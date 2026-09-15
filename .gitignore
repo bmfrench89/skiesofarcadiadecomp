@@ -1,0 +1,48 @@
+# ═══════════════════════════════════════════════════════════════
+#  NEVER COMMIT GAME DATA. Code only. Users supply their own disc.
+# ═══════════════════════════════════════════════════════════════
+*.rvz
+*.iso
+*.gcm
+*.ciso
+*.dol
+*.bin
+*.map
+*.elf
+orig/
+extracted/
+assets/
+game/
+disc/
+
+# reference decomps cloned for signature harvesting
+vendor/
+refs/
+
+# build
+build/
+dist/
+out/
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+CMakeCache.txt
+CMakeFiles/
+
+# generated recompiler output (huge, reproducible)
+gen/
+tools/soa/gen/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# analysis artifacts (reproducible from the disc)
+*.pkl
+*.sqlite
+*.db
