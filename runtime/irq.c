@@ -52,6 +52,12 @@ void dsp_poll(CpuState* s);
 void dsp_report(void);
 #define IRQ_DSP_AI 5
 #define IRQ_DSP_DSP 7
+int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
+int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+int si_irq_pending(void);
+void si_poll(void);
+void si_report(void);
+#define IRQ_PI_SI 20
 
 #define TB_HZ 40500000ull
 #define VI_PERIOD_TICKS (TB_HZ / 60)
@@ -115,6 +121,7 @@ int device_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     if (size == 4 && ea == 0xCC003000u) { *out = g_pi_cause | PI_RSWST_RELEASED; return 1; }
     if (size == 4 && ea == 0xCC003004u) { *out = g_pi_mask; return 1; }
     if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { *out = ai_read(s, ea); return 1; }
+    if (si_read(s, ea, size, out)) return 1;
     if (dsp_read(s, ea, size, out)) return 1;
     if (aram_read(s, ea, size, out)) return 1;
     if (gx_read(s, ea, size, out)) return 1;
@@ -132,6 +139,7 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     if (size == 4 && ea == 0xCC003000u) { g_pi_cause &= ~(uint32_t)v; return; } /* write-one-to-clear */
     if (size == 4 && ea == 0xCC003004u) { g_pi_mask = (uint32_t)v; return; }
     if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { ai_write(s, ea, (uint32_t)v); return; }
+    if (si_write(s, ea, size, v)) return;
     if (dsp_write(s, ea, size, v)) return;
     if (aram_write(s, ea, size, v)) return;
     if (gx_write(s, ea, size, v)) return;
@@ -143,7 +151,7 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 static uint32_t g_dec_value;
 static uint64_t g_dec_set;
 static int g_dec_armed;
-static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count;
+static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count, g_si_count;
 
 void dec_write(CpuState* s, uint32_t v)
 {
@@ -333,8 +341,15 @@ static void deliver_pending(CpuState* s)
             g_vi_last = now;
             g_vi_count++;
             g_vi_pending = 1;
+            si_poll(); /* the controllers are polled once per field */
             call_guest_handler(s, handler, IRQ_PI_VI);
         }
+    }
+
+    /* SI: a direct transfer completed, or polled data is waiting. */
+    if (si_irq_pending()) {
+        handler = interrupt_handler(s, IRQ_PI_SI);
+        if (handler) { g_si_count++; call_guest_handler(s, handler, IRQ_PI_SI); }
     }
 #ifdef _WIN32
     if (g_pace) Sleep(0);
@@ -386,7 +401,14 @@ void irq_report(void)
     gx_report();
     aram_report();
     dsp_report();
+    si_report();
+    fprintf(stderr, "[irq] %llu SI interrupts delivered\n", (unsigned long long)g_si_count);
     fprintf(stderr, "[irq] %llu DSP mails, %llu AI DMA blocks, %llu ARAM DMAs delivered\n",
             (unsigned long long)g_dsp_count, (unsigned long long)g_aid_count,
             (unsigned long long)g_ar_count);
+}
+
+uint64_t irq_retrace_count(void)
+{
+    return g_vi_count;
 }

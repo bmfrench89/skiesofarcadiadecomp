@@ -116,23 +116,23 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **4.3b** Guest→host context-switch bridge | M | **Done** (`runtime/threads.c`: setjmp at the single `OSSaveContext` call site, fibers per thread).  **The hard part of "fibers," and it had no slice.** How a guest `OSThread` switch — guest SP swap, guest LR restore, the `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose C stack is mid-`fn_800A1234` |
 | `[x]` | **4.4** DVD | M | **Done at the DI register level** (`runtime/dvd.c` reads `extracted/disc.iso`); the SDK's DVD stack runs recompiled. Arena-hi must sit at the FST, as the apploader leaves it.  `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
 | `[x]` | **4.5** VI + retrace | M | **Done**: DI0 status bit, 60 Hz of guest timebase, `VIWaitForRetrace` sleeps and wakes the main thread every frame.  **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
-| `[ ]` | **4.6** PAD input | S | SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
+| `[~]` | **4.6** PAD input | S | **SI model done** (`runtime/si.c`: ID/origin transfers, per-field polling, RDST/TCINT interrupts as interrupt 20); a scripted controller (`SOA_PAD=frame:buttons,...`) drives the game headlessly. Real gamepads wait on a window.  SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
 | `[ ]` | **4.7** CARD saves | M | Memory-card emulation. **Acceptance includes importing a save from a real card or Dolphin** — users judge the port on this |
 
 ---
 
-## Phase 5 — Graphics `[ ]` → **M5**, **M6**
+## Phase 5 — Graphics `[~]` → **M5 reached**, **M6 reached**
 
 Gated on **4.1b (the gather pipe)**, not on M2. See SPEC §7.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **5.0** FIFO-log replay harness | M | **The rendering oracle.** Record a Dolphin `.dff` at the title screen, replay it through our backend offline, diff against Dolphin. Frame-level ground truth *before the game runs*, and a permanent regression corpus |
-| `[ ]` | **5.1** GX state HLE + vertex decoder | L | HLE the 104 out-of-line GX entry points (1,674 call sites); decode vertices from `GXSetVtxDesc`/`GXSetVtxAttrFmt`/`GXSetArray` state. A full opcode parser is needed for display-list buffers only — 1 function, 2 call sites |
-| `[ ]` | **5.2** Texture decode | M | GX formats (I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR/C4/C8/C14X2). **Not GVR** — at the GX boundary we see GX enums and tiled data, never a GVR header |
-| `[ ]` | **5.3** Vertex pipeline | L | Vertex descriptors, attribute formats, display lists → Vulkan buffers |
-| `[ ]` | **5.4** TEV shader generation | XL | Up to 16 TEV stages + indirect textures → SPIR-V. The single largest piece of work |
-| `[ ]` | **5.5** EFB/XFB and copies | L | Framebuffer, copy-to-texture, scanout |
+| `[x]` | **5.0** FIFO-log replay harness | M | **Done, from our own captures instead of Dolphin's**: `SOA_FIFO_DUMP` writes a frame's registers, command bytes and RAM; `soa.exe --replay` renders it to PNG; `tools/fifo.py` decodes it.  **The rendering oracle.** Record a Dolphin `.dff` at the title screen, replay it through our backend offline, diff against Dolphin. Frame-level ground truth *before the game runs*, and a permanent regression corpus |
+| `[x]` | **5.1** GX command stream + vertex decoder | L | **Done at the hardware level, not the API level**: the write-gather byte stream is parsed as the command processor would (gx.c), so no GX entry point needs HLE.  HLE the 104 out-of-line GX entry points (1,674 call sites); decode vertices from `GXSetVtxDesc`/`GXSetVtxAttrFmt`/`GXSetArray` state. A full opcode parser is needed for display-list buffers only — 1 function, 2 call sites |
+| `[x]` | **5.2** Texture decode | M | **Done** (`gxr_tev.c`): every format including CMPR and C4/C8/C14X2 through TLUTs in a TMEM model.  GX formats (I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR/C4/C8/C14X2). **Not GVR** — at the GX boundary we see GX enums and tiled data, never a GVR header |
+| `[x]` | **5.3** Vertex pipeline | L | **Done in software** (`gxr.c`): matrices, lighting, texgen, clipping, rasterization. No Vulkan yet -- the software renderer is the reference.  Vertex descriptors, attribute formats, display lists → Vulkan buffers |
+| `[~]` | **5.4** TEV | XL | **Software TEV done** (all 16 stages, konst, swap tables, compare modes, alpha test, blend, logic ops); indirect texturing and fog not yet. Shader generation for a GPU backend is the remaining work, and is now a translation of working code.  Up to 16 TEV stages + indirect textures → SPIR-V. The single largest piece of work |
+| `[~]` | **5.5** EFB/XFB and copies | L | EFB, clears, copies to texture (tiled encode) and to the screen (PNG) done; no window or scanout yet.  Framebuffer, copy-to-texture, scanout |
 | `[ ]` | **5.7** Evaluate replacing the middleware library | M | `0x80266778`-`0x802AC7E0`: 807 functions, 10.3% of `.text`, holds 868 of 1,508 FIFO writes, calls into game code 2 times out of 3,996. Reimplementing rather than recompiling it would delete most of the vertex problem |
 | `[ ]` | **5.6** Graphics dependency vendoring | S | **Undeclared install burden.** Vulkan SDK, `glslang`/`shaderc`, SDL3 — vcpkg vs FetchContent vs prebuilt. Decide before 5.4 |
 

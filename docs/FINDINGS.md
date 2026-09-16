@@ -427,3 +427,42 @@ wakes the main thread each frame, ~4,000 draw commands and ~430 EFB copies
 in 15 s, audio frames every 5 ms through the mailbox protocol. Nothing is
 displayed yet: the GX front end parses the command stream but does not
 rasterize (Phase 5).
+
+
+## 9. ▲ First frames
+
+Frames captured from the running game and rendered offline by the
+software GX (`--replay`) match what the game shows: the "Created by
+OVERWORKS" splash (palettised logo textures over a white clear), the
+opening narration scroll ("The age of exploration has dawned upon the
+world of Arcadia...") with its fade band, and the CMPR cloud layers behind
+it. Lessons recorded while getting there:
+
+- The XF shadow must cover 0x1000-0x10FF: viewport, projection and texgen
+  registers live there, and a 0x1000-word array silently dropped them.
+- TLUT tmem addresses in `LOADTLUT1` and `TX_SETTLUT` are in 512-byte
+  units (`<< 9`); a 32-byte unit produced an all-gray screen because the
+  text glyphs are C4 textures.
+- The EFB persists across frames on the console. A replay must start from
+  the previous frame's clear (colour and z from the captured registers),
+  or every LEQUAL depth test fails against a zeroed z-buffer.
+- Geometry with view-space z > 0 is legitimately behind the camera:
+  the title flyover surrounds the camera, so 170 of 187 triangles in one
+  frame are clipped away and that is correct.
+- Throughput of the first cut is ~8 Mpixel/s (full TEV per pixel with no
+  per-draw precomputation), about a tenth of what 60 Hz needs.
+
+- The game copies the whole EFB to four 640x480 one-byte buffers (copy
+  format R8) every frame. Encoding an unknown copy format at a guessed
+  size overwrote 900 KB past each buffer and stalled the game after ~380
+  frames; a copy encoder must write exactly the hardware's tile size or
+  nothing.
+- The SDK registers the serial interface handler as interrupt 20
+  (`__OSUnmaskInterrupts(0x800)`), not 3; the PAD driver's whole bring-up
+  waits on that one completion interrupt.
+
+**Title screen (M6):** with a scripted START press the game reaches its
+title screen, and the frame is right: logo, the day/sunset/night cloud
+flyover, the New Game / Continue menu with its cursor, and the license
+line. The game runs at ~29 fps without rendering; the software renderer
+adds ~200 ms per rendered frame.

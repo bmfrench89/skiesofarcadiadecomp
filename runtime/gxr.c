@@ -684,6 +684,9 @@ void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, un
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
     if (g_draw_limit && ++g_draw_no > g_draw_limit) return; /* SOA_GXR_DRAWS=N: stop after N draws */
+    /* Headless snapshots (SOA_FRAMES=N): only the frames being written are
+     * worth rasterizing; the game then runs at full speed between them. */
+    if (g_frames_every && !g_png_path[0] && (g_frame_no % g_frames_every) != 0) return;
     tex_set_memory(s);
     v = (Vertex*)malloc(sizeof(Vertex) * count);
     if (!v) return;
@@ -768,10 +771,29 @@ static void copy_to_texture(CpuState* s, const uint32_t* bp, uint32_t v, int x0,
     unsigned tw, th, bpt;
     uint8_t* base;
 
-    /* map copy formats onto texture formats */
-    unsigned texfmt;
-    if (intensity) texfmt = fmt == 0 ? 0 : fmt == 1 ? 1 : fmt == 2 ? 2 : fmt == 3 ? 3 : 1;
-    else texfmt = fmt == 4 ? 4 : fmt == 5 ? 5 : fmt == 6 ? 6 : fmt == 3 ? 3 : fmt == 1 ? 1 : 6;
+    /* map copy formats onto texture formats; anything else is left alone
+     * rather than written at a guessed size */
+    unsigned texfmt, chan_a = 0, chan_b = 3; /* source channels for single/dual-channel copies */
+    if (intensity) texfmt = fmt == 0 ? 0 : fmt == 1 ? 1 : fmt == 2 ? 2 : fmt == 3 ? 3 : 99;
+    else switch (fmt) {
+    case 0: texfmt = 0; break;                       /* R4 */
+    case 1: case 8: texfmt = 1; break;               /* R8 */
+    case 9: texfmt = 1; chan_a = 1; break;           /* G8 */
+    case 10: texfmt = 1; chan_a = 2; break;          /* B8 */
+    case 7: texfmt = 1; chan_a = 3; break;           /* A8 */
+    case 2: texfmt = 2; break;                       /* RA4 */
+    case 3: texfmt = 3; break;                       /* RA8 */
+    case 11: texfmt = 3; chan_a = 0; chan_b = 1; break; /* RG8: like IA8 with (g, r)? keep (b=g, a=r) */
+    case 12: texfmt = 3; chan_a = 1; chan_b = 2; break; /* GB8 */
+    case 4: texfmt = 4; break;
+    case 5: texfmt = 5; break;
+    case 6: texfmt = 6; break;
+    default: texfmt = 99; break;
+    }
+    if (g_debug && g_copies_tex < 16)
+        fprintf(stderr, "[gxr] copy to texture: dest %08X %dx%d from (%d,%d) fmt %u intensity %d half %d -> texfmt %u" "\n",
+                dest, w, h, x0, y0, fmt, intensity, half, texfmt);
+    if (texfmt == 99) { g_copies_tex++; return; }
 
     switch (texfmt) {
     case 0: tw = 8; th = 8; bpt = 32; break;
@@ -796,8 +818,13 @@ static void copy_to_texture(CpuState* s, const uint32_t* bp, uint32_t v, int x0,
                         px[k] = (uint8_t)((g_efb[sy][sx][k] + g_efb[sy][sx + 1][k] + g_efb[sy + 1][sx][k] + g_efb[sy + 1][sx + 1][k]) / 4);
                 } else memcpy(px, g_efb[sy][sx], 4);
             }
-            I = (unsigned)(0.257f * px[0] + 0.504f * px[1] + 0.098f * px[2] + 16.0f);
-            if (I > 255) I = 255;
+            if (intensity) {
+                I = (unsigned)(0.257f * px[0] + 0.504f * px[1] + 0.098f * px[2] + 16.0f);
+                if (I > 255) I = 255;
+            } else {
+                I = px[chan_a]; /* single-channel copies take that channel; dual ones pair it with chan_b */
+                if (texfmt == 2 || texfmt == 3) px[3] = px[chan_b];
+            }
             switch (texfmt) {
             case 0: { uint8_t* b = &tile[iy * 4 + ix / 2]; unsigned n = I >> 4; if (ix & 1) *b = (uint8_t)((*b & 0xF0) | n); else *b = (uint8_t)((*b & 0x0F) | (n << 4)); break; }
             case 1: tile[iy * 8 + ix] = (uint8_t)I; break;
