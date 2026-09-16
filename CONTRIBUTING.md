@@ -35,9 +35,9 @@ into the tree and CI scans the whole history for them.
        set SOA_RENDER=1
        gen\soa.exe extracted
 
-   `SOA_SELFTEST=1 gen\soa.exe extracted` exercises the translated C library
-   and the device models without the game and is a quick check that a build
-   is sane.
+   `SOA_SELFTEST=1 gen\soa.exe extracted` exercises the translated C library,
+   the device models and the software renderer (a synthetic frame through the
+   real GX pipe) without the game, and is a quick check that a build is sane.
 
 ## Tests and style
 
