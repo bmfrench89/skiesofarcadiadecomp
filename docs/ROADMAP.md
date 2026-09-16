@@ -1,12 +1,13 @@
 # Roadmap
 
-Work is sliced so that **every milestone is something you can look at**, not a
-percentage. Slices inside a phase are ordered by dependency; where they are
-independent it is noted.
+**v2** — restructured after adversarial review. See [SPEC.md](SPEC.md) §7–§8 for the two
+findings that moved work around: vertex submission cannot be HLE'd, and the Dolphin
+instruction tracer the v1 critical path depended on does not exist.
 
-**Size key:** `S` = a session · `M` = a few sessions · `L` = weeks · `XL` = months
+Work is sliced so **every milestone is something you can look at**, not a percentage.
 
-**Status key:** `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked
+**Size:** `S` = a session · `M` = a few sessions · `L` = weeks · `XL` = months
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ---
 
@@ -14,14 +15,14 @@ independent it is noted.
 
 | | Milestone | Gated by | What you can see |
 |---|---|---|---|
-| **M1** | Function inventory | Phase 1 | Exact function count, call graph, the real shape of the program |
-| **M2** | SDK boundary known | Phase 2 | A symbol map we generated ourselves — the platform layer is named |
-| **M3** | Whole DOL translates | Phase 3 | 697,784 instructions become C that compiles clean |
-| **M4** | CPU verified correct | Phase 4 | Game code executes, matching Dolphin instruction for instruction |
+| **M1** | Function inventory | Phase 1 | Exact function count, call graph, indirect-branch map |
+| **M2** | HLE boundary known | Phase 2 | The 7.8% of code we delete instead of port, named |
+| **M3** | Whole DOL translates | Phase 3 | 696,120 instructions become C that compiles |
+| **M4** | CPU verified correct | Phase 3+4 | Recompiled code matches the reference interpreter, lockstep |
 | **M5** | First frame | Phase 5 | Something the game drew, in a window |
 | **M6** | Title screen | Phase 5 | The actual title screen, correct |
 | **M7** | Audio | Phase 6 | Music and SFX |
-| **M8** | Playable | Phase 7 | Field movement, battles, saves |
+| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip |
 
 ---
 
@@ -29,117 +30,122 @@ independent it is noted.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[x]` | **0.1** RVZ container decoder | S | Decodes zstd groups + RVZ run packing; exact reads verified against disc header |
-| `[x]` | **0.2** DOL parser | S | Sections, entry, BSS parsed; totals match |
-| `[ ]` | **0.3** Disc extractor | S | Walks FST, writes all 5,552 files to `extracted/`; sizes match FST exactly |
-| `[ ]` | **0.4** Repo scaffold + CI | S | `.gitignore` blocks game data; CI fails if a DOL/ISO/asset is ever committed |
-| `[ ]` | **0.5** Junk-run regeneration (lagged Fibonacci) | S | Optional. Only needed for byte-exact whole-disc rebuild; real file data is already exact without it |
+| `[x]` | **0.1** RVZ container decoder | S | Decodes zstd groups + RVZ run packing. Verified against disc header |
+| `[x]` | **0.2** DOL parser | S | Sections, entry, BSS. Totals match |
+| `[x]` | **0.3** Disc extractor | S | **Done:** 5,552/5,552 files, byte-exact, DOL sha256 matches image |
+| `[x]` | **0.4** Repo scaffold + CI | S | **Done:** guard blocks game data in tree *and* full history; tests run without a disc |
+| `[x]` | **0.6** AKLZ container decoder | S | **Done:** exhaustive gate — 3,633 containers, 1.98 GiB, 0 failures, 0 PPC code |
+| `[ ]` | **0.5** Junk-run regeneration (lagged Fibonacci) | M | **No longer optional — see R9.** RVZ junk runs are zero-filled. GameCube games routinely over-read past a file's declared end; `extracted/` would return zeros where the disc returns junk. Correctness dependency of slice 4.4 |
+| `[~]` | **0.7** DSP microcode probe | S | **Answer before Phase 1 ends.** Stock or custom ucode? If custom, R3 goes High and slice 6.3 goes L → XL |
+| `[ ]` | **0.8** Clean-machine reproduction | S | `pyproject.toml` `[project]` table, pinned deps, `CONTRIBUTING.md`, scripted fetch of `dtk` and the mwcc archive. A second contributor gets from `git clone` to a working tree |
 
-**Exit:** the disc is fully unpacked and reproducible from the user's own dump.
-
----
-
-## Phase 1 — Static analysis `[ ]` → **M1**
-
-The goal is to stop estimating and know exactly what is in the binary.
-
-| | Slice | Size | Acceptance |
-|---|---|---|---|
-| `[ ]` | **1.1** Gekko disassembler | M | Decodes all 697,784 instructions with zero unknowns. Full PPC 750CL: integer, float, branch, SPR, **paired singles**, **`psq_*` quantized load/store** |
-| `[ ]` | **1.2** Function boundary detection | M | CFG from entry + `bl` targets + prologue scan. Outputs function list with exact start/end. Resolves the 5,375 vs 8,024 ambiguity |
-| `[ ]` | **1.3** Call graph + indirect branches | M | Direct call graph; enumerate every `bctr`/`bctrl` site and classify (jump table, vtable, function pointer). **Feeds R1.** |
-| `[ ]` | **1.4** Data classification | M | Partition data sections into: vtables, jump tables, float/double pools, strings, static initializers |
-| `[ ]` | **1.5** Symbol database | S | `config/symbols.toml` schema: address, size, name, source (auto/sig/manual), binding. dtk-format compatibility decision made here |
-
-**Exit / M1:** exact function count, complete call graph, every indirect branch site
-catalogued. This is the first point where the project's real size is known rather than
-estimated.
+**Exit:** the disc is fully unpacked, reproducible, and every container is accounted for.
 
 ---
 
-## Phase 2 — SDK identification `[ ]` → **M2**
-
-The highest-leverage phase. See SPEC §5.
+## Phase 1 — Static analysis `[~]` → **M1**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **2.1** Harvest reference decomps | S | Clone MP4, Animal Crossing, Pikmin into `vendor/` (gitignored). Locate their SDK object sets |
-| `[ ]` | **2.2** Build mwcc toolchain | M | Metrowerks compiler running well enough to build SDK objects from the reference decomps |
-| `[ ]` | **2.3** Signature generator | M | Normalize functions (mask relocations + address operands), emit hashes. Self-test: signatures from MP4 must match Animal Crossing's copy of the same SDK function |
-| `[ ]` | **2.4** Match against Skies DOL | M | Ranked match report. **Target: 1,000+ identified functions.** |
-| `[ ]` | **2.5** Triage and seed symbols | M | Manual confirmation of matches; populate `config/symbols.toml` |
+| `[x]` | **1.1** Gekko disassembler | M | **Done:** 696,144/697,784 words decode. `.text1` at 99.9997%; `.text0` at 30.8% (it is a ROM image of exception vectors with embedded strings and padding). Full paired-single and `psq_*` coverage across all three opcode-4 field widths |
+| `[ ]` | **1.1b** Decoder cross-validation | S | Diff our decoder against an independent disassembler (`dtk`, capstone). **This is the only thing that would have caught the three probes disagreeing about `.text0`.** Keep as a repo test |
+| `[ ]` | **1.2** Function boundary detection | M | CFG from entry + `bl` targets + prologue scan + function-pointer tables. Must reconcile ~7,117 (dtk heuristic) vs ~7,156 (independent derivation) and account for the 1,781 functions never `bl`-called and the 431 leaf functions with no prologue |
+| `[ ]` | **1.3** Call graph + indirect branches | M | Classify all 296 `bctr` + 248 `bctrl` + 121 `blrl` + 527 conditional `blr`. Recover the 320 jump tables / 5,721 entries. Special case: the sole `bla 0x60` at `0x80232278` |
+| `[ ]` | **1.4** Data classification | M | Partition `.data0..5` **and `.text0`** into vtables, jump tables, float pools, strings, static initialisers. Reconcile the disagreement over whether jump tables live only in `.data3` or also `.data4` |
+| `[ ]` | **1.5** Symbol database | S | `config/symbols.toml`: address, size, name, source (auto/dtk/sig/string/manual), binding (direct-only / indirect-only / both). dtk-compatible split format |
+| `[ ]` | **1.6** Constant-propagation engine | M | **Correctness requirement, not an optimisation.** mwcc materialises addresses through per-TU pooled base registers and the `r2`/`r13` SDA bases. Peephole `lis`/`addi` matching misses most references. Needed by 1.3, 1.4, and all of Phase 3 |
 
-**Exit / M2:** the platform layer is named. We effectively have the symbol map the disc
-never shipped.
+**Exit / M1:** exact function count, complete call graph, every indirect branch classified.
 
-> **Decision point.** If 2.4 yields under ~300 functions, fall back to manually
-> identifying only the ~40 SDK entry points that gate a first frame (`OSInit`,
-> `GXInit`, `VIInit`, `DVDRead*`, `PADRead`, the `GXSet*` family). Slower, still viable.
+> **On dtk's numbers.** `dtk dol split` produces ~7,117 boundaries in 0.45s and is worth
+> running immediately. It is a **seed, not an authority** — it is a fast heuristic and its
+> output contains artifacts such as 4-byte "functions." M1 says *exact*; dtk is not.
 
 ---
 
-## Phase 3 — Recompiler `[ ]` → **M3**
+## Phase 2 — HLE boundary `[ ]` → **M2**
+
+Reframed in v2. This phase is not about naming game functions — 92% of `.text` is game
+code and out of reach. It is about identifying the **936 SDK functions (7.8%) we delete
+and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **3.1** CPU state model + codegen skeleton | M | `CpuState` struct, ABI per SPEC §4.3, emitter framework, one hand-picked function translates and compiles |
-| `[ ]` | **3.2** Integer, branch, load/store | M | Covers ~85% of the binary by instruction count. Unit-tested per opcode against known vectors |
-| `[ ]` | **3.3** Floating point + FPSCR | M | Scalar FP incl. FMA, `fres`/`frsqrte` estimates, rounding modes. ~8% of the binary |
-| `[ ]` | **3.4** Paired singles + GQR | S | The 320 `ps_*` and 5,006 `psq_*` instructions. Small but exacting — GQR scale/type decoding must be exact |
-| `[ ]` | **3.5** Indirect branch dispatch | M | Address to function table; every `bctr` site from 1.3 resolves or traps loudly |
-| `[ ]` | **3.6** Whole-DOL translation | M | All 697,784 instructions emit C. Compiles clean. Measure build time and binary size |
+| `[ ]` | **2.1** Run `dtk dol split` | S | ~260 SDK names, 12-section split, zero dependencies |
+| `[ ]` | **2.2** Harvest self-naming strings | S | ~87 names from diagnostic strings. Yields ~8 *SDK* names — useful, but v1 badly over-estimated this vector |
+| `[ ]` | **2.3** Build one donor SDK | M | `mariopartyrd/marioparty4` — the only confirmed `0x2301` banner match. ~+89 names. **Do not budget for building all four repos**; a second donor adds ~8 |
+| `[ ]` | **2.4** Signature match + triage | M | Ranked report, manual confirmation, false-positive check (size agreement is not verification). Populate `config/symbols.toml` |
+| `[ ]` | **2.5** Delimit the replacement set | S | The contiguous SDK block `0x802319E0`–`0x80266770` marked as HLE candidates |
 
-**Exit / M3:** the entire game binary exists as compilable native C.
+**Exit / M2:** we know which code to throw away.
 
 ---
 
-## Phase 4 — Runtime and correctness `[ ]` → **M4**
-
-> **4.2 is scheduled before the HLE work on purpose.** Everything downstream depends on
-> trusting the CPU translation, and blind debugging is what kills these projects.
+## Phase 3 — Recompiler + reference interpreter `[ ]` → **M3**, **M4**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **4.1** Memory map + boot | S | 24 MiB MEM1 at `0x80000000`, stack, entry at `0x80003140`, runs until first unimplemented call |
-| `[ ]` | **4.2** Dolphin differential tracer | M | Dolphin trace vs. our trace, auto binary-search to first divergence. **The debugging oracle.** |
-| `[ ]` | **4.3** OS HLE | L | Threads (fibers per SPEC §9), alarms, interrupts, arena allocator, `OSReport` to console |
-| `[ ]` | **4.4** DVD HLE | M | `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. Async completion callbacks fire correctly |
-| `[ ]` | **4.5** PAD input | S | SDL3 gamepad to `PADRead` struct |
-| `[ ]` | **4.6** CARD saves | M | Memory card emulation to a host file |
+| `[ ]` | **3.0** Byte-swap strategy decision | S | **Irreversible once 696k instructions of C exist (R10).** Measure swap-on-access vs byte-swapped backing image on a representative function. Decide with numbers |
+| `[ ]` | **3.1** CpuState + codegen skeleton | M | ABI per SPEC §4.3 **including `hid2`, `wpar`, gather-pipe accumulator**. One hand-picked function translates and compiles |
+| `[ ]` | **3.2** Integer, branch, load/store | M | ~85% of the binary. Per-opcode vectors sourced from 3.7 plus one-time Dolphin fixtures |
+| `[ ]` | **3.3** Floating point + FPSCR | M | Scalar FP incl. FMA, `fres`/`frsqrte` estimates, rounding modes |
+| `[ ]` | **3.4** Paired singles + GQR | S | 319 `ps_*` + 5,007 `psq_*`. **Specialise at translation time** — GQR values are static constants and 97.3% use GQR0 (plain f32). No runtime GQR dispatch. Only ~135 sites need a convert helper |
+| `[ ]` | **3.5** Indirect branch dispatch | M | Address→function table from 1.3. R1 is Low: the target set is closed, no interpreter fallback needed |
+| `[ ]` | **3.6** Whole-DOL translation | M | All 696,120 instructions emit C and compile. Measure build time and binary size |
+| `[ ]` | **3.7** Reference interpreter + lockstep differ | M | **The oracle. Replaces v1's Dolphin tracer, which does not exist.** C interpreter over the same `CpuState`, sharing the runtime's memory and HLE. Compares per basic block, then per instruction on failure. No trace files, O(1) storage. **Must land alongside 3.2, not later** — 3.2's test vectors have no other source |
 
-**Exit / M4:** real game code executes, verified instruction-for-instruction against
-Dolphin. The CPU is no longer a suspect.
+**Exit / M3:** the game binary exists as compilable native C.
+**Exit / M4:** it executes correctly, verified in lockstep.
+
+> **R8.** The differ is circular if both sides share a bug. Share *field extraction* only,
+> never semantics: write interpreter semantics from the 750CL manual independently of the
+> C emission templates, and anchor with Dolphin save-state fixtures.
+
+---
+
+## Phase 4 — Runtime `[ ]`
+
+| | Slice | Size | Acceptance |
+|---|---|---|---|
+| `[ ]` | **4.1** Memory map + MMIO dispatch | M | MEM1 **plus the `0xC0000000` uncached alias over one backing store**, OS low-memory globals, and trap-and-dispatch for `0xCC00xxxx`. See SPEC §5 — "one flat allocation" was wrong |
+| `[ ]` | **4.1b** Write-gather pipe | M | **Moved ahead of graphics.** `HID2[WPE]`, `WPAR`, 32-byte granularity, the SDK's dummy-write flush idiom. 414 stores depend on it |
+| `[ ]` | **4.2** Boot path lockstep | S | Point the 3.7 differ at the boot path. Runs to first unimplemented HLE call |
+| `[ ]` | **4.2b** Dolphin calibration fixtures | S | Save-state checkpoints, BranchWatch export. Dolphin demoted from daily loop to one-time fixture source |
+| `[ ]` | **4.3** OS HLE | L | Arena allocator, alarms, interrupts, `OSReport` |
+| `[ ]` | **4.3b** Guest→host context-switch bridge | M | **The hard part of "fibers," and it had no slice.** How a guest `OSThread` switch — guest SP swap, guest LR restore, the `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose C stack is mid-`fn_800A1234` |
+| `[ ]` | **4.4** DVD HLE | M | `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
+| `[ ]` | **4.5** VI + retrace | M | **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
+| `[ ]` | **4.6** PAD input | S | SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
+| `[ ]` | **4.7** CARD saves | M | Memory-card emulation. **Acceptance includes importing a save from a real card or Dolphin** — users judge the port on this |
 
 ---
 
 ## Phase 5 — Graphics `[ ]` → **M5**, **M6**
 
-Largest subsystem. Depends on M2 — HLE at the GX API level is only possible once SDK
-functions are identified.
+Gated on **4.1b (the gather pipe)**, not on M2. See SPEC §7.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **5.1** GX state tracking | L | Intercept the `GXSet*` family, maintain shadow state. Log a full frame of GX calls |
-| `[ ]` | **5.2** Texture decode | M | All GX formats (I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR/C4/C8/C14X2) **plus Sega `.gvr`** |
-| `[ ]` | **5.3** Vertex pipeline | L | Vertex descriptors, attribute formats, display lists, primitive assembly to Vulkan buffers |
-| `[ ]` | **5.4** TEV shader generation | XL | Up to 16 TEV stages + indirect textures to generated SPIR-V. The single biggest piece of work in the project |
-| `[ ]` | **5.5** EFB/XFB and copies | L | Framebuffer, copy-to-texture, VI scanout |
-
-**M5** lands mid-5.3 (first geometry on screen). **M6** needs all five.
+| `[ ]` | **5.0** FIFO-log replay harness | M | **The rendering oracle.** Record a Dolphin `.dff` at the title screen, replay it through our backend offline, diff against Dolphin. Frame-level ground truth *before the game runs*, and a permanent regression corpus |
+| `[ ]` | **5.1** GX command-stream decoder | L | Decode CP/XF/BP register writes and primitive data out of the gather pipe. HLE the non-inline `GXSet*` calls as a hybrid |
+| `[ ]` | **5.2** Texture decode | M | GX formats (I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR/C4/C8/C14X2). **Not GVR** — at the GX boundary we see GX enums and tiled data, never a GVR header |
+| `[ ]` | **5.3** Vertex pipeline | L | Vertex descriptors, attribute formats, display lists → Vulkan buffers |
+| `[ ]` | **5.4** TEV shader generation | XL | Up to 16 TEV stages + indirect textures → SPIR-V. The single largest piece of work |
+| `[ ]` | **5.5** EFB/XFB and copies | L | Framebuffer, copy-to-texture, scanout |
+| `[ ]` | **5.6** Graphics dependency vendoring | S | **Undeclared install burden.** Vulkan SDK, `glslang`/`shaderc`, SDL3 — vcpkg vs FetchContent vs prebuilt. Decide before 5.4 |
 
 ---
 
 ## Phase 6 — Audio `[ ]` → **M7**
 
-Deliberately deferred until the game is visually running. No MusyX, so no reference
-implementation exists — this is original reverse engineering.
+Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[ ]` | **6.1** AI/ARAM HLE | M | ARAM as a host buffer, DMA, audio interrupt timing |
-| `[ ]` | **6.2** DSPADPCM decode | S | Standard Nintendo ADPCM. Well documented, low risk |
-| `[ ]` | **6.3** Sega mixer RE | L | Reverse the custom engine driving `AI`/`AR`/`DSP`. The unknown |
-| `[ ]` | **6.4** Streamed BGM | M | Stereo `.dsp` pairs stream and loop correctly |
+| `[ ]` | **6.2** DSPADPCM decode | S | Standard Nintendo ADPCM, well documented |
+| `[ ]` | **6.3** Sega mixer | L **or XL** | L if stock DSP microcode. **XL if custom** — then it is "write a GameCube DSP interpreter." Slice 0.7 decides |
+| `[ ]` | **6.4** Streamed BGM | M | Stereo `.dsp` pairs stream and loop |
 
 ---
 
@@ -147,54 +153,70 @@ implementation exists — this is original reverse engineering.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **7.1** Title to field | M | New game starts, field scene renders and is navigable |
+| `[ ]` | **7.1** Title to field | M | New game starts, field renders and is navigable |
 | `[ ]` | **7.2** Battle system | M | Encounters run start to finish |
-| `[ ]` | **7.3** Ship/overworld | M | Airship sections work |
-| `[ ]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene, every cutscene |
-| `[ ]` | **7.5** Enhancements | M | Widescreen, uncapped framerate, higher internal resolution |
+| `[ ]` | **7.3** Ship/overworld | M | Airship sections |
+| `[ ]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene |
+| `[ ]` | **7.5** Enhancements | **L, not M** | Widescreen, higher internal resolution. **Uncapped framerate is a re-architecture**, not a tweak: the engine is 480i-locked and retrace-driven |
 
 ---
 
 ## Phase 8 — Progressive decompilation `[ ]` *(parallel, ongoing)*
 
-Runs alongside Phases 5-7 once M3 lands. Never blocks the critical path.
+Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[ ]` | **8.1** dtk-compatible splits | M | Split config the wider GC decomp tooling understands |
 | `[ ]` | **8.2** mwcc build pipeline | M | Hand-written C compiles to byte-matching objects |
-| `[ ]` | **8.3** Function swap-in harness | M | Swap a decompiled function for its recompiled twin; differential test proves equivalence |
+| `[ ]` | **8.3** Function swap-in harness | M | Differential test proves a decompiled function equivalent to its recompiled twin |
 | `[ ]` | **8.4** Decomp grind | XL | Function by function, indefinitely |
 
 ---
 
 ## Critical path
 
+v1's graph routed everything through `4.1 → 4.2 → [M4] → 5.x` on the strength of a Dolphin
+tracer that does not exist. Redrawn:
+
 ```
-0.3 -> 1.1 -> 1.2 -> 1.3 -> [M1]
-                      |
-                      +-> 2.1..2.5 -> [M2] ------+
-                      |                          |
-                      +-> 3.1..3.6 -> [M3]       |
-                                       |         |
-                                 4.1 -> 4.2 -> [M4]
-                                                 |
-                                       5.1 .. 5.5 -> [M5][M6]
-                                                 |
-                                       6.x -> [M7] -> 7.x -> [M8]
+  0.3 ─┬─ 1.1 ─ 1.1b ─ 1.6 ─ 1.2 ─ 1.3 ──────────────────► [M1]
+       │                                │
+  0.6 ─┘                                ├─ 2.1..2.5 ─────► [M2]
+                                        │
+  0.7 (DSP probe) ──► sizes 6.3         └─ 3.0 ─ 3.1 ─┬─ 3.2 ─ 3.3 ─ 3.4 ─ 3.5 ─ 3.6 ─► [M3]
+                                                      └─ 3.7 (oracle) ──┬──────────────► [M4]
+                                                                        │
+  0.5 (junk) ──► 4.4                    4.1 ─ 4.1b ─ 4.2 ─ 4.3 ─ 4.3b ─┤
+                                                      │                 │
+                                                      └─ 4.5 (VI) ──────┤
+                                                                        ▼
+                                              5.0 (FIFO oracle) ─ 5.1 ─ 5.2 ─ 5.3 ─► [M5]
+                                                                        └─ 5.4 ─ 5.5 ─► [M6]
+                                                                                  │
+                                                            6.x ─► [M7] ─ 7.x ─► [M8]
 ```
 
-Phases 2 and 3 are **independent** and can proceed in parallel. Phase 2 gates
-graphics; Phase 3 gates everything running at all.
+Key changes from v1:
+
+- **3.7 (reference interpreter) is on the critical path**, paired with 3.2. It is the
+  oracle; nothing downstream can be trusted without it.
+- **4.1b (gather pipe) gates graphics**, replacing M2 as the Phase 5 gate.
+- **5.0 (FIFO replay) comes before 5.1** — validate the backend before the game drives it.
+- **0.7 (DSP probe) is off the critical path** but sizes Phase 6, so it runs now.
+
+Phases 2 and 3 remain independent and can proceed in parallel.
 
 ---
 
 ## Immediate next actions
 
-1. **0.3** — extract the disc (needed by everything)
-2. **1.1** — Gekko disassembler (the foundation of all analysis)
-3. **1.2** — function boundaries → **M1**
+1. **0.7** — DSP microcode probe *(in flight)*
+2. **1.1b** — decoder cross-validation *(in flight)*
+3. **1.6** — constant-propagation engine, then **1.2** → **1.3** → **M1**
 
-Everything through M1, and most of M2, needs only Python 3.14, git and gh — all
-already installed. The C++ toolchain (MSVC/clang, CMake, Ninja, Vulkan SDK) is not
-required until Phase 3.
+> **Correction to v1:** the C++ toolchain is **already installed** — MSVC 14.44.35207,
+> Windows SDK 10.0.26100, and `cmake`/`ninja` under VS BuildTools. `cl.exe` simply is not
+> on `PATH` without `vcvars64.bat`. v1 told contributors to expect a blocker that is not
+> there. Phase 3 needs no new installs; the real install burden is Phase 5's (slice 5.6)
+> and Dolphin-from-source for FIFO capture.

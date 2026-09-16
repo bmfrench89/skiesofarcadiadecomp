@@ -2,18 +2,19 @@
 
 **Subject:** Skies of Arcadia Legends (USA), GameCube, game ID `GEAE8P`
 **Method:** direct decode of an RVZ container; no emulator involved
-**Date:** 2026-09-15
+**Revision:** v2 — figures marked ▲ were corrected after adversarial review
 
 Everything here is structural metadata about the executable — addresses, sizes,
-instruction counts. No game content is reproduced or stored in this repository.
+instruction counts, format headers. No game content is reproduced or stored in this
+repository.
 
 ---
 
 ## 1. Container and disc
 
-The source image is an RVZ (Dolphin's compressed disc format). It was decoded from
-scratch rather than converted with an external tool, so the pipeline has no
-dependency on a Dolphin install.
+The source image is an RVZ (Dolphin's compressed disc format), decoded from scratch rather
+than converted with an external tool, so the pipeline has no dependency on a Dolphin
+install.
 
 | Field | Value |
 |---|---|
@@ -23,24 +24,23 @@ dependency on a Dolphin install.
 | Compressed size | 1,285,948,056 bytes |
 | Game ID | `GEAE8P` — `G`=GameCube, `EA`=Eternal Arcadia, `E`=USA, `8P`=Sega |
 | Magic word | `0xC2339F3D` (valid) |
-| Apploader | dated 2002-09-05, 0x1934 bytes |
+| Apploader | dated 2002-09-05 |
 
 ### RVZ format notes
 
 Two details cost real time and are worth recording:
 
-1. **The first 0x80 bytes of the disc are stored in the RVZ header**, not in the group
-   stream. The single raw-data entry has `base = 0x80`, but groups tile from
-   `align_down(base, chunk_size)` = 0. Treating `base` as the group origin yields
-   garbage.
-2. **Junk runs carry a 68-byte seed** (17 × u32 — a lagged Fibonacci generator state),
-   not 4 bytes. Brute-forcing seed size against "does the chunk decode to exactly
-   131,072 bytes" identified it unambiguously.
+1. **The first 0x80 bytes of the disc live in the RVZ header**, not the group stream. The
+   single raw-data entry has `base = 0x80`, but groups tile from
+   `align_down(base, chunk_size)` = 0. Treating `base` as the group origin yields garbage.
+2. **Junk runs carry a 68-byte seed** (17 × u32 — a lagged Fibonacci generator state), not
+   4 bytes. Brute-forcing seed size against "does the chunk decode to exactly 131,072
+   bytes" identified it unambiguously.
 
-Junk runs are currently zero-filled rather than regenerated. This affects inter-file
-padding only; the DOL, FST and all real file data are stored as literal runs and decode
-exactly. Slice 0.5 covers regeneration if a byte-exact whole-disc rebuild is ever
-wanted.
+Junk runs are currently zero-filled rather than regenerated. ▲ **This is a correctness
+dependency, not a cosmetic gap** (risk R9): GameCube games routinely read past a file's
+declared end, and `extracted/` would return zeros where the disc returns junk. Slice 0.5
+covers regeneration.
 
 ---
 
@@ -51,92 +51,142 @@ wanted.
 | FST offset / size | `0x00323E00` / 134,426 bytes |
 | Entries | 5,560 (5,552 files, 7 directories) |
 | Total file bytes | 1,418,037,369 |
+| ▲ Decompressed bytes | **2,126,196,876 (1.98 GiB)** |
 
 Directories: `battle`, `bchara`, `beff`, `ending`, `field`, `sound`, `title`
 
-### Contents by extension
+### ▲ Compression — the finding that invalidated the original method
 
-| Ext | Files | Size | Notes |
-|---|---:|---:|---|
-| `.mld` | 1,791 | 1,019.7 MB | Field/model data — the bulk of the disc |
-| `.samp` | 590 | 121.5 MB | Audio samples |
-| `.sml` | 136 | 82.0 MB | |
-| `.dsp` | 620 | 74.9 MB | Nintendo DSPADPCM audio |
-| `.mlk` | 574 | 34.4 MB | |
-| `.info` | 589 | 7.9 MB | |
-| `.sct` | 258 | 5.3 MB | |
-| `.mll` | 11 | 3.7 MB | |
-| `.gvr` | 3 | 1.2 MB | **Sega GameCube Video Resource** — Dreamcast PVR lineage |
-| `.std` | 438 | 1.2 MB | |
-| `.tpl` | 2 | — | Nintendo standard texture format — only 2 files |
-| others | — | — | `.dat`, `.sst`, `.tec`, `.enp`, `.ect`, `.bin`, `.evp`, `.lmt`, `.bnr` |
+**3,633 of 5,552 files (65%) are wrapped in a Sega container with magic `AKLZ~?Qd`**,
+whose body is Okumura LZSS. v1 did not know this, which means v1's "no `.rel` files on the
+disc, therefore no runtime-loaded code" argument was inspecting compressed bytes and could
+not have proved anything either way.
+
+`tools/validate_assets.py` now runs an exhaustive gate over every file:
+
+```
+AKLZ containers   3,633 of 5,552
+decoded bytes     2,126,196,876 (1.98 GiB)
+decode failures   0
+files w/ PPC code 0
+```
+
+Every container decodes to exactly its declared size, and no decompressed payload contains
+PowerPC code.
+
+### ▲ Asset formats
+
+v1's table listed `.gvr | 3 files` and treated Sega textures as a footnote. That framing
+was badly wrong — three GVR files happen to be *loose*; the disc holds roughly a hundred
+thousand of them inside containers.
+
+| Format | Scale |
+|---|---|
+| `NMLD` (`.mld`) container | 1,791 files, 1,069 MB |
+| GVR textures | ≈100,000 (CMPR 62%, INDEX4 22%, RGB5A3 16%, ARGB8888 0.1%) |
+| Ninja `NJCM` models / `NJTL` texture lists | ≈23,000 — Dreamcast lineage |
+| `AFNT` font | `FontData.US`, 83 KB |
+| `.sct` scripts | 258 files — **the engine is script-VM driven** |
+| DSPADPCM audio | 620 `.dsp`, 590 `.samp` |
+| Nintendo `.tpl` | 2 files |
+
+The `NJCM`/`NJTL`/`GVRT`/`GCIX` magic constants appear in `boot.dol` itself, confirming
+the Dreamcast Ninja lineage in the engine rather than just the data.
+
+**None of this is on the critical path** — see [SPEC.md](SPEC.md) §9 for why that is a
+decision rather than an oversight.
 
 **No `.rel`, `.map`, or `.elf` files anywhere on the disc.**
-
-The near-total absence of `.tpl` alongside the presence of `.gvr` confirms Sega used
-their own asset pipeline rather than Nintendo's — consistent with a Dreamcast port.
 
 ---
 
 ## 3. Executable
 
-`boot.dol` at disc offset `0x0001EC00`.
+`boot.dol` at disc offset `0x0001EC00`, 3,166,656 bytes, entry `0x80003140`,
+BSS `0x80302A00` + 305,860 bytes. Total RAM footprint 3.3 MiB of 24 MiB MEM1.
 
-| | |
-|---|---|
-| Size | 3,166,656 bytes |
-| Entry point | `0x80003140` |
-| BSS | `0x80302A00`, 305,860 bytes |
-| Total RAM | 3.3 MiB of 24 MiB MEM1 |
+| Section | File offset | Virtual address | Size | dtk name |
+|---|---|---|---:|---|
+| `.text0` | `0x000100` | `0x80003100` | 9,472 | init / vectors |
+| `.text1` | `0x002600` | `0x80005600` | 2,781,664 | `.text` |
+| `.data0` | `0x2A97E0` | `0x802AC7E0` | 32 | `.ctors` |
+| `.data1` | `0x2A9800` | `0x802AC800` | 32 | `.dtors` |
+| `.data2` | `0x2A9820` | `0x802AC820` | 189,856 | `.rodata` |
+| `.data3` | `0x2D7DC0` | `0x802DADC0` | 162,880 | `.data` |
+| `.data4` | `0x2FFA00` | `0x80346720` | 864 | `.sdata` |
+| `.data5` | `0x2FFD60` | `0x80348000` | 21,600 | `.sdata2` |
 
-### Sections
+▲ **`.text0` is not ordinary code.** It is a ROM image the boot path `memcpy`s into low
+memory; its instructions are position-dependent exception vectors interleaved with
+embedded strings and zero padding.
 
-| Section | File offset | Virtual address | Size |
-|---|---|---|---:|
-| `.text0` | `0x000100` | `0x80003100` | 9,472 |
-| `.text1` | `0x002600` | `0x80005600` | 2,781,664 |
-| `.data0` | `0x2A97E0` | `0x802AC7E0` | 32 |
-| `.data1` | `0x2A9800` | `0x802AC800` | 32 |
-| `.data2` | `0x2A9820` | `0x802AC820` | 189,856 |
-| `.data3` | `0x2D7DC0` | `0x802DADC0` | 162,880 |
-| `.data4` | `0x2FFA00` | `0x80346720` | 864 |
-| `.data5` | `0x2FFD60` | `0x80348000` | 21,600 |
+▲ **Small-data bases:** `r2 = 0x80350000` (SDA2), `r13 = 0x8034E720` (SDA). mwcc addresses
+most globals relative to these, and also through per-translation-unit pooled base
+registers — so address analysis needs CFG-aware constant propagation, not peephole
+`lis`/`addi` matching.
 
-Code: 2,791,136 bytes = **697,784 instructions**. Data: 375,264 bytes.
+### Out of scope: the apploader
+
+▲ The disc carries **116,484 bytes of real PowerPC code** in Nintendo's apploader at disc
+offset `0x2440`, which is not in the FST and was overlooked in v1. It exists to load the
+DOL off a physical disc; a native port replaces it wholesale.
 
 ### Toolchain fingerprint
 
 Twelve `<< Dolphin SDK - MODULE release build: ... >>` strings, all stamped
-**2002-09-05, version `0x2301`**, covering at least `OS`, `DVD`, `VI`, `PAD`, `AI`
-and `AR`. Also present: `Metrowerks Target Resident Kernel for PowerPC`.
+**2002-09-05, version `0x2301`**, plus `Metrowerks Target Resident Kernel for PowerPC`.
 
-**No MusyX.** Audio runs on a custom Sega engine sitting directly on the SDK's `AI`,
-`AR` (ARAM) and `DSP` layers — `DSPInit()` is referenced directly. There is no
-off-the-shelf middleware to lean on here, but the underlying sample format is standard
-DSPADPCM.
+**No MusyX.** Audio runs on a custom Sega engine sitting directly on the SDK's `AI`, `AR`
+(ARAM) and `DSP` layers. ▲ Whether Sega also ships **custom DSP microcode** is open, and
+it is the difference between a weeks-long slice and a months-long one.
 
 ---
 
 ## 4. Instruction census
 
-All 697,784 instructions in both text sections were decoded and counted.
+Decoded with `tools/soa/ppc/`, which covers the base 32-bit PowerPC user ISA plus all
+three extended-opcode field widths that Gekko packs into primary opcode 4.
 
-### Gekko-specific usage — the headline result
+| | Words | Valid | Coverage |
+|---|---:|---:|---:|
+| `.text0` | 2,368 | 730 | 30.83% |
+| `.text1` | 695,416 | 695,414 | **99.9997%** |
+| **Total** | **697,784** | **696,144** | **99.7650%** |
+
+▲ **Real instruction count is 696,120**, not 697,784 — 1,664 words in `.text0` are data.
+
+`.text1`'s two undecodable words are both `0x00000000` padding at section boundaries.
+
+> **Honest caveat.** "Decodes as a valid instruction" is a weaker test than it sounds. A
+> table of `0x80xxxxxx` pointers decodes cleanly as PowerPC and would be invisible to this
+> measurement. The claim "`.text1` contains no embedded data" is supported for jump tables
+> and long runs, but float pools and short constant arrays remain possible. Slice 1.1b
+> (cross-validation against an independent disassembler) exists to close this.
+
+### Gekko-specific usage
 
 | Class | Count |
 |---|---:|
-| Paired-single arithmetic (primary opcode 4) | 320 |
-| `psq_l` / `psq_lu` / `psq_st` / `psq_stu` (56/57/60/61) | 5,006 |
-| **Total Gekko-only** | **5,326** |
-| **As share of all code** | **0.76%** |
+| Paired-single arithmetic (opcode 4) | 319 |
+| `psq_l` / `psq_lu` / `psq_st` / `psq_stu` / `psq_lx` etc. | 5,007 |
+| **Total** | **5,326 = 0.76% of code** |
 
-For context, an engine written natively for GameCube is saturated with these. At 0.76%
-this binary barely uses the hardware's distinctive features — which is exactly what an
-SH-4 codebase ported to PowerPC looks like. No locked-cache DMA idioms were observed.
+An engine written natively for GameCube is saturated with these. At 0.76% this binary
+barely touches the hardware's distinctive features — exactly what an SH-4 codebase ported
+to PowerPC looks like. No locked-cache DMA idioms were observed.
 
-Of the 5,326, the overwhelming majority (5,006) are quantized load/store, which
-translate mechanically: a load plus a scale-and-convert driven by a `GQR` register.
-Only 320 instructions are genuine paired-single SIMD math.
+▲ **GQR state is statically determinable**, which matters more than the raw count. The
+binary installs six constants and never varies them:
+
+```
+GQR0 = 0x00000000    GQR1 = 0x08040804    GQR2 = 0x00040004
+GQR3 = 0x00050005    GQR4 = 0x00060006    GQR5 = 0x00070007
+GQR6, GQR7 unused
+```
+
+**97.3% of quantized load/stores (4,872 of 5,007) use GQR0**, which is `f32`/scale-0 — an
+ordinary pair of float loads with no conversion at all. Only ~135 sites need a
+scale-and-convert helper. The recompiler needs no runtime GQR dispatch.
 
 ### Top opcodes
 
@@ -152,32 +202,80 @@ Only 320 instructions are genuine paired-single SIMD math.
 | 11 | `cmpi` | 22,649 | 3.25% |
 | 59 | single-precision FP | 19,308 | 2.77% |
 | 21 | `rlwinm` | 18,408 | 2.64% |
-| 52 | `stfs` | 17,791 | 2.55% |
-| 15 | `addis` | 17,340 | 2.49% |
 
-Float usage is substantial (`lfs` + `stfs` + FP ops ≈ 10%) but **scalar throughout** —
-consistent with the paired-single count.
+Float usage is substantial (~10%) but **scalar throughout**, consistent with the
+paired-single count.
 
-### Function count
+### ▲ Function count
 
 | Signal | Count |
 |---|---:|
 | Unique `bl` targets | 5,375 |
 | `stwu r1` prologues | 5,330 |
 | `blr` returns | 8,024 |
+| **Estimated entry points** | **~7,100–7,160** |
 
-The `bl` figure is a **lower bound** — it misses functions reached only through C++
-virtual dispatch or function pointers. The `blr` figure over-counts (multiple returns
-per function) while missing tail calls. True count is somewhere in **5,400–8,000**;
-Slice 1.2 will settle it exactly.
+v1 quoted 5,375 as the working figure. That undercounts by ~25%: **1,781 functions are
+never `bl`-called**, reached only through function-pointer tables or virtual dispatch, and
+431 are leaf functions with no stack frame at all.
+
+This does *not* rescale Phase 3. Codegen volume scales with **instructions**, and that
+number went slightly down. Function count affects symbol tables and the dispatch map.
+
+### ▲ Indirect branches — risk R1 drops from High to Low
+
+| Form | Count |
+|---|---:|
+| `bctr` | 296 — **all 296 are switch tables** |
+| `bctrl` | 248 |
+| `blrl` | 121 |
+| conditional `blr` | 527 |
+
+320 jump tables totalling 5,721 entries were recovered. Only 24 of 544 sites are
+vtable-shaped. The target set is closed within `boot.dol`, so **no interpreter fallback is
+needed**. One special case: the single `bla 0x60` at `0x80232278`, which is a
+to-be-copied exception-stub template rather than an unresolved branch.
+
+### ▲ Self-modifying code
+
+Only **4 `icbi` instructions** exist in 696,120. PowerPC's instruction cache is not
+coherent with stores, so runtime-generated code *must* be `icbi`'d before execution. All
+four sit in SDK cache primitives whose call sites target fixed low-memory exception
+vectors. Seven runtime-codegen sites exist in total, all confined to the MetroTRK debug
+stub, which can be stubbed out.
 
 ---
 
-## 5. Comparison to completed GameCube decompilations
+## 5. ▲ Hardware access
+
+The single most consequential finding of the review, because it invalidated the graphics
+plan (see [SPEC.md](SPEC.md) §7).
+
+| Measure | Count |
+|---|---:|
+| Stores to `0xCC008000` (GX write-gather pipe) | **414** (`stw` 241, `stb` 180, `stfs` 50, `sth` 31) |
+| Sites materialising `0xCC01xxxx` | 256 — **103 outside the SDK block** |
+| Sites materialising `0xCC00xxxx` | 172 |
+| `WPAR` (SPR 921) accesses | 3 |
+| `HID2` (SPR 920) accesses | 8 |
+
+`GXBegin`, `GXPosition3f32` and the rest of the vertex-submission family are SDK **inline**
+functions: they compile into the caller and store straight to the gather pipe. You cannot
+intercept a function that was inlined away, so a real write-gather pipe and a GX
+command-stream decoder are unavoidable.
+
+▲ **Video mode: 480i only.** Three `GXRenderModeObj` records in `.data3` — NTSC_INT,
+MPAL_INT, EURGB60_INT — all 640×480, full-height EFB, no progressive entry. The engine is
+paced by `VIWaitForRetrace` at 59.94 Hz, which makes VI the main loop rather than a
+late-phase detail.
+
+---
+
+## 6. Comparison to completed GameCube decompilations
 
 | Game | Functions | Decomp status |
 |---|---:|---|
-| **Skies of Arcadia Legends** | **~5,400–8,000** | **0%** |
+| **Skies of Arcadia Legends** | **~7,100–7,160** | **0%** |
 | Pikmin | 8,069 | 100% |
 | Super Mario Strikers | 8,605 | 100% |
 | Mario Party 4 | 10,986 | 100% |
@@ -186,29 +284,35 @@ Slice 1.2 will settle it exactly.
 | Animal Crossing | 20,288 | 100% |
 | Twilight Princess | 48,107 | 100% |
 
-Skies is smaller than every GameCube title that has been fully decompiled.
+Even at the corrected count, Skies remains smaller than every GameCube title that has been
+fully decompiled.
 
 ---
 
-## 6. Assessment
+## 7. Assessment
 
-**Favorable:**
+**Favourable:**
 
-- **No REL modules.** All code in one DOL. The single largest static-recompilation
-  risk is simply absent — every function has a fixed, statically known address.
-- **0.76% Gekko-specific instructions.** CPU translation is a contained problem.
-- **Smallest function count** of any GameCube game yet fully decompiled.
-- **Small RAM footprint** (3.3 of 24 MiB) — plenty of headroom for instrumentation.
-- **Turn-based JRPG.** Tolerant of timing imprecision in a way an action title is not.
+- **No runtime-loaded code.** Now proven properly: 4 `icbi` all in OS init, a closed call
+  graph, no module-loader symbols, and an exhaustive gate over 1.98 GiB of decompressed
+  assets finding zero PowerPC code.
+- **0.76% Gekko-specific instructions**, with GQR values static — the recompiler
+  specialises every quantized access at translation time.
+- **Indirect branches are tractable** — all 296 `bctr` are switch tables (R1: Low).
+- **Smallest function count** of any fully decompiled GameCube game.
+- **Turn-based JRPG** — tolerant of timing imprecision.
+- ▲ **The host toolchain is already installed** — MSVC 14.44, Windows SDK 10.0.26100,
+  cmake and ninja. v1 wrongly reported these missing.
 
-**Unfavorable:**
+**Unfavourable:**
 
-- **No symbol map.** The main gap. Mitigation is the SDK signature strategy (SPEC §5).
-- **Custom Sega audio engine.** No MusyX means no reference implementation; this is
-  original reverse engineering. Deferred to Phase 6.
-- **Zero prior decomp work.** The one public repo
-  (`Rainchus/SkiesOfArcadiaLegends`) is a single commit from 2025-05-07 —
-  a dtk scaffold that reassembles the DOL with no functions decompiled.
+- ▲ **Vertex submission cannot be HLE'd** (§5). This is the project's hardest problem and
+  v1 had it filed as a solved Medium risk.
+- **No symbol map**, and the SDK is only 7.8% of `.text` — so ~6,170 game functions stay
+  anonymous. Phase 2's real job is finding the code to *delete*, not to name.
+- ▲ **DSP microcode unknown.** If custom, Phase 6 grows from weeks to months.
+- **Zero prior decomp work.** The one public repo is a single commit from 2025-05-07 with
+  no functions decompiled.
 
-**Conclusion:** the favorable signals are unusually strong and the one serious gap has
-a credible mitigation that did not exist before 2026. Proceed.
+**Conclusion:** the favourable signals remain unusually strong, and the two serious
+problems — the FIFO and the DSP — are now identified rather than hidden. Proceed.
