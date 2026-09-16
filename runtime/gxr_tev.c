@@ -590,6 +590,8 @@ static inline int compare(unsigned mode, int a, int b)
     }
 }
 
+int g_tev_narrate; /* set by the renderer's SOA_GXR_PIXEL hook: print every stage of one pixel */
+
 /* Runs the stages for one pixel. ras[]: rasterized channel colors 0..255;
  * tex[]: texture coordinates per texcoord slot (s, t, q). */
 void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], uint8_t out[4], int* alpha_pass)
@@ -656,6 +658,11 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], ui
                 dc[i] = S->cclamp ? clamp255(r) : clamp_s11(r);
             }
         }
+        if (g_tev_narrate)
+            fprintf(stderr, "[tev] stage %u: map %u coord %u texel %d,%d,%d,%d ras %d,%d,%d,%d konst %d,%d,%d,%d; color sel %u,%u,%u,%u -> %d,%d,%d (dest %u); alpha sel %u,%u,%u,%u bias %u op %u shift %u (dest %u)\n",
+                    st, S->texmap, S->texcoord, bank[BANK_TEX], bank[BANK_TEX + 1], bank[BANK_TEX + 2], bank[BANK_TEX + 3],
+                    bank[BANK_RAS], bank[BANK_RAS + 1], bank[BANK_RAS + 2], bank[BANK_RAS + 3], S->konst[0], S->konst[1], S->konst[2], S->konst[3],
+                    S->ca, S->cb, S->cc, S->cd, dc[0], dc[1], dc[2], S->cdest, S->aa, S->ab, S->ac, S->ad, S->abias, S->aop, S->ashift, S->adest);
         /* Alpha */
         {
             int* da = &bank[S->adest * 4 + 3];

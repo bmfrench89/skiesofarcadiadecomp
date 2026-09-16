@@ -569,6 +569,18 @@ are now compared in floating point before conversion. `SOA_GXR_PIXEL=x,y`
 narrates every fragment that lands on one pixel, which is how the missing
 fragments were found.
 
+**Open: the battleship's searchlights.** In the opening the Valuan
+battleship's searchlight beams render as near-black slabs with lit rims.
+Per-pixel narration shows why: the beams are translucent quads drawn
+additively from a 16x16 four-bit gradient sprite the game builds at run
+time; their vertex colour is the night ambient plus a dim grey light, the
+combiner doubles texel times that colour, and the quads write depth, so
+the sky drawn afterwards fails behind them. Every step matches what the
+hardware would do with the same command stream, which leaves either a
+subtle hardware rule not modelled (a Z-write or alpha-test detail for
+blended pixels) or a mistake upstream in the vertex data the game
+generates. Needs a reference capture from real hardware or Dolphin.
+
 **Speed.** With every frame rasterised (640x480, eight worker threads) the
 port holds 59 retraces a second through the opening with the game thread
 about two-thirds idle; the renderer's main-thread share is under a fifth of

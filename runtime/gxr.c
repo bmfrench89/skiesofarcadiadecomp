@@ -633,7 +633,10 @@ static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], co
     int alpha_ok = 1;
     if (x == g_dbg_x && y == g_dbg_y) {
         uint8_t o[4]; int ok = 1;
+        extern int g_tev_narrate;
+        g_tev_narrate = 1;
         tev_pixel(&D->tev, col, tex, o, &ok);
+        g_tev_narrate = 0;
         fprintf(stderr, "[gxr] pixel %d,%d: col0 %d,%d,%d,%d tex0 %.3f,%.3f lod %.2f depth %.6f z-buf %.6f -> tev %d,%d,%d,%d alpha_ok %d blend %d z_en %d z_func %u\n",
                 x, y, col[0][0], col[0][1], col[0][2], col[0][3], tex[0][0], tex[0][1], tex[0][3], depth,
                 (float)g_efb_z[y][x] / 16777215.0f, o[0], o[1], o[2], o[3], ok, D->px.blend_en, D->px.z_en, D->px.z_func);
