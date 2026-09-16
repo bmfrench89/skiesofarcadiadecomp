@@ -103,15 +103,17 @@ def test_backreference_repeats_earlier_bytes():
 
 
 def test_backreference_can_overlap_itself():
-    """A match may read bytes it is still writing — the classic RLE idiom."""
+    """A match may read bytes it is still writing — the classic RLE idiom.
+
+    One literal 'X' lands at RING_START. The match then reads from RING_START
+    while writing just ahead of its own read cursor, so each iteration copies
+    the byte the previous one produced: a 5-byte match yields five more X's.
+    """
     stream = bytearray()
     stream.append(0b00000001)  # L M
     stream += b"X"
     stream += backref(RING_START, 5)
-    expected = b"X" + b"X\0\0\0\0"[:5]
-    got = decompress(container(bytes(stream), 6))
-    assert len(got) == 6
-    assert got[0:2] == b"XX"  # second X came from the overlapping read
+    assert decompress(container(bytes(stream), 6)) == b"XXXXXX"
 
 
 def test_output_is_clamped_to_declared_size():
