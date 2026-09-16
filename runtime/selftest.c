@@ -156,6 +156,84 @@ static int render_selftest(CpuState* s, char* got, size_t cap)
     return failures;
 }
 
+/* ---- decompiled functions against their recompiled twins ----------------
+ * src/ is also compiled natively (every function renamed dc_<name>, see
+ * tools/recompile.py). Each pair runs on the same bytes in guest memory: the
+ * twin through dispatch() with guest addresses, the decompiled C on host
+ * pointers into the same memory. Same answers on random inputs, or fail. */
+size_t dc_strlen(const char* str);
+char* dc_strchr(const char* str, int chr);
+void* dc_memchr(const void* src, int val, size_t n);
+void* dc___memrchr(const void* src, int val, size_t n);
+int dc_strncmp(const char* a, const char* b, size_t n);
+char* dc_strcat(char* dst, const char* src);
+char* dc_strncpy(char* dst, const char* src, size_t n);
+
+static uint32_t g_rng = 0x2545F491u;
+static uint32_t rnd(void) { g_rng ^= g_rng << 13; g_rng ^= g_rng >> 17; g_rng ^= g_rng << 5; return g_rng; }
+
+static void random_string(CpuState* s, uint32_t addr, unsigned len)
+{
+    unsigned i;
+    for (i = 0; i < len; i++) mem_w8(s, addr + i, (uint8_t)('a' + rnd() % 6)); /* a small alphabet: repeats matter */
+    mem_w8(s, addr + len, 0);
+}
+
+static int decomp_selftest(CpuState* s, char* got, size_t cap)
+{
+    const uint32_t A = SCRATCH + 0x1000, B = SCRATCH + 0x1200, DST = SCRATCH + 0x1400;
+    int failures = 0, round, bad = 0;
+    for (round = 0; round < 200 && !bad; round++) {
+        unsigned la = rnd() % 40, lb = rnd() % 40, n = rnd() % 48;
+        int chr = 'a' + (int)(rnd() % 8), r1, r2;
+        uint32_t p1, p2;
+        random_string(s, A, la); random_string(s, B, lb);
+
+        s->gpr[3] = A; call(s, 0x8025F1D8u); /* strlen */
+        if (s->gpr[3] != (uint32_t)dc_strlen((const char*)mem_ptr(s, A))) { bad = 1; snprintf(got, cap, "strlen round %d", round); }
+
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; call(s, 0x8025EF18u); /* strchr */
+        p1 = s->gpr[3];
+        { char* r = dc_strchr((const char*)mem_ptr(s, A), chr); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
+        if (p1 != p2) { bad = 1; snprintf(got, cap, "strchr round %d: twin %08X, C %08X", round, p1, p2); }
+
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; call(s, 0x8025C73Cu); /* memchr */
+        p1 = s->gpr[3];
+        { char* r = (char*)dc_memchr(mem_ptr(s, A), chr, n); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
+        if (p1 != p2) { bad = 1; snprintf(got, cap, "memchr round %d: twin %08X, C %08X", round, p1, p2); }
+
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; call(s, 0x8025C710u); /* __memrchr */
+        p1 = s->gpr[3];
+        { char* r = (char*)dc___memrchr(mem_ptr(s, A), chr, n); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
+        if (p1 != p2) { bad = 1; snprintf(got, cap, "memrchr round %d: twin %08X, C %08X", round, p1, p2); }
+
+        s->gpr[3] = A; s->gpr[4] = B; s->gpr[5] = n; call(s, 0x8025EF48u); /* strncmp */
+        r1 = (int)s->gpr[3]; r2 = dc_strncmp((const char*)mem_ptr(s, A), (const char*)mem_ptr(s, B), n);
+        if (r1 != r2) { bad = 1; snprintf(got, cap, "strncmp round %d: twin %d, C %d", round, r1, r2); }
+
+        /* strcat and strncpy write: run the twin, snapshot, run the C on a fresh copy, compare */
+        {
+            uint8_t twin[128], native[128];
+            memset(mem_ptr(s, DST), 'z', 96); random_string(s, DST, rnd() % 24);
+            memcpy(native, mem_ptr(s, DST), 128);
+            s->gpr[3] = DST; s->gpr[4] = A; call(s, 0x8025F0B0u); /* strcat */
+            memcpy(twin, mem_ptr(s, DST), 128);
+            dc_strcat((char*)native, (const char*)mem_ptr(s, A));
+            if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strcat round %d", round); }
+
+            memset(mem_ptr(s, DST), 'z', 96); mem_w8(s, DST + 96, 0);
+            memcpy(native, mem_ptr(s, DST), 128);
+            s->gpr[3] = DST; s->gpr[4] = B; s->gpr[5] = n; call(s, 0x8025F0DCu); /* strncpy */
+            memcpy(twin, mem_ptr(s, DST), 128);
+            dc_strncpy((char*)native, (const char*)mem_ptr(s, B), n);
+            if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strncpy round %d", round); }
+        }
+    }
+    if (!bad) snprintf(got, cap, "7 functions agree over %d rounds", round);
+    failures += check("decompiled vs recompiled", got, bad ? "agreement" : got);
+    return failures;
+}
+
 int selftest(CpuState* s)
 {
     char got[256];
@@ -268,6 +346,7 @@ int selftest(CpuState* s)
     }
 
     failures += render_selftest(s, got, sizeof got);
+    failures += decomp_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

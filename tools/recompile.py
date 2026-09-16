@@ -14,6 +14,7 @@ import argparse
 import collections
 import concurrent.futures
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -28,6 +29,18 @@ from soa.ppc import cfg  # noqa: E402
 from soa.recomp import Emitter  # noqa: E402
 
 RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
+
+
+_FUNC_DEF = re.compile(r"^[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*\n\{", re.M)
+
+
+def native_decomp_sources(src_dir: Path) -> tuple[list[str], list[str]]:
+    """src/**/*.c and the /D renames that prefix every function they define with dc_."""
+    files = sorted(src_dir.rglob("*.c")) if src_dir.is_dir() else []
+    names = set()
+    for f in files:
+        names.update(_FUNC_DEF.findall(f.read_text(encoding="utf-8")))
+    return [str(f) for f in files], [f"/D{n}=dc_{n}" for n in sorted(names)]
 
 
 def main() -> int:
@@ -146,6 +159,18 @@ def main() -> int:
         objs = sorted(args.out.glob("chunk_*.obj")) + [args.out / "dispatch.obj"]
         exe = args.out / "soa.exe"
         t0 = time.time()
+        # The hand-decompiled units (src/) are built natively too, every function
+        # renamed dc_<name> so they sit beside the C runtime's own strlen and
+        # friends; the selftest runs them against their recompiled twins.
+        dc_files, dc_defines = native_decomp_sources(Path("src"))
+        if dc_files:
+            ndir = args.out / "decomp"
+            ndir.mkdir(parents=True, exist_ok=True)
+            proc = toolchain.cl([*toolchain.CFLAGS, "/c", "/Iinclude", *dc_defines, f"/Fo{ndir}/", *dc_files], cwd=".")
+            if proc.returncode != 0:
+                print(proc.stdout[-2000:], file=sys.stderr)
+                return 1
+            objs += sorted(ndir.glob("*.obj"))
         proc = toolchain.cl(
             [
                 *toolchain.CFLAGS,

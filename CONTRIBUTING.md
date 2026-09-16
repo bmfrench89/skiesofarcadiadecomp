@@ -94,7 +94,9 @@ compiler and checked byte for byte against the executable:
 flags. A function counts as done when `tools/matchcheck.py` reports MATCH;
 `tools/disasm.py <name>` shows the target when it does not. The port keeps
 running the recompiled code either way: matching functions are proof of
-understanding, and slice 8.3 will let them replace their recompiled twins.
+understanding. They are also compiled natively (renamed `dc_*`) into the
+port, and `SOA_SELFTEST=1` runs each one against its recompiled twin on
+random inputs, so a match that is somehow wrong still gets caught.
 
 ## Commits
 

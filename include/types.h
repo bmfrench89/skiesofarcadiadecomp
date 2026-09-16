@@ -2,7 +2,11 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+#if defined(_WIN64)
+typedef unsigned long long size_t; /* the native twin build (tools/recompile.py) */
+#else
 typedef unsigned long size_t;
+#endif
 typedef signed char s8;
 typedef unsigned char u8;
 typedef signed short s16;
