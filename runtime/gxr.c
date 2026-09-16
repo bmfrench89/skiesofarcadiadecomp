@@ -712,10 +712,12 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
     if (g_debug && t_tid <= 1 && (g_tris <= 8 || (g_debug > 1 && g_draw_no >= (unsigned)g_debug))) /* SOA_GXR_DEBUG=N: also every triangle from draw N on */
         fprintf(stderr, "[gxr] tri (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) area %.1f scissor %d,%d-%d,%d\n",
                 a->sx, a->sy, a->depth, b->sx, b->sy, b->depth, c->sx, c->sy, c->depth, area, sc->x0, sc->y0, sc->x1, sc->y1);
-    minx = (int)floorf(fminf(a->sx, fminf(b->sx, c->sx)));
-    maxx = (int)ceilf(fmaxf(a->sx, fmaxf(b->sx, c->sx)));
-    miny = (int)floorf(fminf(a->sy, fminf(b->sy, c->sy)));
-    maxy = (int)ceilf(fmaxf(a->sy, fmaxf(b->sy, c->sy)));
+    /* Clamp in float first: a vertex just past the near plane can sit millions of
+     * pixels off screen, and a huge value converted to int becomes INT_MIN. */
+    minx = (int)fmaxf(-1e6f, floorf(fminf(a->sx, fminf(b->sx, c->sx))));
+    maxx = (int)fminf(1e6f, ceilf(fmaxf(a->sx, fmaxf(b->sx, c->sx))));
+    miny = (int)fmaxf(-1e6f, floorf(fminf(a->sy, fminf(b->sy, c->sy))));
+    maxy = (int)fminf(1e6f, ceilf(fmaxf(a->sy, fmaxf(b->sy, c->sy))));
     if (minx < sc->x0) minx = sc->x0;
     if (miny < sc->y0) miny = sc->y0;
     if (maxx > sc->x1) maxx = sc->x1;
