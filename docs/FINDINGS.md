@@ -559,6 +559,14 @@ music at 0.52, under the voices and effects the game mixes over it. So the
 ADPCM decode, the sample-rate conversion and the stream refills through
 ARAM are right. In 7.5 minutes of recording 104 samples clip.
 
+**Speed.** With every frame rasterised (640x480, eight worker threads) the
+port holds 59 retraces a second through the opening with the game thread
+about two-thirds idle; the renderer's main-thread share is under a fifth of
+a core. Headless, with the write-gather pipe stores going straight to the
+GX parser, guest time runs about ten times faster than the wall clock
+(`SOA_SPEED=10`: 594 retraces a second), which is what makes scripted
+exploration runs practical.
+
 **Text.** Dialogue, item names, character names and the battle's action
 window were all blank while stat labels, enemy names and damage numbers
 drew fine. A captured dialogue frame explained it: the game renders each
