@@ -143,6 +143,7 @@ _BRANCH = frozenset({"b", "bc", "bclr", "bcctr"})
 # Words that appear constantly and are worth naming for readability.
 NOP = 0x60000000
 BLR = 0x4E800020
+BCTR = 0x4E800420
 
 
 # --------------------------------------------------------------------------

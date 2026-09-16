@@ -218,3 +218,134 @@ def test_pointer_into_claimed_code_is_not_promoted():
     fns, _ = cfg.build_iterative(dol)
     assert BASE + 8 not in fns
     assert set(fns) == {BASE}
+
+
+# --------------------------------------------------------------------------
+# switch tables and returns
+# --------------------------------------------------------------------------
+
+BCTR = 0x4E800420
+
+
+def cmpli(ra: int, uimm: int) -> int:
+    return (10 << 26) | (ra << 16) | (uimm & 0xFFFF)
+
+
+def addis(rd: int, imm: int) -> int:
+    return (15 << 26) | (rd << 21) | (imm & 0xFFFF)
+
+
+def addi(rd: int, ra: int, imm: int) -> int:
+    return (14 << 26) | (rd << 21) | (ra << 16) | (imm & 0xFFFF)
+
+
+def rlwinm_x4(ra: int, rs: int) -> int:
+    """rlwinm ra, rs, 2, 0, 29 -- multiply an index by four."""
+    return (21 << 26) | (rs << 21) | (ra << 16) | (2 << 11) | (0 << 6) | (29 << 1)
+
+
+def lwzx(rd: int, ra: int, rb: int) -> int:
+    return (31 << 26) | (rd << 21) | (ra << 16) | (rb << 11) | (23 << 1)
+
+
+def mtctr(rs: int) -> int:
+    return (31 << 26) | (rs << 21) | (9 << 16) | (467 << 1)
+
+
+def bclr(bo: int, bi: int = 0) -> int:
+    return (19 << 26) | (bo << 21) | (bi << 16) | (16 << 1)
+
+
+def switch_dol(table_addr: int):
+    """A function that dispatches through a 3-entry mwcc switch table.
+
+    The table sits at `table_addr`, chosen so the @ha/@l split needs the
+    negative-low-half carry: hi must be rounded up when lo is negative.
+    """
+    lo = table_addr & 0xFFFF
+    if lo & 0x8000:
+        lo -= 0x10000
+    hi = (table_addr - lo) >> 16
+    words = [
+        stwu(-16),  # 0
+        cmpli(3, 2),  # 4   three cases: 0, 1, 2
+        bc(32, bo=12) | (1 << 16),  # 8   bgt -> default at +40
+        addis(5, hi),  # 12
+        rlwinm_x4(0, 3),  # 16
+        addi(5, 5, lo),  # 20
+        lwzx(0, 5, 0),  # 24
+        mtctr(0),  # 28
+        BCTR,  # 32
+        BLR,  # 36  case 0
+        BLR,  # 40  case 1 / default
+        BLR,  # 44  case 2
+    ]
+    targets = [BASE + 36, BASE + 40, BASE + 44]
+    return make_dol(words, data_words=targets, data_base=table_addr), targets
+
+
+def test_find_jump_tables_resolves_the_mwcc_idiom():
+    dol, targets = switch_dol(0x8040FFF0)  # forces the @ha carry
+    tables = cfg.find_jump_tables(dol)
+    assert set(tables) == {BASE + 32}
+    table = tables[BASE + 32]
+    assert table.base == 0x8040FFF0
+    assert table.targets == targets
+    assert table.count == 3
+
+
+def test_jump_table_targets_are_intra_function():
+    """Case labels become successors of the dispatching function, not entries."""
+    dol, targets = switch_dol(0x80400000)
+    fns = cfg.build(dol)
+    assert set(fns) == {BASE}
+    fn = fns[BASE]
+    assert fn.jump_tables == [BASE + 32]
+    assert not fn.has_indirect_branch
+    for t in targets:
+        assert t in fn.blocks
+    assert fn.returns == 3
+    assert fn.end == BASE + 48
+
+
+def test_case_labels_are_never_promoted_to_functions():
+    """Even though every case label is a data-section code pointer."""
+    dol, _ = switch_dol(0x80400000)
+    fns, stats = cfg.build_iterative(dol)
+    assert set(fns) == {BASE}
+    assert stats["jump_tables"] == 1
+    assert stats["case_labels"] == 3
+
+
+def test_bctr_without_a_table_is_unresolved():
+    dol = make_dol([stwu(-16), BCTR])
+    fn = cfg.build(dol)[BASE]
+    assert fn.unresolved_indirect == 1
+    assert fn.has_indirect_branch
+    assert fn.jump_tables == []
+
+
+def test_conditional_return_falls_through():
+    """beqlr returns on one path and continues on the other."""
+    #  0: stwu ; 4: beqlr ; 8: nop ; 12: blr
+    dol = make_dol([stwu(-16), bclr(12, 2), NOP, BLR])
+    fn = cfg.build(dol)[BASE]
+    assert fn.returns == 2
+    assert fn.end == BASE + 16
+    assert BASE + 8 in fn.blocks
+
+
+def test_unconditional_return_does_not_fall_through():
+    dol = make_dol([stwu(-16), BLR, NOP, NOP, NOP, NOP])
+    fn = cfg.build(dol)[BASE]
+    assert fn.returns == 1
+    assert fn.end == BASE + 8
+
+
+def test_iterative_promotes_a_frameless_leaf_after_a_return():
+    """li r3,0 ; blr has no prologue and nothing references it -- still a function."""
+    li_r3_0 = (14 << 26) | (3 << 21)
+    dol = make_dol([stwu(-16), BLR, li_r3_0, BLR])
+    fns, stats = cfg.build_iterative(dol)
+    assert set(fns) == {BASE, BASE + 8}
+    assert stats["from_gaps"] == 1

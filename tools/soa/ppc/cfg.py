@@ -21,7 +21,7 @@ its target is a known seed, which is why seeding matters more than the walk.
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from .decode import Insn, decode
+from .decode import BCTR, Insn, decode
 
 
 @dataclass
@@ -46,8 +46,15 @@ class Function:
     calls: set[int] = field(default_factory=set)
     tail_calls: set[int] = field(default_factory=set)
     has_frame: bool = False
-    has_indirect_branch: bool = False
     returns: int = 0
+    indirect_calls: int = 0  # bctrl / blrl: flow continues, target unknown
+    jump_tables: list[int] = field(default_factory=list)  # resolved bctr sites
+    unresolved_indirect: int = 0  # bctr sites we could not resolve
+
+    @property
+    def has_indirect_branch(self) -> bool:
+        """True when some computed branch in this function is still unresolved."""
+        return self.unresolved_indirect > 0
 
     @property
     def start(self) -> int:
@@ -159,7 +166,113 @@ def find_prologues(dol) -> set[int]:
     return found
 
 
-def _walk(entry: int, code: CodeView, seeds: frozenset[int], max_insns: int) -> Function:
+@dataclass
+class JumpTable:
+    """A resolved switch table: the ``bctr`` that dispatches through it, and its targets."""
+
+    site: int  # address of the bctr
+    base: int  # table address in a data section
+    targets: list[int] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return len(self.targets)
+
+
+_SPR_CTR = 9
+_MAX_TABLE = 4096
+_LOOKBACK = 24  # instructions to scan backward from a bctr
+
+
+def find_jump_tables(dol, code: CodeView | None = None) -> dict[int, JumpTable]:
+    """Resolve every ``bctr`` that dispatches through an mwcc switch table.
+
+    mwcc emits one idiom for every switch in this binary::
+
+        cmpli  cr0, rX, N          bound check: N+1 cases
+        bc     gt -> default
+        addis  rT, r0, hi          table address as an @ha/@l pair
+        rlwinm rI, rX, 2, 0, 29    index * 4  (sometimes pre-scaled)
+        addi   rT, rT, lo
+        lwzx   rC, rT, rI
+        mtspr  CTR, rC
+        bctr
+
+    We walk backward from the ``bctr`` collecting each piece by register. A
+    site that does not fit is left unresolved rather than guessed, and shows
+    up in ``Function.unresolved_indirect``.
+
+    Resolving these matters twice over: the targets become intra-function
+    successors, and they are *excluded* from function-entry seeding -- they
+    are case labels, and treating them as functions was the source of a
+    2,600-entry over-count.
+    """
+    code = code or CodeView(dol)
+    tables: dict[int, JumpTable] = {}
+    for section in dol.text:
+        data = dol.read(section.address, section.size)
+        for off in range(0, len(data) - 3, 4):
+            if int.from_bytes(data[off : off + 4], "big") != BCTR:
+                continue
+            site = section.address + off
+            table = _resolve_table(dol, code, site)
+            if table is not None:
+                tables[site] = table
+    return tables
+
+
+def _resolve_table(dol, code: CodeView, site: int) -> JumpTable | None:
+    ctr_src = table_reg = None
+    hi = lo = count = None
+
+    for back in range(1, _LOOKBACK + 1):
+        insn = code.at(site - 4 * back)
+        if insn is None or not insn.valid:
+            break
+        m = insn.mnemonic
+
+        # Each stage consumes the nearest matching instruction, walking backward.
+        if ctr_src is None:
+            if m == "mtspr" and insn.spr == _SPR_CTR:
+                ctr_src = insn.rd
+            continue
+        if table_reg is None:
+            if m == "lwzx" and insn.rd == ctr_src:
+                table_reg = insn.ra
+            continue
+        if lo is None:
+            if m == "addi" and insn.rd == table_reg and insn.ra == table_reg:
+                lo = insn.imm
+            continue
+        if hi is None:
+            if m == "addis" and insn.rd == table_reg and insn.ra == 0:
+                hi = insn.imm
+            continue
+        if m == "cmpli":
+            count = insn.imm + 1
+            break
+
+    if None in (ctr_src, table_reg, lo, hi, count) or not (0 < count <= _MAX_TABLE):
+        return None
+
+    base = ((hi << 16) + lo) & 0xFFFFFFFF
+    section = dol.section_at(base)
+    if section is None or not section.contains(base + 4 * count - 4):
+        return None
+
+    targets = [dol.word(base + 4 * k) for k in range(count)]
+    if not all(code.contains(t) for t in targets):
+        return None
+    return JumpTable(site=site, base=base, targets=targets)
+
+
+def _walk(
+    entry: int,
+    code: CodeView,
+    seeds: frozenset[int],
+    max_insns: int,
+    tables: dict[int, JumpTable],
+) -> Function:
     """Trace one function's blocks from its entry."""
     fn = Function(entry=entry)
     pending = [entry]
@@ -201,23 +314,39 @@ def _walk(entry: int, code: CodeView, seeds: frozenset[int], max_insns: int) -> 
 
             if insn.is_call:
                 if insn.is_indirect_branch:
-                    fn.has_indirect_branch = True
+                    fn.indirect_calls += 1
                 elif insn.target is not None:
                     fn.calls.add(insn.target)
                 continue  # a call returns; flow proceeds to the next instruction
 
-            if insn.is_return:
+            block.terminator = insn.mnemonic
+
+            if insn.mnemonic == "bclr":
+                # A return. When conditional (beqlr, bnelr, ...) execution
+                # falls through on the untaken path -- stopping here truncated
+                # every function containing one.
                 fn.returns += 1
-                block.terminator = insn.mnemonic
+                if not insn.is_unconditional:
+                    block.successors.append(addr)
+                    pending.append(addr)
                 break
 
-            if insn.is_indirect_branch:  # bctr / computed blr
-                fn.has_indirect_branch = True
-                block.terminator = insn.mnemonic
+            if insn.mnemonic == "bcctr":
+                table = tables.get(insn.addr)
+                if table is not None:
+                    fn.jump_tables.append(insn.addr)
+                    for t in table.targets:
+                        if t not in block.successors:
+                            block.successors.append(t)
+                            pending.append(t)
+                else:
+                    fn.unresolved_indirect += 1
+                if not insn.is_unconditional:
+                    block.successors.append(addr)
+                    pending.append(addr)
                 break
 
             target = insn.target
-            block.terminator = insn.mnemonic
 
             if target is not None and target != entry and target in seeds:
                 fn.tail_calls.add(target)  # b into another function
@@ -247,6 +376,7 @@ def build(
 ) -> dict[int, Function]:
     """Recover every function reachable from the DOL entry and all call sites."""
     code = CodeView(dol)
+    tables = find_jump_tables(dol, code)
 
     seeds = {dol.entry_point}
     seeds |= find_bl_targets(dol)
@@ -255,7 +385,7 @@ def build(
     seeds = {a for a in seeds if code.contains(a)}
 
     frozen = frozenset(seeds)
-    return {entry: _walk(entry, code, frozen, max_insns) for entry in sorted(seeds)}
+    return {entry: _walk(entry, code, frozen, max_insns, tables) for entry in sorted(seeds)}
 
 
 def find_code_pointers(dol) -> set[int]:
@@ -306,36 +436,57 @@ def build_iterative(
     false entry.
     """
     code = CodeView(dol)
+    tables = find_jump_tables(dol, code)
+    case_labels = {t for table in tables.values() for t in table.targets}
 
-    # High-confidence seeds only. Data-section pointers are held back: most of
-    # them are switch-case labels pointing *into* a function body, not entries.
+    # High-confidence seeds only, minus anything a switch table points at:
+    # those are case labels inside a function body, never entries.
     seeds = {dol.entry_point} | find_bl_targets(dol)
-    seeds = {a for a in seeds if code.contains(a)}
-    pointers = {a for a in find_code_pointers(dol) if code.contains(a)}
+    seeds = {a for a in seeds if code.contains(a)} - case_labels
+    pointers = {a for a in find_code_pointers(dol) if code.contains(a)} - case_labels
 
-    stats = {"rounds": 0, "seeds_per_round": [len(seeds)], "from_pointers": 0, "from_gaps": 0}
+    # mwcc lays functions end to end with no padding in the main text section,
+    # so once switch tables are resolved any hole there is a function nothing
+    # references directly -- even one that opens with no recognisable prologue.
+    # Smaller text sections (the init/exception-vector ROM image) do contain
+    # data, so there we still insist a gap *look* like a function.
+    main_text = max(dol.text, key=lambda s: s.size)
+
+    stats = {
+        "rounds": 0,
+        "seeds_per_round": [len(seeds)],
+        "from_pointers": 0,
+        "from_gaps": 0,
+        "jump_tables": len(tables),
+        "case_labels": len(case_labels),
+    }
     functions: dict[int, Function] = {}
 
     for _ in range(max_rounds):
         stats["rounds"] += 1
         frozen = frozenset(seeds)
-        functions = {entry: _walk(entry, code, frozen, max_insns) for entry in sorted(seeds)}
+        functions = {
+            entry: _walk(entry, code, frozen, max_insns, tables) for entry in sorted(seeds)
+        }
 
         claimed = coverage(dol, functions)["claimed"]
         added: set[int] = set()
 
-        # A pointer into already-claimed code is a case label; a pointer into
-        # unclaimed code is a function nothing ever bl-calls.
+        # A pointer into already-claimed code is a case label or a mid-function
+        # label; a pointer into unclaimed code is a function nothing bl-calls.
         fresh_pointers = {a for a in pointers - seeds if a not in claimed}
         added |= fresh_pointers
         stats["from_pointers"] += len(fresh_pointers)
 
-        # Remaining holes: promote only those that *open* like a function.
-        gap_starts = {
-            start
-            for start, _ in find_gaps(dol, functions)
-            if start not in claimed and _looks_like_entry(code, start)
-        }
+        gap_starts: set[int] = set()
+        for start, _ in find_gaps(dol, functions, min_words=1):
+            if start in claimed or start in case_labels:
+                continue
+            insn = code.at(start)
+            if insn is None or not insn.valid:
+                continue
+            if main_text.contains(start) or _looks_like_entry(code, start):
+                gap_starts.add(start)
         gap_starts -= seeds | added
         added |= gap_starts
         stats["from_gaps"] += len(gap_starts)
