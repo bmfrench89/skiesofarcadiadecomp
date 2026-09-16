@@ -63,8 +63,9 @@ bytes you need or skip.
 ## Regenerating the function inventory
 
 `config/functions.tsv` and `config/symbols.txt` come from
-`tools/inventory.py`, which runs control-flow recovery over the DOL and can
-merge display names from a decomp-toolkit (`dtk`) symbol file. `dtk` is
+`tools/inventory.py`, which runs control-flow recovery over the DOL, merges
+the evidence-backed names in `config/names.txt` and can merge display names
+from a decomp-toolkit (`dtk`) symbol file. `dtk` is
 optional and not vendored: drop a release binary into `vendor/dtk/` (also
 gitignored) and pass its `symbols.txt` with `--dtk`. Without it, functions
 keep their `fn_XXXXXXXX` names, which is fine for building and running.

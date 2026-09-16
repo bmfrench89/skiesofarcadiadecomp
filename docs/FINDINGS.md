@@ -605,6 +605,6 @@ and the Alfonso scene reads "We've finally found her...".
   transfer; a short delay) removed the `memFree Error`s: with instant
   completion the SDK's completion callbacks could run at the next loop
   edge, before the requesting code had finished, which never happens on
-  the console. The remaining divergence at the battle transition is a
-  package entry whose data pointer reads as `0xE0C0C2E7` -- the same value
-  in every run, so a data or relocation problem rather than a race.
+  the console. The divergence that remained at the battle transition (a
+  package entry whose data pointer read as `0xE0C0C2E7`, the same value in
+  every run) was the ARAM DMA direction bit described above.

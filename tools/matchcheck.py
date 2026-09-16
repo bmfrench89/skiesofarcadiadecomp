@@ -60,7 +60,14 @@ def read_elf(data: bytes):
                 n, value, size, info, other, shndx = struct.unpack(">IIIBBH", data[o : o + 16])
                 nm = data[st["off"] + n :].split(b"\0", 1)[0].decode()
                 symbols.append(
-                    {"name": nm, "value": value, "size": size, "type": info & 0xF, "shndx": shndx}
+                    {
+                        "name": nm,
+                        "value": value,
+                        "size": size,
+                        "type": info & 0xF,
+                        "bind": info >> 4,
+                        "shndx": shndx,
+                    }
                 )
         elif s["type"] == 4:  # RELA
             table = relocs.setdefault(s["info"], {})
@@ -100,6 +107,11 @@ def main() -> int:
         ours = data[sec["off"] + sym["value"] : sec["off"] + sym["value"] + sym["size"]]
         addr = by_name.get(sym["name"])
         if addr is None:
+            # A static helper the compiler inlined at every call site is still
+            # emitted in the object but has no counterpart in the executable.
+            if sym["bind"] == 0:  # STB_LOCAL
+                print(f"{sym['name']:24s} static helper, inlined (no executable counterpart)")
+                continue
             print(f"{sym['name']:24s} not in the inventory")
             failures += 1
             continue

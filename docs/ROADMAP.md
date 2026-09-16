@@ -27,7 +27,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 
 ---
 
-## Phase 0 — Foundation `[~]`
+## Phase 0 — Foundation `[x]`
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
@@ -50,10 +50,10 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 |---|---|---|---|
 | `[x]` | **1.1** Gekko disassembler | M | **Done:** 696,144/697,784 words decode. `.text1` at 99.9997%; `.text0` at 30.8% (it is a ROM image of exception vectors with embedded strings and padding). Full paired-single and `psq_*` coverage across all three opcode-4 field widths |
 | `[x]` | **1.1b** Decoder cross-validation | S | **Done.** Diffed vs capstone + dtk over all 697,784 words. Six defects fixed, worst mislabelled 19,306 float instructions. Whole-image test now passes |
-| `[x]` | **1.2** Function boundary detection | M | **Done.** 7,166 functions recovered; cross-checked against dtk's 7,117 with **99.77% size agreement** and 99.70% `.text` coverage. 62 ours-only / 13 dtk-only, the latter almost entirely the MetroTRK debug stub reached only via `rfi`/vectors. Handles the 1,781 never-`bl`-called functions (data-pointer + gap seeding) and frameless leaves |
+| `[x]` | **1.2** Function boundary detection | M | **Done.** 7,144 functions in the inventory; at 7,166 it was cross-checked against dtk's 7,117 with **99.77% size agreement** and 99.70% `.text` coverage. 62 ours-only / 13 dtk-only, the latter almost entirely the MetroTRK debug stub reached only via `rfi`/vectors. Handles the 1,781 never-`bl`-called functions (data-pointer + gap seeding) and frameless leaves |
 | `[x]` | **1.3** Jump tables + indirect branches | M | **Done (jump tables).** 296/296 `bctr` resolved as switch tables by backward def-chain tracking of the mwcc idiom, including the four whose bound check is a conditional return (`bgtlr`); targets become intra-function successors, not entries. Full `bctrl`/`blrl` classification and the `bla 0x60` special case remain |
 | `[ ]` | **1.4** Data classification | M | Partition `.data0..5` **and `.text0`** into vtables, jump tables, float pools, strings, static initialisers. Reconcile the disagreement over whether jump tables live only in `.data3` or also `.data4` |
-| `[x]` | **1.5** Symbol database | S | **Done.** `config/symbols.txt` (dtk format, 16,531 symbols) and `config/functions.tsv` (per-function metadata). 249 functions carry real names from dtk's SDK signature database; the rest are `fn_XXXXXXXX`. C identifiers are always `fn_`; pretty names are display-only so `exit`/`__start` never collide |
+| `[x]` | **1.5** Symbol database | S | **Done.** `config/symbols.txt` (dtk format, 16,509 symbols) and `config/functions.tsv` (per-function metadata). 254 functions carry real names from dtk's SDK signature database and 74 more come from `config/names.txt` (slice 2.2); the rest are `fn_XXXXXXXX`. C identifiers are always `fn_`; pretty names are display-only so `exit`/`__start` never collide |
 | `[ ]` | **1.6** Constant-propagation engine | M | **Correctness requirement, not an optimisation.** mwcc materialises addresses through per-TU pooled base registers and the `r2`/`r13` SDA bases. Peephole `lis`/`addi` matching misses most references. Needed by 1.3, 1.4, and all of Phase 3 |
 
 **Exit / M1:** exact function count, complete call graph, every indirect branch classified.
@@ -64,7 +64,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 
 ---
 
-## Phase 2 — HLE boundary `[ ]` → **M2**
+## Phase 2 — HLE boundary `[~]` → **M2**
 
 Reframed in v2. This phase is not about naming game functions — 92% of `.text` is game
 code and out of reach. It is about identifying the **936 SDK functions (7.8%) we delete
@@ -75,14 +75,14 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **2.1** Run `dtk dol split` | S | **Done** with slice 8.1: 254 SDK names, the 11-section split, `config/GEAE8P/` |
 | `[x]` | **2.2** Harvest self-naming strings | S | **Done:** 61 functions named from diagnostic strings that name their own routine (`config/names.txt`, merged by `tools/inventory.py`): the script VM's handlers (`scpt*`), the async loader (`akFioReadASync`), effects, `DVDReadAsync` |
 | `[ ]` | **2.3** Build one donor SDK | M | `mariopartyrd/marioparty4` — the only confirmed `0x2301` banner match. ~+89 names. **Do not budget for building all four repos**; a second donor adds ~8 |
-| `[ ]` | **2.4** Signature match + triage | M | Ranked report, manual confirmation, false-positive check (size agreement is not verification). Populate `config/symbols.toml` |
+| `[ ]` | **2.4** Signature match + triage | M | Ranked report, manual confirmation, false-positive check (size agreement is not verification). Populate `config/names.txt` |
 | `[x]` | **2.5** Delimit the replacement set | S | **Done:** the SDK block `0x802319E0`–`0x80266854` is split per library in `config/GEAE8P/splits.txt` (`sdk/*`), the middleware library `0x80266854`–`0x802AC7DC` as `lib/middleware.c`; the HLE bindings in `config/hle.txt` name what the runtime replaces |
 
 **Exit / M2:** we know which code to throw away.
 
 ---
 
-## Phase 3 — Recompiler + reference interpreter `[ ]` → **M3**, **M4**
+## Phase 3 — Recompiler + reference interpreter `[~]` → **M3**, **M4**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
@@ -92,7 +92,7 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **3.3** Floating point + FPSCR | M | **Done.** Single ops fill both halves and round via `(float)`; fused forms use `fma()` under `/fp:strict`; `fctiw[z]`, `fcmp[uo]`, `fsel`, FPSCR bit ops. **Semantics unverified until 3.7** |
 | `[x]` | **3.4** Paired singles + GQR | S | **Done.** Emitter covers all 25 `ps_*` ops and every `psq_*` form, verified end to end (a quantised u8 store scales and saturates natively); `psq_load`/`psq_store` decode GQR type/scale at runtime with truncating, saturating quantisation. Generic on purpose until the differ confirms semantics; specialising on the six static GQRs is a later optimisation |
 | `[x]` | **3.5** Indirect branch dispatch | M | **Done:** `dispatch()` generated as a switch over all 7,144 entries; all 296 switch tables inline (the last four had a `bgtlr` bound check) |
-| `[x]` | **3.6** Whole-DOL translation | M | **Done: 7,166 functions → 18 files, 52.7 MB of C, 99.999% instruction coverage (696,047 of 696,052); all 19 translation units compile under MSVC** (3 s at `/Od`, parallel). Remaining: the 5 unresolved `bctr` |
+| `[x]` | **3.6** Whole-DOL translation | M | **Done: 7,144 functions → 18 files, 55.7 MB of C, 100% instruction coverage (696,171 of 696,171); all 19 translation units compile under MSVC** (3 s at `/Od`, parallel). |
 | `[ ]` | **3.7** Reference interpreter + lockstep differ | M | **The oracle. Replaces v1's Dolphin tracer, which does not exist.** C interpreter over the same `CpuState`, sharing the runtime's memory and HLE. Compares per basic block, then per instruction on failure. No trace files, O(1) storage. **Must land alongside 3.2, not later** — 3.2's test vectors have no other source |
 
 **Exit / M3:** the game binary exists as compilable native C. **Reached.**
@@ -153,7 +153,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 ---
 
-## Phase 7 — Playable `[ ]` → **M8**
+## Phase 7 — Playable `[~]` → **M8**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
@@ -165,7 +165,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 ---
 
-## Phase 8 — Progressive decompilation `[ ]` *(parallel, ongoing)*
+## Phase 8 — Progressive decompilation `[~]` *(parallel, ongoing)*
 
 Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 
@@ -174,7 +174,7 @@ Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 | `[x]` | **8.1** dtk-compatible splits | M | **Done:** `config/GEAE8P/` (config.yml, splits.txt, symbols.txt) drives `dtk dol split` on the user's own DOL: 23 objects, the SDK split per library (os, dvd, vi, gx, exi, si, MetroTRK, MSL, ...), the middleware library (807 functions) and the game (5,362) as units of their own, ready to be subdivided as decompilation names files |
 | `[x]` | **8.2** mwcc build pipeline | M | **Done:** `tools/fetch_toolchain.py` fetches the Metrowerks compilers into `vendor/`; `tools/decomp.py` builds every unit in `config/GEAE8P/units.txt` with the compiler and flags it names and `tools/matchcheck.py` compares each function with the executable word for word. First unit: MSL `strlen` and `strchr`, byte-matching with mwcc 1.3.2 `-O4,p` |
 | `[x]` | **8.3** Function swap-in harness | M | **Done:** decompiled functions are compiled natively (`dc_*`) and bound in `config/hle.txt` through adapters in `runtime/decomp_swap.c`, so the port runs them instead of the translation; the translation survives as `recomp_fn_*` and `SOA_SELFTEST=1` runs each pair on the same guest memory with random inputs (nine string and memory routines, 200 rounds). Byte-oriented routines only until decompiled code reads wider fields through byte-order-aware accessors |
-| `[~]` | **8.4** Decomp grind | XL | **Started:** 12 functions match word for word (nine MSL string/memory routines, three of the game's ARAM cache helpers); the game code is mwcc 1.3.2 `-O4,p` like its libraries. `src/game/aramcache_wip.c` holds two routines still being matched |
+| `[~]` | **8.4** Decomp grind | XL | **Started:** 12 functions match word for word (nine MSL string/memory routines, three of the game's ARAM cache helpers); the game code is mwcc 1.3.2 `-O4,p` like its libraries. `src/soa/aramcache_wip.c` holds two routines still being matched |
 
 ---
 
@@ -215,9 +215,9 @@ Phases 2 and 3 remain independent and can proceed in parallel.
 
 ## Immediate next actions
 
-1. **0.7** — DSP microcode probe *(in flight)*
-2. **1.1b** — decoder cross-validation *(in flight)*
-3. **1.6** — constant-propagation engine, then **1.2** → **1.3** → **M1**
+1. **4.7** — CARD saves: reach a save point in scripted play and round-trip a save
+2. **7.2** / **7.3** — battles beyond the tutorial and the hold; the ship and overworld sections
+3. **8.4** — the decomp grind, with **1.4** and **1.6** still open on the analysis side
 
 > **Correction to v1:** the C++ toolchain is **already installed** — MSVC 14.44.35207,
 > Windows SDK 10.0.26100, and `cmake`/`ninja` under VS BuildTools. `cl.exe` simply is not

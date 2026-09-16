@@ -5,4 +5,12 @@
 # against the executable word for word.
 src/sdk/msl/string.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include	native
 src/sdk/msl/mem.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include	native
-src/game/aramcache.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/soa/aramcache.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/strcpy.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/strcmp.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/fillmem.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/strstr.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/misc.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/soa/aramcache_valid.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/soa/aramcache_find.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/ar/arq.c	1.2.5n	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include

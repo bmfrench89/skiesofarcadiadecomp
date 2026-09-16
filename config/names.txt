@@ -75,3 +75,14 @@
 0x8022ABEC	aramCacheFind	lowercase name searched in the 16 package paths
 0x8022ACA8	aramCacheFetch	ARQ ARAM-to-main of one slot
 0x8022A854	aramCacheStage	state machine loading the 16 packages into ARAM
+0x8025EF88	strcmp	decompiled byte-for-byte (src/)
+0x8025C6C4	memcmp	decompiled byte-for-byte (src/)
+0x8025C620	wctomb	decompiled byte-for-byte (src/)
+0x8025F2B4	strtol	decompiled byte-for-byte (src/)
+0x80243A34	__ARQServiceQueueLo	decompiled byte-for-byte (src/)
+0x80243B34	__ARQCallbackHack	decompiled byte-for-byte (src/)
+0x80243B38	__ARQInterruptServiceRoutine	decompiled byte-for-byte (src/)
+0x80243C04	ARQInit	decompiled byte-for-byte (src/)
+0x80243C74	ARQPostRequest	decompiled byte-for-byte (src/)
+0x80243DD0	ARQSetChunkSize	decompiled byte-for-byte (src/)
+0x80243DF0	ARQGetChunkSize	decompiled byte-for-byte (src/)

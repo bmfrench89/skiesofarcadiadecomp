@@ -68,7 +68,8 @@ how it went.
   the executable, and the same C compiled natively and run against its
   recompiled twin on random inputs. Nine MSL string and memory routines
   match, and the port now runs them natively in place of the translation:
-  the first decompiled code in the shipping path.
+  the first decompiled code in the shipping path. Three of the
+  game's ARAM cache helpers followed (`src/soa/aramcache.c`).
 
 ## Open
 

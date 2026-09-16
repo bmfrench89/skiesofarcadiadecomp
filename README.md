@@ -16,7 +16,7 @@ favorable target:
 |---|---|---|
 | REL modules | **none** | All code is in one DOL. Static recompilation sees the whole program. |
 | Gekko-only instructions | **0.76%** | Dreamcast-lineage code barely touches paired singles or locked cache. |
-| Function count | **~5.4k–8k** | Smaller than *any* GameCube game yet fully decompiled. |
+| Function count | **7,144** | Smaller than *any* GameCube game yet fully decompiled. |
 | Symbol map | absent | The one real gap — mitigated by SDK signature lifting (see spec). |
 
 ## Documents
