@@ -30,8 +30,7 @@ favorable target:
 The game boots, plays its intro, reaches the title screen and starts a new
 game, rendered by a software implementation of the GameCube's graphics
 pipeline in a window with keyboard or gamepad input. See the roadmap for
-what is done and what is not (audio is mixed but not yet heard; saves are
-not implemented; rendering has no fog or mipmaps yet).
+what is done and what is not (saves are not implemented yet).
 
 ## Building and running
 
@@ -70,6 +69,7 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a` |
 | `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
+| `SOA_NOSOUND=1` | no audio device |
 | `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
 | `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
 

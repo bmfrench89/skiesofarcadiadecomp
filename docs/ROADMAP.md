@@ -22,7 +22,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | **M4** | CPU verified correct | Phase 3+4 | Recompiled code matches the reference interpreter, lockstep |
 | **M5** | First frame | Phase 5 | Something the game drew, in a window |
 | **M6** | Title screen | Phase 5 | The actual title screen, correct |
-| **M7** | Audio | Phase 6 | Music and SFX |
+| **M7** | Audio | Phase 6 | Music and SFX. **Reached in first form:** the AX mixer runs the driver's command lists and the AI DMA plays through waveOut |
 | **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game starts and the opening cutscene renders |
 
 ---
@@ -140,16 +140,16 @@ Gated on **4.1b (the gather pipe)**, not on M2. See SPEC §7.
 
 ---
 
-## Phase 6 — Audio `[ ]` → **M7**
+## Phase 6 — Audio `[~]` → **M7 reached**
 
 Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[x]` | **6.1** AI/ARAM/DSP mail | M | **Done** (`runtime/aram.c`, `dsp.c`): ARAM as a host buffer, DMA, DSP mailbox protocol for the stock AX boot and command lists, AI DMA clock raising AIDINT every 5 ms. No mixing yet.  ARAM as a host buffer, DMA, audio interrupt timing |
-| `[ ]` | **6.2** DSPADPCM decode | S | Standard Nintendo ADPCM, well documented |
-| `[ ]` | **6.3** Sega mixer | **L** | Stock AX ucode confirmed, so this is a mixer reimplementation. Dolphin's AX HLE handles this exact CRC and its semantics are publicly documented |
-| `[ ]` | **6.4** Streamed BGM | M | Stereo `.dsp` pairs stream and loop |
+| `[x]` | **6.2** DSPADPCM decode | S | **Done** in `runtime/ax.c` (with PCM16/PCM8, loops, per-voice rate conversion) |
+| `[~]` | **6.3** AX mixer | **L** | **Working** (`runtime/ax.c`): voices, envelopes, per-ms updates, main/aux buses, 32-bit CPU exchange buffers, this build's mixer-control encoding (L/R always; bits for aux A/B, surround, ramps). Not yet: SETUP ramps, compressor, initial-time-delay |
+| `[~]` | **6.4** Streamed BGM | M | Streams flow through the same voices; not yet verified against the disc's `.dsp` pairs |
 
 ---
 

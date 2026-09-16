@@ -101,6 +101,12 @@ void dsp_stub_boot(void)
     g_rom_after_stub = 1;
 }
 
+void ax_command_list(CpuState* s, uint32_t addr);
+void ax_report(void);
+void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate);
+void audio_report(void);
+static CpuState* g_cpu;
+
 static void handle_mail(uint32_t mail)
 {
     g_mails_in++;
@@ -113,9 +119,10 @@ static void handle_mail(uint32_t mail)
         }
         return;
     }
-    if (g_expect == 2) { /* command-list address */
+    if (g_expect == 2) { /* command-list address: the microcode's frame of work */
         g_expect = 0;
         g_cmdlists++;
+        if (g_cpu) ax_command_list(g_cpu, mail);
         push_out(DSP_YIELD, 1);
         return;
     }
@@ -180,7 +187,7 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     if (ea < DSP_BASE || ea >= DSP_BASE + 0x40 || size != 2) return 0;
     switch (ea - DSP_BASE) {
     case 0x00: g_in_hi = (uint32_t)v & 0xFFFFu; return 1;
-    case 0x02: handle_mail((g_in_hi << 16) | ((uint32_t)v & 0xFFFFu)); return 1;
+    case 0x02: g_cpu = s; handle_mail((g_in_hi << 16) | ((uint32_t)v & 0xFFFFu)); return 1;
     case 0x30: g_dma_start = (g_dma_start & 0xFFFFu) | (((uint32_t)v & 0xFFFFu) << 16); return 1;
     case 0x32: g_dma_start = (g_dma_start & 0xFFFF0000u) | ((uint32_t)v & 0xFFFFu); return 1;
     case 0x36: {
@@ -203,14 +210,20 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 void dsp_poll(CpuState* s)
 {
     if ((g_dma_ctrl & 0x8000u) && g_dma_period && tb_now(s) >= g_dma_due) {
+        uint32_t bytes = (g_dma_ctrl & 0x7FFFu) * 32u;
         g_dma_due += g_dma_period;
         g_dma_blocks_done++;
+        /* the block the DAC just played */
+        if (bytes && (g_dma_start & MEM_MASK) + bytes <= MEM1_SIZE)
+            audio_push_block(mem_ptr(s, g_dma_start | 0x80000000u), bytes, 32000);
         dsp_csr_raise(CSR_AIDINT);
     }
 }
 
 void dsp_report(void)
 {
+    ax_report();
+    audio_report();
     fprintf(stderr,
             "[dsp] booted=%d; %llu mails in, %llu out, %llu command lists; %llu AI DMA blocks played\n",
             g_booted, (unsigned long long)g_mails_in, (unsigned long long)g_mails_out,

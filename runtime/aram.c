@@ -118,6 +118,12 @@ int aram_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     }
 }
 
+uint8_t* aram_memory(void)
+{
+    if (!g_aram) g_aram = (uint8_t*)calloc(1, ARAM_SIZE);
+    return g_aram;
+}
+
 /* True when a finished DMA has an enabled, unacknowledged interrupt. */
 int aram_irq_pending(void)
 {
