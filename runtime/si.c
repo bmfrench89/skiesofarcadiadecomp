@@ -74,7 +74,8 @@ static uint16_t button_named(const char* name, size_t len)
 
 static void script_init(void)
 {
-    const char* p = getenv("SOA_PAD");
+    const char* env = getenv("SOA_PAD");
+    const char* p = env;
     g_script_n = 0;
     while (p && *p && g_script_n < (int)(sizeof g_script / sizeof g_script[0])) {
         char* end;
@@ -110,7 +111,16 @@ static void script_init(void)
         g_script_n++;
         if (*p == ',') p++;
     }
-    if (g_script_n) fprintf(stderr, "[si] %d scripted controller events\n", g_script_n);
+    /* A script that parsed as nothing used to print nothing, which looks
+     * exactly like the game ignoring the input. Say what was understood, and
+     * where the parse gave up if it did not reach the end. */
+    if (g_script_n) {
+        fprintf(stderr, "[si] %d scripted controller events\n", g_script_n);
+        if (p && *p) fprintf(stderr, "[si] SOA_PAD not understood from \"%s\" on; that part is ignored\n", p);
+    } else if (env && *env) {
+        fprintf(stderr, "[si] SOA_PAD=\"%s\" parsed no events, so nothing will be pressed "
+                        "(expected frame:buttons,... e.g. 1700:start)\n", env);
+    }
 }
 
 uint64_t irq_retrace_count(void);
@@ -146,12 +156,22 @@ static uint16_t buttons_now(uint8_t stick[2])
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
 
 /* The 8-byte controller report: buttons, main stick, C stick, triggers.
- * Live input from the window when there is one, else the script. */
+ * Live input from the window when there is one, and the script either way --
+ * SOA_PAD normally means no window at all (main.c decides that), but an
+ * explicit SOA_WINDOW=1 alongside it should watch the script run, not
+ * silently drop it. */
 static void pad_report(uint8_t out[8])
 {
     uint16_t b;
     uint8_t stick[2] = {128, 128}, cstick[2] = {128, 128}, trig[2] = {0, 0};
-    if (!window_pad(&b, stick, cstick, trig)) b = buttons_now(stick);
+    if (window_pad(&b, stick, cstick, trig)) {
+        uint8_t sstick[2] = {128, 128};
+        b |= buttons_now(sstick); /* the person's input and the script's, together */
+        if (sstick[0] != 128) stick[0] = sstick[0];
+        if (sstick[1] != 128) stick[1] = sstick[1];
+    } else {
+        b = buttons_now(stick);
+    }
     out[0] = (uint8_t)((b >> 8) & 0x1F);           /* 0 0 1? S Y X B A -- bit 5 (use origin) clear */
     out[1] = (uint8_t)(0x80 | (b & 0x7F));         /* 1 L R Z U D R L */
     out[2] = stick[0]; out[3] = stick[1];          /* main stick */

@@ -26,6 +26,12 @@ typedef struct {
 const uint32_t* gx_cp_regs(void);
 const uint32_t* gx_xf_regs(void);
 const uint32_t* gx_bp_regs(void);
+/* Frames presented so far, counted from 0: what SOA_FRAMES, SOA_SNAP and
+ * SOA_PAD all count. SOA_FRAMES=N therefore runs the frames numbered 0..N-1
+ * and stops before presenting frame N -- SOA_SNAP=N SOA_FRAMES=N writes
+ * 0000.png and not NNNN.png, and SOA_PAD="N:a" needs SOA_FRAMES>N to fire. */
+unsigned gx_frame_count(void);
+void gx_set_frame_limit(unsigned frames);
 
 /* Pipeline (gxr.c) */
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
@@ -33,6 +39,7 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t value);
 int gxr_enabled(void);
 void gxr_enable(int on);
 void gxr_set_output(const char* png_path);
+void gxr_draw_every_frame(void); /* a window is open: do not skip the frames SOA_SNAP is not writing */
 void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);

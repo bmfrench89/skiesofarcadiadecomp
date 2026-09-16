@@ -3,21 +3,40 @@
  *
  * Enough to boot the recompiled program until it touches hardware we have
  * not modelled -- and to say exactly what it touched, which is how the
- * device models get prioritised. Reads return zero; writes are counted per
- * register and the first few of each are printed.
+ * device models get prioritised. Reads return zero; accesses are counted per
+ * register for the end-of-run report, and SOA_MMIO=1 additionally prints the
+ * first few of each as they happen.
  */
 #include "cpu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN /* mmsystem.h defines MMIO_READ/MMIO_WRITE, which are ours below */
+#include <windows.h>
+#endif
 
 #define MMIO_BASE 0xCC000000u
 #define MMIO_SLOTS 0x2000u /* 32 KB of registers, one slot per word */
-#define LOG_PER_REG 6
+#define LOG_PER_REG 6      /* per-register budget for the SOA_MMIO log */
+#define LOG_SYSCALLS 6     /* its own budget, so changing the one above says nothing about syscalls */
 
 static uint32_t g_hits[MMIO_SLOTS];
 
 static uint64_t g_syscalls;
+
+/* Several hundred lines in the first second of a run, all of it a diagnostic
+ * the end-of-run report already summarises: worth having, not worth reading
+ * unless you asked. SOA_MMIO=1 asks. */
+static int mmio_verbose(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char* env = getenv("SOA_MMIO");
+        v = env && atoi(env) ? 1 : 0;
+    }
+    return v;
+}
 
 void hle_report(void);
 uint64_t gx_pipe_bytes(void);
@@ -76,8 +95,10 @@ static void note(CpuState* s, const char* dir, uint32_t ea, unsigned size, uint6
     if (ea < MMIO_BASE || ea >= MMIO_BASE + MMIO_SLOTS * 4u) {
         static int strict = -1, shown;
         if (strict < 0) strict = getenv("SOA_STRICT") ? 1 : 0;
+        /* Its own tag: this one is a bug signal, not the log SOA_MMIO turns
+         * on, and it stays on so that grepping away [mmio] cannot hide it. */
         if (shown++ < 20 || strict)
-            fprintf(stderr, "[mmio] %s %08X/%u = %llx (outside modelled range)\n", dir, ea, size,
+            fprintf(stderr, "[mmio!] %s %08X/%u = %llx (outside modelled range)\n", dir, ea, size,
                     (unsigned long long)v);
         if (strict) { /* almost always a garbage pointer: stop at the first one, with the stack */
             fprintf(stderr, "[strict] pc %08X lr %08X; backtrace:", s->pc, s->lr);
@@ -88,7 +109,8 @@ static void note(CpuState* s, const char* dir, uint32_t ea, unsigned size, uint6
         return;
     }
     slot = (ea - MMIO_BASE) >> 2;
-    if (g_hits[slot]++ < LOG_PER_REG)
+    g_hits[slot]++; /* counted whether or not it is printed: the report is built from these */
+    if (mmio_verbose() && g_hits[slot] <= LOG_PER_REG)
         fprintf(stderr, "[mmio] %-3s %s %08X/%u = %llx\n", peripheral(ea), dir, ea, size,
                 (unsigned long long)v);
 }
@@ -128,6 +150,27 @@ void hle_report(void)
 {
     uint32_t i, distinct = 0;
     uint64_t total = 0;
+    /* Every stop path ends here and then leaves, and printing the busiest
+     * registers empties the table it prints from -- so a second report (the
+     * frame limit and a window close landing together) would be a lie.
+     *
+     * The loser waits rather than returning: every caller _exit()s the moment
+     * this returns, and doing that while the winner is still inside the chain
+     * would cut the report off partway and leave the WAV header unfinalised
+     * (audio_report, at the end of irq_report, is what writes the real data
+     * size). The wait is bounded so a wedged reporter cannot hang the exit. */
+    static long reported;
+    static volatile long done;
+#ifdef _WIN32
+    if (InterlockedCompareExchange(&reported, 1, 0) != 0) {
+        int waited = 0;
+        while (!done && waited < 5000) { Sleep(1); waited++; }
+        return;
+    }
+#else
+    if (reported) return;
+    reported = 1;
+#endif
     irq_report();
     threads_report();
     for (i = 0; i < MMIO_SLOTS; i++) {
@@ -149,6 +192,8 @@ void hle_report(void)
             g_hits[best_i] = 0;
         }
     }
+    fflush(stderr);
+    done = 1; /* release any other stop path waiting above */
 }
 
 void hle_dump(CpuState* s, uint32_t pc)
@@ -182,7 +227,8 @@ void guest_unimplemented(CpuState* s, uint32_t pc, const char* what)
 void guest_syscall(CpuState* s, uint32_t pc)
 {
     (void)s;
-    if (g_syscalls++ < LOG_PER_REG) fprintf(stderr, "[sc] at %08X\n", pc);
+    g_syscalls++; /* the count is in the report either way; the lines are hardware tracing like the MMIO log */
+    if (mmio_verbose() && g_syscalls <= LOG_SYSCALLS) fprintf(stderr, "[sc] at %08X\n", pc);
 }
 
 /* The Gekko timebase ticks at a quarter of the 162 MHz bus clock. */

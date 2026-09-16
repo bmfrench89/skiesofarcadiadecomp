@@ -110,6 +110,7 @@ static int render_selftest(CpuState* s, char* got, size_t cap)
 
     _putenv("SOA_RENDER=1");
     _putenv("SOA_THREADS=1");
+    _putenv("SOA_SNAP="); /* a snapshot interval left in the environment would skip the one frame this draws */
     if (!gxr_enabled()) { fprintf(stderr, "[selftest] renderer disabled; skipping render checks\n"); return 0; }
     gxr_reset_efb();
 

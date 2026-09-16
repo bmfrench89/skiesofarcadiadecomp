@@ -30,11 +30,19 @@ void gxr_enable(int on);
 void gxr_set_output(const char* png_path);
 void watch_init(void);
 void window_start(void);
+void gx_set_frame_limit(unsigned frames);
+unsigned gx_frame_count(void);
+void gxr_draw_every_frame(void);
 int irq_in_handler(void);
 
 /* A loop that never touches hardware never trips the MMIO spin detector, so
- * a second thread waits SOA_WATCHDOG seconds (default 20) and then reports
- * the block the guest is in. */
+ * a second thread waits SOA_WATCHDOG seconds without a video frame and then
+ * reports the block the guest is in. It defaults to 20 seconds headless and
+ * to off when a window is open, since a window means a person is driving and
+ * a timeout would cut them off mid-play; an explicit SOA_WATCHDOG wins
+ * either way. It times a stall, not the run: a run that is still presenting
+ * frames is working, and killing it is what made a long SOA_FRAMES run
+ * impossible headless. */
 #ifdef _WIN32
 #include <process.h>
 #include <windows.h>
@@ -74,16 +82,25 @@ void guest_backtrace(CpuState* s, uint32_t sp);
 static unsigned __stdcall watchdog(void* arg)
 {
     unsigned secs = (unsigned)(uintptr_t)arg;
-    unsigned n = 0;
+    unsigned n = 0, frames = gx_frame_count();
     ULONGLONG t0 = GetTickCount64();
     /* Sleep(1) is really ~15 ms at the default timer resolution, so pace the
      * wait by the clock rather than by counting sleeps. */
-    while (GetTickCount64() - t0 < (ULONGLONG)secs * 1000u) {
+    for (;;) {
+        unsigned now;
         Sleep(1);
         /* Block addresses are 4-aligned; bit 0 tags samples taken in a handler. */
         if (n < SAMPLES) g_samples[n++] = g_state->pc | (irq_in_handler() ? 1u : 0u);
+        /* Every frame presented restarts the clock, so the timeout means what
+         * the message says -- nothing happened for this long -- and the
+         * profile below covers the stall rather than the whole run. A boot
+         * that never reaches its first frame still reports, on time. */
+        now = gx_frame_count();
+        if (now != frames) { frames = now; n = 0; t0 = GetTickCount64(); continue; }
+        if (GetTickCount64() - t0 >= (ULONGLONG)secs * 1000u) break;
     }
-    fprintf(stderr, "[watchdog] still running after %us; last block %08X\n", secs, g_state->pc);
+    fprintf(stderr, "[watchdog] no video frame for %us (SOA_WATCHDOG=0 disables it, SOA_WATCHDOG=s "
+                    "changes the timeout); %u frames so far, last block %08X\n", secs, frames, g_state->pc);
     hle_dump(g_state, g_state->pc);
     fprintf(stderr, "  backtrace from r1:");
     guest_backtrace(g_state, g_state->gpr[1]);
@@ -92,15 +109,43 @@ static unsigned __stdcall watchdog(void* arg)
     _exit(5);
     return 0;
 }
-static void start_watchdog(CpuState* s)
+static int g_watchdog_on;
+
+/* Returns the timeout it armed, so the startup line can say what will end
+ * the run rather than guess. */
+static unsigned start_watchdog(CpuState* s, int windowed)
 {
     const char* env = getenv("SOA_WATCHDOG");
-    unsigned secs = env ? (unsigned)atoi(env) : 20u;
+    unsigned secs = env ? (unsigned)atoi(env) : (windowed ? 0u : 20u);
     g_state = s;
-    if (secs) _beginthreadex(NULL, 0, watchdog, (void*)(uintptr_t)secs, 0, NULL);
+    if (secs) {
+        /* Only report a timeout there is really a thread behind: the startup
+         * line says what will end the run, and a thread that never started
+         * would make that a lie. */
+        uintptr_t h = _beginthreadex(NULL, 0, watchdog, (void*)(uintptr_t)secs, 0, NULL);
+        if (!h) {
+            fprintf(stderr, "[watchdog] cannot start the watchdog thread; nothing will time this run out\n");
+            return 0;
+        }
+        CloseHandle((HANDLE)h);
+        g_watchdog_on = 1;
+    }
+    return secs;
+}
+
+/* The window standing down the watchdog is only safe while the window turns
+ * up; if it fails to open, the run would be headless with nothing watching
+ * it at all. window.c calls this on that path. */
+void watchdog_fallback(void)
+{
+    const char* env = getenv("SOA_WATCHDOG");
+    if (g_watchdog_on || !g_state || (env && !atoi(env))) return;
+    fprintf(stderr, "[watchdog] no window after all; arming the headless default\n");
+    start_watchdog(g_state, 0);
 }
 #else
-static void start_watchdog(CpuState* s) { (void)s; }
+static unsigned start_watchdog(CpuState* s, int windowed) { (void)s; (void)windowed; return 0; }
+void watchdog_fallback(void) {}
 #endif
 
 #define ARENA_HI 0x81700000u
@@ -174,6 +219,73 @@ static void setup_low_memory(uint8_t* mem, const uint8_t* boot, uint32_t fst_add
     w32(mem, 0x800000FCu, 0x1CF7C580u); /* CPU clock, 486 MHz */
 }
 
+/* snprintf returns the length it wanted, not the length it wrote, so clamp
+ * before using the total as an offset again. */
+#define STOP_ADD(buf, n, ...)                                            \
+    do {                                                                 \
+        (n) += snprintf((buf) + (n), sizeof(buf) - (size_t)(n), __VA_ARGS__); \
+        if ((n) > (int)sizeof(buf) - 1) (n) = (int)sizeof(buf) - 1;      \
+    } while (0)
+
+/* One line before the guest starts. Which mode the port is in, what will end
+ * the run and how to drive it are exactly the three things the switch names
+ * used to answer wrongly, so say them outright. The keys are window.c's
+ * mapping; keep the two in step. */
+static void print_mode(int windowed, int rendering, int scripted, unsigned frames, unsigned snap,
+                       unsigned watchdog_secs)
+{
+    char stop[256], snaps[80];
+    int n = 0;
+    stop[0] = '\0';
+    snaps[0] = '\0';
+    /* A snapshot needs something to snapshot: without SOA_RENDER the EFB copy
+     * hook never reaches the renderer, so no PNG is ever written. Say that
+     * rather than promise files that will not appear. */
+    if (snap && rendering)
+        snprintf(snaps, sizeof snaps, ", a snapshot to build/frames every %u frames", snap);
+    if (frames) STOP_ADD(stop, n, "stopping after %u frames", frames);
+    if (windowed) STOP_ADD(stop, n, "%sEscape or closing the window quits", n ? ", " : "");
+    if (watchdog_secs)
+        STOP_ADD(stop, n, "%swatchdog if no frame for %us (SOA_WATCHDOG=0 disables it)", n ? ", " : "",
+                 watchdog_secs);
+    if (!n) snprintf(stop, sizeof stop, "nothing will stop it -- Ctrl-C to quit");
+    if (windowed)
+        fprintf(stderr, "[run] window%s%s; %s; keys X=A Z=B C=X V=Y, Enter or Space=START, Q=L E=R R=Z, "
+                        "T/F/G/H=D-pad up/left/down/right, arrows or WASD=stick, IJKL=C-stick\n",
+                rendering ? "" : " (blank until SOA_RENDER=1: nothing is drawn without it)", snaps, stop);
+    else if (snap && rendering)
+        fprintf(stderr, "[run] headless%s; %s\n", snaps, stop);
+    else if (snap)
+        fprintf(stderr, "[run] headless; SOA_SNAP is set but SOA_RENDER is not, so nothing is drawn and "
+                        "no snapshot is written; %s\n", stop);
+    else if (rendering)
+        fprintf(stderr, "[run] headless, rendering with nowhere to put it -- SOA_WINDOW=1 for a window, "
+                        "SOA_SNAP=n for PNGs in build/frames; %s\n", stop);
+    else
+        fprintf(stderr, "[run] headless; %s\n", stop);
+    if (scripted)
+        fprintf(stderr, "[run] SOA_PAD drives the controller%s\n",
+                windowed ? "; the keyboard and gamepad add to it" : "");
+}
+
+static void usage(void)
+{
+    fprintf(stderr,
+            "soa.exe [extracted-dir]             run the game (default directory: extracted)\n"
+            "soa.exe --replay build/fifo/0000    render one captured frame to <base>.png\n"
+            "\n"
+            "Environment (PowerShell: $env:SOA_RENDER='1'):\n"
+            "  SOA_RENDER=1     draw the game; a window opens unless SOA_SNAP or SOA_PAD is set\n"
+            "  SOA_WINDOW=0|1   force the window off or on\n"
+            "  SOA_FRAMES=n     run n video frames (numbered 0..n-1), then stop and print the report\n"
+            "  SOA_SNAP=n       write build/frames/NNNN.png every n frames; needs SOA_RENDER=1\n"
+            "  SOA_WATCHDOG=s   report and stop after s seconds with no frame (default 20 headless,\n"
+            "                   off when a window is open; 0 disables it)\n"
+            "  SOA_MMIO=1       log the first few accesses of every hardware register\n"
+            "  SOA_PAD=f:btns   scripted controller, e.g. 1700:start (implies no window)\n"
+            "The rest of the switches, and the keyboard mapping, are in README.md.\n");
+}
+
 int main(int argc, char** argv)
 {
     const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";
@@ -182,6 +294,22 @@ int main(int argc, char** argv)
     size_t dol_size, boot_size, fst_size;
     uint32_t fst_addr, fst_max;
     static CpuState s;
+
+    /* An option we do not know is a typo, not a directory: saying so beats
+     * booting the game as though nothing had been asked for. */
+    if (argc > 1 && argv[1][0] == '-') {
+        int replay = strcmp(argv[1], "--replay") == 0;
+        if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "-?") == 0) {
+            usage();
+            return 0;
+        }
+        if (!replay || argc < 3) {
+            fprintf(stderr, "%s: %s\n", argv[1],
+                    replay ? "--replay needs the base path of a captured frame" : "unknown option");
+            usage();
+            return 1;
+        }
+    }
 
     s.mem = (uint8_t*)calloc(1, MEM1_SIZE);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
@@ -192,7 +320,11 @@ int main(int argc, char** argv)
     boot = slurp(path, &boot_size);
     snprintf(path, sizeof path, "%s/sys/fst.bin", dir);
     fst = slurp(path, &fst_size);
-    if (!dol || !boot || !fst) return 1;
+    if (!dol || !boot || !fst) {
+        fprintf(stderr, "[boot] %s does not look like an extracted disc (sys/main.dol, sys/boot.bin and "
+                        "sys/fst.bin live there); run: python tools/extract.py <your disc dump> --iso\n", dir);
+        return 1;
+    }
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
 
@@ -221,15 +353,38 @@ int main(int argc, char** argv)
         gxr_set_output(png);
         return gx_replay(&s, argv[2]);
     }
-    start_watchdog(&s);
     {
-        /* A window when rendering for a person: SOA_RENDER=1 without
-         * headless snapshots, unless SOA_WINDOW=0. */
+        /* A window when rendering for a person: SOA_RENDER is set and neither
+         * of the two switches that mean nobody is watching -- SOA_SNAP, which
+         * writes frames to disk, and SOA_PAD, which drives the controller from
+         * a script the live keyboard would otherwise override. SOA_WINDOW
+         * forces it either way. SOA_FRAMES has no bearing here -- it only says
+         * when to stop. */
         const char* r = getenv("SOA_RENDER");
         const char* w = getenv("SOA_WINDOW");
-        int want = r && atoi(r) && !getenv("SOA_FRAMES");
+        const char* f = getenv("SOA_FRAMES");
+        const char* snapenv = getenv("SOA_SNAP");
+        const char* pad = getenv("SOA_PAD");
+        unsigned frames = f ? (unsigned)atoi(f) : 0u;
+        unsigned snap = snapenv ? (unsigned)atoi(snapenv) : 0u;
+        int rendering = r && atoi(r);
+        int scripted = pad && *pad;
+        int want = rendering && !snap && !scripted;
+        unsigned secs;
         if (w) want = atoi(w) != 0;
-        if (want) window_start();
+#ifndef _WIN32
+        want = 0; /* window.c is stubs off Windows; do not promise a window or a quit key */
+#endif
+        gx_set_frame_limit(frames);
+        /* Skipping the frames between snapshots is a headless speed-up. A
+         * window asked for alongside them wants every frame drawn, or it
+         * shows the clear colour all but one frame in N. */
+        if (want && snap) gxr_draw_every_frame();
+        /* The watchdog has to know about the window, so decide the window
+         * first; window_open() cannot answer yet, the UI thread has not run. */
+        secs = start_watchdog(&s, want);
+        print_mode(want, rendering, scripted, frames, snap, secs);
+        if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
     }
     ENTRY_FN(&s);
 

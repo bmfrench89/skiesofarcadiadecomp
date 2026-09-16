@@ -24,6 +24,7 @@
 
 long gxr_presented(void);
 void hle_report(void);
+void watchdog_fallback(void);
 
 static HWND g_hwnd;
 static volatile int g_open;
@@ -45,7 +46,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
-        if (g_bgra && g_shown_w) {
+        if (!(g_bgra && g_shown_w)) {
+            /* Nothing rasterized yet (or SOA_RENDER unset, so nothing ever
+             * will be): the class has no background brush and WM_ERASEBKGND
+             * is refused, so without this the client area shows whatever was
+             * behind the window. The startup line promises blank; make it so. */
+            RECT rc;
+            GetClientRect(h, &rc);
+            FillRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        } else {
             BITMAPINFO bi;
             RECT rc;
             GetClientRect(h, &rc);
@@ -99,10 +108,17 @@ static unsigned __stdcall ui_thread(void* arg)
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
     g_hwnd = CreateWindowA("SoaWindow", "Skies of Arcadia Legends -- native", WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
                            CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, wc.hInstance, NULL);
-    if (!g_hwnd) { fprintf(stderr, "[window] CreateWindow failed\n"); g_open = 0; return 0; }
+    if (!g_hwnd) {
+        /* The watchdog stood down because this window was coming; without
+         * either, nothing would ever end the run. */
+        fprintf(stderr, "[window] CreateWindow failed; the run continues headless\n");
+        g_open = 0;
+        watchdog_fallback();
+        return 0;
+    }
     ShowWindow(g_hwnd, SW_SHOW);
     g_open = 1;
-    fprintf(stderr, "[window] open at %dx (Escape or close to quit)\n", g_scale);
+    fprintf(stderr, "[window] open at %dx\n", g_scale); /* the keys and the quit key are in the startup line */
     for (;;) {
         long now;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -124,8 +140,17 @@ static unsigned __stdcall ui_thread(void* arg)
 void window_start(void)
 {
     const char* env = getenv("SOA_SCALE");
+    uintptr_t h;
     if (env && atoi(env) > 0) g_scale = atoi(env);
-    _beginthreadex(NULL, 0, ui_thread, NULL, 0, NULL);
+    h = _beginthreadex(NULL, 0, ui_thread, NULL, 0, NULL);
+    if (!h) {
+        /* Same hole as a failed CreateWindow, one step earlier: the watchdog
+         * stood down for a window that is not coming. */
+        fprintf(stderr, "[window] cannot start the UI thread; the run continues headless\n");
+        watchdog_fallback();
+        return;
+    }
+    CloseHandle((HANDLE)h);
 }
 
 int window_open(void)

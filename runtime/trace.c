@@ -67,9 +67,21 @@ uint32_t g_watch_addr, g_watch_len;
 void watch_init(void)
 {
     const char* env = getenv("SOA_WATCH");
+    const char* text = env;
     if (!env) return;
     g_watch_addr = (uint32_t)strtoul(env, (char**)&env, 0);
     g_watch_len = *env == ',' ? (uint32_t)strtoul(env + 1, NULL, 0) : 4u;
+    /* The watchdog's own message says "SOA_WATCHDOG=0 disables it", and half
+     * remembering it as SOA_WATCH=0 used to install a watchpoint over guest
+     * address zero, print a line that looks like success, and leave the
+     * watchdog armed. Guest addresses start at 0x80000000. */
+    if (g_watch_addr < 0x80000000u) {
+        fprintf(stderr, "[watch] SOA_WATCH=\"%s\" is not a guest address (did you mean SOA_WATCHDOG?); "
+                        "no watchpoint set\n", text);
+        g_watch_len = 0;
+        g_watch_addr = 0;
+        return;
+    }
     fprintf(stderr, "[watch] %08X..%08X\n", g_watch_addr, g_watch_addr + g_watch_len);
 }
 

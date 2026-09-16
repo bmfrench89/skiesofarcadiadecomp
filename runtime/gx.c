@@ -60,6 +60,19 @@ static unsigned g_frame;
 static const char* g_dump_list = NULL;
 static int g_dump_checked;
 
+/* SOA_FRAMES=n stops the run here rather than in the renderer, so it counts
+ * the frames the game presents whether or not anything is being drawn, and
+ * counts the same ones SOA_PAD scripts against. main sets it once the guest
+ * is about to run, which keeps --replay and the selftest out of it. */
+static unsigned g_frame_limit;
+void hle_report(void);
+void gxr_flush(void);
+
+void gx_set_frame_limit(unsigned frames)
+{
+    g_frame_limit = frames;
+}
+
 static int frame_wanted(unsigned frame)
 {
     const char* p;
@@ -116,6 +129,18 @@ static void frame_end(CpuState* s)
         fprintf(stderr, "[gx] captured frame %u: %zu command bytes\n", g_frame, g_cap_len);
     }
     g_frame++;
+    if (g_frame_limit && g_frame >= g_frame_limit) {
+        /* The copy for this frame is already queued (load_bp calls the
+         * renderer before us), so flushing here finishes it -- any snapshot
+         * is written and the counters are real before the report. Leave with
+         * _exit for the reason window.c does: the rasterizer's workers are
+         * spinning, and CRT teardown around them can hang. */
+        fprintf(stderr, "[boot] %u frames done (SOA_FRAMES)\n", g_frame);
+        gxr_flush();
+        hle_report();
+        fflush(NULL);
+        _exit(0);
+    }
     g_cap_len = 0;
     memcpy(g_cap_cp, g_cp, sizeof g_cp);
     memcpy(g_cap_xf, g_xf, sizeof g_xf);

@@ -15,7 +15,10 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <direct.h>
 #include <windows.h>
+#else
+#include <sys/stat.h>
 #endif
 
 double g_gxr_time[T_COUNT];
@@ -36,7 +39,8 @@ uint8_t g_efb[EFB_H][EFB_W][4];
 uint32_t g_efb_z[EFB_H][EFB_W];
 
 static int g_enabled = -1;
-static unsigned g_frames_every, g_frame_no;
+static unsigned g_snap_every; /* SOA_SNAP=n; frames are numbered by gx_frame_count() so the PNG names agree with SOA_FRAMES and SOA_PAD */
+static int g_draw_every;      /* a window is open: draw every frame, snapshots or not */
 static char g_png_path[512];
 static uint64_t g_tris, g_lines, g_points, g_clipped, g_verts_bad;
 static uint64_t g_copies_tex, g_copies_xfb, g_rej_bary;
@@ -60,9 +64,9 @@ int gxr_enabled(void)
 {
     if (g_enabled < 0) {
         const char* env = getenv("SOA_RENDER");
-        const char* every = getenv("SOA_FRAMES");
+        const char* snap = getenv("SOA_SNAP");
         g_enabled = env && atoi(env) ? 1 : 0;
-        g_frames_every = every ? (unsigned)atoi(every) : 0;
+        g_snap_every = snap ? (unsigned)atoi(snap) : 0;
         g_cull_flip = getenv("SOA_CULLFLIP") ? 1 : 0;
         if (getenv("SOA_GXR_PIXEL")) sscanf(getenv("SOA_GXR_PIXEL"), "%d,%d", &g_dbg_x, &g_dbg_y);
         g_debug = getenv("SOA_GXR_DEBUG") ? atoi(getenv("SOA_GXR_DEBUG")) : 0;
@@ -95,6 +99,16 @@ void gxr_enable(int on)
 void gxr_set_output(const char* png_path)
 {
     snprintf(g_png_path, sizeof g_png_path, "%s", png_path);
+}
+
+/* SOA_SNAP skips the frames it is not writing, which is what makes a
+ * snapshot run fast -- but the XFB copy still clears and presents every
+ * frame, so with a window that skip shows the clear colour all but one frame
+ * in N. main calls this when it opens a window anyway (SOA_WINDOW=1 with
+ * SOA_SNAP set). */
+void gxr_draw_every_frame(void)
+{
+    g_draw_every = 1;
 }
 
 static float xff(const uint32_t* xf, unsigned i)
@@ -1088,9 +1102,11 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (!gxr_enabled() || count == 0) return;
     ++g_draw_no;
     if (g_draw_limit && g_draw_no > g_draw_limit) return; /* SOA_GXR_DRAWS=N: stop after N draws */
-    /* Headless snapshots (SOA_FRAMES=N): only the frames being written are
-     * worth rasterizing; the game then runs at full speed between them. */
-    if (g_frames_every && !g_png_path[0] && (g_frame_no % g_frames_every) != 0) return;
+    /* Headless snapshots (SOA_SNAP=N): only the frames being written are
+     * worth rasterizing; the game then runs at full speed between them. A
+     * window (g_draw_every) or a replay (g_png_path) wants every frame it
+     * shows, whatever the interval says. */
+    if (g_snap_every && !g_draw_every && !g_png_path[0] && (gx_frame_count() % g_snap_every) != 0) return;
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
 
@@ -1298,6 +1314,22 @@ const uint8_t* gxr_screen(int* w, int* h)
     return &g_screen[0][0][0];
 }
 
+/* Nothing else creates build/frames, so the first SOA_SNAP run on a clean
+ * tree used to write nothing and say only that it could not. */
+static void ensure_frames_dir(void)
+{
+    static int done;
+    if (done) return;
+    done = 1;
+#ifdef _WIN32
+    _mkdir("build");
+    _mkdir("build/frames");
+#else
+    mkdir("build", 0777);
+    mkdir("build/frames", 0777);
+#endif
+}
+
 static void write_frame_png(const char* path, int w, int h)
 {
     if (!png_write_rgba(path, &g_screen[0][0][0], w, h, EFB_W * 4)) fprintf(stderr, "[gxr] cannot write %s\n", path);
@@ -1333,9 +1365,9 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     if (to_screen) {
         char path[512];
         int want = 0;
+        unsigned frame = gx_frame_count(); /* the front end increments it after this copy, so this is the frame being presented */
         if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
-        else if (g_frames_every && (g_frame_no % g_frames_every) == 0) { snprintf(path, sizeof path, "build/frames/%04u.png", g_frame_no); want = 1; }
-        g_frame_no++;
+        else if (g_snap_every && (frame % g_snap_every) == 0) { ensure_frames_dir(); snprintf(path, sizeof path, "build/frames/%04u.png", frame); want = 1; }
         if (want) { gxr_flush(); TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h)); }
     }
 }

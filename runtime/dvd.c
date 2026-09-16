@@ -79,7 +79,13 @@ static uint64_t g_reads, g_bytes;
 void dvd_init(const char* path)
 {
     g_disc = fopen(path, "rb");
-    if (!g_disc) fprintf(stderr, "[dvd] no disc image at %s; reads will return zeros\n", path);
+    /* tools/extract.py's --iso is optional, so an extracted/ without it looks
+     * complete and boots -- and then every asset reads as zeros. Name the fix
+     * here and again in the end-of-run report, which is where someone who
+     * scrolled past this line will be looking. */
+    if (!g_disc)
+        fprintf(stderr, "[dvd] no disc image at %s; every read will return zeros "
+                        "-- re-run tools/extract.py with --iso\n", path);
 }
 
 static void disc_read(CpuState* s, uint64_t offset, uint32_t addr, uint32_t length)
@@ -91,7 +97,15 @@ static void disc_read(CpuState* s, uint64_t offset, uint32_t addr, uint32_t leng
         return;
     }
     if (g_disc && _fseeki64(g_disc, (long long)offset, SEEK_SET) == 0) got = fread(dst, 1, length, g_disc);
-    if (got < length) memset(dst + got, 0, length - got);
+    if (got < length) {
+        /* A truncated or partial disc.iso otherwise has no diagnostic at all:
+         * the game just gets zeros where an asset should be. Once is enough. */
+        static int shown;
+        if (g_disc && !shown++)
+            fprintf(stderr, "[dvd] read past the end of the disc image at %llu (+%u bytes of zeros); "
+                            "the image looks incomplete\n", (unsigned long long)offset, (unsigned)(length - got));
+        memset(dst + got, 0, length - got);
+    }
     g_reads++;
     g_bytes += length;
 }
@@ -192,4 +206,7 @@ void dvd_report(void)
 {
     fprintf(stderr, "[dvd] %llu reads, %llu bytes\n", (unsigned long long)g_reads,
             (unsigned long long)g_bytes);
+    if (!g_disc)
+        fprintf(stderr, "[dvd] no disc image was opened -- every one of those reads returned zeros; "
+                        "re-run tools/extract.py with --iso\n");
 }
