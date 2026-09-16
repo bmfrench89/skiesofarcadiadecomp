@@ -91,7 +91,7 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **3.2** Integer, branch, load/store | M | **Done.** Direct branches → `goto`, calls → C calls with LR set, conditional returns, CTR-decrement forms, switch tables → `switch`, indirect calls → `dispatch`, `rfi`, `dcbz` |
 | `[x]` | **3.3** Floating point + FPSCR | M | **Done.** Single ops fill both halves and round via `(float)`; fused forms use `fma()` under `/fp:strict`; `fctiw[z]`, `fcmp[uo]`, `fsel`, FPSCR bit ops. **Semantics unverified until 3.7** |
 | `[x]` | **3.4** Paired singles + GQR | S | **Done.** Emitter covers all 25 `ps_*` ops and every `psq_*` form, verified end to end (a quantised u8 store scales and saturates natively); `psq_load`/`psq_store` decode GQR type/scale at runtime with truncating, saturating quantisation. Generic on purpose until the differ confirms semantics; specialising on the six static GQRs is a later optimisation |
-| `[~]` | **3.5** Indirect branch dispatch | M | `dispatch()` generated as a switch over all 7,166 entries. 291 switch tables inline. **5 `bctr` sites remain unresolved** (table address computed, not constant) |
+| `[x]` | **3.5** Indirect branch dispatch | M | **Done:** `dispatch()` generated as a switch over all 7,144 entries; all 296 switch tables inline (the last four had a `bgtlr` bound check) |
 | `[x]` | **3.6** Whole-DOL translation | M | **Done: 7,166 functions → 18 files, 52.7 MB of C, 99.999% instruction coverage (696,047 of 696,052); all 19 translation units compile under MSVC** (3 s at `/Od`, parallel). Remaining: the 5 unresolved `bctr` |
 | `[ ]` | **3.7** Reference interpreter + lockstep differ | M | **The oracle. Replaces v1's Dolphin tracer, which does not exist.** C interpreter over the same `CpuState`, sharing the runtime's memory and HLE. Compares per basic block, then per instruction on failure. No trace files, O(1) storage. **Must land alongside 3.2, not later** — 3.2's test vectors have no other source |
 
@@ -157,8 +157,8 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **7.1** Title to field | M | New game starts, field renders and is navigable |
-| `[ ]` | **7.2** Battle system | M | Encounters run start to finish |
+| `[x]` | **7.1** Title to field | M | **Done:** New Game, the opening, the deck battle and the Valuan ship's hold as the first navigable field, with dialogue, menus and the minimap rendering |
+| `[~]` | **7.2** Battle system | M | **The tutorial battle and random encounters in the hold run start to finish** (command wheel, targeting, attacks, damage, turns, victory); magic, items, Focus and boss fights not yet exercised |
 | `[ ]` | **7.3** Ship/overworld | M | Airship sections |
 | `[ ]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene |
 | `[ ]` | **7.5** Enhancements | **L, not M** | Widescreen, higher internal resolution. **Uncapped framerate is a re-architecture**, not a tweak: the engine is 480i-locked and retrace-driven |
