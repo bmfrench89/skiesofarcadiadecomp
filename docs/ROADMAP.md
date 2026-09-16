@@ -23,7 +23,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | **M5** | First frame | Phase 5 | Something the game drew, in a window |
 | **M6** | Title screen | Phase 5 | The actual title screen, correct |
 | **M7** | Audio | Phase 6 | Music and SFX |
-| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip |
+| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game starts and the opening cutscene renders |
 
 ---
 

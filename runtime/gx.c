@@ -417,6 +417,7 @@ void gx_report(void)
 /* ---- replay ------------------------------------------------------------
  * Feed a captured frame through the same parser with MEM1 restored, so the
  * renderer sees exactly what it saw in the game. */
+unsigned gx_frame_count(void) { return g_frame; }
 const uint32_t* gx_cp_regs(void) { return g_cp; }
 const uint32_t* gx_xf_regs(void) { return g_xf; }
 const uint32_t* gx_bp_regs(void) { return g_bp; }

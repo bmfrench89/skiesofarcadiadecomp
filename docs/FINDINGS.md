@@ -466,3 +466,13 @@ title screen, and the frame is right: logo, the day/sunset/night cloud
 flyover, the New Game / Continue menu with its cursor, and the license
 line. The game runs at ~29 fps without rendering; the software renderer
 adds ~200 ms per rendered frame.
+
+**Into the game:** a scripted START + A on the title menu starts a new
+game. The opening cutscene renders through the software GX: the Valuan
+warship at night with its searchlight, the ship's deck above the clouds,
+the armada's riveted hull -- the game's own 3D models, textures and
+matrices, submitted through the exact command stream. Wrong so far: the
+character on deck is flat blue (a lighting or material-source detail),
+there is no fog (BP 0xEE-0xF2 are set but ignored) and no mipmapping.
+Input scripting had to move from retrace numbers to the game's own frame
+count: the intro's timing is wall-clock while frames are not.

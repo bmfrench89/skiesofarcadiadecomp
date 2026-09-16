@@ -11,8 +11,8 @@
  * interrupting. PADRead reads INBUF; reading INBUFL clears RDST.
  *
  * Input comes from a script for now (SOA_PAD="frame:buttons,..." -- e.g.
- * "600:start,900:a" holds START from retrace 600 and A from 900, each for
- * 20 retraces), later from a window and real gamepads.
+ * "1700:start,1800:a" holds START from the game's frame 1700 and A from
+ * 1800, each for 10 frames), later from a window and real gamepads.
  *
  *   0xCC006400 + 12*ch  SICnOUTBUF   0xCC006404 + 12*ch  SICnINBUFH   +8 INBUFL
  *   0xCC006430  SIPOLL      0xCC006434  SICOMCSR    0xCC006438  SISR
@@ -56,7 +56,7 @@ static int g_present[4] = {1, 0, 0, 0};
 typedef struct { unsigned frame; uint16_t buttons; } PadEvent;
 static PadEvent g_script[64];
 static int g_script_n = -1;
-#define HOLD_FRAMES 20
+#define HOLD_FRAMES 10
 
 static uint16_t button_named(const char* name, size_t len)
 {
@@ -96,14 +96,21 @@ static void script_init(void)
 
 uint64_t irq_retrace_count(void);
 
+unsigned gx_frame_count(void);
+
 static uint16_t buttons_now(void)
 {
-    uint64_t frame = irq_retrace_count();
+    static uint16_t last;
+    uint64_t frame = gx_frame_count(); /* the game's frames, not fields: deterministic against its logic */
     uint16_t b = 0;
     int i;
     if (g_script_n < 0) script_init();
     for (i = 0; i < g_script_n; i++)
         if (frame >= g_script[i].frame && frame < g_script[i].frame + HOLD_FRAMES) b |= g_script[i].buttons;
+    if (b != last) {
+        fprintf(stderr, "[si] frame %llu (retrace %llu): buttons %04X\n", (unsigned long long)frame, (unsigned long long)irq_retrace_count(), b);
+        last = b;
+    }
     return b;
 }
 
