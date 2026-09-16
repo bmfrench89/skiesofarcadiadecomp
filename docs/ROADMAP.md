@@ -36,7 +36,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | `[x]` | **0.4** Repo scaffold + CI | S | **Done:** guard blocks game data in tree *and* full history; tests run without a disc |
 | `[x]` | **0.6** AKLZ container decoder | S | **Done:** exhaustive gate — 3,633 containers, 1.98 GiB, 0 failures, 0 PPC code |
 | `[ ]` | **0.5** Junk-run regeneration (lagged Fibonacci) | M | **No longer optional — see R9.** RVZ junk runs are zero-filled. GameCube games routinely over-read past a file's declared end; `extracted/` would return zeros where the disc returns junk. Correctness dependency of slice 4.4 |
-| `[~]` | **0.7** DSP microcode probe | S | **Answer before Phase 1 ends.** Stock or custom ucode? If custom, R3 goes High and slice 6.3 goes L → XL |
+| `[x]` | **0.7** DSP microcode probe | S | **Done: STOCK.** Audio ucode hashes to `0x4E8A8B21` = Dolphin's stock AX. Positive control validated the method. R3 → Low; slice 6.3 stays L |
 | `[ ]` | **0.8** Clean-machine reproduction | S | `pyproject.toml` `[project]` table, pinned deps, `CONTRIBUTING.md`, scripted fetch of `dtk` and the mwcc archive. A second contributor gets from `git clone` to a working tree |
 
 **Exit:** the disc is fully unpacked, reproducible, and every container is accounted for.
@@ -48,7 +48,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[x]` | **1.1** Gekko disassembler | M | **Done:** 696,144/697,784 words decode. `.text1` at 99.9997%; `.text0` at 30.8% (it is a ROM image of exception vectors with embedded strings and padding). Full paired-single and `psq_*` coverage across all three opcode-4 field widths |
-| `[ ]` | **1.1b** Decoder cross-validation | S | Diff our decoder against an independent disassembler (`dtk`, capstone). **This is the only thing that would have caught the three probes disagreeing about `.text0`.** Keep as a repo test |
+| `[x]` | **1.1b** Decoder cross-validation | S | **Done.** Diffed vs capstone + dtk over all 697,784 words. Six defects fixed, worst mislabelled 19,306 float instructions. Whole-image test now passes |
 | `[ ]` | **1.2** Function boundary detection | M | CFG from entry + `bl` targets + prologue scan + function-pointer tables. Must reconcile ~7,117 (dtk heuristic) vs ~7,156 (independent derivation) and account for the 1,781 functions never `bl`-called and the 431 leaf functions with no prologue |
 | `[ ]` | **1.3** Call graph + indirect branches | M | Classify all 296 `bctr` + 248 `bctrl` + 121 `blrl` + 527 conditional `blr`. Recover the 320 jump tables / 5,721 entries. Special case: the sole `bla 0x60` at `0x80232278` |
 | `[ ]` | **1.4** Data classification | M | Partition `.data0..5` **and `.text0`** into vtables, jump tables, float pools, strings, static initialisers. Reconcile the disagreement over whether jump tables live only in `.data3` or also `.data4` |
@@ -127,11 +127,12 @@ Gated on **4.1b (the gather pipe)**, not on M2. See SPEC §7.
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[ ]` | **5.0** FIFO-log replay harness | M | **The rendering oracle.** Record a Dolphin `.dff` at the title screen, replay it through our backend offline, diff against Dolphin. Frame-level ground truth *before the game runs*, and a permanent regression corpus |
-| `[ ]` | **5.1** GX command-stream decoder | L | Decode CP/XF/BP register writes and primitive data out of the gather pipe. HLE the non-inline `GXSet*` calls as a hybrid |
+| `[ ]` | **5.1** GX state HLE + vertex decoder | L | HLE the 104 out-of-line GX entry points (1,674 call sites); decode vertices from `GXSetVtxDesc`/`GXSetVtxAttrFmt`/`GXSetArray` state. A full opcode parser is needed for display-list buffers only — 1 function, 2 call sites |
 | `[ ]` | **5.2** Texture decode | M | GX formats (I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR/C4/C8/C14X2). **Not GVR** — at the GX boundary we see GX enums and tiled data, never a GVR header |
 | `[ ]` | **5.3** Vertex pipeline | L | Vertex descriptors, attribute formats, display lists → Vulkan buffers |
 | `[ ]` | **5.4** TEV shader generation | XL | Up to 16 TEV stages + indirect textures → SPIR-V. The single largest piece of work |
 | `[ ]` | **5.5** EFB/XFB and copies | L | Framebuffer, copy-to-texture, scanout |
+| `[ ]` | **5.7** Evaluate replacing the middleware library | M | `0x80266778`-`0x802AC7E0`: 807 functions, 10.3% of `.text`, holds 868 of 1,508 FIFO writes, calls into game code 2 times out of 3,996. Reimplementing rather than recompiling it would delete most of the vertex problem |
 | `[ ]` | **5.6** Graphics dependency vendoring | S | **Undeclared install burden.** Vulkan SDK, `glslang`/`shaderc`, SDL3 — vcpkg vs FetchContent vs prebuilt. Decide before 5.4 |
 
 ---
@@ -144,7 +145,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 |---|---|---|---|
 | `[ ]` | **6.1** AI/ARAM HLE | M | ARAM as a host buffer, DMA, audio interrupt timing |
 | `[ ]` | **6.2** DSPADPCM decode | S | Standard Nintendo ADPCM, well documented |
-| `[ ]` | **6.3** Sega mixer | L **or XL** | L if stock DSP microcode. **XL if custom** — then it is "write a GameCube DSP interpreter." Slice 0.7 decides |
+| `[ ]` | **6.3** Sega mixer | **L** | Stock AX ucode confirmed, so this is a mixer reimplementation. Dolphin's AX HLE handles this exact CRC and its semantics are publicly documented |
 | `[ ]` | **6.4** Streamed BGM | M | Stereo `.dsp` pairs stream and loop |
 
 ---

@@ -137,8 +137,42 @@ Twelve `<< Dolphin SDK - MODULE release build: ... >>` strings, all stamped
 **2002-09-05, version `0x2301`**, plus `Metrowerks Target Resident Kernel for PowerPC`.
 
 **No MusyX.** Audio runs on a custom Sega engine sitting directly on the SDK's `AI`, `AR`
-(ARAM) and `DSP` layers. ▲ Whether Sega also ships **custom DSP microcode** is open, and
-it is the difference between a weeks-long slice and a months-long one.
+(ARAM) and `DSP` layers.
+
+### ▲ DSP microcode: stock, not custom
+
+This was the open question that could have doubled the project, and it is closed.
+
+Only **three DSP microcode blobs exist in the entire image**, which is provable rather than
+merely observed: there are only three code paths that can ever boot a ucode, and all three
+hand the DSP a hardcoded `.data` address.
+
+| Address | Size | Identity | Dolphin `HashEctor` |
+|---|---:|---|---|
+| `0x802FE3A0` | 6,624 | **stock AX audio ucode** | `0x4E8A8B21` |
+| `0x802FB400` | 352 | stock CARD ucode | `0x65D6CC6F` |
+| `0x802F9600` | 128 | `UCODE_INIT_AUDIO_SYSTEM` | `0x18712672` |
+
+`0x4E8A8B21` is an exact match for Dolphin's stock AX entry — the same build used by
+Melee, Super Monkey Ball, Star Fox Adventures and Mario Party 4. The method was validated
+end-to-end with a **positive control**: the CARD blob hashes to Dolphin's CARD constant
+byte-for-byte.
+
+A structural scan of all 3,166,656 DOL bytes for the GameCube DSP's 8-entry exception
+vector table returns only these three, and the same scan across all 5,556 extracted files
+plus 164 MB of decompressed assets returns **zero**.
+
+Sega wrote their own **AX driver** (roughly `0x8027C000`–`0x80292000`), not their own
+ucode: it assembles AXPB parameter blocks and command lists by hand and mails them to the
+stock AX binary. The CPU never mixes — samples are DMA'd into ARAM via `ARQPostRequest`,
+the DSP mixes in 5 ms frames (640-byte blocks at 32 kHz, the textbook AX cadence), and AI
+resamples to 48 kHz.
+
+Phase 6.3 is therefore a stock-AX mixer reimplementation, not a GameCube DSP interpreter.
+
+> Correction: an earlier draft reported `__DSP_boot_task` referenced five times. That count
+> belonged to `__DSP_debug_printf` (7 references), which compiles to an empty stub.
+> `__DSP_boot_task` has exactly one caller.
 
 ---
 
@@ -157,11 +191,34 @@ three extended-opcode field widths that Gekko packs into primary opcode 4.
 
 `.text1`'s two undecodable words are both `0x00000000` padding at section boundaries.
 
-> **Honest caveat.** "Decodes as a valid instruction" is a weaker test than it sounds. A
-> table of `0x80xxxxxx` pointers decodes cleanly as PowerPC and would be invisible to this
-> measurement. The claim "`.text1` contains no embedded data" is supported for jump tables
-> and long runs, but float pools and short constant arrays remain possible. Slice 1.1b
-> (cross-validation against an independent disassembler) exists to close this.
+### ▲ Independent cross-validation
+
+The decoder was diffed against two independent disassemblers — capstone 5.0.7 (LLVM-derived)
+and dtk 1.8.4 (`ppc750cl`, written from the 750CL manual for this console) — across all
+697,784 words plus a synthetic sweep of the encoding space.
+
+**Field extraction was already correct**: 700,624 operand comparisons, zero real mismatches,
+covering every branch target, all 18,890 rotate mask triples, all 12,464 SPR numbers, all
+5,007 `psq_*` fields and 28,839 A-form register orderings.
+
+**Naming was not.** Six defects were found and fixed; the worst mislabelled **19,306
+instructions (2.77% of the binary)** — every single-precision float carried its
+double-precision name, and `fadds` rounds where `fadd` does not. Details in the commit log.
+
+Four apparent disagreements were **capstone gaps where we are correct**, since capstone is a
+modern PowerPC decoder rather than a 750CL one: `fcmpo` (3,013 instances), `mcrxr`, every
+OE form, and the opcode-4 paired-single compares (which it resolves as AltiVec). dtk
+arbitrates in our favour on all four.
+
+The whole-image test now passes: every one of the 697,784 words agrees.
+
+dtk independently found **7,117 functions** and only **three** embedded-data words in the
+whole of `.text1`, confirming both figures by a separate method. It also reports **no jump
+tables in `.text1`** — they live in `.rodata`.
+
+> **Caveat that remains.** "Decodes as a valid instruction" is weaker than it sounds: a table
+> of `0x80xxxxxx` pointers decodes cleanly as PowerPC. Long runs and jump tables are now
+> ruled out by dtk's independent code/data map, but short float pools remain possible.
 
 ### Gekko-specific usage
 
@@ -253,16 +310,30 @@ plan (see [SPEC.md](SPEC.md) §7).
 
 | Measure | Count |
 |---|---:|
-| Stores to `0xCC008000` (GX write-gather pipe) | **414** (`stw` 241, `stb` 180, `stfs` 50, `sth` 31) |
-| Sites materialising `0xCC01xxxx` | 256 — **103 outside the SDK block** |
-| Sites materialising `0xCC00xxxx` | 172 |
-| `WPAR` (SPR 921) accesses | 3 |
-| `HID2` (SPR 920) accesses | 8 |
+| Stores to `0xCC008000` (GX write-gather pipe) | **1,508**, across **164 functions** |
+| Out-of-line GX entry points called from non-SDK code | **104**, via **1,674 call sites** |
+| `GXBegin` (`0x8024E478`) call sites | 96 |
+| Non-SDK gather-pipe functions that also call `GXBegin` | **84 of 86**, bracketing 98.2% of their stores |
+| Direct MMIO register stores outside the SDK block | **0** |
 
-`GXBegin`, `GXPosition3f32` and the rest of the vertex-submission family are SDK **inline**
-functions: they compile into the caller and store straight to the gather pipe. You cannot
-intercept a function that was inlined away, so a real write-gather pipe and a GX
-command-stream decoder are unavoidable.
+Per-vertex attribute submission *is* inlined, and aggressively — one function copies the
+FIFO base into 24 separate GPRs so an unrolled loop can issue back-to-back `stfs` without
+dependency stalls. But the GX **API** is not inlined away: every state-setting call remains
+an ordinary out-of-line function, and almost every inlined vertex burst is bracketed by a
+real `GXBegin` carrying primitive type, format index and vertex count.
+
+So a gather-pipe assembler and a vertex decoder are needed; a command-processor emulator is
+not. See [SPEC.md](SPEC.md) §7.
+
+### ▲ A third code layer
+
+`0x80266778`–`0x802AC7E0` — **807 functions, 286,600 bytes, 10.3% of `.text`** — is a
+statically-linked rendering middleware library that no earlier analysis had identified,
+distinct from both the Nintendo SDK and the game. It contains **868 of the 1,508 FIFO
+writes** and calls up into game code only **2 times out of 3,996 outbound calls**.
+
+That near-zero coupling makes it a clean replacement seam rather than something that must
+be recompiled.
 
 ▲ **Video mode: 480i only.** Three `GXRenderModeObj` records in `.data3` — NTSC_INT,
 MPAL_INT, EURGB60_INT — all 640×480, full-height EFB, no progressive entry. The engine is
@@ -304,15 +375,25 @@ fully decompiled.
 - ▲ **The host toolchain is already installed** — MSVC 14.44, Windows SDK 10.0.26100,
   cmake and ninja. v1 wrongly reported these missing.
 
+- ▲ **Stock DSP microcode**, hash-matched against Dolphin's table with a positive control.
+  Audio is a mixer reimplementation, not a DSP interpreter.
+- ▲ **The GX API survives interception.** 104 out-of-line entry points, 1,674 call sites,
+  and 98.2% of inlined vertex bursts bracketed by a real `GXBegin`.
+- ▲ **The decoder is independently validated** against two disassemblers, whole-image.
+- ▲ **A 10.3% slice of `.text` is replaceable middleware** with near-zero coupling.
+
 **Unfavourable:**
 
-- ▲ **Vertex submission cannot be HLE'd** (§5). This is the project's hardest problem and
-  v1 had it filed as a solved Medium risk.
+- ▲ **Per-vertex submission is inlined**, so a write-gather pipe and vertex decoder are
+  unavoidable — 1,508 stores across 164 functions. Less bad than the v2 review feared, but
+  still the largest single piece of runtime work.
 - **No symbol map**, and the SDK is only 7.8% of `.text` — so ~6,170 game functions stay
   anonymous. Phase 2's real job is finding the code to *delete*, not to name.
-- ▲ **DSP microcode unknown.** If custom, Phase 6 grows from weeks to months.
+- ▲ **The exception-vector region is self-modifying in effect** — copied to low memory at
+  boot and `ICInvalidateRange`'d — so those 15 bodies need pre-translation or detection.
 - **Zero prior decomp work.** The one public repo is a single commit from 2025-05-07 with
   no functions decompiled.
 
-**Conclusion:** the favourable signals remain unusually strong, and the two serious
-problems — the FIFO and the DSP — are now identified rather than hidden. Proceed.
+**Conclusion:** every risk that could have ended the project has now been measured rather
+than assumed. The DSP question closed favourably, the graphics question closed to a hard
+but bounded problem, and the decoder is cross-validated. Proceed.

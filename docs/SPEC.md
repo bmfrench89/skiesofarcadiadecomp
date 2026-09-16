@@ -175,26 +175,47 @@ dynamic-GQR machinery would be wasted work.
 > v1 said "memory is one flat allocation with `0x80000000` mapped to its base." That is
 > wrong and would silently corrupt every DMA buffer and FIFO setup.
 
-The guest address space has four distinct kinds of region:
+The map was derived from the binary's own BAT programming rather than assumed. `Config24MB`
+at `0x80235EB8` writes `DBAT0`/`IBAT0` = `0x800001FF`/`0x00000002` (16 MB at `0x80000000`)
+and `DBAT2`/`IBAT2` = `0x810000FF`/`0x01000002` (8 MB at `0x81000000`). Two BATs only
+because 24 MB is not a power of two; they map physically contiguous DRAM.
 
-| Region | Contents | Implementation |
+**One backing allocation of `0x01800000` bytes** representing physical `0x00000000`–
+`0x017FFFFF`, viewed through three windows:
+
+| Window | Range | Meaning |
 |---|---|---|
-| `0x80000000`–`0x817FFFFF` | MEM1, 24 MB cached window | backing store |
-| `0xC0000000`–`0xC17FFFFF` | **uncached alias of the same DRAM** | *same* backing store, different view |
-| `0x80000000`–`0x800030FF` | OS low memory globals (`__OSCurrentThread` at `0x800000E4`, memory size, console type, exception vectors) | backing store, some fields synthesised at boot |
-| `0xCC000000`–`0xCC00FFFF` | hardware MMIO | **trap and dispatch to device models** |
+| cached | `0x80000000`–`0x817FFFFF` | normal code and data |
+| uncached | `0xC0000000`–`0xC17FFFFF` | DMA buffers, FIFO setup |
+| **real mode** | `0x00000000`–`0x017FFFFF` | **mandatory** — exception vectors are copied to `0x80000100`–`0x80001700` and run with `MSR[IR|DR]=0` |
 
-Two rules fall out, both absent from v1:
+**A single mask of `0x01FFFFFF`, applied after MMIO routing, resolves all three.** The
+address-space cost is one allocation, so this is an additive fix rather than a redesign.
 
-1. **The cached and uncached windows must alias one allocation.** The game does pointer
-   arithmetic in the `0xC0000000` space for DMA buffers and display lists. If they are
-   separate arrays, writes vanish.
-2. **MMIO must trap, not store.** 428 sites materialise `0xCC00xxxx`/`0xCC01xxxx`
-   addresses. A flat array would turn device programming into silent no-ops.
+Trapped regions, which are *not* memory:
 
-Peripherals to model: CP `0xCC000000`, PE `0xCC001000`, VI `0xCC002000`, PI `0xCC003000`,
-MI `0xCC004000`, DSP `0xCC005000`, DI `0xCC006000`, SI `0xCC006400`, EXI `0xCC006800`,
-AI `0xCC006C00`, and the write-gather pipe at `0xCC008000` (§7).
+| Range | Contents |
+|---|---|
+| `0xCC000000`–`0xCC007000` | **99 distinct registers across 8 peripherals** — CP, PE, VI, PI, MI, DSP, DI, SI, EXI, AI |
+| `0xCC008000` | write-gather pipe — a FIFO port taking 1/2/4/8-byte stores (§7) |
+| `0xE0000000` | 16 KB stub, `LCDisable` only |
+
+Regions inside the block needing care rather than separate mappings: `0x80000100`–
+`0x80001800` is written at runtime then `ICInvalidateRange`'d, so the recompiler must
+pre-translate the 15 vector bodies or detect it as self-modifying; `0x8034D4C8`–
+`0x8035D4C8` is the 64 KB boot stack and `0x803624E0`–`0x81700000` the arena — neither is
+in the DOL image but both must be backed.
+
+**Cache maintenance can be a no-op only if all three windows genuinely share one store.**
+There are 62 `DCFlushRange`/`DCInvalidateRange` call sites and `GXSetCPUFifo` converts FIFO
+base and top to physical addresses; any separately-allocated uncached buffer would silently
+desynchronise.
+
+> Corrections to earlier drafts: `0xCC01xxxx`, `0x8130xxxx`, `0x817xxxxx` and `0xC8000000`
+> are **not** regions and were wrongly listed as devices. And the "uncached alias is used
+> widely" claim was over-stated — of 55 candidate sites, 45 are struct-flag
+> read-modify-writes and only one is a genuine uncached access (`0xC00000D0`, in DSP init).
+> The real coherency model is cached memory plus explicit flush/invalidate.
 
 `.text0` is **not ordinary code**. It is a ROM image the boot path `memcpy`s into low
 memory; its 706 real instructions are position-dependent exception vectors and need
@@ -227,31 +248,58 @@ for Phases 1 and 3, not an optimisation.
 
 ---
 
-## 7. Graphics: the write-gather pipe is unavoidable
+## 7. Graphics: a gather pipe, but not a GPU emulator
 
-> v1's mitigation — "HLE at the GX API level rather than parsing the FIFO" — is **false**,
-> and this was the single most dangerous error in the document.
+This section has been wrong twice in opposite directions. v1 claimed the whole of GX could
+be intercepted at the API level. The v2 review refuted that and concluded a full GX
+command-stream parser was unavoidable. A deeper probe shows the truth sits between them.
 
-`GXBegin`, `GXPosition3f32`, `GXColor1u32`, `GXTexCoord2f32` and the rest of the
-vertex-submission family are SDK **inline** functions. They compile *into the caller* and
-store directly to the write-gather pipe. **You cannot intercept a function that was
-inlined away.**
+**What is true:** the write-gather pipe is unavoidable and *busier than v2 said* —
+**1,508 stores** to `0xCC008000` across **164 functions**, not 414. The inlining is
+aggressive: one function copies the FIFO base into 24 separate GPRs so an unrolled vertex
+loop can issue back-to-back `stfs` with no dependency stalls.
 
-The evidence: **414 stores whose effective address is `0xCC008000`** (`stw` 241, `stb`
-180, `stfs` 50, `sth` 31), and of 256 sites materialising a `0xCC01xxxx` base, **103 are
-outside the SDK block** — in engine code that `dtk` leaves as `fn_XXXXXXXX`.
+**What is false:** that the GX API is inlined away. It is not. There are **1,674 call
+sites from non-SDK code into 104 distinct out-of-line GX functions**, and `GXBegin` is one
+of them (`0x8024E478`, 96 call sites). Decisively: **84 of the 86 non-SDK functions that
+write the gather pipe also call `GXBegin`, bracketing 881 of their 897 stores (98.2%)**.
 
-So the runtime must implement:
+So every inlined vertex burst is preceded by an interceptable call carrying primitive
+type, vertex format index and vertex count, and the attribute layout comes from
+`GXSetVtxAttrFmt` (292 sites), `GXSetVtxDesc` (124) and `GXSetArray` (81). Only
+**per-vertex attribute submission** is genuinely inlined. Every state-setting call — TEV,
+texture, blend, cull, matrices, FIFO setup — remains an ordinary out-of-line function.
 
-- **A real write-gather pipe.** `HID2[WPE]` enables it; `WPAR` holds the target address;
-  it accumulates in 32-byte granules and the SDK flushes with dummy-write padding. A
-  naive "store to MMIO calls a handler" model loses partial gathers and mis-orders bytes.
-- **A GX command-stream decoder** over the gathered output: CP/XF/BP register writes plus
-  primitive vertex data.
+**A GameCube command-processor emulator is therefore not required.** What is required:
 
-A hybrid remains viable and is the working plan: HLE the non-inline `GXSet*` state calls,
-and parse only the vertex stream coming through the pipe. Phase 5 is gated on this, not
-on symbol recovery.
+- **A gather-pipe byte-stream assembler.** Cheap, because all 1,508 store sites are known
+  at translation time, so the recompiler emits direct `gp_append` calls with no runtime
+  address check.
+- **A vertex decoder driven by HLE-tracked state** (`GXSetVtxDesc`/`GXSetVtxAttrFmt`/
+  `GXSetArray`), not by opcode dispatch.
+- **A real GX opcode parser for display-list buffers only** — 1 function, 2 call sites.
+- **`HID2[WPE]`, `WPAR`, and `PI_FIFO_BASE/TOP/WRITE_PTR`** modelled, so the runtime knows
+  whether the CPU FIFO currently targets the GP FIFO or a RAM display list.
+
+Also note: **100% of direct MMIO register stores in the binary are inside the SDK block.**
+Game and middleware code perform exactly zero. The device-programming surface is entirely
+HLE-able.
+
+### 7.1 A third layer: statically-linked middleware
+
+The probe found a block nobody had identified: **`0x80266778`–`0x802AC7E0`, 807 functions,
+286,600 bytes, 10.3% of `.text`** — a statically-linked rendering middleware library,
+distinct from both the Nintendo SDK and the game. It holds **868 of the 1,508 FIFO writes**
+and 147 of the GX-calling functions, and it calls *up* into game code only **2 times out
+of 3,996 outbound calls**.
+
+That near-zero coupling makes it a clean seam. It is a candidate to be reimplemented
+natively rather than recompiled — which would delete most of the vertex-submission problem
+outright. Worth evaluating before Phase 5 begins.
+
+**Rendering ground truth** comes from Dolphin FIFO logs (`.dff`): a recorded GX command
+stream plus the memory it references, replayable offline against our backend and diffable
+against Dolphin's output.
 
 **Rendering ground truth** comes from Dolphin FIFO logs (`.dff`): a recorded GX command
 stream plus the memory it references, replayable offline against our backend and
@@ -350,8 +398,8 @@ Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unb
 |---|---|---|---|
 | R1 | Indirect branches unresolvable statically | ~~High~~ **Low** | Measured: 296/296 `bctr` are switch tables; 320 tables / 5,721 entries recovered; only 24 of 544 sites vtable-shaped; target set closed within `boot.dol`. No interpreter fallback needed. |
 | R2 | SDK identification yields too little | ~~High~~ **Medium** | `dtk` gives ~260 names free; one donor SDK adds ~89. Reframed: the goal is the 7.8% HLE boundary, not naming game code. |
-| R3 | Custom Sega audio engine | **Medium → TBD** | **Open.** If Sega ships custom DSP microcode, Phase 6 becomes "write a GameCube DSP interpreter" and this goes High. Probe in flight. |
-| R4 | GX translation | ~~Medium~~ **High** | Vertex submission is inlined into game code and cannot be HLE'd (§7). Requires write-gather pipe + command-stream decoder. Validated against Dolphin FIFO logs. |
+| R3 | Custom Sega audio engine | ~~TBD~~ **Low** | **Closed.** The game runs 100% stock Nintendo microcode. The audio ucode at `0x802FE3A0` (6,624 bytes) hashes to `0x4E8A8B21`, an exact match for Dolphin's stock AX ucode — the same build used by Melee, Monkey Ball and Mario Party 4. Method validated by positive control: the CARD ucode at `0x802FB400` hashes to Dolphin's CARD constant exactly. Only three ucode blobs exist in the image and zero in assets. Sega wrote their own AX *driver*, not their own ucode. No DSP interpreter needed. |
+| R4 | GX translation | ~~High~~ **Medium** | Structurally worse than v2 stated (1,508 gather-pipe stores across 164 functions, not 414) but architecturally far better: 98.2% of non-SDK gather-pipe stores are bracketed by a real out-of-line `GXBegin` call, and all 104 GX state entry points remain interceptable. No command-processor emulator required — see §7. |
 | R5 | Self-modifying code | **Low** | 7 runtime-codegen sites exist, all confined to the MetroTRK debug stub; stub it out. |
 | R6 | Timing assumptions | **Medium** | Game is 480i-only and retrace-driven at 59.94 Hz. Pacing is the main loop, not an afterthought. |
 | R7 | Analysis paralysis | **High** | Milestones are demoable, not percentage-based. |
@@ -371,10 +419,20 @@ Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unb
 - **Graphics is gated on the FIFO model, not on symbol recovery.**
 - **Adopt dtk's split format** for decomp compatibility — cheap now, expensive to retrofit.
 
+- **DSP microcode: stock.** Settled by hash match against Dolphin's ucode table, with a
+  positive control. Phase 6.3 is a stock-AX mixer reimplementation, not a DSP interpreter.
+  Dolphin's AX HLE already handles this exact CRC, and its author cites this very game as
+  motivation for that rewrite — so the semantics are publicly documented.
+- **Graphics: hybrid, not a GPU emulator.** HLE the 104 out-of-line GX entry points; assemble
+  the gather-pipe byte stream; decode vertices from HLE-tracked format state (§7).
+
 **Still open:**
 
-- **DSP microcode: stock or custom?** Probe in flight. Changes R3 and the shape of Phase 6.
 - **Byte-swap strategy.** Needs a measurement, not an opinion (R10).
+- **Reimplement the middleware library natively?** `0x80266778`–`0x802AC7E0` is 807
+  functions with near-zero coupling to game code (2 of 3,996 outbound calls) and holds 868
+  of the 1,508 FIFO writes. Replacing rather than recompiling it would delete most of the
+  vertex-submission problem. Evaluate before Phase 5 (§7.1).
 - **The guest-to-host context-switch bridge.** "Fibers" names the host mechanism but not
   how a guest `OSThread` switch — guest stack pointer swap, guest LR restore, and the
   `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose
