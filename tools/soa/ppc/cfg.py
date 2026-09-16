@@ -183,9 +183,14 @@ def _walk(entry: int, code: CodeView, seeds: frozenset[int], max_insns: int) -> 
             budget -= 1
             addr += 4
 
-            if insn.mnemonic == "stwu" and insn.ra == 1 and insn.rd == 1 and insn.imm < 0:
-                if block_start == entry:
-                    fn.has_frame = True
+            if (
+                block_start == entry
+                and insn.mnemonic == "stwu"
+                and insn.ra == 1
+                and insn.rd == 1
+                and insn.imm < 0
+            ):
+                fn.has_frame = True
 
             if not insn.is_branch:
                 # A new block begins wherever another branch lands.
