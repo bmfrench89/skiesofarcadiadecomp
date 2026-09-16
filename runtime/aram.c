@@ -67,6 +67,16 @@ static void dma(CpuState* s, uint32_t cnt)
     }
     g_dmas++;
     g_dma_bytes += len;
+    {
+        static int verbose = -1;
+        if (verbose < 0) verbose = getenv("SOA_ARAM_VERBOSE") ? 1 : 0;
+        if (verbose && g_dmas <= 4000 && (g_araddr & ARAM_MASK) + len <= ARAM_SIZE && (g_mmaddr & MEM_MASK) + len <= MEM1_SIZE) {
+            const uint8_t* p = to_main ? (const uint8_t*)mem_ptr(s, g_mmaddr) : g_aram + (g_araddr & ARAM_MASK);
+            fprintf(stderr, "[aram] %s mm %08X ar %08X len %u: %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
+                    to_main ? "ARAM->main" : "main->ARAM", g_mmaddr, g_araddr, len, p[0], p[1], p[2], p[3], p[4], p[5],
+                    p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+        }
+    }
     /* the engine takes time; the interrupt (and the busy bit clearing) wait for it */
     g_ar_busy = 1;
     g_ar_due = tb_now(s) + TB_HZ / 20000 + (uint64_t)len * TB_HZ / 20000000u;

@@ -6,6 +6,7 @@
 #include "cpu.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define PER_SITE 1000
 
@@ -43,6 +44,20 @@ void trace_hit(CpuState* s, uint32_t pc, const char* name)
             s->lr, s->msr, s->gpr[3], s->gpr[4], s->gpr[5], s->gpr[6], s->gpr[7], s->gpr[31], s->gpr[1]);
     show_string(s, s->gpr[3]);
     show_string(s, s->gpr[4]);
+    {
+        /* SOA_TRACE_DUMP=1 shows 12 words at r3; a site named "Thing@r7" dumps at r7 instead. */
+        static int dump = -1;
+        const char* at = strrchr(name, '@');
+        unsigned reg = at && at[1] == 'r' ? (unsigned)atoi(at + 2) & 31u : 3u;
+        uint32_t base = s->gpr[reg];
+        if (dump < 0) dump = getenv("SOA_TRACE_DUMP") ? 1 : 0;
+        if (dump && base >= 0x80000000u && base < 0x81800000u - 64) {
+            unsigned i;
+            fprintf(stderr, " r%u[", reg);
+            for (i = 0; i < 12; i++) fprintf(stderr, "%s%08X", i ? " " : "", mem_r32(s, base + 4 * i));
+            fprintf(stderr, "]");
+        }
+    }
     if (enabled > 1) { fprintf(stderr, ";"); guest_backtrace(s, s->gpr[1]); }
     else fprintf(stderr, "\n");
 }

@@ -506,3 +506,11 @@ game's own lighting. It ends at the transition into the first battle,
 where the game opens `/battle/.GVR` and `/battle/.PVR` (an empty name),
 reports `memFree Error` twice and runs off through garbage pointers: the
 first divergence that is not a missing device. Being chased.
+
+- Giving DVD commands and ARAM DMAs realistic completion times (seek plus
+  transfer; a short delay) removed the `memFree Error`s: with instant
+  completion the SDK's completion callbacks could run at the next loop
+  edge, before the requesting code had finished, which never happens on
+  the console. The remaining divergence at the battle transition is a
+  package entry whose data pointer reads as `0xE0C0C2E7` -- the same value
+  in every run, so a data or relocation problem rather than a race.

@@ -7,3 +7,8 @@
 0x800079AC  LoadTexture
 0x8006EB88  LoadCrew
 0x801DB244  LoadAsset
+0x801D67F4  AssetSlot0
+0x801D67FC  BattleTable
+0x8022AB08  CacheStore@r7
+0x8022ADDC  CacheFetched@r31
+0x8022AD64  CacheFetchSlot@r30
