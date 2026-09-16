@@ -24,6 +24,7 @@ favorable target:
 - **[docs/SPEC.md](docs/SPEC.md)** — architecture and technical decisions
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — work slices, milestones, current status
 - **[docs/FINDINGS.md](docs/FINDINGS.md)** — disc analysis evidence base
+- **[docs/PROGRESS.md](docs/PROGRESS.md)** — what got built, in order
 
 ## Status
 
