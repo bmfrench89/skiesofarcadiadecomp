@@ -63,12 +63,16 @@ typedef struct {
     uint8_t ja, jb, jc, jd;             /* alpha input bank indices */
 } Stage;
 
+#define MAX_MIPS 11
+
 typedef struct {
-    const uint8_t* rgba;
+    const uint8_t* level[MAX_MIPS]; /* decoded RGBA per mip level; level[0] NULL = unused */
+    int lw[MAX_MIPS], lh[MAX_MIPS];
+    int nlevels;
     int w, h;
-    int mask_s, mask_t;  /* size-1 when the size is a power of two, else -1 */
     unsigned wrap_s, wrap_t;
-    int linear;
+    int linear, mip;        /* bilinear within a level; pick a level by lod */
+    float lod_bias, min_lod, max_lod;
     float scale_s, scale_t;
 } TexCfg;
 
@@ -84,7 +88,7 @@ typedef struct {
 } TevSetup;
 
 void tev_prepare(const uint32_t* bp, TevSetup* out);
-void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], uint8_t out[4], int* alpha_pass);
+void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], uint8_t out[4], int* alpha_pass);
 void tev_register_written(uint32_t reg, uint32_t v);
 void tex_invalidate_all(void);
 void tex_graveyard_empty(void); /* frees textures no queued draw can reference any more */

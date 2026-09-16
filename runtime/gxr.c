@@ -52,6 +52,7 @@ static uint64_t g_pixels_t[MAX_THREADS], g_rej_depth_t[MAX_THREADS], g_rej_alpha
 #define g_rej_depth g_rej_depth_t[t_tid]
 #define g_rej_alpha g_rej_alpha_t[t_tid]
 static int g_cull_flip, g_debug;
+static int g_debug_lights;
 static unsigned g_draw_limit, g_draw_no;
 
 int gxr_enabled(void)
@@ -63,6 +64,7 @@ int gxr_enabled(void)
         g_frames_every = every ? (unsigned)atoi(every) : 0;
         g_cull_flip = getenv("SOA_CULLFLIP") ? 1 : 0;
         g_debug = getenv("SOA_GXR_DEBUG") ? 1 : 0;
+        g_debug_lights = getenv("SOA_GXR_LIGHTS") ? atoi(getenv("SOA_GXR_LIGHTS")) : 0;
         g_draw_limit = getenv("SOA_GXR_DRAWS") ? (unsigned)atoi(getenv("SOA_GXR_DRAWS")) : 0;
     }
     return g_enabled;
@@ -279,6 +281,20 @@ static void light_channel(const uint32_t* xf, unsigned chan, int alpha, const Ve
     if (matsrc && !in->has_col[chan]) { mat[0] = mat[1] = mat[2] = mat[3] = 1.0f; }
     if (!enable) { memcpy(out, mat, sizeof mat); return; }
 
+    if (g_debug_lights > 0) {
+        unsigned li2;
+        g_debug_lights--;
+        fprintf(stderr, "[gxr] chan%u %s ctl %08X mat %08X amb %08X mask %02X diffuse %u attn %u\n", chan, alpha ? "alpha" : "color", ctl, mat_reg, amb_reg, mask, diffuse, attnfn);
+        for (li2 = 0; li2 < 8; li2++) {
+            const uint32_t* L2 = xf + 0x600 + 16 * li2;
+            if (!((mask >> li2) & 1)) continue;
+            fprintf(stderr, "[gxr]   light %u color %08X att %g %g %g / %g %g %g pos %g %g %g dir %g %g %g\n", li2, L2[3],
+                    xff(xf, 0x600 + 16 * li2 + 4), xff(xf, 0x600 + 16 * li2 + 5), xff(xf, 0x600 + 16 * li2 + 6),
+                    xff(xf, 0x600 + 16 * li2 + 7), xff(xf, 0x600 + 16 * li2 + 8), xff(xf, 0x600 + 16 * li2 + 9),
+                    xff(xf, 0x600 + 16 * li2 + 10), xff(xf, 0x600 + 16 * li2 + 11), xff(xf, 0x600 + 16 * li2 + 12),
+                    xff(xf, 0x600 + 16 * li2 + 13), xff(xf, 0x600 + 16 * li2 + 14), xff(xf, 0x600 + 16 * li2 + 15));
+        }
+    }
     amb[0] = ambsrc ? vc->r : ((amb_reg >> 24) & 255) / 255.0f;
     amb[1] = ambsrc ? vc->g : ((amb_reg >> 16) & 255) / 255.0f;
     amb[2] = ambsrc ? vc->b : ((amb_reg >> 8) & 255) / 255.0f;
@@ -431,7 +447,22 @@ typedef struct {
     int const_alpha; /* -1 when not enabled */
     int z_en, z_upd, ztop;
     unsigned z_func;
+    /* fog (BP 0xEE-0xF2, GXSetFog): type 0 off, 2 linear, 4 exp, 5 exp2, 6/7 backwards */
+    unsigned fog_type, fog_proj;
+    float fog_a, fog_c;
+    uint32_t fog_b_mag;
+    unsigned fog_b_shift;
+    uint8_t fog_color[3];
 } PixelCfg;
+
+/* The 20-bit floats in the fog registers: sign, 8-bit exponent, 11-bit mantissa. */
+static float fog_float(uint32_t v)
+{
+    uint32_t bits = ((v >> 19) & 1) << 31 | ((v >> 11) & 0xFF) << 23 | (v & 0x7FF) << 12;
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
 
 typedef struct {
     Rect scissor;
@@ -445,6 +476,8 @@ typedef struct {
     PixelCfg px;
     RasterCfg rc;
     unsigned ntex, nchan, prim, count;
+    unsigned miptex;      /* texcoord slots whose map has mipmaps */
+    uint8_t texmap_of[8]; /* the map a texcoord slot feeds (first stage using it) */
     const Vertex* v;
     /* copy: the registers as they were, and the command word */
     uint32_t cp_v, cp_tl, cp_wh, cp_dest, cp_stride, cp_ar, cp_gb, cp_z;
@@ -486,6 +519,46 @@ static void pixel_prepare(const uint32_t* bp, PixelCfg* px)
     px->const_alpha = (cmode1 & 0x100) ? (int)(cmode1 & 0xFF) : -1;
     px->z_en = zmode & 1; px->z_func = (zmode >> 1) & 7; px->z_upd = (zmode >> 4) & 1;
     px->ztop = (bp[0x43] >> 6) & 1;
+    px->fog_type = (bp[0xF1] >> 21) & 7;
+    px->fog_proj = (bp[0xF1] >> 20) & 1;
+    px->fog_a = fog_float(bp[0xEE]);
+    px->fog_c = fog_float(bp[0xF1]);
+    px->fog_b_mag = bp[0xEF] & 0xFFFFFFu;
+    px->fog_b_shift = bp[0xF0] & 0x1F;
+    px->fog_color[0] = (uint8_t)((bp[0xF2] >> 16) & 0xFF);
+    px->fog_color[1] = (uint8_t)((bp[0xF2] >> 8) & 0xFF);
+    px->fog_color[2] = (uint8_t)(bp[0xF2] & 0xFF);
+}
+
+/* Fog blends the TEV output toward the fog colour by a function of eye
+ * distance recovered from the 24-bit screen z, as the pixel engine does. */
+static inline void fog_apply(const PixelCfg* px, uint8_t out[4], float depth)
+{
+    float ze, f;
+    int fi, i;
+    uint32_t zs = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f));
+    if (px->fog_type == 0) return;
+    if (!px->fog_proj) {
+        int32_t denom = (int32_t)px->fog_b_mag - (int32_t)(zs >> px->fog_b_shift);
+        if (denom == 0) return;
+        ze = (px->fog_a * 16777215.0f) / (float)denom;
+    } else {
+        ze = px->fog_a * ((float)zs / 16777215.0f);
+    }
+    f = ze - px->fog_c;
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    switch (px->fog_type) {
+    case 2: break;                                     /* linear */
+    case 4: f = 1.0f - exp2f(-8.0f * f); break;        /* exp */
+    case 5: f = 1.0f - exp2f(-8.0f * f * f); break;    /* exp2 */
+    case 6: f = exp2f(-8.0f * (1.0f - f)); break;      /* backward exp */
+    case 7: f = exp2f(-8.0f * (1.0f - f) * (1.0f - f)); break;
+    default: return;
+    }
+    fi = (int)(f * 256.0f);
+    if (fi > 256) fi = 256;
+    for (i = 0; i < 3; i++) out[i] = (uint8_t)((out[i] * (256 - fi) + px->fog_color[i] * fi) >> 8);
 }
 
 static void to_screen(const RasterCfg* rc, Vertex* v)
@@ -552,7 +625,7 @@ static inline int depth_test(const PixelCfg* px, int x, int y, float depth)
     return pass;
 }
 
-static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][3], float depth)
+static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][4], float depth)
 {
     uint8_t out[4];
     int alpha_ok = 1;
@@ -562,6 +635,7 @@ static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], co
     tev_pixel(&D->tev, col, tex, out, &alpha_ok);
     if (!alpha_ok) { g_rej_alpha++; return; }
     if (!D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    fog_apply(&D->px, out, depth);
     blend_pixel(&D->px, x, y, out);
     g_pixels++;
 }
@@ -582,6 +656,31 @@ static Plane plane_of(const Vertex* v0, const Vertex* v1, const Vertex* v2, floa
 
 #define MAX_ATTR (2 + 8 + 8 * 3) /* depth, 1/w, two colours, eight texcoords */
 
+/* log2 of the texel footprint of one pixel for a texcoord slot, from the
+ * screen-space derivatives of s = (S/w)/(1/w) and t. */
+static float span_lod(const Plane* attr, int wi, int ti, float px, float py, float scale_s, float scale_t)
+{
+    float W = attr[wi].a * px + attr[wi].b * py + attr[wi].c;
+    float S = attr[ti].a * px + attr[ti].b * py + attr[ti].c;
+    float T = attr[ti + 1].a * px + attr[ti + 1].b * py + attr[ti + 1].c;
+    float Q = attr[ti + 2].a * px + attr[ti + 2].b * py + attr[ti + 2].c;
+    float iw2, dsdx, dsdy, dtdx, dtdy, q, fx, fy, f;
+    if (W == 0.0f) return 0.0f;
+    iw2 = 1.0f / (W * W);
+    q = Q / W;
+    if (q == 0.0f) q = 1.0f;
+    /* d(S/W)/dx = (S_a W - S W_a) / W^2, likewise for y and for T; divide by q */
+    dsdx = (attr[ti].a * W - S * attr[wi].a) * iw2 / q * scale_s;
+    dsdy = (attr[ti].b * W - S * attr[wi].b) * iw2 / q * scale_s;
+    dtdx = (attr[ti + 1].a * W - T * attr[wi].a) * iw2 / q * scale_t;
+    dtdy = (attr[ti + 1].b * W - T * attr[wi].b) * iw2 / q * scale_t;
+    fx = dsdx * dsdx + dtdx * dtdx;
+    fy = dsdy * dsdy + dtdy * dtdy;
+    f = fx > fy ? fx : fy;
+    if (f <= 1e-12f) return -16.0f;
+    return 0.5f * log2f(f);
+}
+
 static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
     const Rect* sc = &D->rc.scissor;
@@ -594,6 +693,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
     int nattr = 0, ci[2], ti[8], di, wi;
     unsigned i, k;
     const Vertex* v[3];
+    float lod[8] = {0, 0, 0, 0, 0, 0, 0, 0}, dlod[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
     if (area == 0.0f) return;
     if (g_cull_flip) area = -area;
@@ -663,11 +763,21 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
         if (xs > xe) continue;
         px0 = (float)xs + 0.5f;
         for (n = 0; n < nattr; n++) av[n] = attr[n].a * px0 + attr[n].b * py + attr[n].c;
+        /* Level of detail per texcoord slot: log2 of the texel footprint of
+         * one pixel, evaluated at both ends of the span and interpolated. */
+        for (i = 0; i < 8; i++) {
+            float l0, l1;
+            if (ti[i] < 0 || !((D->miptex >> i) & 1)) continue;
+            l0 = span_lod(attr, wi, ti[i], px0, py, D->tev.tex[D->texmap_of[i]].scale_s, D->tev.tex[D->texmap_of[i]].scale_t);
+            l1 = span_lod(attr, wi, ti[i], (float)xe + 0.5f, py, D->tev.tex[D->texmap_of[i]].scale_s, D->tev.tex[D->texmap_of[i]].scale_t);
+            lod[i] = l0;
+            dlod[i] = xe > xs ? (l1 - l0) / (float)(xe - xs) : 0.0f;
+        }
         for (x = xs; x <= xe; x++) {
             float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
             float w255 = w * 255.0f;
             int col[2][4];
-            float tex[8][3];
+            float tex[8][4];
             for (i = 0; i < 2; i++) {
                 if (!((D->nchan >> i) & 1)) { col[i][0] = col[i][1] = col[i][2] = col[i][3] = 0; continue; }
                 for (k = 0; k < 4; k++) {
@@ -678,6 +788,8 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
             for (i = 0; i < 8; i++) {
                 if (ti[i] < 0) continue;
                 tex[i][0] = av[ti[i]] * w; tex[i][1] = av[ti[i] + 1] * w; tex[i][2] = av[ti[i] + 2] * w;
+                tex[i][3] = lod[i];
+                lod[i] += dlod[i];
             }
             shade(D, x, y, col, tex, av[di]);
             for (n = 0; n < nattr; n++) av[n] += attr[n].a;
@@ -698,7 +810,7 @@ static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
         float f = (float)i / (float)n;
         int x = (int)floorf(a->sx + dx * f), y = (int)floorf(a->sy + dy * f);
         int col[2][4];
-        float tex[8][3];
+        float tex[8][4];
         if (x < sc->x0 || x > sc->x1 || y < sc->y0 || y > sc->y1) continue;
         for (t = 0; t < 2; t++) {
             const float* ca = &a->col[t].r; const float* cb = &b->col[t].r;
@@ -707,8 +819,10 @@ static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
                 col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
             }
         }
-        for (t = 0; t < 8; t++)
+        for (t = 0; t < 8; t++) {
             for (k = 0; k < 3; k++) tex[t][k] = a->tex[t][k] + (b->tex[t][k] - a->tex[t][k]) * f;
+            tex[t][3] = 0.0f;
+        }
         shade(D, x, y, col, tex, a->depth + (b->depth - a->depth) * f);
     }
 }
@@ -721,11 +835,13 @@ static void raster_point(const DrawCmd* D, const Vertex* a)
     unsigned t, k;
     g_points++;
     if (x < sc->x0 || x > sc->x1 || y < sc->y0 || y > sc->y1) return;
+    float tex[8][4];
     for (t = 0; t < 2; t++) {
         const float* ca = &a->col[t].r;
         for (k = 0; k < 4; k++) { int cv = (int)(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
     }
-    shade(D, x, y, col, a->tex, a->depth);
+    for (t = 0; t < 8; t++) { tex[t][0] = a->tex[t][0]; tex[t][1] = a->tex[t][1]; tex[t][2] = a->tex[t][2]; tex[t][3] = 0.0f; }
+    shade(D, x, y, col, tex, a->depth);
 }
 
 /* ---- clipping ----------------------------------------------------------- */
@@ -963,6 +1079,17 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     raster_prepare(xf, bp, &D->rc);
     D->ntex = D->tev.used_tex & ((1u << (xf[0x103F] & 15)) - 1u);
     D->nchan = D->tev.used_chan;
+    D->miptex = 0;
+    memset(D->texmap_of, 0, sizeof D->texmap_of);
+    {
+        unsigned st;
+        for (st = 0; st < D->tev.stages; st++) {
+            const Stage* S = &D->tev.st[st];
+            if (!S->texen) continue;
+            D->texmap_of[S->texcoord] = S->texmap;
+            if (D->tev.tex[S->texmap].mip && D->tev.tex[S->texmap].nlevels > 1) D->miptex |= 1u << S->texcoord;
+        }
+    }
     D->prim = prim; D->count = count; D->v = v;
     for (i = 0; i < count; i++) {
         VertexIn in;

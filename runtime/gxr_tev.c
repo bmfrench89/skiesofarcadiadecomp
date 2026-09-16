@@ -28,7 +28,9 @@ void tex_set_memory(CpuState* s)
 
 typedef struct {
     uint32_t addr, fmt, w, h, tlut_off, tlut_fmt;
-    uint8_t* rgba; /* w*h*4 */
+    uint8_t* rgba; /* every level, consecutively; level 0 first */
+    const uint8_t* level[MAX_MIPS];
+    int lw[MAX_MIPS], lh[MAX_MIPS], nlevels;
     uint64_t stamp;
     uint32_t hash;
 } TexEntry;
@@ -194,14 +196,13 @@ static void decode_cmpr_block(const uint8_t* p, uint8_t* out, unsigned ox, unsig
     }
 }
 
-static uint8_t* decode_texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt)
+static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt)
 {
-    uint8_t* out = (uint8_t*)calloc((size_t)w * h, 4);
     const uint8_t* base;
     unsigned tw, th, bytes_per_tile, tiles_w;
     unsigned x, y;
-    if (!out || !g_s) return out;
-    if ((addr & MEM_MASK) >= MEM1_SIZE) return out;
+    if (!out || !g_s) return;
+    if ((addr & MEM_MASK) >= MEM1_SIZE) return;
     base = mem_ptr(g_s, addr);
 
     switch (fmt) {
@@ -225,7 +226,7 @@ static uint8_t* decode_texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
                 decode_cmpr_block(blk + 16, out, bx * 8, by * 8 + 4, w, h);
                 decode_cmpr_block(blk + 24, out, bx * 8 + 4, by * 8 + 4, w, h);
             }
-        return out;
+        return;
     }
 
     for (y = 0; y < h; y++) {
@@ -296,10 +297,39 @@ static uint8_t* decode_texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
             }
         }
     }
-    return out;
 }
 
-static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt)
+/* Decode a texture and up to `nlevels` of its mipmaps, which follow the
+ * base level in memory, each tiled at its own size. */
+static void decode_texture(TexEntry* e, int nlevels)
+{
+    uint32_t w = e->w, h = e->h, addr = e->addr;
+    size_t total = 0;
+    int l;
+    uint8_t* out;
+    if (nlevels < 1) nlevels = 1;
+    if (nlevels > MAX_MIPS) nlevels = MAX_MIPS;
+    e->nlevels = 0;
+    for (l = 0; l < nlevels; l++) {
+        e->lw[l] = (int)w; e->lh[l] = (int)h;
+        total += (size_t)w * h * 4;
+        e->nlevels++;
+        if (w == 1 && h == 1) break;
+        w = w > 1 ? w / 2 : 1; h = h > 1 ? h / 2 : 1;
+    }
+    out = (uint8_t*)calloc(total, 1);
+    e->rgba = out;
+    if (!out) return;
+    for (l = 0; l < e->nlevels; l++) {
+        e->level[l] = out;
+        decode_level(out, addr, e->fmt, (uint32_t)e->lw[l], (uint32_t)e->lh[l], e->tlut_off, e->tlut_fmt);
+        addr += texture_bytes(e->fmt, (uint32_t)e->lw[l], (uint32_t)e->lh[l]);
+        out += (size_t)e->lw[l] * e->lh[l] * 4;
+    }
+    for (; l < MAX_MIPS; l++) e->level[l] = NULL;
+}
+
+static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt, int nlevels)
 {
     int i, victim = 0;
     uint64_t oldest = ~0ull;
@@ -310,9 +340,9 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         TexEntry* e = &g_cache[i];
         if (e->rgba && e->addr == addr && e->fmt == fmt && e->w == w && e->h == h && e->tlut_off == tlut_off && e->tlut_fmt == tlut_fmt) {
             e->stamp = ++g_stamp;
-            if (e->hash != hsh) { /* rewritten in place: decode again */
+            if (e->hash != hsh || e->nlevels < nlevels) { /* rewritten in place, or more levels wanted */
                 tex_free_later(e->rgba);
-                TIMED(T_DECODE, e->rgba = decode_texture(addr, fmt, w, h, tlut_off, tlut_fmt));
+                TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
                 e->hash = hsh;
             }
             return e;
@@ -323,7 +353,7 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         TexEntry* e = &g_cache[victim];
         tex_free_later(e->rgba);
         e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
-        TIMED(T_DECODE, e->rgba = decode_texture(addr, fmt, w, h, tlut_off, tlut_fmt));
+        TIMED(T_DECODE, decode_texture(e, nlevels));
         e->hash = hsh;
         e->stamp = ++g_stamp;
         return e;
@@ -428,26 +458,33 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
     }
 
     /* textures: decode (cached) and resolve sampling state per map used */
-    for (i = 0; i < 8; i++) T->tex[i].rgba = NULL;
+    for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
         unsigned map = S->texmap, rb;
         TexCfg* C;
-        uint32_t mode0, image0, image3, tlut, w, h, fmt, addr, tlut_off, tlut_fmt;
+        uint32_t mode0, mode1, image0, image3, tlut, w, h, fmt, addr, tlut_off, tlut_fmt;
+        unsigned minf;
+        int nlevels, l;
         const TexEntry* te;
         if (!S->texen) continue;
         C = &T->tex[map];
-        if (C->rgba) continue;
+        if (C->level[0]) continue;
         rb = map < 4 ? map : 0x20 + (map - 4);
-        mode0 = bp[0x80 + rb]; image0 = bp[0x88 + rb]; image3 = bp[0x94 + rb]; tlut = bp[0x98 + rb];
+        mode0 = bp[0x80 + rb]; mode1 = bp[0x84 + rb]; image0 = bp[0x88 + rb]; image3 = bp[0x94 + rb]; tlut = bp[0x98 + rb];
         w = (image0 & 0x3FF) + 1; h = ((image0 >> 10) & 0x3FF) + 1; fmt = (image0 >> 20) & 15;
         addr = (image3 & 0x1FFFFF) << 5;
         tlut_off = (tlut & 0x3FF) << 9; tlut_fmt = (tlut >> 10) & 3;
-        te = texture(addr, fmt, w, h, tlut_off, tlut_fmt);
-        C->rgba = te->rgba;
+        minf = (mode0 >> 5) & 7;
+        C->mip = (minf == 1 || minf == 2 || minf == 5 || minf == 6);
+        C->min_lod = (float)(mode1 & 0xFF) / 16.0f;
+        C->max_lod = (float)((mode1 >> 8) & 0xFF) / 16.0f;
+        C->lod_bias = (float)(int8_t)((mode0 >> 9) & 0xFF) / 32.0f;
+        nlevels = C->mip ? (int)(C->max_lod + 0.999f) + 1 : 1;
+        te = texture(addr, fmt, w, h, tlut_off, tlut_fmt, nlevels);
+        C->nlevels = te->nlevels;
+        for (l = 0; l < MAX_MIPS; l++) { C->level[l] = te->level[l]; C->lw[l] = te->lw[l]; C->lh[l] = te->lh[l]; }
         C->w = (int)w; C->h = (int)h;
-        C->mask_s = (w & (w - 1)) == 0 ? (int)w - 1 : -1;
-        C->mask_t = (h & (h - 1)) == 0 ? (int)h - 1 : -1;
         C->wrap_s = mode0 & 3; C->wrap_t = (mode0 >> 2) & 3;
         C->linear = (mode0 >> 4) & 1;
         C->scale_s = (float)((bp[0x30 + 2 * map] & 0xFFFF) + 1);
@@ -481,25 +518,25 @@ static inline int wrap(int i, int size, int mask, unsigned mode)
 }
 
 static int g_notex = -1;
-static inline void sample(const TexCfg* C, float s, float t, uint8_t out[4])
+
+static inline void sample_level(const TexCfg* C, int l, float u, float v, uint8_t out[4])
 {
-    float u = s * C->scale_s, v = t * C->scale_t;
-    if (g_notex < 0) g_notex = getenv("SOA_GXR_NOTEX") ? 1 : 0;
-    if (g_notex) { out[0] = out[1] = out[2] = out[3] = 200; return; }
-    if (!C->rgba || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
+    const uint8_t* img = C->level[l];
+    int w = C->lw[l], h = C->lh[l];
+    int mask_s = (w & (w - 1)) == 0 ? w - 1 : -1, mask_t = (h & (h - 1)) == 0 ? h - 1 : -1;
     if (!C->linear) {
-        int x = wrap(fast_floor(u), C->w, C->mask_s, C->wrap_s), y = wrap(fast_floor(v), C->h, C->mask_t, C->wrap_t);
-        memcpy(out, C->rgba + ((size_t)y * C->w + x) * 4, 4);
+        int x = wrap(fast_floor(u), w, mask_s, C->wrap_s), y = wrap(fast_floor(v), h, mask_t, C->wrap_t);
+        memcpy(out, img + ((size_t)y * w + x) * 4, 4);
     } else {
         float fu = u - 0.5f, fv = v - 0.5f;
         int x0 = fast_floor(fu), y0 = fast_floor(fv);
         int ax = (int)((fu - (float)x0) * 256.0f), ay = (int)((fv - (float)y0) * 256.0f);
-        int xa = wrap(x0, C->w, C->mask_s, C->wrap_s), xb = wrap(x0 + 1, C->w, C->mask_s, C->wrap_s);
-        int ya = wrap(y0, C->h, C->mask_t, C->wrap_t), yb = wrap(y0 + 1, C->h, C->mask_t, C->wrap_t);
-        const uint8_t* p00 = C->rgba + ((size_t)ya * C->w + xa) * 4;
-        const uint8_t* p10 = C->rgba + ((size_t)ya * C->w + xb) * 4;
-        const uint8_t* p01 = C->rgba + ((size_t)yb * C->w + xa) * 4;
-        const uint8_t* p11 = C->rgba + ((size_t)yb * C->w + xb) * 4;
+        int xa = wrap(x0, w, mask_s, C->wrap_s), xb = wrap(x0 + 1, w, mask_s, C->wrap_s);
+        int ya = wrap(y0, h, mask_t, C->wrap_t), yb = wrap(y0 + 1, h, mask_t, C->wrap_t);
+        const uint8_t* p00 = img + ((size_t)ya * w + xa) * 4;
+        const uint8_t* p10 = img + ((size_t)ya * w + xb) * 4;
+        const uint8_t* p01 = img + ((size_t)yb * w + xa) * 4;
+        const uint8_t* p11 = img + ((size_t)yb * w + xb) * 4;
         int i;
         for (i = 0; i < 4; i++) {
             int top = p00[i] * (256 - ax) + p10[i] * ax;
@@ -507,6 +544,27 @@ static inline void sample(const TexCfg* C, float s, float t, uint8_t out[4])
             out[i] = (uint8_t)((top * (256 - ay) + bot * ay + 32768) >> 16);
         }
     }
+}
+
+/* lod: log2 of texels per pixel at this pixel, from the rasterizer. */
+static inline void sample(const TexCfg* C, float s, float t, float lod, uint8_t out[4])
+{
+    int l = 0;
+    float u, v;
+    if (g_notex < 0) g_notex = getenv("SOA_GXR_NOTEX") ? 1 : 0;
+    if (g_notex) { out[0] = out[1] = out[2] = out[3] = 200; return; }
+    if (!C->level[0] || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
+    if (C->mip && C->nlevels > 1) {
+        float L = lod + C->lod_bias;
+        if (L < C->min_lod) L = C->min_lod;
+        if (L > C->max_lod) L = C->max_lod;
+        l = (int)(L + 0.5f);
+        if (l >= C->nlevels) l = C->nlevels - 1;
+        if (l < 0) l = 0;
+    }
+    u = s * (C->scale_s * (float)C->lw[l] / (float)C->w);
+    v = t * (C->scale_t * (float)C->lh[l] / (float)C->h);
+    sample_level(C, l, u, v, out);
 }
 
 /* ---- TEV ---------------------------------------------------------------- */
@@ -530,7 +588,7 @@ static inline int compare(unsigned mode, int a, int b)
 
 /* Runs the stages for one pixel. ras[]: rasterized channel colors 0..255;
  * tex[]: texture coordinates per texcoord slot (s, t, q). */
-void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], uint8_t out[4], int* alpha_pass)
+void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], uint8_t out[4], int* alpha_pass)
 {
     unsigned st;
     int bank[BANK_SIZE];
@@ -550,7 +608,7 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], ui
             float q = tc[2];
             float s = q != 0.0f ? tc[0] / q : tc[0];
             float tt = q != 0.0f ? tc[1] / q : tc[1];
-            sample(&T->tex[S->texmap], s, tt, tmp);
+            sample(&T->tex[S->texmap], s, tt, tc[3], tmp);
             for (i = 0; i < 4; i++) bank[BANK_TEX + i] = tmp[S->tswap[i]];
         }
         if (S->chan < 2) {
