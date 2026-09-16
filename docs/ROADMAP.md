@@ -23,7 +23,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | **M5** | First frame | Phase 5 | Something the game drew, in a window |
 | **M6** | Title screen | Phase 5 | The actual title screen, correct |
 | **M7** | Audio | Phase 6 | Music and SFX. **Reached in first form:** the AX mixer runs the driver's command lists and the AI DMA plays through waveOut |
-| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game, the opening cutscenes and the first battle (command wheel, targeting, turns) all run; saves not yet |
+| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game, the opening cutscenes, the first battle (won) and free movement in the first field (the Valuan ship's hold, with the minimap) all run; saves not yet |
 
 ---
 
@@ -51,7 +51,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | `[x]` | **1.1** Gekko disassembler | M | **Done:** 696,144/697,784 words decode. `.text1` at 99.9997%; `.text0` at 30.8% (it is a ROM image of exception vectors with embedded strings and padding). Full paired-single and `psq_*` coverage across all three opcode-4 field widths |
 | `[x]` | **1.1b** Decoder cross-validation | S | **Done.** Diffed vs capstone + dtk over all 697,784 words. Six defects fixed, worst mislabelled 19,306 float instructions. Whole-image test now passes |
 | `[x]` | **1.2** Function boundary detection | M | **Done.** 7,166 functions recovered; cross-checked against dtk's 7,117 with **99.77% size agreement** and 99.70% `.text` coverage. 62 ours-only / 13 dtk-only, the latter almost entirely the MetroTRK debug stub reached only via `rfi`/vectors. Handles the 1,781 never-`bl`-called functions (data-pointer + gap seeding) and frameless leaves |
-| `[x]` | **1.3** Jump tables + indirect branches | M | **Done (jump tables).** 291/296 `bctr` resolved as switch tables (5,213 entries) by backward def-chain tracking of the mwcc idiom; targets become intra-function successors, not entries. 5 `bctr` remain unresolved (table address computed, not link-time constant). Full `bctrl`/`blrl` classification and the `bla 0x60` special case remain |
+| `[x]` | **1.3** Jump tables + indirect branches | M | **Done (jump tables).** 296/296 `bctr` resolved as switch tables by backward def-chain tracking of the mwcc idiom, including the four whose bound check is a conditional return (`bgtlr`); targets become intra-function successors, not entries. Full `bctrl`/`blrl` classification and the `bla 0x60` special case remain |
 | `[ ]` | **1.4** Data classification | M | Partition `.data0..5` **and `.text0`** into vtables, jump tables, float pools, strings, static initialisers. Reconcile the disagreement over whether jump tables live only in `.data3` or also `.data4` |
 | `[x]` | **1.5** Symbol database | S | **Done.** `config/symbols.txt` (dtk format, 16,531 symbols) and `config/functions.tsv` (per-function metadata). 249 functions carry real names from dtk's SDK signature database; the rest are `fn_XXXXXXXX`. C identifiers are always `fn_`; pretty names are display-only so `exit`/`__start` never collide |
 | `[ ]` | **1.6** Constant-propagation engine | M | **Correctness requirement, not an optimisation.** mwcc materialises addresses through per-TU pooled base registers and the `r2`/`r13` SDA bases. Peephole `lis`/`addi` matching misses most references. Needed by 1.3, 1.4, and all of Phase 3 |

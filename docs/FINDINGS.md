@@ -536,6 +536,18 @@ it held sixty-four events and the sixty-fourth was an A press at the
 command menu, so the game waited politely for input that never came.
 Scripts now repeat (`3600:a@150`) and hold (`sup#120`) instead.
 
+**Into the field.** Past the battle the story runs on into the Valuan
+ship's hold, the first area the player controls: Vyse walks where the
+scripted stick sends him, the minimap draws in the corner, the room
+loads its neighbours (`a201a`, `a200a`, `a101b`) and their music, and a
+run of 55,000 frames at three times real time ended only at its
+watchdog. The last unresolved indirect branches (four switches whose
+bound check is a `bgtlr`) were found the hard way -- the first field
+loader dispatches through one -- and are now resolved statically like
+the other 292. Not yet verified: the battle's top message window
+renders empty while attack animations play; names, numbers and gauges
+render, so it may simply have had nothing to say.
+
 - Giving DVD commands and ARAM DMAs realistic completion times (seek plus
   transfer; a short delay) removed the `memFree Error`s: with instant
   completion the SDK's completion callbacks could run at the next loop
