@@ -349,3 +349,177 @@ def test_iterative_promotes_a_frameless_leaf_after_a_return():
     fns, stats = cfg.build_iterative(dol)
     assert set(fns) == {BASE, BASE + 8}
     assert stats["from_gaps"] == 1
+
+
+LI_R3_0 = (14 << 26) | (3 << 21)
+
+
+def test_back_to_back_unreferenced_functions_surface_in_one_round():
+    """A run of unreferenced leaves used to be discovered one per round."""
+    dol = make_dol([stwu(-16), BLR] + [LI_R3_0, BLR] * 6)
+    fns, stats = cfg.build_iterative(dol)
+    assert len(fns) == 7
+    assert stats["rounds"] <= 2
+
+
+def test_mid_function_label_is_reabsorbed_not_promoted():
+    """A block reached only by a branch from inside its owner is not a function.
+
+    The owner's walk follows the branch (a gap start never terminates a walk),
+    which places the label inside the owner's extent, and it is pruned.
+    """
+    #  0: stwu ; 4: b +12 (-> 16) ; 8: nop ; 12: blr ; 16: nop ; 20: b -12 (-> 8)
+    dol = make_dol([stwu(-16), b(12), NOP, BLR, NOP, b(-12)])
+    fns, stats = cfg.build_iterative(dol)
+    assert set(fns) == {BASE}
+    assert fns[BASE].end == BASE + 24
+    assert BASE + 8 not in fns and BASE + 16 not in fns
+
+
+def test_dead_branch_inside_a_function_is_absorbed():
+    """mwcc leaves a stray `b` behind an unconditional branch; nothing reaches it.
+
+    The owner's blocks run up to the hole and resume after it, so it is the
+    owner's dead code, not a new function.
+    """
+    #  0: stwu ; 4: beq -> 20 ; 8: nop ; 12: b -> 24 ; 16: b -> 8 (DEAD) ; 20: nop ; 24: blr
+    beq_20 = bc(16, bo=12) | (2 << 16)
+    dol = make_dol([stwu(-16), beq_20, NOP, b(12), b(-8), NOP, BLR])
+    fns, stats = cfg.build_iterative(dol)
+    assert set(fns) == {BASE}
+    assert fns[BASE].end == BASE + 28
+    assert stats["absorbed"] == 1
+    assert fns[BASE].blocks[BASE + 16].terminator == "dead"
+
+
+def test_dead_branch_at_function_tail_is_absorbed():
+    """A dead `b` after the final return, jumping back into its own function."""
+    #  0: stwu ; 4: nop ; 8: blr ; 12: b -> 4 (DEAD) ; 16: stwu ; 20: blr   (16 is a pointer target)
+    dol = make_dol([stwu(-16), NOP, BLR, b(-8), stwu(-32), BLR], data_words=[BASE + 16])
+    fns, stats = cfg.build_iterative(dol)
+    assert set(fns) == {BASE, BASE + 16}
+    assert fns[BASE].end == BASE + 16
+    assert stats["absorbed"] >= 1
+    assert fns[BASE].blocks[BASE + 12].terminator == "dead"
+
+
+def test_tail_called_frameless_leaf_merges_into_caller():
+    """Documented limitation: a leaf reached only by `b` and nothing else is
+    walked as part of its caller, so no separate boundary is recovered.
+    Coverage is complete either way."""
+    #  0: stwu ; 4: b +4 (-> 8) ; 8: li r3,0 ; 12: blr
+    dol = make_dol([stwu(-16), b(4), LI_R3_0, BLR])
+    fns, _ = cfg.build_iterative(dol)
+    assert set(fns) == {BASE}
+    assert fns[BASE].end == BASE + 16
+
+
+# --------------------------------------------------------------------------
+# switch-table register variants
+# --------------------------------------------------------------------------
+
+
+def or_(ra: int, rs: int, rb: int) -> int:
+    return (31 << 26) | (rs << 21) | (ra << 16) | (rb << 11) | (444 << 1)
+
+
+def stw(rs: int, ra: int, d: int) -> int:
+    return (36 << 26) | (rs << 21) | (ra << 16) | (d & 0xFFFF)
+
+
+def _switch_variant(prefix, tail_regs, table_addr=0x80400000):
+    """Build a switch whose table-address materialisation is `prefix`
+    (a list of words), ending with the table in register `tail_regs[0]` and
+    the scaled index in `tail_regs[1]`."""
+    t, i = tail_regs
+    words = [stwu(-16)] + prefix + [lwzx(0, t, i), mtctr(0), BCTR, BLR, BLR, BLR]
+    n = len(words)
+    bctr_at = BASE + 4 * (n - 4)
+    targets = [BASE + 4 * (n - 3), BASE + 4 * (n - 2), BASE + 4 * (n - 1)]
+    dol = make_dol(words, data_words=targets, data_base=table_addr)
+    return dol, bctr_at, targets
+
+
+def _bgt_to(default_delta: int) -> int:
+    return bc(default_delta, bo=12) | (1 << 16)
+
+
+def test_table_halves_in_different_registers():
+    """addis r4 ; addi r3, r4, lo -- @ha and @l allocated to different registers."""
+    hi, lo = 0x8040, 0
+    prefix = [cmpli(3, 2), _bgt_to(28), addis(4, hi), rlwinm_x4(0, 3), addi(3, 4, lo)]
+    dol, site, targets = _switch_variant(prefix, (3, 0))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables and tables[site].targets == targets
+
+
+def test_bound_check_hoisted_above_stores():
+    prefix = [
+        cmpli(3, 2),
+        stw(7, 1, 0x30),
+        stw(6, 1, 0x34),
+        stw(5, 1, 0x38),
+        _bgt_to(24),
+        addis(4, 0x8040),
+        rlwinm_x4(0, 3),
+        addi(4, 4, 0),
+    ]
+    dol, site, targets = _switch_variant(prefix, (4, 0))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables and tables[site].targets == targets
+
+
+def test_table_register_copied_through_mr():
+    prefix = [
+        cmpli(3, 2),
+        _bgt_to(28),
+        addis(4, 0x8040),
+        addi(4, 4, 0),
+        or_(5, 4, 4),  # mr r5, r4
+        rlwinm_x4(0, 3),
+    ]
+    dol, site, targets = _switch_variant(prefix, (5, 0))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables and tables[site].targets == targets
+
+
+def test_table_offset_from_a_pooled_base():
+    """addi r3, r31, off where r31 = lis/addi pool base -- resolves to absolute."""
+    pool = 0x80400000 - 0x100
+    prefix = [
+        addis(31, 0x8040),
+        addi(31, 31, -0x100),  # r31 = pool base
+        cmpli(3, 2),
+        _bgt_to(20),
+        rlwinm_x4(0, 3),
+        addi(3, 31, 0x100),  # r3 = pool + 0x100 = table
+    ]
+    dol, site, targets = _switch_variant(prefix, (3, 0))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables
+    assert tables[site].base == pool + 0x100
+    assert tables[site].targets == targets
+
+
+def test_table_operands_swapped():
+    """lwzx rC, rI, rT -- index in rA, table in rB."""
+    prefix = [cmpli(3, 2), _bgt_to(28), addis(4, 0x8040), rlwinm_x4(0, 3), addi(4, 4, 0)]
+    dol, site, targets = _switch_variant(prefix, (0, 4))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables and tables[site].targets == targets
+
+
+def test_table_register_loaded_from_memory_is_unresolved():
+    """A table address that comes from a load is not a link-time constant."""
+    lwz_r3 = (32 << 26) | (3 << 21) | (1 << 16) | 8  # lwz r3, 8(r1)
+    prefix = [cmpli(3, 2), _bgt_to(20), lwz_r3, rlwinm_x4(0, 3)]
+    dol, site, _ = _switch_variant(prefix, (3, 0))
+    assert site not in cfg.find_jump_tables(dol)
+
+
+def test_record_form_between_compare_and_bgt_is_unresolved():
+    """An intervening `add.` clobbers CR0, so the cmpli no longer bounds the switch."""
+    add_dot = (31 << 26) | (9 << 21) | (9 << 16) | (9 << 11) | (266 << 1) | 1
+    prefix = [cmpli(3, 2), add_dot, _bgt_to(24), addis(4, 0x8040), rlwinm_x4(0, 3), addi(4, 4, 0)]
+    dol, site, _ = _switch_variant(prefix, (4, 0))
+    assert site not in cfg.find_jump_tables(dol)

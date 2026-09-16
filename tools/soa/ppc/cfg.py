@@ -22,6 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from .decode import BCTR, Insn, decode
+from .regs import gpr_defs, is_mr
 
 
 @dataclass
@@ -181,7 +182,8 @@ class JumpTable:
 
 _SPR_CTR = 9
 _MAX_TABLE = 4096
-_LOOKBACK = 24  # instructions to scan backward from a bctr
+_TRACK_BACK = 256  # how far a register's definition chain may be followed
+_BOUND_BACK = 64  # how far above the bgt the bound check may be hoisted
 
 
 def find_jump_tables(dol, code: CodeView | None = None) -> dict[int, JumpTable]:
@@ -198,9 +200,15 @@ def find_jump_tables(dol, code: CodeView | None = None) -> dict[int, JumpTable]:
         mtspr  CTR, rC
         bctr
 
-    We walk backward from the ``bctr`` collecting each piece by register. A
-    site that does not fit is left unresolved rather than guessed, and shows
-    up in ``Function.unresolved_indirect``.
+    The register allocator does not keep this tidy: the @ha and @l halves often
+    land in different registers, the table address may be loaded well ahead of
+    the dispatch (or copied through ``mr``, or offset from a pooled base), and
+    the bound check gets hoisted above unrelated stores. So rather than pattern
+    matching a fixed window we follow the *definition chain* of the table
+    register backward until an absolute address resolves, and find the bound by
+    locating the ``bgt`` and then the nearest instruction that defines CR0
+    above it. A site that still does not fit is left unresolved rather than
+    guessed, and shows up in ``Function.unresolved_indirect``.
 
     Resolving these matters twice over: the targets become intra-function
     successors, and they are *excluded* from function-entry seeding -- they
@@ -221,43 +229,121 @@ def find_jump_tables(dol, code: CodeView | None = None) -> dict[int, JumpTable]:
     return tables
 
 
-def _resolve_table(dol, code: CodeView, site: int) -> JumpTable | None:
-    ctr_src = table_reg = None
-    hi = lo = count = None
+def _track_address(code: CodeView, from_addr: int, reg: int) -> int | None:
+    """Resolve ``reg`` at ``from_addr`` to a constant by walking its definitions backward.
 
-    for back in range(1, _LOOKBACK + 1):
-        insn = code.at(site - 4 * back)
+    Follows ``addi``/``addis``/``ori``/``mr`` chains; anything else that writes
+    the tracked register (a load, an argument, arithmetic) means the value is
+    not a link-time constant and we give up. Leaving the function through an
+    unconditional return also gives up.
+    """
+    lo = 0
+    addr = from_addr
+    for _ in range(_TRACK_BACK):
+        addr -= 4
+        insn = code.at(addr)
         if insn is None or not insn.valid:
-            break
+            return None
+        if insn.mnemonic == "bclr" and insn.is_unconditional:
+            return None
+        if reg not in gpr_defs(insn):
+            continue
+
         m = insn.mnemonic
+        if m == "addi":
+            lo += insn.imm
+            if insn.ra == 0:  # li
+                return lo & 0xFFFFFFFF
+            reg = insn.ra
+        elif m == "ori":
+            lo += insn.imm
+            reg = insn.rd  # ori's source sits in the rD field
+        elif m == "addis":
+            if insn.ra != 0:
+                # addis off a register we would have to propagate first.
+                return None
+            return ((insn.imm << 16) + lo) & 0xFFFFFFFF
+        elif is_mr(insn):
+            reg = insn.rd
+        else:
+            return None
+    return None
 
-        # Each stage consumes the nearest matching instruction, walking backward.
-        if ctr_src is None:
-            if m == "mtspr" and insn.spr == _SPR_CTR:
-                ctr_src = insn.rd
-            continue
-        if table_reg is None:
-            if m == "lwzx" and insn.rd == ctr_src:
-                table_reg = insn.ra
-            continue
-        if lo is None:
-            if m == "addi" and insn.rd == table_reg and insn.ra == table_reg:
-                lo = insn.imm
-            continue
-        if hi is None:
-            if m == "addis" and insn.rd == table_reg and insn.ra == 0:
-                hi = insn.imm
-            continue
-        if m == "cmpli":
-            count = insn.imm + 1
+
+def _bound_count(code: CodeView, lwzx_addr: int) -> int | None:
+    """Entry count from the switch's bound check.
+
+    Find the ``bgt default`` (BO=12, BI=1: CR0[GT] set) immediately above the
+    table load, then the nearest instruction above *that* which defines CR0.
+    Only a ``cmpli``/``cmpi`` against CR0 gives a usable bound.
+    """
+    bgt = None
+    for k in range(1, 16):
+        insn = code.at(lwzx_addr - 4 * k)
+        if insn is None or not insn.valid:
+            return None
+        if insn.mnemonic == "bc" and insn.bo == 12 and insn.bi == 1:
+            bgt = insn.addr
             break
-
-    if None in (ctr_src, table_reg, lo, hi, count) or not (0 < count <= _MAX_TABLE):
+    if bgt is None:
         return None
 
-    base = ((hi << 16) + lo) & 0xFFFFFFFF
+    for k in range(1, _BOUND_BACK):
+        insn = code.at(bgt - 4 * k)
+        if insn is None or not insn.valid:
+            return None
+        m = insn.mnemonic
+        if m in ("cmpli", "cmpi") and insn.crf_d == 0:
+            return insn.imm + 1 if insn.imm >= 0 else None
+        if m in ("cmp", "cmpl") and insn.crf_d == 0:
+            return None
+        if insn.rc_bit:  # record form clobbers CR0
+            return None
+        if m == "bclr" and insn.is_unconditional:
+            return None
+    return None
+
+
+def _resolve_table(dol, code: CodeView, site: int) -> JumpTable | None:
+    # The mtctr sits within a few instructions of its bctr.
+    ctr_src = mtctr_addr = None
+    for k in range(1, 5):
+        insn = code.at(site - 4 * k)
+        if insn is None or not insn.valid:
+            return None
+        if insn.mnemonic == "mtspr" and insn.spr == _SPR_CTR:
+            ctr_src, mtctr_addr = insn.rd, insn.addr
+            break
+    if ctr_src is None:
+        return None
+
+    # The value moved to CTR must come straight from an indexed load.
+    load = None
+    for k in range(1, 9):
+        insn = code.at(mtctr_addr - 4 * k)
+        if insn is None or not insn.valid:
+            return None
+        if insn.mnemonic == "lwzx" and insn.rd == ctr_src:
+            load = insn
+            break
+        if ctr_src in gpr_defs(insn):
+            return None
+    if load is None:
+        return None
+
+    # Either operand may hold the table; the other is the scaled index.
+    base = _track_address(code, load.addr, load.ra)
+    if base is None:
+        base = _track_address(code, load.addr, load.rb)
+    if base is None:
+        return None
+
+    count = _bound_count(code, load.addr)
+    if count is None or not (0 < count <= _MAX_TABLE):
+        return None
+
     section = dol.section_at(base)
-    if section is None or not section.contains(base + 4 * count - 4):
+    if section is None or section.is_text or not section.contains(base + 4 * count - 4):
         return None
 
     targets = [dol.word(base + 4 * k) for k in range(count)]
@@ -304,6 +390,13 @@ def _walk(
                 and insn.imm < 0
             ):
                 fn.has_frame = True
+
+            if insn.mnemonic == "rfi":
+                # Return from interrupt: an exception-handler epilogue. Control
+                # never falls through, and what follows is the next handler.
+                block.terminator = "rfi"
+                fn.returns += 1
+                break
 
             if not insn.is_branch:
                 # A new block begins wherever another branch lands.
@@ -423,8 +516,46 @@ def _looks_like_entry(code: CodeView, addr: int) -> bool:
     return insn.mnemonic == "stwu" and insn.ra == 1 and insn.rd == 1 and insn.imm < 0
 
 
+def _owns(fn: Function, addr: int) -> bool:
+    return any(b.start <= addr < b.end for b in fn.blocks.values())
+
+
+def _interior_owner(
+    functions: dict[int, Function],
+    end_index: dict[int, list[int]],
+    code: CodeView,
+    start: int,
+    end: int,
+) -> int | None:
+    """The function a gap is a dead hole *inside* of, or None.
+
+    mwcc leaves single unreachable ``b`` instructions behind an unconditional
+    branch -- a jump to a label nothing else can reach. Nothing references
+    them, so they surface as one-word gaps in the middle of a function. A gap
+    belongs to F when F's blocks run right up to it and either resume right
+    after it, or every branch inside the gap lands back in F (a dead jump at
+    the function's tail). Promoting these as functions manufactured hundreds
+    of phantom entries that then rebuilt their owner's tail from the inside.
+    """
+    for entry in end_index.get(start, ()):
+        fn = functions[entry]
+        if end in fn.blocks:
+            return entry
+        targets: list[int] | None = []
+        for addr in range(start, end, 4):
+            insn = code.at(addr)
+            if insn is None or not insn.valid:
+                targets = None
+                break
+            if insn.is_direct_branch and insn.target is not None:
+                targets.append(insn.target)
+        if targets and all(_owns(fn, t) for t in targets):
+            return entry
+    return None
+
+
 def build_iterative(
-    dol, max_rounds: int = 8, max_insns: int = 200_000
+    dol, max_rounds: int = 32, max_insns: int = 200_000
 ) -> tuple[dict[int, Function], dict]:
     """Recover functions, then mine the gaps for entries the seeds missed.
 
@@ -439,24 +570,52 @@ def build_iterative(
     tables = find_jump_tables(dol, code)
     case_labels = {t for table in tables.values() for t in table.targets}
 
-    # High-confidence seeds only, minus anything a switch table points at:
-    # those are case labels inside a function body, never entries.
-    seeds = {dol.entry_point} | find_bl_targets(dol)
-    seeds = {a for a in seeds if code.contains(a)} - case_labels
+    # Two tiers of entry. HARD entries -- the DOL entry point, bl targets, and
+    # data-section pointers that land in unclaimed code -- are believed to be
+    # functions, so a `b` into one is a tail call and terminates the caller's
+    # walk. SOFT entries are gap starts we promoted on the strength of nothing
+    # but "code was left over here". A `b` into a soft entry is *followed*, so
+    # that if it was really a mid-function label its owner reclaims it and we
+    # can prune it. Making gap starts terminators was self-reinforcing: once a
+    # label was mis-promoted, every later round saw the owner's branch to it as
+    # a tail call and the fragment could never be reabsorbed.
+    hard = {dol.entry_point} | find_bl_targets(dol)
+    hard = {a for a in hard if code.contains(a)} - case_labels
     pointers = {a for a in find_code_pointers(dol) if code.contains(a)} - case_labels
+    soft: set[int] = set()
 
-    # mwcc lays functions end to end with no padding in the main text section,
-    # so once switch tables are resolved any hole there is a function nothing
-    # references directly -- even one that opens with no recognisable prologue.
-    # Smaller text sections (the init/exception-vector ROM image) do contain
-    # data, so there we still insist a gap *look* like a function.
+    # mwcc lays functions end to end in the main text section, so once switch
+    # tables are resolved any hole there is a function nothing references --
+    # even one with no recognisable prologue. The small init/vector section
+    # contains data, so there a gap must still *look* like a function.
     main_text = max(dol.text, key=lambda s: s.size)
+
+    def gap_entry(start: int, end: int) -> int | None:
+        """Where the function in a gap begins: the first word that decodes.
+
+        A gap can open with padding or a stray data word -- one of the three
+        non-instruction words in this binary's ``.text1`` sat at the head of
+        the gap holding ``InitMetroTRK``, ``TRK_main`` and ``exit``, and
+        rejecting the whole gap for its first word hid all three.
+        """
+        for addr in range(start, end, 4):
+            if addr in case_labels:
+                continue
+            insn = code.at(addr)
+            if insn is None or not insn.valid:
+                continue
+            if main_text.contains(addr) or _looks_like_entry(code, addr):
+                return addr
+            return None
+        return None
 
     stats = {
         "rounds": 0,
-        "seeds_per_round": [len(seeds)],
+        "seeds_per_round": [len(hard)],
         "from_pointers": 0,
         "from_gaps": 0,
+        "absorbed": 0,
+        "pruned": 0,
         "jump_tables": len(tables),
         "case_labels": len(case_labels),
     }
@@ -464,39 +623,82 @@ def build_iterative(
 
     for _ in range(max_rounds):
         stats["rounds"] += 1
-        frozen = frozenset(seeds)
+        terminators = frozenset(hard)
         functions = {
-            entry: _walk(entry, code, frozen, max_insns, tables) for entry in sorted(seeds)
+            entry: _walk(entry, code, terminators, max_insns, tables)
+            for entry in sorted(hard | soft)
         }
 
+        # Pointers into unclaimed code are functions nothing bl-calls. Promote
+        # them before mining gaps: they are stronger evidence than a leftover
+        # run of code, and walking them now keeps the gap pass from claiming
+        # them as anonymous remainders.
         claimed = coverage(dol, functions)["claimed"]
-        added: set[int] = set()
+        fresh = {a for a in pointers - hard if a not in claimed}
+        for entry in fresh:
+            functions[entry] = _walk(entry, code, terminators, max_insns, tables)
+        hard |= fresh
+        terminators = frozenset(hard)
+        stats["from_pointers"] += len(fresh)
 
-        # A pointer into already-claimed code is a case label or a mid-function
-        # label; a pointer into unclaimed code is a function nothing bl-calls.
-        fresh_pointers = {a for a in pointers - seeds if a not in claimed}
-        added |= fresh_pointers
-        stats["from_pointers"] += len(fresh_pointers)
+        # Fill every remaining hole. Soft walks never affect other walks, so
+        # this can iterate to a fixpoint without rebuilding the hard set --
+        # which matters when a run of back-to-back unreferenced functions would
+        # otherwise surface one per round.
+        while True:
+            end_index: dict[int, list[int]] = defaultdict(list)
+            for fn in functions.values():
+                for block in fn.blocks.values():
+                    end_index[block.end].append(fn.entry)
 
-        gap_starts: set[int] = set()
-        for start, _ in find_gaps(dol, functions, min_words=1):
-            if start in claimed or start in case_labels:
+            gap_starts: set[int] = set()
+            absorbed = 0
+            for start, end in find_gaps(dol, functions, min_words=1):
+                owner = _interior_owner(functions, end_index, code, start, end)
+                if owner is not None:
+                    functions[owner].blocks[start] = BasicBlock(start, end, terminator="dead")
+                    absorbed += 1
+                    continue
+                entry = gap_entry(start, end)
+                if entry is not None:
+                    gap_starts.add(entry)
+            stats["absorbed"] += absorbed
+            gap_starts -= hard | soft
+            if not gap_starts:
+                if absorbed:
+                    continue  # coverage changed; look again
+                break
+            for entry in gap_starts:
+                functions[entry] = _walk(entry, code, terminators, max_insns, tables)
+            soft |= gap_starts
+            stats["from_gaps"] += len(gap_starts)
+
+        # A soft entry strictly inside another function's contiguous extent was
+        # a mid-function label after all. An entry that merely *starts* where
+        # another ends is a neighbour, and is kept.
+        extents = sorted((f.start, f.end, f.entry) for f in functions.values())
+        reach = 0
+        pruned: set[int] = set()
+        for start, end, entry in extents:
+            if entry in soft and start < reach:
+                pruned.add(entry)
                 continue
-            insn = code.at(start)
-            if insn is None or not insn.valid:
-                continue
-            if main_text.contains(start) or _looks_like_entry(code, start):
-                gap_starts.add(start)
-        gap_starts -= seeds | added
-        added |= gap_starts
-        stats["from_gaps"] += len(gap_starts)
+            reach = max(reach, end)
+        for entry in pruned:
+            functions.pop(entry)
+        soft -= pruned
+        stats["pruned"] += len(pruned)
 
-        if not added:
+        # Soft survivors are real functions; harden them so tail calls into
+        # them classify correctly on the next pass.
+        grew = bool(fresh) or bool(soft)
+        hard |= soft
+        soft.clear()
+        stats["seeds_per_round"].append(len(hard))
+        if not grew:
             break
-        seeds |= added
-        stats["seeds_per_round"].append(len(seeds))
 
-    stats["final_seeds"] = len(seeds)
+    stats["final_seeds"] = len(hard)
     return functions, stats
 
 
