@@ -1,4 +1,5 @@
-"""The native twin build finds every function a decompiled unit defines."""
+"""The native twin build takes the units marked native and renames every
+function they define or declare."""
 
 import importlib.util
 import sys
@@ -11,7 +12,7 @@ recompile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recompile)
 
 
-def test_function_definitions_are_found(tmp_path):
+def test_native_units_and_their_renames(tmp_path):
     (tmp_path / "a.c").write_text(
         "#include \"types.h\"\n"
         "size_t strlen(const char* str)\n{\n    return 0;\n}\n\n"
@@ -20,7 +21,15 @@ def test_function_definitions_are_found(tmp_path):
         "int forward_decl(int x);\n",
         encoding="utf-8",
     )
-    files, defines = recompile.native_decomp_sources(tmp_path)
+    (tmp_path / "b.c").write_text("int game_only(void)\n{\n    return 2;\n}\n", encoding="utf-8")
+    units = tmp_path / "units.txt"
+    units.write_text(
+        "# comment\n"
+        f"{tmp_path / 'a.c'}\t1.3.2\t-O4,p\tnative\n"
+        f"{tmp_path / 'b.c'}\t1.3.2\t-O4,p\n",
+        encoding="utf-8",
+    )
+    files, defines = recompile.native_decomp_sources(units)
     assert files == [str(tmp_path / "a.c")]
     assert defines == [
         "/Dforward_decl=dc_forward_decl",
@@ -30,5 +39,5 @@ def test_function_definitions_are_found(tmp_path):
     ]
 
 
-def test_missing_source_dir_is_empty(tmp_path):
-    assert recompile.native_decomp_sources(tmp_path / "nope") == ([], [])
+def test_missing_units_file_is_empty(tmp_path):
+    assert recompile.native_decomp_sources(tmp_path / "nope.txt") == ([], [])

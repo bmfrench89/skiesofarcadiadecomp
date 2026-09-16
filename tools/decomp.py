@@ -22,7 +22,7 @@ def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.startswith("#"):
             continue
-        src, version, flags = line.split("\t")
+        src, version, flags = line.split("\t")[:3]
         units.append((Path(src), version, flags.split()))
     return units
 
@@ -42,7 +42,8 @@ def main() -> int:
             print(f"{src}: compiler GC/{version} missing; run tools/fetch_toolchain.py --versions {version}", file=sys.stderr)
             return 2
         obj = args.out / (src.stem + ".o")
-        proc = subprocess.run([str(cc), "-c", *flags, str(src), "-o", str(obj)], capture_output=True, text=True)
+        # -nosyspath stops the compiler looking beside the source for "quoted" headers
+        proc = subprocess.run([str(cc), "-c", *flags, "-i", str(src.parent), str(src), "-o", str(obj)], capture_output=True, text=True)
         if proc.returncode != 0:
             print(f"{src}: compile failed\n{proc.stdout}{proc.stderr}")
             failures += 1

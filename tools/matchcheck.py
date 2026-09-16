@@ -89,7 +89,8 @@ def main() -> int:
             if len(a) < 4 or len(b) < 4:
                 diffs.append(i)
                 continue
-            if sym["value"] + 4 * i in rel:  # linker-filled field: compare the opcode only
+            off = sym["value"] + 4 * i
+            if off in rel or off + 2 in rel:  # linker-filled field (half-word ones sit at +2): compare the opcode only
                 if a[0] >> 2 == b[0] >> 2:
                     same += 1
                 else:

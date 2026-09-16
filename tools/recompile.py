@@ -34,11 +34,20 @@ RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
 _FUNC_DEF = re.compile(r"^[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*(?:\n\{|;)", re.M)
 
 
-def native_decomp_sources(src_dir: Path) -> tuple[list[str], list[str]]:
-    """src/**/*.c and the /D renames that prefix every function they define or
-    declare with dc_ (a declared callee that is not decompiled yet comes from
-    runtime/decomp_shims.c)."""
-    files = sorted(src_dir.rglob("*.c")) if src_dir.is_dir() else []
+def native_decomp_sources(units: Path) -> tuple[list[str], list[str]]:
+    """The units marked ``native`` in config/GEAE8P/units.txt, and the /D renames
+    that prefix every function they define or declare with dc_ (a declared
+    callee that is not decompiled yet comes from runtime/decomp_shims.c).
+    Units that touch the game's globals stay out until the native build can
+    map those onto guest memory."""
+    files = []
+    if units.exists():
+        for line in units.read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) >= 4 and cols[3].strip() == "native":
+                files.append(Path(cols[0]))
     names = set()
     for f in files:
         names.update(_FUNC_DEF.findall(f.read_text(encoding="utf-8")))
@@ -164,7 +173,7 @@ def main() -> int:
         # The hand-decompiled units (src/) are built natively too, every function
         # renamed dc_<name> so they sit beside the C runtime's own strlen and
         # friends; the selftest runs them against their recompiled twins.
-        dc_files, dc_defines = native_decomp_sources(Path("src"))
+        dc_files, dc_defines = native_decomp_sources(Path("config/GEAE8P/units.txt"))
         if dc_files:
             ndir = args.out / "decomp"
             ndir.mkdir(parents=True, exist_ok=True)

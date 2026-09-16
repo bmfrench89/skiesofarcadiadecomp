@@ -67,3 +67,11 @@
 0x8025F0DC	strncpy	MSL source match
 0x8025F120	strcpy	MSL word-copy strcpy
 0x8025F1F4	atoi	calls __strtol with base 10
+0x8025ED74	strstr	MSL source match
+0x8022A7F4	aramCacheRestore	table copied from low memory
+0x8022A824	aramCacheSave	table copied to low memory
+0x8022AE04	aramCacheValid	checksum then slot flag
+0x8022AE88	aramCacheCallback	ARQ completion sets the done flag
+0x8022ABEC	aramCacheFind	lowercase name searched in the 16 package paths
+0x8022ACA8	aramCacheFetch	ARQ ARAM-to-main of one slot
+0x8022A854	aramCacheStage	state machine loading the 16 packages into ARAM

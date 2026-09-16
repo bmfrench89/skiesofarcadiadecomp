@@ -1,6 +1,8 @@
 # Hand-decompiled translation units: source, compiler (a folder under
-# vendor/mwcc/GC/), and flags. tools/decomp.py builds each one with the
-# vendored Metrowerks compiler and checks every function against the
-# executable word for word.
-src/sdk/msl/string.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
-src/sdk/msl/mem.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+# vendor/mwcc/GC/), flags, and "native" for units that are also compiled
+# natively as twins (only units free of the game's globals). tools/decomp.py
+# builds each one with the vendored compiler and checks every function
+# against the executable word for word.
+src/sdk/msl/string.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include	native
+src/sdk/msl/mem.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include	native
+src/game/aramcache.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
