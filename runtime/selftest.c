@@ -171,6 +171,23 @@ char* dc_strncpy(char* dst, const char* src, size_t n);
 void* dc_memcpy(void* dst, const void* src, size_t n);
 void* dc_memset(void* dst, int val, size_t n);
 
+/* The recompiled twins, by name: dispatch() now reaches the adapters in
+ * runtime/decomp_swap.c for these addresses (config/hle.txt). */
+void recomp_fn_8025F1D8(CpuState* s); void recomp_fn_8025EF18(CpuState* s); void recomp_fn_8025C73C(CpuState* s);
+void recomp_fn_8025C710(CpuState* s); void recomp_fn_8025EF48(CpuState* s); void recomp_fn_8025F0B0(CpuState* s);
+void recomp_fn_8025F0DC(CpuState* s); void recomp_fn_80005520(CpuState* s); void recomp_fn_80005434(CpuState* s);
+
+static void run_twin(CpuState* s, void (*fn)(CpuState*))
+{
+    s->gpr[1] = STACK_TOP - 0x400;
+    s->gpr[2] = SDA2_BASE;
+    s->gpr[13] = SDA_BASE;
+    s->lr = 0;
+    s->cr = 0;
+    s->msr = 0x00002030u;
+    fn(s);
+}
+
 static uint32_t g_rng = 0x2545F491u;
 static uint32_t rnd(void) { g_rng ^= g_rng << 13; g_rng ^= g_rng >> 17; g_rng ^= g_rng << 5; return g_rng; }
 
@@ -191,25 +208,25 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
         uint32_t p1, p2;
         random_string(s, A, la); random_string(s, B, lb);
 
-        s->gpr[3] = A; call(s, 0x8025F1D8u); /* strlen */
+        s->gpr[3] = A; run_twin(s, recomp_fn_8025F1D8); /* strlen */
         if (s->gpr[3] != (uint32_t)dc_strlen((const char*)mem_ptr(s, A))) { bad = 1; snprintf(got, cap, "strlen round %d", round); }
 
-        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; call(s, 0x8025EF18u); /* strchr */
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; run_twin(s, recomp_fn_8025EF18); /* strchr */
         p1 = s->gpr[3];
         { char* r = dc_strchr((const char*)mem_ptr(s, A), chr); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
         if (p1 != p2) { bad = 1; snprintf(got, cap, "strchr round %d: twin %08X, C %08X", round, p1, p2); }
 
-        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; call(s, 0x8025C73Cu); /* memchr */
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; run_twin(s, recomp_fn_8025C73C); /* memchr */
         p1 = s->gpr[3];
         { char* r = (char*)dc_memchr(mem_ptr(s, A), chr, n); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
         if (p1 != p2) { bad = 1; snprintf(got, cap, "memchr round %d: twin %08X, C %08X", round, p1, p2); }
 
-        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; call(s, 0x8025C710u); /* __memrchr */
+        s->gpr[3] = A; s->gpr[4] = (uint32_t)chr; s->gpr[5] = n; run_twin(s, recomp_fn_8025C710); /* __memrchr */
         p1 = s->gpr[3];
         { char* r = (char*)dc___memrchr(mem_ptr(s, A), chr, n); p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
         if (p1 != p2) { bad = 1; snprintf(got, cap, "memrchr round %d: twin %08X, C %08X", round, p1, p2); }
 
-        s->gpr[3] = A; s->gpr[4] = B; s->gpr[5] = n; call(s, 0x8025EF48u); /* strncmp */
+        s->gpr[3] = A; s->gpr[4] = B; s->gpr[5] = n; run_twin(s, recomp_fn_8025EF48); /* strncmp */
         r1 = (int)s->gpr[3]; r2 = dc_strncmp((const char*)mem_ptr(s, A), (const char*)mem_ptr(s, B), n);
         if (r1 != r2) { bad = 1; snprintf(got, cap, "strncmp round %d: twin %d, C %d", round, r1, r2); }
 
@@ -218,14 +235,14 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
             uint8_t twin[128], native[128];
             memset(mem_ptr(s, DST), 'z', 96); random_string(s, DST, rnd() % 24);
             memcpy(native, mem_ptr(s, DST), 128);
-            s->gpr[3] = DST; s->gpr[4] = A; call(s, 0x8025F0B0u); /* strcat */
+            s->gpr[3] = DST; s->gpr[4] = A; run_twin(s, recomp_fn_8025F0B0); /* strcat */
             memcpy(twin, mem_ptr(s, DST), 128);
             dc_strcat((char*)native, (const char*)mem_ptr(s, A));
             if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strcat round %d", round); }
 
             memset(mem_ptr(s, DST), 'z', 96); mem_w8(s, DST + 96, 0);
             memcpy(native, mem_ptr(s, DST), 128);
-            s->gpr[3] = DST; s->gpr[4] = B; s->gpr[5] = n; call(s, 0x8025F0DCu); /* strncpy */
+            s->gpr[3] = DST; s->gpr[4] = B; s->gpr[5] = n; run_twin(s, recomp_fn_8025F0DC); /* strncpy */
             memcpy(twin, mem_ptr(s, DST), 128);
             dc_strncpy((char*)native, (const char*)mem_ptr(s, B), n);
             if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strncpy round %d", round); }
@@ -236,11 +253,11 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
                 uint32_t from = DST + off, to = DST + (rnd() % 16);
                 random_string(s, DST, 60);
                 memcpy(native, mem_ptr(s, DST), 128);
-                s->gpr[3] = to; s->gpr[4] = from; s->gpr[5] = len; call(s, 0x80005520u); /* memcpy */
+                s->gpr[3] = to; s->gpr[4] = from; s->gpr[5] = len; run_twin(s, recomp_fn_80005520); /* memcpy */
                 memcpy(twin, mem_ptr(s, DST), 128);
                 dc_memcpy(native + (to - DST), native + off, len);
                 if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "memcpy round %d", round); }
-                s->gpr[3] = DST + off; s->gpr[4] = (uint32_t)chr; s->gpr[5] = len; call(s, 0x80005434u); /* memset */
+                s->gpr[3] = DST + off; s->gpr[4] = (uint32_t)chr; s->gpr[5] = len; run_twin(s, recomp_fn_80005434); /* memset */
                 memcpy(twin, mem_ptr(s, DST), 128);
                 dc_memset(native + off, chr, len);
                 if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "memset round %d", round); }
@@ -314,11 +331,11 @@ int selftest(CpuState* s)
     s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x200;
     call(s, 0x8025F120u); /* strcpy */
     s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x300;
-    call(s, 0x8025F0B0u); /* strcat */
+    run_twin(s, recomp_fn_8025F0B0); /* strcat */
     get_string(s, SCRATCH, got, sizeof got);
     failures += check("strcpy+strcat", got, "alphabeta");
     s->gpr[3] = SCRATCH;
-    call(s, 0x8025F1D8u); /* strlen */
+    run_twin(s, recomp_fn_8025F1D8); /* strlen */
     snprintf(got, sizeof got, "%u", s->gpr[3]);
     failures += check("strlen", got, "9");
     s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x200;
@@ -326,12 +343,12 @@ int selftest(CpuState* s)
     snprintf(got, sizeof got, "%s", (int32_t)s->gpr[3] > 0 ? "positive" : "other");
     failures += check("strcmp", got, "positive");
     s->gpr[3] = SCRATCH + 0x400; s->gpr[4] = 0x41; s->gpr[5] = 37;
-    call(s, 0x80005434u); /* memset 37 bytes of 'A' */
+    run_twin(s, recomp_fn_80005434); /* memset 37 bytes of 'A' */
     mem_w8(s, SCRATCH + 0x400 + 37, 0);
     get_string(s, SCRATCH + 0x400, got, sizeof got);
     failures += check("memset", got, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     s->gpr[3] = SCRATCH + 0x500 + 3; s->gpr[4] = SCRATCH; s->gpr[5] = 10; /* unaligned memcpy incl. the NUL */
-    call(s, 0x80005520u);
+    run_twin(s, recomp_fn_80005520);
     get_string(s, SCRATCH + 0x503, got, sizeof got);
     failures += check("memcpy unaligned", got, "alphabeta");
 

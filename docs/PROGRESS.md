@@ -66,7 +66,9 @@ how it went.
 - The decompilation pipeline: the original Metrowerks compiler fetched
   into `vendor/`, hand-written C compiled and compared word for word with
   the executable, and the same C compiled natively and run against its
-  recompiled twin on random inputs. Seven MSL string routines match.
+  recompiled twin on random inputs. Nine MSL string and memory routines
+  match, and the port now runs them natively in place of the translation:
+  the first decompiled code in the shipping path.
 
 ## Open
 

@@ -95,8 +95,11 @@ flags. A function counts as done when `tools/matchcheck.py` reports MATCH;
 `tools/disasm.py <name>` shows the target when it does not. The port keeps
 running the recompiled code either way: matching functions are proof of
 understanding. They are also compiled natively (renamed `dc_*`) into the
-port, and `SOA_SELFTEST=1` runs each one against its recompiled twin on
-random inputs, so a match that is somehow wrong still gets caught.
+port; an adapter in `runtime/decomp_swap.c` plus a line in `config/hle.txt`
+swaps one in for its translation, and `SOA_SELFTEST=1` runs each pair on
+random inputs, so a match that is somehow wrong still gets caught. Callees
+that are not decompiled yet come from `runtime/decomp_shims.c`. Rebuild
+with `--compile --optimize --link` after touching `config/hle.txt`.
 
 ## Commits
 

@@ -12,3 +12,15 @@
 # Diagnostics: the guest's own printf-style output, formatted natively (runtime/hle_stdio.c).
 0x802AC75C  OSReport              # vprintf to a console nobody reads
 0x801DBE1C  GameDebugPrintf       # the game's debug print, stubbed out in the retail build
+
+# Decompiled and swapped in (runtime/decomp_swap.c calls the natively compiled
+# src/ code); the recompiled bodies stay as recomp_fn_* for the selftest.
+0x8025F1D8  strlen                # src/sdk/msl/string.c
+0x8025EF18  strchr                # src/sdk/msl/string.c
+0x8025C73C  memchr                # src/sdk/msl/string.c
+0x8025C710  __memrchr             # src/sdk/msl/string.c
+0x8025EF48  strncmp               # src/sdk/msl/string.c
+0x8025F0B0  strcat                # src/sdk/msl/string.c
+0x8025F0DC  strncpy               # src/sdk/msl/string.c
+0x80005520  memcpy                # src/sdk/msl/mem.c
+0x80005434  memset                # src/sdk/msl/mem.c
