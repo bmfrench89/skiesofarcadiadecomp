@@ -16,7 +16,7 @@
 #define LOG_PER_REG 6
 
 static uint32_t g_hits[MMIO_SLOTS];
-static uint64_t g_gp_bytes;
+
 static uint64_t g_syscalls;
 
 void hle_report(void);
@@ -71,10 +71,7 @@ static const char* peripheral(uint32_t ea)
 static void note(CpuState* s, const char* dir, uint32_t ea, unsigned size, uint64_t v)
 {
     uint32_t slot;
-    if (ea >= MMIO_BASE + 0x8000u && ea < MMIO_BASE + 0x8100u) {
-        g_gp_bytes += size; /* write-gather pipe: counted, not logged */
-        return;
-    }
+    /* (write-gather pipe stores never come here: cpu.h sends them straight to gx_pipe_write) */
     spin_check(s, ea, dir[0] == 'w');
     if (ea < MMIO_BASE || ea >= MMIO_BASE + MMIO_SLOTS * 4u) {
         static int strict = -1, shown;
@@ -138,7 +135,7 @@ void hle_report(void)
     }
     fprintf(stderr, "[hle] %llu MMIO accesses over %u registers; %llu bytes to the gather pipe; "
             "%llu syscalls\n", (unsigned long long)total, distinct,
-            (unsigned long long)(g_gp_bytes + gx_pipe_bytes()), (unsigned long long)g_syscalls);
+            (unsigned long long)gx_pipe_bytes(), (unsigned long long)g_syscalls);
     /* The busiest registers say what the guest is waiting on. */
     {
         uint32_t shown;
