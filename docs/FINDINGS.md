@@ -526,6 +526,16 @@ fills looked fine. One line in the register model (the read returns what
 was written) fixed it; the selftest now round-trips a DMA in each
 direction so the direction bit cannot silently regress.
 
+**The first battle plays.** With the cache intact the deck battle against
+the Valuan soldiers runs end to end: the command wheel, target selection,
+Vyse's and Aika's attacks with their camera cuts, the round counter, the
+enemy's turn, the win, and the story continuing into the next field
+scene (`/field/a201a.mld` loading with new music as the run timed out).
+The only thing that had made it look stuck was the scripted controller:
+it held sixty-four events and the sixty-fourth was an A press at the
+command menu, so the game waited politely for input that never came.
+Scripts now repeat (`3600:a@150`) and hold (`sup#120`) instead.
+
 - Giving DVD commands and ARAM DMAs realistic completion times (seek plus
   transfer; a short delay) removed the `memFree Error`s: with instant
   completion the SDK's completion callbacks could run at the next loop

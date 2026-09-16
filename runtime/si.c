@@ -55,8 +55,8 @@ static int g_present[4] = {1, 0, 0, 0};
 
 /* ---- scripted controller ------------------------------------------------ */
 
-typedef struct { unsigned frame, every; uint16_t buttons; uint8_t stick[2]; } PadEvent;
-static PadEvent g_script[1024]; /* "F:buttons" once at frame F; "F:buttons@N" again every N frames */
+typedef struct { unsigned frame, every, hold; uint16_t buttons; uint8_t stick[2]; } PadEvent;
+static PadEvent g_script[1024]; /* "F:buttons" once at frame F; "@N" again every N frames; "#H" held H frames */
 static int g_script_n = -1;
 #define HOLD_FRAMES 10
 
@@ -78,15 +78,15 @@ static void script_init(void)
     g_script_n = 0;
     while (p && *p && g_script_n < (int)(sizeof g_script / sizeof g_script[0])) {
         char* end;
-        unsigned frame = (unsigned)strtoul(p, &end, 10), every = 0;
+        unsigned frame = (unsigned)strtoul(p, &end, 10), every = 0, hold = HOLD_FRAMES;
         uint16_t buttons = 0;
         if (end == p || *end != ':') break;
         p = end + 1;
         uint8_t stick[2] = {128, 128};
-        while (*p && *p != ',' && *p != '@') {
+        while (*p && *p != ',' && *p != '@' && *p != '#') {
             const char* q = p;
             size_t len;
-            while (*q && *q != ',' && *q != '+' && *q != '@') q++;
+            while (*q && *q != ',' && *q != '+' && *q != '@' && *q != '#') q++;
             len = (size_t)(q - p);
             /* sup/sdown/sleft/sright move the main stick; everything else is a button */
             if (len == 3 && strncmp(p, "sup", 3) == 0) stick[1] = 255;
@@ -96,9 +96,14 @@ static void script_init(void)
             else buttons |= button_named(p, len);
             p = *q == '+' ? q + 1 : q;
         }
-        if (*p == '@') { every = (unsigned)strtoul(p + 1, &end, 10); p = end; }
+        while (*p == '@' || *p == '#') {
+            unsigned n = (unsigned)strtoul(p + 1, &end, 10);
+            if (*p == '@') every = n; else hold = n;
+            p = end;
+        }
         g_script[g_script_n].frame = frame;
         g_script[g_script_n].every = every;
+        g_script[g_script_n].hold = hold;
         g_script[g_script_n].buttons = buttons;
         g_script[g_script_n].stick[0] = stick[0];
         g_script[g_script_n].stick[1] = stick[1];
@@ -125,7 +130,7 @@ static uint16_t buttons_now(uint8_t stick[2])
         if (frame < g_script[i].frame) continue;
         rel = frame - g_script[i].frame;
         if (g_script[i].every) rel %= g_script[i].every;
-        if (rel < HOLD_FRAMES) {
+        if (rel < g_script[i].hold) {
             b |= g_script[i].buttons;
             if (g_script[i].stick[0] != 128) stick[0] = g_script[i].stick[0];
             if (g_script[i].stick[1] != 128) stick[1] = g_script[i].stick[1];

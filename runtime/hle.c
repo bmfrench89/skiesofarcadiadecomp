@@ -194,11 +194,17 @@ static uint64_t timebase(void)
 {
     struct timespec ts;
     static uint64_t origin;
+    static unsigned speed; /* SOA_SPEED=n: guest time runs n times faster than the wall clock */
     uint64_t ns;
     timespec_get(&ts, TIME_UTC);
     ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-    if (!origin) origin = ns;
-    return (ns - origin) / 1000000000ull * TB_HZ + (ns - origin) % 1000000000ull * TB_HZ / 1000000000ull;
+    if (!origin) {
+        const char* env = getenv("SOA_SPEED");
+        origin = ns;
+        speed = env && atoi(env) > 0 ? (unsigned)atoi(env) : 1u;
+    }
+    ns = (ns - origin) * speed;
+    return ns / 1000000000ull * TB_HZ + ns % 1000000000ull * TB_HZ / 1000000000ull;
 }
 
 uint32_t guest_timebase_lo(CpuState* s) { (void)s; return (uint32_t)timebase(); }

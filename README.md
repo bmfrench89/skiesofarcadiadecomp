@@ -27,9 +27,10 @@ favorable target:
 
 ## Status
 
-The game boots, plays its intro, reaches the title screen and starts a new
-game, rendered by a software implementation of the GameCube's graphics
-pipeline in a window with keyboard or gamepad input. See the roadmap for
+The game boots, plays its intro, reaches the title screen, starts a new
+game and plays through the opening cutscenes into the first battle, with
+music and sound, rendered by a software implementation of the GameCube's
+graphics pipeline in a window with keyboard or gamepad input. See the roadmap for
 what is done and what is not (saves are not implemented yet).
 
 ## Building and running
@@ -69,7 +70,8 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_SCALE=n` | window scale, default 2 |
 | `SOA_WINDOW=0` | render without a window |
 | `SOA_FRAMES=n` | headless: write every nth frame to `build/frames/` and skip rendering the rest |
-| `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `3600:a@150` repeats A every 150 frames |
+| `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames |
+| `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
 | `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
 | `SOA_NOSOUND=1` | no audio device |
