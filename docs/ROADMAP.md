@@ -1,8 +1,9 @@
 # Roadmap
 
-**v2** — restructured after adversarial review. See [SPEC.md](SPEC.md) §7–§8 for the two
-findings that moved work around: vertex submission cannot be HLE'd, and the Dolphin
-instruction tracer the v1 critical path depended on does not exist.
+**v3** — restructured after two rounds of adversarial review. See [SPEC.md](SPEC.md) §7–§8
+for the findings that moved work around: per-vertex submission is inlined and needs a
+write-gather pipe (though the GX *API* survives interception, so no GPU emulator), and the
+Dolphin instruction tracer the v1 critical path depended on does not exist.
 
 Work is sliced so **every milestone is something you can look at**, not a percentage.
 
