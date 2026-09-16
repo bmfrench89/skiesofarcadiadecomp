@@ -59,6 +59,7 @@ def main() -> int:
     ap.add_argument("object", type=Path)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--functions", type=Path, default=Path("config/functions.tsv"))
+    ap.add_argument("--show", type=int, default=0, metavar="N", help="list the first N differing instructions side by side")
     args = ap.parse_args()
 
     dol = D.parse(args.dol.read_bytes())
@@ -103,6 +104,16 @@ def main() -> int:
         failures += not ok
         where = "" if ok else " at +" + ", +".join(f"{4 * i:X}" for i in diffs[:6]) + (" ..." if len(diffs) > 6 else "")
         print(f"{sym['name']:24s} {'MATCH' if ok else 'differs'}  {same}/{n} words  (object {len(ours)} bytes, executable {len(theirs)}){where}")
+        if diffs and args.show:
+            from soa.ppc.decode import decode as decode_insn  # noqa: PLC0415 - optional detail
+            from soa.ppc.fmt import format_insn  # noqa: PLC0415
+
+            for i in diffs[: args.show]:
+                a = ours[4 * i : 4 * i + 4]
+                b = theirs[4 * i : 4 * i + 4]
+                fa = format_insn(decode_insn(int.from_bytes(a, "big"), addr + 4 * i)) if len(a) == 4 else "(end)"
+                fb = format_insn(decode_insn(int.from_bytes(b, "big"), addr + 4 * i)) if len(b) == 4 else "(end)"
+                print(f"    +{4 * i:03X}  ours: {fa:32s} theirs: {fb}")
     return 1 if failures else 0
 
 
