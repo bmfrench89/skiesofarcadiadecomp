@@ -25,6 +25,9 @@ void hle_dump(CpuState* s, uint32_t pc);
 void threads_init(CpuState* s);
 void dvd_init(const char* path);
 int selftest(CpuState* s);
+int gx_replay(CpuState* s, const char* base);
+void gxr_enable(int on);
+void gxr_set_output(const char* png_path);
 void watch_init(void);
 int irq_in_handler(void);
 
@@ -172,7 +175,7 @@ static void setup_low_memory(uint8_t* mem, const uint8_t* boot, uint32_t fst_add
 
 int main(int argc, char** argv)
 {
-    const char* dir = argc > 1 ? argv[1] : "extracted";
+    const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";
     char path[1024];
     uint8_t *dol, *boot, *fst;
     size_t dol_size, boot_size, fst_size;
@@ -209,6 +212,14 @@ int main(int argc, char** argv)
     threads_init(&s);
     watch_init();
     if (getenv("SOA_SELFTEST")) return selftest(&s) ? 7 : 0;
+    if (argc > 2 && strcmp(argv[1], "--replay") == 0) {
+        /* Render one captured frame (see gx.c frame capture) to <base>.png. */
+        char png[1024];
+        snprintf(png, sizeof png, "%s.png", argv[2]);
+        gxr_enable(1);
+        gxr_set_output(png);
+        return gx_replay(&s, argv[2]);
+    }
     start_watchdog(&s);
     ENTRY_FN(&s);
 

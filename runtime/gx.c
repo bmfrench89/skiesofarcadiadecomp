@@ -30,7 +30,7 @@
 
 /* CP register shadow (indices are the CP register numbers). */
 static uint32_t g_cp[0x100];
-static uint32_t g_xf[0x1000];
+static uint32_t g_xf[0x1100]; /* 0x000-0xFFF matrix memory, 0x1000-0x10FF registers */
 static uint32_t g_bp[0x100];
 static uint16_t g_cp_mmio[0x40]; /* the CP's own MMIO registers, by half-word index */
 static uint16_t g_pe_mmio[8];
@@ -45,8 +45,82 @@ static uint32_t g_pi_fifo[3];
 #define ISR_FINISH 0x8u
 
 static uint64_t g_bytes, g_cmds, g_draws, g_verts, g_dl_calls, g_bp_loads, g_xf_loads, g_cp_loads;
-static uint64_t g_finishes, g_tokens, g_efb_copies, g_unknown;
+static uint64_t g_finishes, g_tokens, g_efb_copies, g_xfb_copies, g_unknown;
 static uint32_t g_last_unknown;
+
+/* ---- frame capture ---------------------------------------------------
+ * SOA_FIFO_DUMP=a,b,c names frame numbers (frames end at a copy to the
+ * XFB). For each, build/fifo/NNNN.regs holds the CP/XF/BP shadows as the
+ * frame began, NNNN.fifo the bytes the CPU pushed during it, NNNN.ram all
+ * of MEM1 as it ended: everything a replay needs to render it offline. */
+static uint8_t* g_cap;
+static size_t g_cap_len, g_cap_cap;
+static uint32_t g_cap_cp[0x100], g_cap_xf[0x1100], g_cap_bp[0x100];
+static unsigned g_frame;
+static const char* g_dump_list = NULL;
+static int g_dump_checked;
+
+static int frame_wanted(unsigned frame)
+{
+    const char* p;
+    if (!g_dump_checked) { g_dump_checked = 1; g_dump_list = getenv("SOA_FIFO_DUMP"); }
+    for (p = g_dump_list; p && *p;) {
+        char* end;
+        unsigned long n = strtoul(p, &end, 10);
+        if (end == p) break;
+        if (n == frame) return 1;
+        p = *end == ',' ? end + 1 : end;
+    }
+    return 0;
+}
+
+static void cap_append(const uint8_t* p, size_t n)
+{
+    if (!g_dump_list) return;
+    if (g_cap_len + n > g_cap_cap) {
+        size_t want = g_cap_cap ? g_cap_cap * 2 : (1u << 20);
+        while (want < g_cap_len + n) want *= 2;
+        g_cap = (uint8_t*)realloc(g_cap, want);
+        g_cap_cap = want;
+    }
+    memcpy(g_cap + g_cap_len, p, n);
+    g_cap_len += n;
+}
+
+static void write_file(const char* path, const void* data, size_t len)
+{
+    FILE* f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "[gx] cannot write %s\n", path); return; }
+    fwrite(data, 1, len, f);
+    fclose(f);
+}
+
+static void frame_end(CpuState* s)
+{
+    char path[256];
+    if (frame_wanted(g_frame)) {
+        snprintf(path, sizeof path, "build/fifo/%04u.regs", g_frame);
+        {
+            FILE* f = fopen(path, "wb");
+            if (f) {
+                fwrite(g_cap_cp, 4, 0x100, f);
+                fwrite(g_cap_xf, 4, 0x1100, f);
+                fwrite(g_cap_bp, 4, 0x100, f);
+                fclose(f);
+            } else fprintf(stderr, "[gx] cannot write %s (mkdir build/fifo)\n", path);
+        }
+        snprintf(path, sizeof path, "build/fifo/%04u.fifo", g_frame);
+        write_file(path, g_cap, g_cap_len);
+        snprintf(path, sizeof path, "build/fifo/%04u.ram", g_frame);
+        write_file(path, s->mem, MEM1_SIZE);
+        fprintf(stderr, "[gx] captured frame %u: %zu command bytes\n", g_frame, g_cap_len);
+    }
+    g_frame++;
+    g_cap_len = 0;
+    memcpy(g_cap_cp, g_cp, sizeof g_cp);
+    memcpy(g_cap_xf, g_xf, sizeof g_xf);
+    memcpy(g_cap_bp, g_bp, sizeof g_bp);
+}
 
 /* ---- vertex size from the current VCD/VAT --------------------------- */
 
@@ -106,7 +180,12 @@ static unsigned vertex_size(unsigned vat)
 
 /* ---- command stream --------------------------------------------------- */
 
-static void load_bp(uint32_t v)
+void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t value);
+void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
+void gxr_report(void);
+void gxr_reset_efb(void);
+
+static void load_bp(CpuState* s, uint32_t v)
 {
     uint32_t reg = v >> 24;
     g_bp[reg] = v & 0xFFFFFFu;
@@ -128,9 +207,12 @@ static void load_bp(uint32_t v)
         break;
     case 0x52: /* EFB copy: to a texture or to the XFB -- a frame, when the latter */
         g_efb_copies++;
-        break;
+        gxr_bp_written(s, reg, v & 0xFFFFFFu);
+        if (v & 0x4000u) { g_xfb_copies++; frame_end(s); }
+        return;
     default: break;
     }
+    gxr_bp_written(s, reg, v & 0xFFFFFFu);
 }
 
 static uint32_t be32(const uint8_t* p)
@@ -168,12 +250,25 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             {
                 uint32_t i;
                 for (i = 0; i < count; i++)
-                    if (addr + i < 0x1000) g_xf[addr + i] = be32(p + off + 5 + 4 * i);
+                    if (addr + i < 0x1100) g_xf[addr + i] = be32(p + off + 5 + 4 * i);
             }
             g_xf_loads++;
-        } else if (op == 0x20 || op == 0x28 || op == 0x30 || op == 0x38) { /* indexed XF */
+        } else if (op == 0x20 || op == 0x28 || op == 0x30 || op == 0x38) { /* indexed XF (GXLoadPosMtxIndx etc.) */
+            uint32_t index, v, count, addr, array, base, stride, src, i;
             need = 5;
             if (off + need > len) break;
+            index = be16(p + off + 1);
+            v = be16(p + off + 3);
+            count = (v >> 12) + 1;
+            addr = v & 0xFFF;
+            array = 12 + ((op - 0x20) >> 3);
+            base = g_cp[0xA0 + array] & 0x1FFFFFFFu;
+            stride = g_cp[0xB0 + array] & 0xFFu;
+            src = base + index * stride;
+            if ((src & MEM_MASK) + 4 * count <= MEM1_SIZE) {
+                for (i = 0; i < count; i++)
+                    if (addr + i < 0x1100) g_xf[addr + i] = mem_r32(s, (src | 0x80000000u) + 4 * i);
+            }
             g_xf_loads++;
         } else if (op == 0x40) { /* display list */
             uint32_t addr, size;
@@ -192,7 +287,7 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
         } else if (op == 0x61) { /* BP register */
             need = 5;
             if (off + need > len) break;
-            load_bp(be32(p + off + 1));
+            load_bp(s, be32(p + off + 1));
         } else if (op >= 0x80 && op < 0xC0) { /* draw */
             unsigned vat = op & 7, count, vsize;
             if (off + 3 > len) break;
@@ -202,6 +297,7 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             if (off + need > len) break;
             g_draws++;
             g_verts += count;
+            gxr_draw(s, op, count, p + off + 3, vsize);
         } else {
             if (g_unknown++ == 0 || g_last_unknown != op)
                 fprintf(stderr, "[gx] unknown command byte %02X (%s)\n", op, in_display_list ? "display list" : "pipe");
@@ -238,6 +334,7 @@ void gx_pipe_write(CpuState* s, unsigned size, uint64_t v)
         g_pipe_len = 0;
     }
     for (i = 0; i < size; i++) g_pipe[g_pipe_len++] = (uint8_t)(v >> (8 * (size - 1 - i)));
+    cap_append(g_pipe + g_pipe_len - size, size);
     g_bytes += size;
     pipe_flush(s);
 }
@@ -314,4 +411,51 @@ void gx_report(void)
             (unsigned long long)g_verts, (unsigned long long)g_finishes,
             (unsigned long long)g_tokens, (unsigned long long)g_efb_copies,
             (unsigned long long)g_unknown);
+    gxr_report();
+}
+
+/* ---- replay ------------------------------------------------------------
+ * Feed a captured frame through the same parser with MEM1 restored, so the
+ * renderer sees exactly what it saw in the game. */
+const uint32_t* gx_cp_regs(void) { return g_cp; }
+const uint32_t* gx_xf_regs(void) { return g_xf; }
+const uint32_t* gx_bp_regs(void) { return g_bp; }
+
+int gx_replay(CpuState* s, const char* base)
+{
+    char path[512];
+    FILE* f;
+    uint8_t* fifo;
+    size_t len, done;
+
+    snprintf(path, sizeof path, "%s.regs", base);
+    f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
+    if (fread(g_cp, 4, 0x100, f) != 0x100 || fread(g_xf, 4, 0x1100, f) != 0x1100 || fread(g_bp, 4, 0x100, f) != 0x100) {
+        fprintf(stderr, "[gx] short register file %s\n", path); fclose(f); return 1;
+    }
+    fclose(f);
+
+    snprintf(path, sizeof path, "%s.ram", base);
+    f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
+    if (fread(s->mem, 1, MEM1_SIZE, f) != MEM1_SIZE) { fprintf(stderr, "[gx] short RAM file\n"); fclose(f); return 1; }
+    fclose(f);
+
+    snprintf(path, sizeof path, "%s.fifo", base);
+    f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
+    fseek(f, 0, SEEK_END);
+    len = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    fifo = (uint8_t*)malloc(len ? len : 1);
+    if (fread(fifo, 1, len, f) != len) { fprintf(stderr, "[gx] short FIFO file\n"); fclose(f); return 1; }
+    fclose(f);
+
+    gxr_reset_efb();
+    done = parse(s, fifo, len, 0);
+    fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);
+    gx_report();
+    free(fifo);
+    return 0;
 }
