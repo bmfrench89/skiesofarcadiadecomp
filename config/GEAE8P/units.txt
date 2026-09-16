@@ -3,3 +3,4 @@
 # vendored Metrowerks compiler and checks every function against the
 # executable word for word.
 src/sdk/msl/string.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/mem.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include

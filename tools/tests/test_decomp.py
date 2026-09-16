@@ -22,7 +22,12 @@ def test_function_definitions_are_found(tmp_path):
     )
     files, defines = recompile.native_decomp_sources(tmp_path)
     assert files == [str(tmp_path / "a.c")]
-    assert defines == ["/Dhelper=dc_helper", "/Dstrchr=dc_strchr", "/Dstrlen=dc_strlen"]
+    assert defines == [
+        "/Dforward_decl=dc_forward_decl",
+        "/Dhelper=dc_helper",
+        "/Dstrchr=dc_strchr",
+        "/Dstrlen=dc_strlen",
+    ]
 
 
 def test_missing_source_dir_is_empty(tmp_path):

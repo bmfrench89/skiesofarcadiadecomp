@@ -168,6 +168,8 @@ void* dc___memrchr(const void* src, int val, size_t n);
 int dc_strncmp(const char* a, const char* b, size_t n);
 char* dc_strcat(char* dst, const char* src);
 char* dc_strncpy(char* dst, const char* src, size_t n);
+void* dc_memcpy(void* dst, const void* src, size_t n);
+void* dc_memset(void* dst, int val, size_t n);
 
 static uint32_t g_rng = 0x2545F491u;
 static uint32_t rnd(void) { g_rng ^= g_rng << 13; g_rng ^= g_rng >> 17; g_rng ^= g_rng << 5; return g_rng; }
@@ -227,9 +229,25 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
             memcpy(twin, mem_ptr(s, DST), 128);
             dc_strncpy((char*)native, (const char*)mem_ptr(s, B), n);
             if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strncpy round %d", round); }
+
+            /* memcpy in both directions over an overlapping region, and memset */
+            {
+                unsigned off = rnd() % 8, len = rnd() % 40;
+                uint32_t from = DST + off, to = DST + (rnd() % 16);
+                random_string(s, DST, 60);
+                memcpy(native, mem_ptr(s, DST), 128);
+                s->gpr[3] = to; s->gpr[4] = from; s->gpr[5] = len; call(s, 0x80005520u); /* memcpy */
+                memcpy(twin, mem_ptr(s, DST), 128);
+                dc_memcpy(native + (to - DST), native + off, len);
+                if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "memcpy round %d", round); }
+                s->gpr[3] = DST + off; s->gpr[4] = (uint32_t)chr; s->gpr[5] = len; call(s, 0x80005434u); /* memset */
+                memcpy(twin, mem_ptr(s, DST), 128);
+                dc_memset(native + off, chr, len);
+                if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "memset round %d", round); }
+            }
         }
     }
-    if (!bad) snprintf(got, cap, "7 functions agree over %d rounds", round);
+    if (!bad) snprintf(got, cap, "9 functions agree over %d rounds", round);
     failures += check("decompiled vs recompiled", got, bad ? "agreement" : got);
     return failures;
 }

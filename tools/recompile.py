@@ -31,11 +31,13 @@ from soa.recomp import Emitter  # noqa: E402
 RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
 
 
-_FUNC_DEF = re.compile(r"^[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*\n\{", re.M)
+_FUNC_DEF = re.compile(r"^[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*(?:\n\{|;)", re.M)
 
 
 def native_decomp_sources(src_dir: Path) -> tuple[list[str], list[str]]:
-    """src/**/*.c and the /D renames that prefix every function they define with dc_."""
+    """src/**/*.c and the /D renames that prefix every function they define or
+    declare with dc_ (a declared callee that is not decompiled yet comes from
+    runtime/decomp_shims.c)."""
     files = sorted(src_dir.rglob("*.c")) if src_dir.is_dir() else []
     names = set()
     for f in files:

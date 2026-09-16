@@ -63,6 +63,10 @@ how it went.
   library; 61 functions named from their own diagnostic strings.
 - Three 25-minute mixed-input runs at triple speed: menus, random
   encounters, a game over and a restart from the title, no errors.
+- The decompilation pipeline: the original Metrowerks compiler fetched
+  into `vendor/`, hand-written C compiled and compared word for word with
+  the executable, and the same C compiled natively and run against its
+  recompiled twin on random inputs. Seven MSL string routines match.
 
 ## Open
 
