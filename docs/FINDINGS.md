@@ -37,10 +37,11 @@ Two details cost real time and are worth recording:
    4 bytes. Brute-forcing seed size against "does the chunk decode to exactly 131,072
    bytes" identified it unambiguously.
 
-Junk runs are currently zero-filled rather than regenerated. ▲ **This is a correctness
-dependency, not a cosmetic gap** (risk R9): GameCube games routinely read past a file's
-declared end, and `extracted/` would return zeros where the disc returns junk. Slice 0.5
-covers regeneration.
+Junk runs are regenerated (slice 0.5): the seed's 17 words feed a 521-word lagged
+Fibonacci generator with lag 32, shifted and byte-swapped once at initialisation and
+advanced four times, then forwarded by the run's disc offset modulo the 32 KiB sector.
+GameCube games routinely read past a file's declared end, and `disc.iso` now returns
+there what the drive returns.
 
 ---
 

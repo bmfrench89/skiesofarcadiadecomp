@@ -36,7 +36,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | `[x]` | **0.3** Disc extractor | S | **Done:** 5,552/5,552 files, byte-exact, DOL sha256 matches image |
 | `[x]` | **0.4** Repo scaffold + CI | S | **Done:** guard blocks game data in tree *and* full history; tests run without a disc |
 | `[x]` | **0.6** AKLZ container decoder | S | **Done:** exhaustive gate — 3,633 containers, 1.98 GiB, 0 failures, 0 PPC code |
-| `[ ]` | **0.5** Junk-run regeneration (lagged Fibonacci) | M | **No longer optional — see R9.** RVZ junk runs are zero-filled. GameCube games routinely over-read past a file's declared end; `extracted/` would return zeros where the disc returns junk. Correctness dependency of slice 4.4 |
+| `[x]` | **0.5** Junk-run regeneration (lagged Fibonacci) | M | **Done:** the RVZ reader regenerates every junk run from its 17-word seed with the disc's lagged Fibonacci generator (521/32, forwarded by the run's offset in its 32 KiB sector), so `disc.iso` holds what the drive returns past a file's end. Unit-tested against the generator's invariants; no disc needed |
 | `[x]` | **0.7** DSP microcode probe | S | **Done: STOCK.** Audio ucode hashes to `0x4E8A8B21` = Dolphin's stock AX. Positive control validated the method. R3 → Low; slice 6.3 stays L |
 | `[x]` | **0.8** Clean-machine reproduction | S | **Done:** `pyproject.toml` `[project]` table with the dev extras, `CONTRIBUTING.md` walking a second contributor from `git clone` to a running game and the tests; `dtk` is optional (names only) and documented rather than fetched |
 

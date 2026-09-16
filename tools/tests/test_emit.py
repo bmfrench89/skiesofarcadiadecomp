@@ -224,6 +224,7 @@ void mmio_write32(CpuState* s, uint32_t ea, uint32_t v){(void)s;(void)ea;(void)v
 void mmio_write64(CpuState* s, uint32_t ea, uint64_t v){(void)s;(void)ea;(void)v;}
 void dispatch(CpuState* s, uint32_t a){(void)s;(void)a;}
 void irq_poll(CpuState* s){(void)s;}
+void gx_pipe_write(CpuState* s, unsigned size, uint64_t v){(void)s;(void)size;(void)v;}
 uint32_t g_watch_addr, g_watch_len;
 void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v){(void)s;(void)ea;(void)size;(void)v;}
 void guest_trap(CpuState* s, uint32_t pc){(void)s;(void)pc;}

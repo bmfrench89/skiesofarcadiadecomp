@@ -4,12 +4,73 @@ Decodes RVZ directly so the pipeline has no dependency on a Dolphin install.
 See docs/FINDINGS.md section 1 for the two format details that matter:
 groups tile from the chunk-aligned base, and junk runs carry a 68-byte seed.
 
-Junk runs are zero-filled rather than regenerated (slice 0.5). This affects
-inter-file padding only -- the DOL, FST and all real file data decode exactly.
+Junk runs (the pseudo-random padding a GameCube disc carries between files)
+are regenerated from their 68-byte seed with the same lagged Fibonacci
+generator the disc mastering used, so a read past a file's end returns what
+the drive would return, not zeros (slice 0.5).
 """
 
 import struct
 from compression import zstd
+
+# ---- junk generator ---------------------------------------------------------
+# A lagged Fibonacci generator over 521 words with lag 32. RVZ stores the 17
+# seed words of every junk run; the stream position within the run is the run's
+# disc offset modulo the 32 KiB sector. Algorithm after Dolphin's
+# DiscIO/LaggedFibonacciGenerator (CC0).
+
+LFG_K = 521
+LFG_J = 32
+LFG_SEED_WORDS = 17
+LFG_BYTES = LFG_K * 4
+
+
+def _lfg_forward(buf):
+    for i in range(LFG_J):
+        buf[i] ^= buf[i + LFG_K - LFG_J]
+    for i in range(LFG_J, LFG_K):
+        buf[i] ^= buf[i - LFG_J]
+
+
+class JunkGenerator:
+    """Yields the padding bytes for one junk run."""
+
+    def __init__(self, seed):
+        words = list(struct.unpack(">17I", seed[: LFG_SEED_WORDS * 4]))
+        buf = words + [0] * (LFG_K - LFG_SEED_WORDS)
+        for i in range(LFG_SEED_WORDS, LFG_K):
+            buf[i] = ((buf[i - 17] << 23) ^ (buf[i - 16] >> 9) ^ buf[i - 1]) & 0xFFFFFFFF
+        # The hardware shifts by 18 rather than 16 when emitting; fold that in once.
+        self.buf = [(x & 0xFF00FFFF) | ((x >> 2) & 0x00FF0000) for x in buf]
+        for _ in range(4):
+            _lfg_forward(self.buf)
+        self.pos = 0  # byte position within the current 2084-byte block
+
+    def skip(self, count):
+        self.pos += count
+        while self.pos >= LFG_BYTES:
+            _lfg_forward(self.buf)
+            self.pos -= LFG_BYTES
+
+    def get(self, count):
+        out = bytearray()
+        while count > 0:
+            block = struct.pack(">521I", *self.buf)
+            take = min(count, LFG_BYTES - self.pos)
+            out += block[self.pos : self.pos + take]
+            self.pos += take
+            count -= take
+            if self.pos == LFG_BYTES:
+                _lfg_forward(self.buf)
+                self.pos = 0
+        return bytes(out)
+
+
+def junk_bytes(seed, disc_offset, count):
+    """The junk a disc holds at ``disc_offset`` for a run with this seed."""
+    g = JunkGenerator(seed)
+    g.skip(disc_offset % 0x8000)
+    return g.get(count)
 
 
 class RVZ:
@@ -54,14 +115,19 @@ class RVZ:
             self.f.seek(doff * 4)
             raw = self.f.read(dsize)
             data = zstd.decompress(raw) if comp else raw
-            out = self._unpack(data) if packed else data
+            out = self._unpack(data, self.group_disc_offset(idx)) if packed else data
         out = out.ljust(self.chunk, b"\0")
         if len(self.cache) < 64:
             self.cache[idx] = out
         return out
 
-    def _unpack(self, d):
-        # RVZ run encoding: u32 size (bit31 => junk run, followed by 4-byte seed)
+    def group_disc_offset(self, idx):
+        """Disc offset of the first byte a group decodes to."""
+        base, size, gidx, ngroups = self.raw[0]
+        return base - (base % self.chunk) + (idx - gidx) * self.chunk
+
+    def _unpack(self, d, disc_offset):
+        # RVZ run encoding: u32 size (bit 31 => junk run, followed by the 68-byte seed)
         out = bytearray()
         p = 0
         while p + 4 <= len(d):
@@ -70,8 +136,8 @@ class RVZ:
             junk = sz & 0x80000000
             sz &= 0x7FFFFFFF
             if junk:
-                p += 68  # LFG seed = 17 u32
-                out += b"\0" * sz  # junk = padding; irrelevant for real files
+                out += junk_bytes(d[p : p + 68], disc_offset + len(out), sz)
+                p += 68
             else:
                 out += d[p : p + sz]
                 p += sz
