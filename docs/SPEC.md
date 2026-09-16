@@ -404,7 +404,7 @@ Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unb
 | R6 | Timing assumptions | **Medium** | Game is 480i-only and retrace-driven at 59.94 Hz. Pacing is the main loop, not an afterthought. |
 | R7 | Analysis paralysis | **High** | Milestones are demoable, not percentage-based. |
 | R8 | **New:** correlated bug between recompiler and reference interpreter | **Medium** | Share field extraction only, never semantics. Write interpreter semantics from the 750CL manual independently of the C emission templates. Anchor with Dolphin fixtures. |
-| R9 | **New:** `extracted/` is not a faithful DVD | **Medium** | RVZ junk runs are zero-filled. Games routinely over-read past a file's declared end. Slice 0.5 is a correctness dependency of DVD HLE, not optional. |
+| R9 | `extracted/` is not a faithful DVD | **Closed** | RVZ junk runs are regenerated from their seeds (slice 0.5), so `disc.iso` returns the drive's junk past a file's end. |
 | R10 | **New:** byte-swap strategy is irreversible | **Medium** | Swap-on-access vs byte-swapped backing image must be decided *and measured* before 696,120 instructions of C exist. |
 
 ---

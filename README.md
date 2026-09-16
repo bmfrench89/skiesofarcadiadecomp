@@ -28,9 +28,11 @@ favorable target:
 ## Status
 
 The game boots, plays its intro, reaches the title screen, starts a new
-game and plays through the opening cutscenes into the first battle, with
-music and sound, rendered by a software implementation of the GameCube's
-graphics pipeline in a window with keyboard or gamepad input. See the roadmap for
+game and plays through the opening cutscenes, the first battle and into
+the first field (the Valuan ship's hold: walking, the minimap, menus and
+random encounters), with dialogue text, music and sound, rendered by a
+software implementation of the GameCube's graphics pipeline in a window
+with keyboard or gamepad input. See the roadmap for
 what is done and what is not (saves are not implemented yet).
 
 ## Building and running
