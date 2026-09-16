@@ -86,5 +86,5 @@ expect (triggers are L/R, the right shoulder is Z).
 
 - `tools/` — disc extraction, analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, tests
 - `runtime/` — the native runtime: CPU helpers, memory and MMIO, device models, threads, the software GX, the window
-- `config/` — analysis metadata: the function inventory, HLE bindings, hooks, tracepoints
+- `config/` — analysis metadata: the function inventory, HLE bindings, hooks, tracepoints; `config/GEAE8P/` is the decomp-toolkit project (splits and symbols)
 - `docs/` — specification, roadmap, findings

@@ -1,0 +1,54 @@
+Sections:
+	.init       type:code align:4
+	.text       type:code align:8
+	.ctors      type:rodata align:8
+	.dtors      type:rodata align:32
+	.rodata     type:rodata align:32
+	.data       type:data align:32
+	.bss        type:bss align:4
+	.sdata      type:data align:16
+	.sbss       type:bss align:32
+	.sdata2     type:rodata align:32
+	.sbss2      type:bss align:32
+
+game/game.c:
+	.text       start:0x80005600 end:0x802319E0
+
+sdk/ppc/PPCArch.c:
+	.text       start:0x802319E0 end:0x80231AD0
+
+sdk/os/os.c:
+	.text       start:0x80231AD0 end:0x80238A14
+
+sdk/db/db.c:
+	.text       start:0x80238A14 end:0x80239638
+
+sdk/dvd/dvd.c:
+	.text       start:0x80239638 end:0x8023DA58
+
+sdk/vi/vi.c:
+	.text       start:0x8023DA58 end:0x80241624
+
+sdk/pad_ar_ai_dsp_card.c:
+	.text       start:0x80241624 end:0x8024B2B0
+
+sdk/gx/gx.c:
+	.text       start:0x8024B2B0 end:0x8025334C
+
+sdk/trk/MetroTRK.c:
+	.text       start:0x8025334C end:0x80259E48
+
+sdk/msl/msl.c:
+	.text       start:0x80259E48 end:0x80262A7C
+
+sdk/exi/exi.c:
+	.text       start:0x80262A7C end:0x802653D8
+
+sdk/si/si.c:
+	.text       start:0x802653D8 end:0x80266854
+
+lib/middleware.c:
+	.text       start:0x80266854 end:0x802AC7DC
+
+sdk/init.c:
+	.init       start:0x80003100 end:0x80005570

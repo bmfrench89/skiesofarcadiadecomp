@@ -69,6 +69,19 @@ optional and not vendored: drop a release binary into `vendor/dtk/` (also
 gitignored) and pass its `symbols.txt` with `--dtk`. Without it, functions
 keep their `fn_XXXXXXXX` names, which is fine for building and running.
 
+## Decompilation project
+
+`config/GEAE8P/` is a decomp-toolkit project: with your dump unpacked,
+
+    vendor/dtk/dtk.exe dol split config/GEAE8P/config.yml build/dtk
+
+writes disassembly, relocatable objects and a linker script under `build/`
+(never committed). `splits.txt` names the translation units; refine it as
+functions get identified, and `dtk` keeps `symbols.txt` updated. The
+recompiler reads its own inventory in `config/functions.tsv` and
+`config/symbols.txt`; the two symbol files carry the same addresses and
+names from different tools.
+
 ## Commits
 
 Small, self-contained commits with a subject line that says what changed and

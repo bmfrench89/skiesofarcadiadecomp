@@ -1,0 +1,9 @@
+# decomp-toolkit project configuration for Skies of Arcadia Legends (USA).
+# Run from the repository root, with your own dump unpacked into extracted/:
+#   vendor/dtk/dtk.exe dol split config/GEAE8P/config.yml build/dtk
+# The DOL never enters the repository; only its hash, symbols and splits do.
+object: extracted/sys/main.dol
+hash: 8c0e278126fa3b0173400fdb632038172743cc13
+symbols: config/GEAE8P/symbols.txt
+splits: config/GEAE8P/splits.txt
+mw_comment_version: 8

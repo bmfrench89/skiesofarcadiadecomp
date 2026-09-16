@@ -171,7 +171,7 @@ Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **8.1** dtk-compatible splits | M | Split config the wider GC decomp tooling understands |
+| `[x]` | **8.1** dtk-compatible splits | M | **Done:** `config/GEAE8P/` (config.yml, splits.txt, symbols.txt) drives `dtk dol split` on the user's own DOL: 23 objects, the SDK split per library (os, dvd, vi, gx, exi, si, MetroTRK, MSL, ...), the middleware library (807 functions) and the game (5,362) as units of their own, ready to be subdivided as decompilation names files |
 | `[ ]` | **8.2** mwcc build pipeline | M | Hand-written C compiles to byte-matching objects |
 | `[ ]` | **8.3** Function swap-in harness | M | Differential test proves a decompiled function equivalent to its recompiled twin |
 | `[ ]` | **8.4** Decomp grind | XL | Function by function, indefinitely |
