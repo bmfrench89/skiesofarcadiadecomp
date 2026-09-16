@@ -282,7 +282,8 @@ def _bound_count(code: CodeView, lwzx_addr: int) -> int | None:
         insn = code.at(lwzx_addr - 4 * k)
         if insn is None or not insn.valid:
             return None
-        if insn.mnemonic == "bc" and insn.bo == 12 and insn.bi == 1:
+        # `bgt default`, or `bgtlr` when the default case is simply a return.
+        if insn.mnemonic in ("bc", "bclr") and insn.bo == 12 and insn.bi == 1:
             bgt = insn.addr
             break
     if bgt is None:

@@ -541,3 +541,15 @@ def test_record_form_between_compare_and_bgt_is_unresolved():
     prefix = [cmpli(3, 2), add_dot, _bgt_to(24), addis(4, 0x8040), rlwinm_x4(0, 3), addi(4, 4, 0)]
     dol, site, _ = _switch_variant(prefix, (4, 0))
     assert site not in cfg.find_jump_tables(dol)
+
+
+def test_bound_check_by_conditional_return():
+    """`cmpli ; bgtlr` -- the default case is a plain return, not a label.
+
+    Four switches in the game (0x801C30E0 among them) end their bound check
+    this way; the field loader after the first battle dispatches through one.
+    """
+    prefix = [cmpli(3, 2), bclr(12, 1), addis(4, 0x8040), rlwinm_x4(0, 3), addi(4, 4, 0)]
+    dol, site, targets = _switch_variant(prefix, (4, 0))
+    tables = cfg.find_jump_tables(dol)
+    assert site in tables and tables[site].targets == targets
