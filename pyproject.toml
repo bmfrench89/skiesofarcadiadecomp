@@ -9,6 +9,7 @@ dev = ["pytest", "ruff", "capstone>=5.0"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+src = ["tools", "tools/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
