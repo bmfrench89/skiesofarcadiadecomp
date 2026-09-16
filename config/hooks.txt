@@ -1,0 +1,4 @@
+# Addresses where recompiled code calls hook_XXXXXXXX(s) before the
+# instruction there. See tools/soa/hle.py and runtime/irq.c.
+
+0x80237BA8  SelectThread.idle   # the scheduler's idle spin: deliver interrupts here

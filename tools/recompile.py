@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from soa import dol as D  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa import toolchain  # noqa: E402
+from soa.hle import load_hle  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
 from soa.recomp import Emitter  # noqa: E402
 
@@ -38,6 +39,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="translate only the first N functions")
     ap.add_argument("--compile", action="store_true", help="compile every chunk with MSVC")
     ap.add_argument("--optimize", action="store_true", help="compile at /O2 instead of /Od")
+    ap.add_argument(
+        "--link", action="store_true", help="link the objects with runtime/ into soa.exe"
+    )
     args = ap.parse_args()
 
     dol = D.parse(args.dol.read_bytes())
@@ -52,7 +56,15 @@ def main() -> int:
     if tsv.exists():
         names = {a: r["name"] for a, r in S.load_tsv(tsv).items()}
 
-    em = Emitter(dol, functions, tables, code, names)
+    hle = load_hle(args.config / "hle.txt")
+    hooks = load_hle(args.config / "hooks.txt")
+    savepoints = load_hle(args.config / "savepoints.txt")
+    if hle or hooks or savepoints:
+        print(
+            f"{len(hle)} functions bound to HLE, {len(hooks)} runtime hooks, "
+            f"{len(savepoints)} savepoints"
+        )
+    em = Emitter(dol, functions, tables, code, names, hle, hooks, savepoints)
     entries = sorted(functions)
     if args.limit:
         entries = entries[: args.limit]
@@ -123,7 +135,34 @@ def main() -> int:
                     print(f"  FAIL {path.name}: {errs[0] if errs else proc.stdout[-300:]}")
         elapsed = time.time() - t0
         print(f"compiled {len(units) - len(failures)}/{len(units)} units in {elapsed:.1f}s")
-        return 1 if failures else 0
+        if failures:
+            return 1
+
+    if args.link:
+        if toolchain.msvc_env() is None:
+            print("\nMSVC not found; skipping link", file=sys.stderr)
+            return 1
+        objs = sorted(args.out.glob("chunk_*.obj")) + [args.out / "dispatch.obj"]
+        exe = args.out / "soa.exe"
+        t0 = time.time()
+        proc = toolchain.cl(
+            [
+                *toolchain.CFLAGS,
+                f"/I{RUNTIME}",
+                f"/I{args.out}",
+                f"/Fo{args.out}/",
+                f"/Fe:{exe}",
+                *map(str, sorted(RUNTIME.glob("*.c"))),
+                *map(str, objs),
+                "/link",
+                "/STACK:33554432",  # guest call depth becomes host call depth
+            ],
+            cwd=".",
+        )
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:], file=sys.stderr)
+            return 1
+        print(f"linked {exe} ({time.time() - t0:.1f}s)")
     return 0
 
 

@@ -1,0 +1,10 @@
+# Guest functions the runtime provides natively. Format: address name [# note]
+# The recompiled body is still emitted as recomp_fn_XXXXXXXX. See tools/soa/hle.py.
+
+0x80232B90  __OSInitAudioSystem   # boots a DSP program that clears ARAM; DSP is high-level emulated
+0x80232D4C  __OSStopAudioSystem   # its shutdown counterpart
+
+# Thread context switching lives on host fibers (runtime/threads.c).
+0x80233544  OSSaveContext         # setjmp-like snapshot; dtk left this one unnamed
+0x802335C4  OSLoadContext         # restore + rfi: a mid-function resume, impossible to recompile
+0x802336A4  OSSwitchFiber         # call a function on another stack

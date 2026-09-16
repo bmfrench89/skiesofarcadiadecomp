@@ -206,12 +206,18 @@ class Emitter:
         tables: dict[int, JumpTable],
         code: CodeView | None = None,
         names: dict[int, str] | None = None,
+        hle: dict[int, str] | None = None,
+        hooks: dict[int, str] | None = None,
+        savepoints: dict[int, str] | None = None,
     ):
         self.dol = dol
         self.functions = functions
         self.tables = tables
         self.code = code or CodeView(dol)
         self.names = names or {}
+        self.hle = hle or {}  # functions the runtime provides natively
+        self.hooks = hooks or {}  # addresses where the runtime is called first
+        self.savepoints = savepoints or {}  # call sites wrapped in setjmp (thread parking)
         self.stats = EmitStats()
 
     # ------------------------------------------------------------------ API
@@ -229,13 +235,23 @@ class Emitter:
                 labels.update(t for t in self.tables[a].targets if t in addr_set)
 
         pretty = self.names.get(fn.entry)
-        head = f"/* {pretty} */\n" if pretty and pretty != c_name(fn.entry) else ""
-        out = [f"{head}void {c_name(fn.entry)}(CpuState* s)", "{"]
+        name = c_name(fn.entry)
+        head = f"/* {pretty} */\n" if pretty and pretty != name else ""
+        if fn.entry in self.hle:
+            # The runtime defines fn_X; keep the recompiled body under another
+            # name so the two can be run against each other.
+            head = f"/* {self.hle[fn.entry]} -- bound to HLE; recompiled body kept */\n"
+            name = "recomp_" + name
+        out = [f"{head}void {name}(CpuState* s)", "{"]
         for a in addrs:
             if a in labels:
                 out.append(f"{label(a)}:;")
+                # Block-level position, so a hang or trap can say where it is.
+                out.append(f"    s->pc = {u32(a)};")
             i = self.code.at(a)
             out.append(f"    /* {a:08X} {i.mnemonic if i and i.valid else '??'} */")
+            if a in self.hooks:
+                out.append(f"    hook_{a:08X}(s); /* {self.hooks[a]} */")
             for st in self._translate(i, addr_set):
                 out.append("    " + st)
         out.append("    return;")
@@ -244,7 +260,12 @@ class Emitter:
 
     def prototypes(self) -> str:
         lines = ["#pragma once", '#include "cpu.h"', ""]
-        lines += [f"void {c_name(a)}(CpuState* s);" for a in sorted(self.functions)]
+        for a in sorted(self.functions):
+            lines.append(f"void {c_name(a)}(CpuState* s);")
+            if a in self.hle:
+                lines.append(f"void recomp_{c_name(a)}(CpuState* s); /* {self.hle[a]}: HLE */")
+        for a, name in sorted(self.hooks.items()):
+            lines.append(f"void hook_{a:08X}(CpuState* s); /* {name} */")
         return "\n".join(lines) + "\n"
 
     def dispatch_c(self) -> str:
@@ -476,6 +497,10 @@ class Emitter:
             rc_(G(ra))
 
         # ---- special registers / CR -----------------------------------
+        elif m == "mfspr" and i.spr == 22:
+            st.append(f"{G(rd)} = dec_read(s);")
+        elif m == "mtspr" and i.spr == 22:
+            st.append(f"dec_write(s, {G(rd)});")
         elif m == "mfspr":
             src = _SPR_FIELDS.get(i.spr)
             if src is None and i.spr in isa.GQR_SPRS:
@@ -516,7 +541,14 @@ class Emitter:
 
         # ---- branches -------------------------------------------------
         elif m == "b":
-            if i.lk_bit:
+            if i.lk_bit and pc in self.savepoints:
+                # A context-saving call: the thread parks here and is resumed
+                # by a longjmp to this frame. See runtime/threads.c.
+                st.append(
+                    f"if (setjmp(*guest_savepoint(s)) == 0) {{ {self._call(i.target, nxt)} }} "
+                    f"else {{ guest_resumed(s); }} /* {self.savepoints[pc]} */"
+                )
+            elif i.lk_bit:
                 st.append(self._call(i.target, nxt))
             else:
                 st.append(self._jump(i.target, addr_set, pc))

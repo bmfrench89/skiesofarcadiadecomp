@@ -14,6 +14,7 @@
  */
 #pragma once
 #include <math.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -43,6 +44,7 @@ struct CpuState {
     uint32_t gpr[32];
     Fpr fpr[32];
     uint32_t cr, xer, lr, ctr, fpscr, msr, dec;
+    uint32_t pc; /* address of the basic block being executed; diagnostics only */
     uint32_t gqr[8];
     uint32_t hid2, wpar;
     uint32_t spr[1024]; /* everything not modelled explicitly above */
@@ -70,6 +72,15 @@ void guest_syscall(CpuState* s, uint32_t pc);
 void guest_unimplemented(CpuState* s, uint32_t pc, const char* what);
 uint32_t guest_timebase_lo(CpuState* s);
 uint32_t guest_timebase_hi(CpuState* s);
+void dec_write(CpuState* s, uint32_t v); /* mtspr DEC: arms the decrementer */
+uint32_t dec_read(CpuState* s);          /* mfspr DEC: what is left on it */
+
+/* Thread parking (runtime/threads.c). The recompiler wraps the one call to
+ * OSSaveContext as
+ *     if (setjmp(*guest_savepoint(s)) == 0) fn_OSSaveContext(s); else guest_resumed(s);
+ * so a thread's resume point is a live frame in its own SelectThread. */
+jmp_buf* guest_savepoint(CpuState* s);
+void guest_resumed(CpuState* s);
 
 /* ---- memory ------------------------------------------------------------ */
 

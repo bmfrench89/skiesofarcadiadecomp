@@ -1,0 +1,5 @@
+# Call sites of the SDK's setjmp-like context save. The recompiler wraps each
+# in a setjmp on the caller's own frame so a parked thread has a live frame to
+# be resumed into. See runtime/threads.c and tools/soa/hle.py.
+
+0x80237B5C  SelectThread.OSSaveContext   # the only caller of OSSaveContext
