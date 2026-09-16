@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define PER_SITE 40
+#define PER_SITE 1000
 
 void guest_backtrace(CpuState* s, uint32_t sp);
 
@@ -39,8 +39,8 @@ void trace_hit(CpuState* s, uint32_t pc, const char* name)
     }
     if (!enabled) return;
     if (pc == last_pc) { if (++hits > PER_SITE) return; } else { last_pc = pc; hits = 1; }
-    fprintf(stderr, "[trace] %-24s pc %08X lr %08X msr %08X r3 %08X r4 %08X r5 %08X r6 %08X r7 %08X r1 %08X", name, pc,
-            s->lr, s->msr, s->gpr[3], s->gpr[4], s->gpr[5], s->gpr[6], s->gpr[7], s->gpr[1]);
+    fprintf(stderr, "[trace] %-24s pc %08X lr %08X msr %08X r3 %08X r4 %08X r5 %08X r6 %08X r7 %08X r31 %08X r1 %08X", name, pc,
+            s->lr, s->msr, s->gpr[3], s->gpr[4], s->gpr[5], s->gpr[6], s->gpr[7], s->gpr[31], s->gpr[1]);
     show_string(s, s->gpr[3]);
     show_string(s, s->gpr[4]);
     if (enabled > 1) { fprintf(stderr, ";"); guest_backtrace(s, s->gpr[1]); }

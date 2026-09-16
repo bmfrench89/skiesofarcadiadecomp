@@ -498,3 +498,11 @@ count: the intro's timing is wall-clock while frames are not.
 - The memory card is reported unlocked from the start, so the SDK never
   runs its DSP unlock microcode; a blank 59-block image is enough for
   the game to offer formatting.
+
+**The opening plays through.** Ten minutes of scripted dialogue advances
+run the whole opening: the Valuan bridge (Alfonso, Galcian), the helmsman,
+Vyse and Aika boarding the ship -- all rendered by the software GX with the
+game's own lighting. It ends at the transition into the first battle,
+where the game opens `/battle/.GVR` and `/battle/.PVR` (an empty name),
+reports `memFree Error` twice and runs off through garbage pointers: the
+first divergence that is not a missing device. Being chased.

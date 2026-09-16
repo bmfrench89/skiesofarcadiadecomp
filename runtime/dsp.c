@@ -122,7 +122,11 @@ static void handle_mail(uint32_t mail)
     if (g_expect == 2) { /* command-list address: the microcode's frame of work */
         g_expect = 0;
         g_cmdlists++;
-        if (g_cpu) ax_command_list(g_cpu, mail);
+        {
+            static int noax = -1;
+            if (noax < 0) noax = getenv("SOA_NOAX") ? 1 : 0; /* experiment: no mixing, no RAM writes */
+            if (g_cpu && !noax) ax_command_list(g_cpu, mail);
+        }
         push_out(DSP_YIELD, 1);
         return;
     }

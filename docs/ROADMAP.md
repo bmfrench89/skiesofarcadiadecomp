@@ -123,7 +123,7 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 
 ## Phase 5 — Graphics `[~]` → **M5 reached**, **M6 reached**
 
-The software renderer runs on worker threads behind a deferred command queue and keeps up with the game's own 30 fps cap with every frame rendered (`runtime/gxr.c`). A GPU backend is now an optimisation, not a prerequisite.
+A release build of the translated code (`recompile.py --compile --optimize`) takes 103 s on 16 cores; the validation build 3 s. The software renderer runs on worker threads behind a deferred command queue and keeps up with the game's own 30 fps cap with every frame rendered (`runtime/gxr.c`). A GPU backend is now an optimisation, not a prerequisite.
 
 Gated on **4.1b (the gather pipe)**, not on M2. See SPEC §7.
 

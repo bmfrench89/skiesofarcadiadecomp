@@ -2,18 +2,8 @@
 # the runtime is started with SOA_TRACE=1 (SOA_TRACE=2 adds backtraces).
 # Diagnostic only; harmless to leave in.
 
-0x80235574  OSDisableInterrupts
-0x80235588  OSEnableInterrupts
-0x8023559C  OSRestoreInterrupts
-0x80239A4C  DVDLowRead
-0x801DB244  LoadAsset
-0x801E13B0  FindAssetHome
-0x801DAEB8  RelocateAsset
 0x8023A818  DVDOpen
-0x8026606C  SITransfer
-0x80266470  SIGetType
-0x802661D8  SIGetTypeCallback
-0x802653D8  SIInterruptHandler
-0x80238354  OSWakeupThread
-0x8023DAEC  VIRetraceHandler.flags
-0x8023E460  VIWaitForRetrace
+0x801E1648  memFreeError
+0x800079AC  LoadTexture
+0x8006EB88  LoadCrew
+0x801DB244  LoadAsset

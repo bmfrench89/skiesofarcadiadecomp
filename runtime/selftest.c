@@ -95,6 +95,44 @@ int selftest(CpuState* s)
     get_string(s, SCRATCH, got, sizeof got);
     failures += check("sprintf mixed", got, "title/ts026.mld");
 
+    /* sprintf(buf, "%.2f|%g|%5.1f", 3.14159, 2.5, -0.75): the FPU and float varargs */
+    put_string(s, SCRATCH + 0x100, "%.2f|%g|%5.1f");
+    s->gpr[3] = SCRATCH;
+    s->gpr[4] = SCRATCH + 0x100;
+    s->fpr[1].ps0 = 3.14159; s->fpr[2].ps0 = 2.5; s->fpr[3].ps0 = -0.75;
+    s->gpr[1] = STACK_TOP - 0x400; s->gpr[2] = SDA2_BASE; s->gpr[13] = SDA_BASE; s->lr = 0; s->msr = 0x00002030u;
+    s->cr = 0x02000000u; /* CR bit 6: floating-point arguments present */
+    dispatch(s, 0x8025CB24u);
+    get_string(s, SCRATCH, got, sizeof got);
+    failures += check("sprintf floats", got, "3.14|2.5| -0.8");
+
+    /* strcpy / strcat / strcmp / strlen / memset / memcpy */
+    put_string(s, SCRATCH + 0x200, "alpha");
+    put_string(s, SCRATCH + 0x300, "beta");
+    s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x200;
+    call(s, 0x8025F120u); /* strcpy */
+    s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x300;
+    call(s, 0x8025F0B0u); /* strcat */
+    get_string(s, SCRATCH, got, sizeof got);
+    failures += check("strcpy+strcat", got, "alphabeta");
+    s->gpr[3] = SCRATCH;
+    call(s, 0x8025F1D8u); /* strlen */
+    snprintf(got, sizeof got, "%u", s->gpr[3]);
+    failures += check("strlen", got, "9");
+    s->gpr[3] = SCRATCH; s->gpr[4] = SCRATCH + 0x200;
+    call(s, 0x8025EF88u); /* strcmp("alphabeta", "alpha") > 0 */
+    snprintf(got, sizeof got, "%s", (int32_t)s->gpr[3] > 0 ? "positive" : "other");
+    failures += check("strcmp", got, "positive");
+    s->gpr[3] = SCRATCH + 0x400; s->gpr[4] = 0x41; s->gpr[5] = 37;
+    call(s, 0x80005434u); /* memset 37 bytes of 'A' */
+    mem_w8(s, SCRATCH + 0x400 + 37, 0);
+    get_string(s, SCRATCH + 0x400, got, sizeof got);
+    failures += check("memset", got, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    s->gpr[3] = SCRATCH + 0x500 + 3; s->gpr[4] = SCRATCH; s->gpr[5] = 10; /* unaligned memcpy incl. the NUL */
+    call(s, 0x80005520u);
+    get_string(s, SCRATCH + 0x503, got, sizeof got);
+    failures += check("memcpy unaligned", got, "alphabeta");
+
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;
 }

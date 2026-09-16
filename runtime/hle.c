@@ -76,8 +76,17 @@ static void note(CpuState* s, const char* dir, uint32_t ea, unsigned size, uint6
     }
     spin_check(s, ea, dir[0] == 'w');
     if (ea < MMIO_BASE || ea >= MMIO_BASE + MMIO_SLOTS * 4u) {
-        fprintf(stderr, "[mmio] %s %08X/%u = %llx (outside modelled range)\n", dir, ea, size,
-                (unsigned long long)v);
+        static int strict = -1, shown;
+        if (strict < 0) strict = getenv("SOA_STRICT") ? 1 : 0;
+        if (shown++ < 20 || strict)
+            fprintf(stderr, "[mmio] %s %08X/%u = %llx (outside modelled range)\n", dir, ea, size,
+                    (unsigned long long)v);
+        if (strict) { /* almost always a garbage pointer: stop at the first one, with the stack */
+            fprintf(stderr, "[strict] pc %08X lr %08X; backtrace:", s->pc, s->lr);
+            guest_backtrace(s, s->gpr[1]);
+            hle_report();
+            exit(8);
+        }
         return;
     }
     slot = (ea - MMIO_BASE) >> 2;
@@ -158,6 +167,8 @@ void guest_trap(CpuState* s, uint32_t pc)
 {
     fprintf(stderr, "[trap] at %08X\n", pc);
     hle_dump(s, pc);
+    fprintf(stderr, "  backtrace from r1:");
+    guest_backtrace(s, s->gpr[1]);
     hle_report();
     exit(3);
 }
