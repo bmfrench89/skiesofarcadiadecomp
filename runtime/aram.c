@@ -42,6 +42,12 @@ void dsp_reset(void);
 void dsp_stub_boot(void);
 
 static uint8_t* g_aram;
+static int g_ar_busy;
+static uint64_t g_ar_due;
+uint32_t guest_timebase_lo(CpuState* s);
+uint32_t guest_timebase_hi(CpuState* s);
+#define TB_HZ 40500000ull
+static uint64_t tb_now(CpuState* s) { return ((uint64_t)guest_timebase_hi(s) << 32) | guest_timebase_lo(s); }
 static uint16_t g_csr = CSR_HALT | CSR_DSPINIT, g_ar_size, g_ar_mode, g_ar_refresh;
 static uint32_t g_mmaddr, g_araddr;
 static uint16_t g_cnt_hi; /* the register bank is 16-bit; the low half of CNT starts the DMA */
@@ -61,15 +67,25 @@ static void dma(CpuState* s, uint32_t cnt)
     }
     g_dmas++;
     g_dma_bytes += len;
-    g_csr |= CSR_ARINT; /* complete: raise the ARAM interrupt */
+    /* the engine takes time; the interrupt (and the busy bit clearing) wait for it */
+    g_ar_busy = 1;
+    g_ar_due = tb_now(s) + TB_HZ / 20000 + (uint64_t)len * TB_HZ / 20000000u;
 }
+
+/* From the interrupt code: a DMA whose time is up completes with ARINT. */
+void aram_poll(CpuState* s)
+{
+    if (g_ar_busy && tb_now(s) >= g_ar_due) { g_ar_busy = 0; g_csr |= CSR_ARINT; }
+}
+
+void aram_poll(CpuState* s);
 
 int aram_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
 {
-    (void)s;
     if (ea < 0xCC005000u || ea >= 0xCC005040u) return 0;
+    aram_poll(s); /* a poll loop with interrupts off still sees the DMA finish */
     switch (ea - 0xCC005000u) {
-    case 0x0A: if (size != 2) return 0; *out = g_csr; return 1;
+    case 0x0A: if (size != 2) return 0; *out = g_csr | (g_ar_busy ? 0x0200u : 0u); return 1; /* DSPDMA: in progress */
     case 0x12: if (size != 2) return 0; *out = g_ar_size; return 1;
     case 0x16: if (size != 2) return 0; *out = g_ar_mode | 1u; return 1; /* ready */
     case 0x1A: if (size != 2) return 0; *out = g_ar_refresh; return 1;

@@ -32,6 +32,8 @@
 int di_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int di_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 int di_irq_pending(void);
+void di_poll(CpuState* s);
+void aram_poll(CpuState* s);
 void dvd_report(void);
 int gx_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int gx_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
@@ -316,6 +318,10 @@ static void deliver_pending(CpuState* s)
             if (handler) { g_pe_count++; call_guest_handler(s, handler, IRQ_PI_PE_TOKEN); }
         }
     }
+
+    /* Devices with commands in flight: finish the ones whose time is up. */
+    di_poll(s);
+    aram_poll(s);
 
     /* DSP: a mail from the microcode; AI: a DMA block finished playing. */
     dsp_poll(s);

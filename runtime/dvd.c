@@ -42,6 +42,37 @@
 #define DICR_DMA 0x02u
 
 static uint32_t g_disr, g_dicvr, g_cmd[3], g_mar, g_len, g_imm, g_cfg;
+
+/* A command takes time on the real drive, and the SDK's callbacks run
+ * from the completion interrupt; completing at once let callbacks run
+ * before their requesters had finished. Data moves immediately (nothing
+ * may touch the buffer before completion anyway); the interrupt waits. */
+static int g_busy;
+static uint64_t g_due;
+uint32_t guest_timebase_lo(CpuState* s);
+uint32_t guest_timebase_hi(CpuState* s);
+#define TB_HZ 40500000ull
+static uint64_t tb_now(CpuState* s) { return ((uint64_t)guest_timebase_hi(s) << 32) | guest_timebase_lo(s); }
+
+static void complete(void)
+{
+    uint32_t cmd = g_cmd[0] >> 24;
+    if (cmd == 0x12 || cmd == 0xA8) {
+        /* The DMA engine counts DILENGTH down as it moves data and leaves
+         * DIMAR at the end of the transfer; the SDK reads DILENGTH back to
+         * learn how much arrived, and retries if it is not zero. */
+        g_mar += g_len;
+        g_len = 0;
+    }
+    g_busy = 0;
+    g_disr |= DISR_TCINT; /* transfer complete; raised on the next delivery */
+}
+
+/* From the interrupt code: finish the command in flight once its time is up. */
+void di_poll(CpuState* s)
+{
+    if (g_busy && tb_now(s) >= g_due) complete();
+}
 static FILE* g_disc;
 static uint64_t g_reads, g_bytes;
 
@@ -95,19 +126,17 @@ static void execute(CpuState* s)
         g_imm = 0;
         break;
     }
-    if (cmd == 0x12 || cmd == 0xA8) {
-        /* The DMA engine counts DILENGTH down as it moves data and leaves
-         * DIMAR at the end of the transfer; the SDK reads DILENGTH back to
-         * learn how much arrived, and retries if it is not zero. */
-        g_mar += g_len;
-        g_len = 0;
+    {
+        /* seek plus transfer at the drive's rate; other commands are quick */
+        uint64_t ticks = cmd == 0xA8 ? TB_HZ * 6 / 1000 + (uint64_t)g_len * TB_HZ / 3000000u : TB_HZ / 1000;
+        g_busy = 1;
+        g_due = tb_now(s) + ticks;
     }
-    g_disr |= DISR_TCINT; /* transfer complete; raised on the next delivery */
 }
 
 int di_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
 {
-    (void)s;
+    di_poll(s); /* the drive progresses whether or not interrupts are on */
     if (ea < DI_BASE || ea >= DI_BASE + 0x28 || size != 4) return 0;
     switch (ea - DI_BASE) {
     case 0x00: *out = g_disr; break;
@@ -117,7 +146,7 @@ int di_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     case 0x10: *out = g_cmd[2]; break;
     case 0x14: *out = g_mar; break;
     case 0x18: *out = g_len; break;
-    case 0x1C: *out = 0; break; /* never mid-transfer */
+    case 0x1C: *out = g_busy ? 3u : 0u; break; /* TSTART and DMA while a command is in flight */
     case 0x20: *out = g_imm; break;
     case 0x24: *out = g_cfg; break;
     default: *out = 0; break;
