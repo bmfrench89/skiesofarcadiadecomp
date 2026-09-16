@@ -75,6 +75,7 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
 | `SOA_NOSOUND=1` | no audio device |
+| `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
 | `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
 
