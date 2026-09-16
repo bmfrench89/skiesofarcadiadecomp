@@ -103,7 +103,11 @@ int aram_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     case 0x22: if (size != 2) return 0; *out = g_mmaddr & 0xFFFFu; return 1;
     case 0x24: *out = size == 4 ? g_araddr : (g_araddr >> 16); return 1;
     case 0x26: if (size != 2) return 0; *out = g_araddr & 0xFFFFu; return 1;
-    case 0x28: case 0x2A: *out = 0; return 1; /* DMA never in progress */
+    /* ARStartDMA writes the direction bit into CNT_H, then reads CNT_H back to merge the
+     * length's high bits into it: the read must return what was written, or the direction
+     * is lost and every ARAM-to-main-memory fetch turns into a store over the cached data. */
+    case 0x28: *out = size == 4 ? ((uint32_t)g_cnt_hi << 16) : g_cnt_hi; return 1;
+    case 0x2A: *out = 0; return 1; /* the low half reads as zero once the DMA is done */
     default: return 0;
     }
 }

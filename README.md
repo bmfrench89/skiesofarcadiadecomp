@@ -34,7 +34,7 @@ what is done and what is not (saves are not implemented yet).
 
 ## Building and running
 
-You need Windows, Python 3.12+, the Visual Studio 2022 Build Tools (MSVC),
+You need Windows, Python 3.14 (its standard library decodes zstd, which the RVZ reader needs), the Visual Studio 2022 Build Tools (MSVC),
 and your own dump of the disc (`.rvz`, `.iso` or `.gcm`).
 
 ```
@@ -69,7 +69,7 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_SCALE=n` | window scale, default 2 |
 | `SOA_WINDOW=0` | render without a window |
 | `SOA_FRAMES=n` | headless: write every nth frame to `build/frames/` and skip rendering the rest |
-| `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a` |
+| `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `3600:a@150` repeats A every 150 frames |
 | `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
 | `SOA_NOSOUND=1` | no audio device |

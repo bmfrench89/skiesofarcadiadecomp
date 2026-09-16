@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
+uint8_t* aram_memory(void);
+int device_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
+void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+
 #define SCRATCH 0x81000000u /* above the arena; nothing else is there yet */
 #define SDA2_BASE 0x80350000u
 #define SDA_BASE 0x8034E720u
@@ -132,6 +136,34 @@ int selftest(CpuState* s)
     call(s, 0x80005520u);
     get_string(s, SCRATCH + 0x503, got, sizeof got);
     failures += check("memcpy unaligned", got, "alphabeta");
+
+    /* ARAM DMA: the SDK's ARStartDMA writes the direction into CNT_H, reads CNT_H back to
+     * merge the length's high bits, then writes CNT_L. The direction must survive that. */
+    {
+        uint64_t v = 0;
+        uint8_t* ar = aram_memory();
+        memset(ar + 0x10000, 0x5A, 64);
+        mem_w32(s, SCRATCH + 0x600, 0);
+        device_write(s, 0xCC005020u, 2, (SCRATCH + 0x600) >> 16);
+        device_write(s, 0xCC005022u, 2, (SCRATCH + 0x600) & 0xFFFFu);
+        device_write(s, 0xCC005024u, 2, 0x10000u >> 16);
+        device_write(s, 0xCC005026u, 2, 0);
+        device_write(s, 0xCC005028u, 2, 0x8000u); /* ARAM to main memory */
+        device_read(s, 0xCC005028u, 2, &v);
+        device_write(s, 0xCC005028u, 2, (v & ~0x3FFull) | 0u);
+        device_write(s, 0xCC00502Au, 2, 64);
+        snprintf(got, sizeof got, "%08X", mem_r32(s, SCRATCH + 0x600));
+        failures += check("ARAM DMA to main memory", got, "5A5A5A5A");
+        mem_w32(s, SCRATCH + 0x600, 0xC0FFEE11u);
+        device_write(s, 0xCC005024u, 2, 0x10040u >> 16);
+        device_write(s, 0xCC005026u, 2, 0x10040u & 0xFFFFu);
+        device_write(s, 0xCC005028u, 2, 0); /* main memory to ARAM */
+        device_read(s, 0xCC005028u, 2, &v);
+        device_write(s, 0xCC005028u, 2, (v & ~0x3FFull) | 0u);
+        device_write(s, 0xCC00502Au, 2, 64);
+        snprintf(got, sizeof got, "%02X%02X%02X%02X", ar[0x10040], ar[0x10041], ar[0x10042], ar[0x10043]);
+        failures += check("ARAM DMA from main memory", got, "C0FFEE11");
+    }
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

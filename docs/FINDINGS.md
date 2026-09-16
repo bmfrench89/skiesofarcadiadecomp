@@ -502,10 +502,29 @@ count: the intro's timing is wall-clock while frames are not.
 **The opening plays through.** Ten minutes of scripted dialogue advances
 run the whole opening: the Valuan bridge (Alfonso, Galcian), the helmsman,
 Vyse and Aika boarding the ship -- all rendered by the software GX with the
-game's own lighting. It ends at the transition into the first battle,
-where the game opens `/battle/.GVR` and `/battle/.PVR` (an empty name),
-reports `memFree Error` twice and runs off through garbage pointers: the
-first divergence that is not a missing device. Being chased.
+game's own lighting. It used to end at the transition into the first
+battle, where the game opened `/battle/.GVR` and `/battle/.PVR` (an empty
+name), reported `memFree Error` twice and ran off through garbage
+pointers: the first divergence that was not a missing device.
+
+**The ARAM package cache.** Chasing that divergence exposed a subsystem
+worth knowing about. At boot the game stages sixteen battle packages
+(`/battle/command.mld`, `pcwindow.mld`, `btlcursor.mld`, the `/bchara/`
+models and their `.std` files) into ARAM above the 8 MB mark, one
+high-priority ARQ transfer each, and records each slot's ARAM address and
+length in a 16-entry table at `0x803165C8` guarded by a byte checksum.
+Battle setup pulls a slot back with one ARAM-to-main-memory DMA, trims
+the block with the game's `realloc`, and walks its entry table. The
+fetched block came back as the stale contents of the freshly allocated
+buffer, and the DMA log showed why: the fetch ran as a *store*. The SDK's
+`ARStartDMA` writes the direction bit into `AR_DMA_CNT_H`, then reads the
+register back to merge in the length's high bits; the runtime answered
+that read with zero, so every ARAM-to-main transfer became main-to-ARAM
+-- and, worse, overwrote the cached package with the empty buffer. The
+stores had all worked, which is why the sound samples and the cache
+fills looked fine. One line in the register model (the read returns what
+was written) fixed it; the selftest now round-trips a DMA in each
+direction so the direction bit cannot silently regress.
 
 - Giving DVD commands and ARAM DMAs realistic completion times (seek plus
   transfer; a short delay) removed the `memFree Error`s: with instant

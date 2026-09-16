@@ -13,7 +13,8 @@
  * Input comes from the window when there is one, else from a script
  * (SOA_PAD="frame:buttons,..." -- e.g. "1700:start,1800:a+sup" holds
  * START from the game's frame 1700, and A with the stick up from 1800,
- * each for 10 frames; sup/sdown/sleft/sright move the stick).
+ * each for 10 frames; sup/sdown/sleft/sright move the stick; "3600:a@150"
+ * presses A at frame 3600 and again every 150 frames after that).
  *
  *   0xCC006400 + 12*ch  SICnOUTBUF   0xCC006404 + 12*ch  SICnINBUFH   +8 INBUFL
  *   0xCC006430  SIPOLL      0xCC006434  SICOMCSR    0xCC006438  SISR
@@ -54,8 +55,8 @@ static int g_present[4] = {1, 0, 0, 0};
 
 /* ---- scripted controller ------------------------------------------------ */
 
-typedef struct { unsigned frame; uint16_t buttons; uint8_t stick[2]; } PadEvent;
-static PadEvent g_script[64];
+typedef struct { unsigned frame, every; uint16_t buttons; uint8_t stick[2]; } PadEvent;
+static PadEvent g_script[1024]; /* "F:buttons" once at frame F; "F:buttons@N" again every N frames */
 static int g_script_n = -1;
 #define HOLD_FRAMES 10
 
@@ -75,17 +76,17 @@ static void script_init(void)
 {
     const char* p = getenv("SOA_PAD");
     g_script_n = 0;
-    while (p && *p && g_script_n < 64) {
+    while (p && *p && g_script_n < (int)(sizeof g_script / sizeof g_script[0])) {
         char* end;
-        unsigned frame = (unsigned)strtoul(p, &end, 10);
+        unsigned frame = (unsigned)strtoul(p, &end, 10), every = 0;
         uint16_t buttons = 0;
         if (end == p || *end != ':') break;
         p = end + 1;
         uint8_t stick[2] = {128, 128};
-        while (*p && *p != ',') {
+        while (*p && *p != ',' && *p != '@') {
             const char* q = p;
             size_t len;
-            while (*q && *q != ',' && *q != '+') q++;
+            while (*q && *q != ',' && *q != '+' && *q != '@') q++;
             len = (size_t)(q - p);
             /* sup/sdown/sleft/sright move the main stick; everything else is a button */
             if (len == 3 && strncmp(p, "sup", 3) == 0) stick[1] = 255;
@@ -95,7 +96,9 @@ static void script_init(void)
             else buttons |= button_named(p, len);
             p = *q == '+' ? q + 1 : q;
         }
+        if (*p == '@') { every = (unsigned)strtoul(p + 1, &end, 10); p = end; }
         g_script[g_script_n].frame = frame;
+        g_script[g_script_n].every = every;
         g_script[g_script_n].buttons = buttons;
         g_script[g_script_n].stick[0] = stick[0];
         g_script[g_script_n].stick[1] = stick[1];
@@ -117,12 +120,17 @@ static uint16_t buttons_now(uint8_t stick[2])
     int i;
     stick[0] = stick[1] = 128;
     if (g_script_n < 0) script_init();
-    for (i = 0; i < g_script_n; i++)
-        if (frame >= g_script[i].frame && frame < g_script[i].frame + HOLD_FRAMES) {
+    for (i = 0; i < g_script_n; i++) {
+        uint64_t rel;
+        if (frame < g_script[i].frame) continue;
+        rel = frame - g_script[i].frame;
+        if (g_script[i].every) rel %= g_script[i].every;
+        if (rel < HOLD_FRAMES) {
             b |= g_script[i].buttons;
             if (g_script[i].stick[0] != 128) stick[0] = g_script[i].stick[0];
             if (g_script[i].stick[1] != 128) stick[1] = g_script[i].stick[1];
         }
+    }
     if (b != last) {
         fprintf(stderr, "[si] frame %llu (retrace %llu): buttons %04X\n", (unsigned long long)frame, (unsigned long long)irq_retrace_count(), b);
         last = b;

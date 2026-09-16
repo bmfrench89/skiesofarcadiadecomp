@@ -12,3 +12,5 @@
 0x8022AB08  CacheStore@r7
 0x8022ADDC  CacheFetched@r31
 0x8022AD64  CacheFetchSlot@r30
+0x801C63EC  LoadStart
+0x801C6B78  LoadDone@r31

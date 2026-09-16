@@ -38,7 +38,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | `[x]` | **0.6** AKLZ container decoder | S | **Done:** exhaustive gate — 3,633 containers, 1.98 GiB, 0 failures, 0 PPC code |
 | `[ ]` | **0.5** Junk-run regeneration (lagged Fibonacci) | M | **No longer optional — see R9.** RVZ junk runs are zero-filled. GameCube games routinely over-read past a file's declared end; `extracted/` would return zeros where the disc returns junk. Correctness dependency of slice 4.4 |
 | `[x]` | **0.7** DSP microcode probe | S | **Done: STOCK.** Audio ucode hashes to `0x4E8A8B21` = Dolphin's stock AX. Positive control validated the method. R3 → Low; slice 6.3 stays L |
-| `[ ]` | **0.8** Clean-machine reproduction | S | `pyproject.toml` `[project]` table, pinned deps, `CONTRIBUTING.md`, scripted fetch of `dtk` and the mwcc archive. A second contributor gets from `git clone` to a working tree |
+| `[x]` | **0.8** Clean-machine reproduction | S | **Done:** `pyproject.toml` `[project]` table with the dev extras, `CONTRIBUTING.md` walking a second contributor from `git clone` to a running game and the tests; `dtk` is optional (names only) and documented rather than fetched |
 
 **Exit:** the disc is fully unpacked, reproducible, and every container is accounted for.
 
