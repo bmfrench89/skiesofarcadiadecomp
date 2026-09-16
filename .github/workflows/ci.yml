@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guard:
+    name: Game data guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # The repository contains code only. This must fail loudly if that ever
+      # stops being true. See docs/SPEC.md section 2.
+      - name: No game data in working tree
+        run: python tools/guard.py
+
+      # A file can be removed in a later commit and still sit in history, where
+      # it is just as much a problem. Check every blob that has ever existed.
+      - name: No game data anywhere in history
+        run: |
+          echo "scanning full history for forbidden blobs..."
+          bad=$(git rev-list --objects --all \
+            | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' \
+            | awk '$1=="blob"' \
+            | grep -Ei '\.(rvz|iso|gcm|ciso|wbfs|nkit|dol|rel|elf|gvr|tpl|mld|mlk|mll|sml|samp|dsp|sct|std|sst|tec|enp|ect|evp|lmt|bnr|map)$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::game data found in git history"
+            echo "$bad"
+            exit 1
+          fi
+          echo "history clean"
+
+      - name: No oversized blobs in history
+        run: |
+          big=$(git rev-list --objects --all \
+            | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' \
+            | awk '$1=="blob" && $3 > 2097152 {print $3, $4}' || true)
+          if [ -n "$big" ]; then
+            echo "::error::blobs over 2 MiB found in history"
+            echo "$big"
+            exit 1
+          fi
+          echo "no oversized blobs"
+
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest ruff
+
+      # Tests synthesise every fixture in-memory precisely so they can run here,
+      # where no disc image exists. Tests needing the real game skip themselves.
+      - name: Run tests
+        run: python -m pytest tools/tests -q
+
+      - name: Lint
+        run: ruff check tools/
+
+      - name: Format check
+        run: ruff format --check tools/

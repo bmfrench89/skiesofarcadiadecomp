@@ -61,7 +61,7 @@ class Dol:
         if s is None:
             raise ValueError(f"address 0x{addr:08X} is not mapped")
         off = s.file_offset + (addr - s.address)
-        return self.data[off:off + length]
+        return self.data[off : off + length]
 
     def word(self, addr: int) -> int:
         """Read one big-endian u32 from virtual address `addr`."""
@@ -82,10 +82,10 @@ def parse(data: bytes) -> Dol:
     bss_address, bss_size, entry_point = struct.unpack(">III", data[0xD8:0xE4])
 
     sections: list[Section] = []
-    for i, (o, a, s) in enumerate(zip(text_off, text_addr, text_size)):
+    for i, (o, a, s) in enumerate(zip(text_off, text_addr, text_size, strict=True)):
         if s:
             sections.append(Section(f".text{i}", o, a, s, True))
-    for i, (o, a, s) in enumerate(zip(data_off, data_addr, data_size)):
+    for i, (o, a, s) in enumerate(zip(data_off, data_addr, data_size, strict=True)):
         if s:
             sections.append(Section(f".data{i}", o, a, s, False))
 
@@ -99,6 +99,6 @@ def image_size(header: bytes) -> int:
     text_size = struct.unpack(">7I", header[0x90:0xAC])
     data_size = struct.unpack(">11I", header[0xAC:0xD8])
     return max(
-        [o + s for o, s in zip(text_off, text_size)]
-        + [o + s for o, s in zip(data_off, data_size)]
+        [o + s for o, s in zip(text_off, text_size, strict=True)]
+        + [o + s for o, s in zip(data_off, data_size, strict=True)]
     )

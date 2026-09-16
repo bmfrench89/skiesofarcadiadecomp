@@ -66,9 +66,7 @@ class Fst:
 
 def parse_boot(header: bytes) -> BootInfo:
     """Parse the 0x440-byte boot header (boot.bin)."""
-    dol_offset, fst_offset, fst_size, fst_max_size = struct.unpack(
-        ">IIII", header[0x420:0x430]
-    )
+    dol_offset, fst_offset, fst_size, fst_max_size = struct.unpack(">IIII", header[0x420:0x430])
     return BootInfo(
         game_id=header[0x00:0x06].decode("ascii", errors="replace"),
         disc_number=header[0x06],
@@ -131,9 +129,7 @@ class Disc:
     @property
     def fst(self) -> Fst:
         if self._fst is None:
-            self._fst = parse_fst(
-                self.reader.read(self.boot.fst_offset, self.boot.fst_size)
-            )
+            self._fst = parse_fst(self.reader.read(self.boot.fst_offset, self.boot.fst_size))
         return self._fst
 
     def read_file(self, entry: FstFile) -> bytes:
@@ -155,9 +151,7 @@ class Disc:
             out.parent.mkdir(parents=True, exist_ok=True)
             data = self.read_file(entry)
             if len(data) != entry.size:
-                raise IOError(
-                    f"{entry.path}: read {len(data)} bytes, FST says {entry.size}"
-                )
+                raise OSError(f"{entry.path}: read {len(data)} bytes, FST says {entry.size}")
             out.write_bytes(data)
             written += len(data)
             if progress:
@@ -169,7 +163,5 @@ class Disc:
         (sysdir / "boot.bin").write_bytes(self.reader.read(0, BOOT_HEADER_SIZE))
         (sysdir / "bi2.bin").write_bytes(self.reader.read(BI2_OFFSET, 0x2000))
         (sysdir / "main.dol").write_bytes(self.read_dol())
-        (sysdir / "fst.bin").write_bytes(
-            self.reader.read(self.boot.fst_offset, self.boot.fst_size)
-        )
+        (sysdir / "fst.bin").write_bytes(self.reader.read(self.boot.fst_offset, self.boot.fst_size))
         return written

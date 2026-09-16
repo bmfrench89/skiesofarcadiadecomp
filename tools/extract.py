@@ -24,7 +24,8 @@ class RawImage:
     """Plain .iso/.gcm reader with the same interface as RVZ."""
 
     def __init__(self, path):
-        self.f = open(path, "rb")
+        # held open for the object's lifetime, mirroring RVZ
+        self.f = open(path, "rb")  # noqa: SIM115
 
     def read(self, offset: int, length: int) -> bytes:
         self.f.seek(offset)
