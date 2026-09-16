@@ -9,13 +9,13 @@ field width varies by form, so decode.py tries the widths in the order the
 hardware does; see EXT_WIDTHS.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Form(str, Enum):
+class Form(StrEnum):
     """Instruction encoding form. Determines which operand fields are valid."""
 
-    I = "I"  # b, bl, ba, bla
+    I = "I"  # noqa: E741 - PowerPC form name, not a variable
     B = "B"  # bc
     SC = "SC"  # sc
     D = "D"  # rD, rA, immediate

@@ -14,7 +14,6 @@ from soa.ppc import decode  # noqa: E402
 from soa.ppc.decode import sign_extend, spr_number  # noqa: E402
 from soa.ppc.isa import Form  # noqa: E402
 
-
 # --------------------------------------------------------------------------
 # field helpers
 # --------------------------------------------------------------------------
