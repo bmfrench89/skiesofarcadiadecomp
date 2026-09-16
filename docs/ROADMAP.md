@@ -149,7 +149,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 | `[x]` | **6.1** AI/ARAM/DSP mail | M | **Done** (`runtime/aram.c`, `dsp.c`): ARAM as a host buffer, DMA, DSP mailbox protocol for the stock AX boot and command lists, AI DMA clock raising AIDINT every 5 ms. No mixing yet.  ARAM as a host buffer, DMA, audio interrupt timing |
 | `[x]` | **6.2** DSPADPCM decode | S | **Done** in `runtime/ax.c` (with PCM16/PCM8, loops, per-voice rate conversion) |
 | `[~]` | **6.3** AX mixer | **L** | **Working** (`runtime/ax.c`): voices, envelopes, per-ms updates, main/aux buses, 32-bit CPU exchange buffers, this build's mixer-control encoding (L/R always; bits for aux A/B, surround, ramps). Not yet: SETUP ramps, compressor, initial-time-delay |
-| `[~]` | **6.4** Streamed BGM | M | Streams flow through the same voices; not yet verified against the disc's `.dsp` pairs |
+| `[x]` | **6.4** Streamed BGM | M | **Verified:** `tools/audio_check.py` decodes a `.dsp` stream and cross-correlates it with a `SOA_WAV` recording; the opening music matches at 0.85 (both channels) and the battle music at 0.52 under the voices and effects mixed over it; clipping 0.0004% |
 
 ---
 

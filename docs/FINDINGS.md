@@ -550,6 +550,15 @@ bound check is a `bgtlr`) were found the hard way -- the first field
 loader dispatches through one -- and are now resolved statically like
 the other 292.
 
+**Streamed music, checked.** `SOA_WAV` records everything the game plays;
+`tools/audio_check.py` decodes a `.dsp` stream (`tools/soa/dspadpcm.py`,
+unit-tested on hand-computed frames), resamples it to 32 kHz and slides an
+excerpt over the recording. The opening music (`m01`, 22.05 kHz, 128 s)
+correlates at 0.85 on both channels with what the port played; the battle
+music at 0.52, under the voices and effects the game mixes over it. So the
+ADPCM decode, the sample-rate conversion and the stream refills through
+ARAM are right. In 7.5 minutes of recording 104 samples clip.
+
 **Text.** Dialogue, item names, character names and the battle's action
 window were all blank while stat labels, enemy names and damage numbers
 drew fine. A captured dialogue frame explained it: the game renders each
