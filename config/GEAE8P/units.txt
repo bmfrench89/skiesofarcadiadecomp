@@ -14,3 +14,7 @@ src/sdk/msl/misc.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions 
 src/soa/aramcache_valid.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
 src/soa/aramcache_find.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
 src/sdk/ar/arq.c	1.2.5n	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/ar/ar.c	1.2.5n	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/wide.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include -use_lmw_stmw on
+src/soa/aramcache_fetch.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
+src/sdk/msl/strto.c	1.3.2	-O4,p -nodefaults -proc gekko -fp hard -Cpp_exceptions off -RTTI off -enum int -str reuse -inline auto -nosyspath -i include
