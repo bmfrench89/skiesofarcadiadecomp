@@ -27,4 +27,55 @@ favorable target:
 
 ## Status
 
-Phase 0. See the roadmap.
+The game boots, plays its intro, reaches the title screen and starts a new
+game, rendered by a software implementation of the GameCube's graphics
+pipeline in a window with keyboard or gamepad input. See the roadmap for
+what is done and what is not (audio is mixed but not yet heard; saves are
+not implemented; rendering has no fog or mipmaps yet).
+
+## Building and running
+
+You need Windows, Python 3.12+, the Visual Studio 2022 Build Tools (MSVC),
+and your own dump of the disc (`.rvz`, `.iso` or `.gcm`).
+
+```
+pip install -e .[dev]
+python tools/extract.py "path/to/Skies of Arcadia Legends (USA).rvz" --iso
+python tools/recompile.py --compile --link
+set SOA_RENDER=1
+gen\soa.exe extracted
+```
+
+`extract.py` unpacks the disc into `extracted/` (gitignored, never committed).
+`recompile.py` translates the whole executable to C into `gen/` (also
+gitignored), compiles it with MSVC and links the runtime into `gen/soa.exe`.
+The function inventory it uses is in `config/` and is the only thing derived
+from the game that the repository carries: addresses, sizes and names.
+
+### Controls
+
+Keyboard when the window has focus: arrows or WASD move the stick, IJKL the
+C-stick; X = A, Z = B, C = X, V = Y, Enter or Space = START, R = Z, Q = L,
+E = R, T/F/G/H = D-pad, Escape quits. An XInput gamepad works as you would
+expect (triggers are L/R, the right shoulder is Z).
+
+### Useful environment variables
+
+| Variable | Effect |
+|---|---|
+| `SOA_RENDER=1` | render (and open the window) |
+| `SOA_SCALE=n` | window scale, default 2 |
+| `SOA_WINDOW=0` | render without a window |
+| `SOA_FRAMES=n` | headless: write every nth frame to `build/frames/` and skip rendering the rest |
+| `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a` |
+| `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
+| `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
+| `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
+| `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
+
+## Repository layout
+
+- `tools/` — disc extraction, analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, tests
+- `runtime/` — the native runtime: CPU helpers, memory and MMIO, device models, threads, the software GX, the window
+- `config/` — analysis metadata: the function inventory, HLE bindings, hooks, tracepoints
+- `docs/` — specification, roadmap, findings
