@@ -104,18 +104,18 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 
 ---
 
-## Phase 4 — Runtime `[ ]`
+## Phase 4 — Runtime `[~]`
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **4.1** Memory map + MMIO dispatch | M | MEM1 **plus the `0xC0000000` uncached alias over one backing store**, OS low-memory globals, and trap-and-dispatch for `0xCC00xxxx`. See SPEC §5 — "one flat allocation" was wrong |
-| `[ ]` | **4.1b** Write-gather pipe | M | **Moved ahead of graphics.** `HID2[WPE]`, `WPAR`, 32-byte granularity, the SDK's dummy-write flush idiom. 414 stores depend on it |
-| `[ ]` | **4.2** Boot path lockstep | S | Point the 3.7 differ at the boot path. Runs to first unimplemented HLE call |
+| `[x]` | **4.1** Memory map + MMIO dispatch | M | **Done** (`runtime/cpu.h`, `hle.c`, `irq.c`).  MEM1 **plus the `0xC0000000` uncached alias over one backing store**, OS low-memory globals, and trap-and-dispatch for `0xCC00xxxx`. See SPEC §5 — "one flat allocation" was wrong |
+| `[x]` | **4.1b** Write-gather pipe | M | **Done** (`runtime/gx.c`: byte stream parsed as CP commands; BP/XF/CP loads, display lists, draws counted).  **Moved ahead of graphics.** `HID2[WPE]`, `WPAR`, 32-byte granularity, the SDK's dummy-write flush idiom. 414 stores depend on it |
+| `[x]` | **4.2** Boot path | S | **Reached without the differ**: the boot runs `__start` → `main` → the game loop on diagnostics alone (`SOA_TRACE`, `SOA_WATCH`, guest printf, spin/watchdog backtraces). 3.7 stays valuable for the long tail.  Point the 3.7 differ at the boot path. Runs to first unimplemented HLE call |
 | `[ ]` | **4.2b** Dolphin calibration fixtures | S | Save-state checkpoints, BranchWatch export. Dolphin demoted from daily loop to one-time fixture source |
-| `[ ]` | **4.3** OS HLE | L | Arena allocator, alarms, interrupts, `OSReport` |
-| `[ ]` | **4.3b** Guest→host context-switch bridge | M | **The hard part of "fibers," and it had no slice.** How a guest `OSThread` switch — guest SP swap, guest LR restore, the `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose C stack is mid-`fn_800A1234` |
-| `[ ]` | **4.4** DVD HLE | M | `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
-| `[ ]` | **4.5** VI + retrace | M | **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
+| `[~]` | **4.3** OS HLE | L | **Mostly recompiled, not HLE'd**: allocator, alarms, interrupts and threads run as translated; only `OSSave/LoadContext`, `__OSInitAudioSystem` and `OSReport` are native. Interrupts arrive at loop back-edges (`irq_poll`) and the idle loop, with the full register file saved around every handler.  Arena allocator, alarms, interrupts, `OSReport` |
+| `[x]` | **4.3b** Guest→host context-switch bridge | M | **Done** (`runtime/threads.c`: setjmp at the single `OSSaveContext` call site, fibers per thread).  **The hard part of "fibers," and it had no slice.** How a guest `OSThread` switch — guest SP swap, guest LR restore, the `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose C stack is mid-`fn_800A1234` |
+| `[x]` | **4.4** DVD | M | **Done at the DI register level** (`runtime/dvd.c` reads `extracted/disc.iso`); the SDK's DVD stack runs recompiled. Arena-hi must sit at the FST, as the apploader leaves it.  `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
+| `[x]` | **4.5** VI + retrace | M | **Done**: DI0 status bit, 60 Hz of guest timebase, `VIWaitForRetrace` sleeps and wakes the main thread every frame.  **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
 | `[ ]` | **4.6** PAD input | S | SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
 | `[ ]` | **4.7** CARD saves | M | Memory-card emulation. **Acceptance includes importing a save from a real card or Dolphin** — users judge the port on this |
 
@@ -144,7 +144,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **6.1** AI/ARAM HLE | M | ARAM as a host buffer, DMA, audio interrupt timing |
+| `[x]` | **6.1** AI/ARAM/DSP mail | M | **Done** (`runtime/aram.c`, `dsp.c`): ARAM as a host buffer, DMA, DSP mailbox protocol for the stock AX boot and command lists, AI DMA clock raising AIDINT every 5 ms. No mixing yet.  ARAM as a host buffer, DMA, audio interrupt timing |
 | `[ ]` | **6.2** DSPADPCM decode | S | Standard Nintendo ADPCM, well documented |
 | `[ ]` | **6.3** Sega mixer | **L** | Stock AX ucode confirmed, so this is a mixer reimplementation. Dolphin's AX HLE handles this exact CRC and its semantics are publicly documented |
 | `[ ]` | **6.4** Streamed BGM | M | Stereo `.dsp` pairs stream and loop |

@@ -7,14 +7,20 @@
  */
 #include "cpu.h"
 
+void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+
 /* __OSInitAudioSystem (0x80232B90). Copies a 128-byte DSP program to
  * 0x81000000, DMAs it into ARAM, un-halts the DSP, waits for its mailbox
  * reply, then halts and resets it and restores the memory it borrowed. The
  * program only clears ARAM. The DSP is high-level emulated and ARAM starts
- * zeroed, so there is nothing to do. */
+ * zeroed, so only the register state it leaves behind matters: AR_SIZE set,
+ * the DSP halted with DSPINIT, and a reset issued -- after which the ROM
+ * has announced itself in the outgoing mailbox, which DSPInit relies on. */
 void fn_80232B90(CpuState* s)
 {
-    (void)s;
+    device_write(s, 0xCC005012u, 2, 0x43);
+    device_write(s, 0xCC00500Au, 2, 0x8AC);
+    device_write(s, 0xCC00500Au, 2, 0x8AD);
 }
 
 /* __OSStopAudioSystem (0x80232D4C). The shutdown counterpart. */

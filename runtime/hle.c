@@ -28,7 +28,9 @@ void hle_report(void);
 #define SPIN_READS 2000000u
 static uint32_t g_spin_ea, g_spin_same, g_reads_since_write;
 
-static void spin_check(uint32_t ea, int is_write)
+void guest_backtrace(CpuState* s, uint32_t sp);
+
+static void spin_check(CpuState* s, uint32_t ea, int is_write)
 {
     if (is_write) {
         g_spin_same = 0;
@@ -41,6 +43,8 @@ static void spin_check(uint32_t ea, int is_write)
     if (g_spin_same > SPIN_SAME || g_reads_since_write > SPIN_READS) {
         fprintf(stderr, "[spin] polling %08X: %u consecutive reads, %u reads since the last write\n",
                 ea, g_spin_same, g_reads_since_write);
+        fprintf(stderr, "[spin] pc %08X lr %08X; backtrace:", s->pc, s->lr);
+        guest_backtrace(s, s->gpr[1]);
         hle_report();
         exit(4);
     }
@@ -63,14 +67,14 @@ static const char* peripheral(uint32_t ea)
     return "??";
 }
 
-static void note(const char* dir, uint32_t ea, unsigned size, uint64_t v)
+static void note(CpuState* s, const char* dir, uint32_t ea, unsigned size, uint64_t v)
 {
     uint32_t slot;
     if (ea >= MMIO_BASE + 0x8000u && ea < MMIO_BASE + 0x8100u) {
         g_gp_bytes += size; /* write-gather pipe: counted, not logged */
         return;
     }
-    spin_check(ea, dir[0] == 'w');
+    spin_check(s, ea, dir[0] == 'w');
     if (ea < MMIO_BASE || ea >= MMIO_BASE + MMIO_SLOTS * 4u) {
         fprintf(stderr, "[mmio] %s %08X/%u = %llx (outside modelled range)\n", dir, ea, size,
                 (unsigned long long)v);
@@ -91,13 +95,13 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
     {                                                          \
         uint64_t v = 0;                                        \
         int handled = device_read(s, ea, sizeof(T), &v);       \
-        note(handled ? "RD" : "rd", ea, sizeof(T), v);         \
+        note(s, handled ? "RD" : "rd", ea, sizeof(T), v);         \
         return (T)v;                                           \
     }
 #define MMIO_WRITE(T, N)                                       \
     void mmio_write##N(CpuState* s, uint32_t ea, T v)          \
     {                                                          \
-        note("wr", ea, sizeof(T), v);                          \
+        note(s, "wr", ea, sizeof(T), v);                          \
         device_write(s, ea, sizeof(T), v);                     \
     }
 

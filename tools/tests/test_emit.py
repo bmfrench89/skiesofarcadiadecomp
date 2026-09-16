@@ -223,6 +223,9 @@ void mmio_write16(CpuState* s, uint32_t ea, uint16_t v){(void)s;(void)ea;(void)v
 void mmio_write32(CpuState* s, uint32_t ea, uint32_t v){(void)s;(void)ea;(void)v;}
 void mmio_write64(CpuState* s, uint32_t ea, uint64_t v){(void)s;(void)ea;(void)v;}
 void dispatch(CpuState* s, uint32_t a){(void)s;(void)a;}
+void irq_poll(CpuState* s){(void)s;}
+uint32_t g_watch_addr, g_watch_len;
+void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v){(void)s;(void)ea;(void)size;(void)v;}
 void guest_trap(CpuState* s, uint32_t pc){(void)s;(void)pc;}
 void guest_syscall(CpuState* s, uint32_t pc){(void)s;(void)pc;}
 void guest_unimplemented(CpuState* s, uint32_t pc, const char* w){(void)s;(void)pc;(void)w;}

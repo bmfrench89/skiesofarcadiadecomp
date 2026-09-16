@@ -397,3 +397,33 @@ fully decompiled.
 **Conclusion:** every risk that could have ended the project has now been measured rather
 than assumed. The DSP question closed favourably, the graphics question closed to a hard
 but bounded problem, and the decoder is cross-validated. Proceed.
+
+
+---
+
+## 8. ▲ Runtime: what it took to reach the game loop
+
+Recorded as each blocker fell, because each one is a rule the runtime now
+embodies. Log lines quoted are from `build/boot.log`.
+
+| Blocker | Cause | Rule |
+|---|---|---|
+| Spin on `0xCC005004` before any mail | The DSP ROM announces itself with `0x8071FEED` at power-on and after reset; `__DSP_boot_task` waits for it before uploading | Outgoing mailbox starts non-empty; CSR `RES` re-arms it; clearing `DSPINIT` boots the ARAM stub (`0x80544348`, then the ROM again) |
+| Main thread spinning on a flag with interrupts enabled | Interrupts were only delivered at the scheduler's idle loop | Every backward branch polls (`irq_poll`), then runs `__OSReschedule` as `__OSDispatchInterrupt` would |
+| `msr=0x32` forever after the first audio frame | The driver's frame callback does `OSEnableInterrupts … OSDisableInterrupts` inside a handler and relies on `rfi` to restore MSR | Handlers run with EE clear and MSR restored afterwards |
+| `sprintf` produced its own format string; random traps | Handlers (and the reschedule) clobbered volatile registers of the interrupted loop | The full register file is saved around every handler and around the reschedule call |
+| `DVDOpen(): file '/sound/tone.info' was not found` | The FST was parked *below* arena-hi, so the game's heap overwrote it | Arena-hi = FST start, exactly as the apploader leaves it |
+
+Diagnostics that found them, all kept: `SOA_TRACE=1|2` (tracepoints from
+`config/trace.txt`, with backtraces), `SOA_WATCH=addr,len` (store watchpoint
+with backtrace), guest `OSReport`/debug-printf HLE (the game's own messages),
+the spin detector and watchdog (both with guest backtraces), and
+`SOA_SELFTEST=1` (call recompiled library functions directly).
+
+State at the end of this pass: the game boots through `OSInit`, the SDK
+banners, `DSPInit`/AX microcode boot, DVD reads of the title assets
+(≈11 MB), and runs its main loop at 60 Hz — `VIWaitForRetrace` sleeps and
+wakes the main thread each frame, ~4,000 draw commands and ~430 EFB copies
+in 15 s, audio frames every 5 ms through the mailbox protocol. Nothing is
+displayed yet: the GX front end parses the command stream but does not
+rasterize (Phase 5).

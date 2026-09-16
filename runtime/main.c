@@ -24,6 +24,8 @@ void hle_report(void);
 void hle_dump(CpuState* s, uint32_t pc);
 void threads_init(CpuState* s);
 void dvd_init(const char* path);
+int selftest(CpuState* s);
+void watch_init(void);
 int irq_in_handler(void);
 
 /* A loop that never touches hardware never trips the MMIO spin detector, so
@@ -64,6 +66,7 @@ static void profile_report(unsigned n)
                 (hist[i][0] & 1u) ? "H" : "");
 }
 
+void guest_backtrace(CpuState* s, uint32_t sp);
 static unsigned __stdcall watchdog(void* arg)
 {
     unsigned secs = (unsigned)(uintptr_t)arg;
@@ -78,6 +81,8 @@ static unsigned __stdcall watchdog(void* arg)
     }
     fprintf(stderr, "[watchdog] still running after %us; last block %08X\n", secs, g_state->pc);
     hle_dump(g_state, g_state->pc);
+    fprintf(stderr, "  backtrace from r1:");
+    guest_backtrace(g_state, g_state->gpr[1]);
     profile_report(n);
     hle_report();
     _exit(5);
@@ -155,7 +160,7 @@ static void setup_low_memory(uint8_t* mem, const uint8_t* boot, uint32_t fst_add
     w32(mem, 0x80000028u, MEM1_SIZE);   /* physical memory size */
     w32(mem, 0x8000002Cu, 0x00000003u); /* console type: retail production board */
     w32(mem, 0x80000030u, 0x00000000u); /* arena lo: let the OS derive it */
-    w32(mem, 0x80000034u, ARENA_HI);    /* arena hi */
+    w32(mem, 0x80000034u, fst_addr);    /* arena hi: the FST sits just above it */
     w32(mem, 0x80000038u, fst_addr);    /* FST location */
     w32(mem, 0x8000003Cu, fst_max);     /* FST max size */
     w32(mem, 0x800000CCu, 0x00000000u); /* video mode: NTSC */
@@ -187,7 +192,8 @@ int main(int argc, char** argv)
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
 
-    /* The apploader parks the FST just under the arena, 32-byte aligned. */
+    /* The apploader parks the FST at the top of memory, 32-byte aligned, and
+     * ends the arena where it starts. */
     fst_max = be32(boot + 0x42C);
     fst_addr = (ARENA_HI - (uint32_t)fst_size) & ~31u;
     memcpy(s.mem + (fst_addr & MEM_MASK), fst, fst_size);
@@ -201,6 +207,8 @@ int main(int argc, char** argv)
     snprintf(path, sizeof path, "%s/disc.iso", dir);
     dvd_init(path);
     threads_init(&s);
+    watch_init();
+    if (getenv("SOA_SELFTEST")) return selftest(&s) ? 7 : 0;
     start_watchdog(&s);
     ENTRY_FN(&s);
 

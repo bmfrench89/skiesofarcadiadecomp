@@ -209,6 +209,7 @@ class Emitter:
         hle: dict[int, str] | None = None,
         hooks: dict[int, str] | None = None,
         savepoints: dict[int, str] | None = None,
+        traces: dict[int, str] | None = None,
     ):
         self.dol = dol
         self.functions = functions
@@ -218,7 +219,9 @@ class Emitter:
         self.hle = hle or {}  # functions the runtime provides natively
         self.hooks = hooks or {}  # addresses where the runtime is called first
         self.savepoints = savepoints or {}  # call sites wrapped in setjmp (thread parking)
+        self.traces = traces or {}  # addresses that report themselves when SOA_TRACE is set
         self.stats = EmitStats()
+        self._hooked = False  # the function being emitted delivers interrupts at a hook
 
     # ------------------------------------------------------------------ API
 
@@ -234,6 +237,7 @@ class Emitter:
             if i and i.valid and i.mnemonic == "bcctr" and a in self.tables:
                 labels.update(t for t in self.tables[a].targets if t in addr_set)
 
+        self._hooked = any(a in self.hooks for a in addrs)
         pretty = self.names.get(fn.entry)
         name = c_name(fn.entry)
         head = f"/* {pretty} */\n" if pretty and pretty != name else ""
@@ -252,6 +256,8 @@ class Emitter:
             out.append(f"    /* {a:08X} {i.mnemonic if i and i.valid else '??'} */")
             if a in self.hooks:
                 out.append(f"    hook_{a:08X}(s); /* {self.hooks[a]} */")
+            if a in self.traces:
+                out.append(f'    trace_hit(s, {u32(a)}, "{self.traces[a]}");')
             for st in self._translate(i, addr_set):
                 out.append("    " + st)
         out.append("    return;")
@@ -292,9 +298,16 @@ class Emitter:
         return f"s->lr = {u32(next_pc)}; dispatch(s, {u32(target)});"
 
     def _jump(self, target: int, addr_set: set[int], pc: int) -> str:
-        """An unconditional transfer: local goto, tail call, or trap."""
+        """An unconditional transfer: local goto, tail call, or trap.
+
+        A backward goto is a loop edge, and loops are where a thread waits
+        for something an interrupt handler does -- so each one polls for
+        pending interrupts first (runtime/irq.c). Functions with a hook
+        deliver at the hook instead; the scheduler's idle loop is one.
+        """
         if target in addr_set:
-            return f"goto {label(target)};"
+            poll = "irq_poll(s); " if target <= pc and not self._hooked else ""
+            return f"{poll}goto {label(target)};"
         if target in self.functions:
             return f"{c_name(target)}(s); return;"
         return f"guest_trap(s, {u32(pc)}); return;"

@@ -1,0 +1,12 @@
+# Addresses that report themselves (registers, optionally a backtrace) when
+# the runtime is started with SOA_TRACE=1 (SOA_TRACE=2 adds backtraces).
+# Diagnostic only; harmless to leave in.
+
+0x80235574  OSDisableInterrupts
+0x80235588  OSEnableInterrupts
+0x8023559C  OSRestoreInterrupts
+0x80239A4C  DVDLowRead
+0x801DB244  LoadAsset
+0x801E13B0  FindAssetHome
+0x801DAEB8  RelocateAsset
+0x8023A818  DVDOpen

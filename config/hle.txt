@@ -8,3 +8,7 @@
 0x80233544  OSSaveContext         # setjmp-like snapshot; dtk left this one unnamed
 0x802335C4  OSLoadContext         # restore + rfi: a mid-function resume, impossible to recompile
 0x802336A4  OSSwitchFiber         # call a function on another stack
+
+# Diagnostics: the guest's own printf-style output, formatted natively (runtime/hle_stdio.c).
+0x802AC75C  OSReport              # vprintf to a console nobody reads
+0x801DBE1C  GameDebugPrintf       # the game's debug print, stubbed out in the retail build

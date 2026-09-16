@@ -67,6 +67,8 @@ void mmio_write32(CpuState* s, uint32_t ea, uint32_t v);
 void mmio_write64(CpuState* s, uint32_t ea, uint64_t v);
 
 void dispatch(CpuState* s, uint32_t addr); /* call through a computed address */
+void irq_poll(CpuState* s);                 /* loop back-edge: deliver pending interrupts */
+void trace_hit(CpuState* s, uint32_t pc, const char* name); /* config/trace.txt */
 void guest_trap(CpuState* s, uint32_t pc);
 void guest_syscall(CpuState* s, uint32_t pc);
 void guest_unimplemented(CpuState* s, uint32_t pc, const char* what);
@@ -121,26 +123,36 @@ static inline uint64_t mem_r64(CpuState* s, uint32_t ea)
     memcpy(&v, mem_ptr(s, ea), 8);
     return BSWAP64(v);
 }
+/* Watchpoint (SOA_WATCH=addr[,len]): every store into the range reports
+ * itself with the storing block's address. One compare per store. */
+extern uint32_t g_watch_addr, g_watch_len;
+void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+#define WATCH(ea, size, v)     do { if ((uint32_t)((ea) - g_watch_addr) < g_watch_len) watch_hit(s, (ea), (size), (v)); } while (0)
+
 static inline void mem_w8(CpuState* s, uint32_t ea, uint8_t v)
 {
     if (is_mmio(ea)) { mmio_write8(s, ea, v); return; }
+    WATCH(ea, 1, v);
     *mem_ptr(s, ea) = v;
 }
 static inline void mem_w16(CpuState* s, uint32_t ea, uint16_t v)
 {
     if (is_mmio(ea)) { mmio_write16(s, ea, v); return; }
+    WATCH(ea, 2, v);
     v = BSWAP16(v);
     memcpy(mem_ptr(s, ea), &v, 2);
 }
 static inline void mem_w32(CpuState* s, uint32_t ea, uint32_t v)
 {
     if (is_mmio(ea)) { mmio_write32(s, ea, v); return; }
+    WATCH(ea, 4, v);
     v = BSWAP32(v);
     memcpy(mem_ptr(s, ea), &v, 4);
 }
 static inline void mem_w64(CpuState* s, uint32_t ea, uint64_t v)
 {
     if (is_mmio(ea)) { mmio_write64(s, ea, v); return; }
+    WATCH(ea, 8, v);
     v = BSWAP64(v);
     memcpy(mem_ptr(s, ea), &v, 8);
 }

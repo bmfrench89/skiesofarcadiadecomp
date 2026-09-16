@@ -62,6 +62,22 @@ static void* g_main_fiber;
 static CpuState* g_s;
 static uint64_t g_saves, g_resumes, g_switches;
 
+/* Return addresses up a guest stack: EABI keeps the back chain at 0(r1)
+ * and each frame's saved LR at 4(caller r1). Prints on one line. */
+void guest_backtrace(CpuState* s, uint32_t sp)
+{
+    uint32_t depth;
+    for (depth = 0; depth < 14 && sp >= 0x80000000u && sp < 0x81800000u; depth++) {
+        uint32_t prev = mem_r32(s, sp);
+        uint32_t ret;
+        if (prev <= sp || prev >= 0x81800000u) break;
+        ret = mem_r32(s, prev + 4);
+        fprintf(stderr, " %08X", ret);
+        sp = prev;
+    }
+    fprintf(stderr, "\n");
+}
+
 void threads_report(void)
 {
     int i, n = 0;
@@ -74,20 +90,12 @@ void threads_report(void)
      * the back chain at 0(r1) and the saved LR at 4(caller r1). */
     for (i = 0; i < MAX_THREADS; i++) {
         GuestThread* t = &g_threads[i];
-        uint32_t sp, depth;
+        uint32_t sp;
         if (!t->ctx || !g_s) continue;
         sp = t->saved.gpr[1];
         fprintf(stderr, "  thread ctx %08X parked at lr %08X, r1 %08X; backtrace:", t->ctx,
                 t->saved.lr, sp);
-        for (depth = 0; depth < 14 && sp >= 0x80000000u && sp < 0x81800000u; depth++) {
-            uint32_t prev = mem_r32(g_s, sp);
-            uint32_t ret;
-            if (prev <= sp || prev >= 0x81800000u) break;
-            ret = mem_r32(g_s, prev + 4);
-            fprintf(stderr, " %08X", ret);
-            sp = prev;
-        }
-        fprintf(stderr, "\n");
+        guest_backtrace(g_s, sp);
     }
 }
 
@@ -280,6 +288,11 @@ void fn_802335C4(CpuState* s)
         g_switches++;
         SwitchToFiber(t->fiber);
         resume_self(); /* we were switched back: go to our own savepoint */
+    }
+    if (!ctx || mem_r32(s, ctx + CTX_SRR0) == 0) {
+        fprintf(stderr, "[threads] OSLoadContext(%08X) from lr %08X with no entry; backtrace:", ctx, s->lr);
+        guest_backtrace(s, s->gpr[1]);
+        exit(6);
     }
     if (!t) t = alloc(ctx);
     t->started = 1;

@@ -15,6 +15,7 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -38,6 +39,19 @@ unsigned gx_pe_irq_pending(void);
 void gx_report(void);
 #define IRQ_PI_PE_TOKEN 18
 #define IRQ_PI_PE_FINISH 19
+int aram_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
+int aram_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+int aram_irq_pending(void);
+void aram_report(void);
+#define IRQ_DSP_ARAM 6
+int dsp_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
+int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+int dsp_irq_pending(void);
+int ai_dma_irq_pending(void);
+void dsp_poll(CpuState* s);
+void dsp_report(void);
+#define IRQ_DSP_AI 5
+#define IRQ_DSP_DSP 7
 
 #define TB_HZ 40500000ull
 #define VI_PERIOD_TICKS (TB_HZ / 60)
@@ -58,6 +72,35 @@ static uint16_t g_vi_di[4]; /* DI0..DI3 as written, without the status bit */
  * OSGetResetButtonState the button is being held. */
 static uint32_t g_pi_mask, g_pi_cause;
 #define PI_RSWST_RELEASED 0x10000u
+
+/* AI: the audio interface. Its sample counter runs at 48 kHz off the timebase
+ * (40.5 MHz / 843.75 = 16/13500); the SDK spins on it advancing to sync to
+ * the audio clock. AICR: PSTAT, AFR, AIINTMSK, AIINT (w1c), AIINTVLD, SCRESET (pulse), DSPFR. */
+static uint32_t g_ai_cr, g_ai_vr, g_ai_it;
+static uint64_t g_ai_scnt_base;
+static uint64_t tb_now(CpuState* s);
+static uint32_t ai_read(CpuState* s, uint32_t ea)
+{
+    switch (ea - 0xCC006C00u) {
+    case 0: return g_ai_cr;
+    case 4: return g_ai_vr;
+    case 8: return (uint32_t)((tb_now(s) - g_ai_scnt_base) * 16u / 13500u);
+    case 12: return g_ai_it;
+    default: return 0;
+    }
+}
+static void ai_write(CpuState* s, uint32_t ea, uint32_t v)
+{
+    switch (ea - 0xCC006C00u) {
+    case 0:
+        if (v & 0x20u) g_ai_scnt_base = tb_now(s);
+        g_ai_cr = (g_ai_cr & 0x8u & ~(v & 0x8u)) | (v & ~0x28u);
+        break;
+    case 4: g_ai_vr = v; break;
+    case 12: g_ai_it = v; break;
+    default: break;
+    }
+}
 static int g_vi_pending;
 static uint64_t g_vi_last;
 static uint64_t g_vi_count;
@@ -71,6 +114,9 @@ int device_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     }
     if (size == 4 && ea == 0xCC003000u) { *out = g_pi_cause | PI_RSWST_RELEASED; return 1; }
     if (size == 4 && ea == 0xCC003004u) { *out = g_pi_mask; return 1; }
+    if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { *out = ai_read(s, ea); return 1; }
+    if (dsp_read(s, ea, size, out)) return 1;
+    if (aram_read(s, ea, size, out)) return 1;
     if (gx_read(s, ea, size, out)) return 1;
     return di_read(s, ea, size, out);
 }
@@ -85,6 +131,9 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     }
     if (size == 4 && ea == 0xCC003000u) { g_pi_cause &= ~(uint32_t)v; return; } /* write-one-to-clear */
     if (size == 4 && ea == 0xCC003004u) { g_pi_mask = (uint32_t)v; return; }
+    if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { ai_write(s, ea, (uint32_t)v); return; }
+    if (dsp_write(s, ea, size, v)) return;
+    if (aram_write(s, ea, size, v)) return;
     if (gx_write(s, ea, size, v)) return;
     di_write(s, ea, size, v);
 }
@@ -94,7 +143,7 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 static uint32_t g_dec_value;
 static uint64_t g_dec_set;
 static int g_dec_armed;
-static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count;
+static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count;
 
 void dec_write(CpuState* s, uint32_t v)
 {
@@ -119,6 +168,7 @@ uint32_t dec_read(CpuState* s)
 static jmp_buf g_irq_jmp;
 static uint32_t g_irq_ctx;
 static int g_in_handler;
+static uint64_t g_delivered; /* handlers run, for the poll to notice */
 
 uint32_t irq_interrupted_context(void)
 {
@@ -149,22 +199,56 @@ static uint32_t exception_handler(CpuState* s, uint32_t exc)
     return mem_r32(s, table + 4 * exc);
 }
 
+/* Run a handler as the exception path would: MSR[EE] clear on entry and the
+ * interrupted MSR back on return, whether the handler returns or "rfi"s by
+ * loading the interrupted context. Callbacks rely on that -- the audio
+ * driver's frame callback enables interrupts for its work and disables them
+ * again before returning to the handler. */
+typedef struct {
+    uint32_t gpr[32];
+    Fpr fpr[32];
+    uint32_t cr, xer, lr, ctr, fpscr, msr, pc;
+    uint32_t gqr[8];
+} RegisterFile;
+
+static void regs_save(const CpuState* s, RegisterFile* r)
+{
+    memcpy(r->gpr, s->gpr, sizeof r->gpr);
+    memcpy(r->fpr, s->fpr, sizeof r->fpr);
+    memcpy(r->gqr, s->gqr, sizeof r->gqr);
+    r->cr = s->cr; r->xer = s->xer; r->lr = s->lr; r->ctr = s->ctr;
+    r->fpscr = s->fpscr; r->msr = s->msr; r->pc = s->pc;
+}
+
+static void regs_restore(CpuState* s, const RegisterFile* r)
+{
+    memcpy(s->gpr, r->gpr, sizeof r->gpr);
+    memcpy(s->fpr, r->fpr, sizeof r->fpr);
+    memcpy(s->gqr, r->gqr, sizeof r->gqr);
+    s->cr = r->cr; s->xer = r->xer; s->lr = r->lr; s->ctr = r->ctr;
+    s->fpscr = r->fpscr; s->msr = r->msr; s->pc = r->pc;
+}
+
+/* Run a handler as the exception path would: every register comes back as
+ * it was -- the interrupted code is mid-flight with live values in volatile
+ * registers, which the handler is free to use -- and MSR[EE] is clear while
+ * it runs, whether it returns or "rfi"s by loading the interrupted context.
+ * Callbacks rely on that too: the audio driver's frame callback enables
+ * interrupts for its work and disables them again before returning. */
 static void call_guest_handler(CpuState* s, uint32_t handler, uint32_t number)
 {
-    uint32_t lr = s->lr, ctr = s->ctr, cr = s->cr;
-    uint32_t r3 = s->gpr[3], r4 = s->gpr[4];
+    RegisterFile saved;
+    regs_save(s, &saved);
     s->gpr[3] = number;
     s->gpr[4] = mem_r32(s, OS_CURRENT_CONTEXT);
+    s->msr &= ~0x8000u;
     g_irq_ctx = s->gpr[4];
     g_in_handler++;
+    g_delivered++;
     if (setjmp(g_irq_jmp) == 0) dispatch(s, handler);
     g_in_handler--;
     g_irq_ctx = 0;
-    s->lr = lr;
-    s->ctr = ctr;
-    s->cr = cr;
-    s->gpr[3] = r3;
-    s->gpr[4] = r4;
+    regs_restore(s, &saved);
 }
 
 static uint32_t interrupt_handler(CpuState* s, uint32_t irq)
@@ -216,6 +300,23 @@ static void deliver_pending(CpuState* s)
         }
     }
 
+    /* DSP: a mail from the microcode; AI: a DMA block finished playing. */
+    dsp_poll(s);
+    if (dsp_irq_pending()) {
+        handler = interrupt_handler(s, IRQ_DSP_DSP);
+        if (handler) { g_dsp_count++; call_guest_handler(s, handler, IRQ_DSP_DSP); }
+    }
+    if (ai_dma_irq_pending()) {
+        handler = interrupt_handler(s, IRQ_DSP_AI);
+        if (handler) { g_aid_count++; call_guest_handler(s, handler, IRQ_DSP_AI); }
+    }
+
+    /* ARAM: a finished DMA the ARQ handler has not acknowledged. */
+    if (aram_irq_pending()) {
+        handler = interrupt_handler(s, IRQ_DSP_ARAM);
+        if (handler) { g_ar_count++; call_guest_handler(s, handler, IRQ_DSP_ARAM); }
+    }
+
     /* DVD: a finished transfer whose interrupt the handler has not acknowledged. */
     if (di_irq_pending()) {
         handler = interrupt_handler(s, IRQ_PI_DI);
@@ -225,8 +326,8 @@ static void deliver_pending(CpuState* s)
         }
     }
 
-    /* VI retrace at 60 Hz when paced; otherwise as fast as the guest idles. */
-    if (!g_pace || now - g_vi_last >= VI_PERIOD_TICKS) {
+    /* VI retrace at 60 Hz of guest time. */
+    if (now - g_vi_last >= VI_PERIOD_TICKS) {
         handler = interrupt_handler(s, IRQ_PI_VI);
         if (handler) {
             g_vi_last = now;
@@ -247,6 +348,32 @@ void hook_80237BA8(CpuState* s)
     deliver_pending(s);
 }
 
+/* Every backward branch in recompiled code lands here (emit.py). A thread
+ * spinning on a flag with interrupts enabled gets its interrupts, and if a
+ * handler woke a thread the scheduler runs, as __OSDispatchInterrupt would
+ * have made it after the handler returned. Rate-limited: the devices are
+ * clocked by the timebase, which is not worth reading on every iteration. */
+#define OS_RESCHEDULE 0x80237C84u
+void irq_poll(CpuState* s)
+{
+    static unsigned n;
+    uint64_t before;
+    if (!(s->msr & 0x8000u) || g_in_handler) return; /* MSR[EE] clear, or nested */
+    if (++n & 0xFu) return;
+    before = g_delivered;
+    deliver_pending(s);
+    if (g_delivered != before) {
+        /* The scheduler is guest code too: it clobbers volatile registers
+         * the interrupted loop is still using. */
+        RegisterFile saved;
+        regs_save(s, &saved);
+        s->msr &= ~0x8000u; /* SelectThread expects interrupts disabled */
+        s->lr = 0;
+        dispatch(s, OS_RESCHEDULE);
+        regs_restore(s, &saved);
+    }
+}
+
 void irq_report(void)
 {
     fprintf(stderr,
@@ -257,4 +384,9 @@ void irq_report(void)
             (unsigned long long)g_dec_count);
     dvd_report();
     gx_report();
+    aram_report();
+    dsp_report();
+    fprintf(stderr, "[irq] %llu DSP mails, %llu AI DMA blocks, %llu ARAM DMAs delivered\n",
+            (unsigned long long)g_dsp_count, (unsigned long long)g_aid_count,
+            (unsigned long long)g_ar_count);
 }

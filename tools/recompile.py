@@ -59,12 +59,13 @@ def main() -> int:
     hle = load_hle(args.config / "hle.txt")
     hooks = load_hle(args.config / "hooks.txt")
     savepoints = load_hle(args.config / "savepoints.txt")
+    traces = load_hle(args.config / "trace.txt")
     if hle or hooks or savepoints:
         print(
             f"{len(hle)} functions bound to HLE, {len(hooks)} runtime hooks, "
             f"{len(savepoints)} savepoints"
         )
-    em = Emitter(dol, functions, tables, code, names, hle, hooks, savepoints)
+    em = Emitter(dol, functions, tables, code, names, hle, hooks, savepoints, traces)
     entries = sorted(functions)
     if args.limit:
         entries = entries[: args.limit]
