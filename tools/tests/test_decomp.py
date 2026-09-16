@@ -7,14 +7,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-spec = importlib.util.spec_from_file_location("recompile", Path(__file__).resolve().parents[1] / "recompile.py")
+spec = importlib.util.spec_from_file_location(
+    "recompile", Path(__file__).resolve().parents[1] / "recompile.py"
+)
 recompile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recompile)
 
 
 def test_native_units_and_their_renames(tmp_path):
     (tmp_path / "a.c").write_text(
-        "#include \"types.h\"\n"
+        '#include "types.h"\n'
         "size_t strlen(const char* str)\n{\n    return 0;\n}\n\n"
         "char* strchr(const char* str, int chr)\n{\n    return 0;\n}\n\n"
         "static int helper(void)\n{\n    return 1;\n}\n"
@@ -24,9 +26,7 @@ def test_native_units_and_their_renames(tmp_path):
     (tmp_path / "b.c").write_text("int game_only(void)\n{\n    return 2;\n}\n", encoding="utf-8")
     units = tmp_path / "units.txt"
     units.write_text(
-        "# comment\n"
-        f"{tmp_path / 'a.c'}\t1.3.2\t-O4,p\tnative\n"
-        f"{tmp_path / 'b.c'}\t1.3.2\t-O4,p\n",
+        f"# comment\n{tmp_path / 'a.c'}\t1.3.2\t-O4,p\tnative\n{tmp_path / 'b.c'}\t1.3.2\t-O4,p\n",
         encoding="utf-8",
     )
     files, defines = recompile.native_decomp_sources(units)

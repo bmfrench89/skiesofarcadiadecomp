@@ -26,12 +26,27 @@ def read_elf(data: bytes):
     """Sections, symbols and relocations of a big-endian ELF32 relocatable."""
     if data[:4] != b"\x7fELF" or data[4] != 1 or data[5] != 2:
         raise ValueError("not a big-endian ELF32 object")
-    shoff, shentsize, shnum, shstrndx = struct.unpack(">I", data[0x20:0x24])[0], *struct.unpack(">HHH", data[0x2E:0x34])
+    shoff, shentsize, shnum, shstrndx = (
+        struct.unpack(">I", data[0x20:0x24])[0],
+        *struct.unpack(">HHH", data[0x2E:0x34]),
+    )
     sections = []
     for i in range(shnum):
         o = shoff + i * shentsize
-        name, typ, flags, addr, off, size, link, info, align, entsize = struct.unpack(">IIIIIIIIII", data[o : o + 40])
-        sections.append({"name": name, "type": typ, "off": off, "size": size, "link": link, "info": info, "entsize": entsize})
+        name, typ, flags, addr, off, size, link, info, align, entsize = struct.unpack(
+            ">IIIIIIIIII", data[o : o + 40]
+        )
+        sections.append(
+            {
+                "name": name,
+                "type": typ,
+                "off": off,
+                "size": size,
+                "link": link,
+                "info": info,
+                "entsize": entsize,
+            }
+        )
     strtab = sections[shstrndx]
     for s in sections:
         s["name"] = data[strtab["off"] + s["name"] :].split(b"\0", 1)[0].decode()
@@ -44,7 +59,9 @@ def read_elf(data: bytes):
                 o = s["off"] + j * 16
                 n, value, size, info, other, shndx = struct.unpack(">IIIBBH", data[o : o + 16])
                 nm = data[st["off"] + n :].split(b"\0", 1)[0].decode()
-                symbols.append({"name": nm, "value": value, "size": size, "type": info & 0xF, "shndx": shndx})
+                symbols.append(
+                    {"name": nm, "value": value, "size": size, "type": info & 0xF, "shndx": shndx}
+                )
         elif s["type"] == 4:  # RELA
             table = relocs.setdefault(s["info"], {})
             for j in range(s["size"] // 12):
@@ -55,11 +72,19 @@ def read_elf(data: bytes):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("object", type=Path)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--functions", type=Path, default=Path("config/functions.tsv"))
-    ap.add_argument("--show", type=int, default=0, metavar="N", help="list the first N differing instructions side by side")
+    ap.add_argument(
+        "--show",
+        type=int,
+        default=0,
+        metavar="N",
+        help="list the first N differing instructions side by side",
+    )
     args = ap.parse_args()
 
     dol = D.parse(args.dol.read_bytes())
@@ -91,7 +116,9 @@ def main() -> int:
                 diffs.append(i)
                 continue
             off = sym["value"] + 4 * i
-            if off in rel or off + 2 in rel:  # linker-filled field (half-word ones sit at +2): compare the opcode only
+            if (
+                off in rel or off + 2 in rel
+            ):  # linker-filled field (half-word ones sit at +2): compare the opcode only
                 if a[0] >> 2 == b[0] >> 2:
                     same += 1
                 else:
@@ -102,8 +129,16 @@ def main() -> int:
                 diffs.append(i)
         ok = not diffs and len(ours) == len(theirs)
         failures += not ok
-        where = "" if ok else " at +" + ", +".join(f"{4 * i:X}" for i in diffs[:6]) + (" ..." if len(diffs) > 6 else "")
-        print(f"{sym['name']:24s} {'MATCH' if ok else 'differs'}  {same}/{n} words  (object {len(ours)} bytes, executable {len(theirs)}){where}")
+        where = (
+            ""
+            if ok
+            else " at +"
+            + ", +".join(f"{4 * i:X}" for i in diffs[:6])
+            + (" ..." if len(diffs) > 6 else "")
+        )
+        print(
+            f"{sym['name']:24s} {'MATCH' if ok else 'differs'}  {same}/{n} words  (object {len(ours)} bytes, executable {len(theirs)}){where}"
+        )
         if diffs and args.show:
             from soa.ppc.decode import decode as decode_insn  # noqa: PLC0415 - optional detail
             from soa.ppc.fmt import format_insn  # noqa: PLC0415
@@ -111,8 +146,16 @@ def main() -> int:
             for i in diffs[: args.show]:
                 a = ours[4 * i : 4 * i + 4]
                 b = theirs[4 * i : 4 * i + 4]
-                fa = format_insn(decode_insn(int.from_bytes(a, "big"), addr + 4 * i)) if len(a) == 4 else "(end)"
-                fb = format_insn(decode_insn(int.from_bytes(b, "big"), addr + 4 * i)) if len(b) == 4 else "(end)"
+                fa = (
+                    format_insn(decode_insn(int.from_bytes(a, "big"), addr + 4 * i))
+                    if len(a) == 4
+                    else "(end)"
+                )
+                fb = (
+                    format_insn(decode_insn(int.from_bytes(b, "big"), addr + 4 * i))
+                    if len(b) == 4
+                    else "(end)"
+                )
                 print(f"    +{4 * i:03X}  ours: {fa:32s} theirs: {fb}")
     return 1 if failures else 0
 

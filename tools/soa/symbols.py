@@ -156,7 +156,10 @@ def name_for(
 
 
 def build_inventory(
-    dol, functions: dict, dtk_symbols: list[Symbol] | None = None, names: dict[int, tuple[str, str]] | None = None
+    dol,
+    functions: dict,
+    dtk_symbols: list[Symbol] | None = None,
+    names: dict[int, tuple[str, str]] | None = None,
 ) -> list[dict]:
     """Rows for functions.tsv, one per recovered function."""
     dtk_by_addr = {s.address: s for s in (dtk_symbols or []) if s.kind == "function"}

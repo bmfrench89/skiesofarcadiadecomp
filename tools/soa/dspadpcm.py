@@ -43,11 +43,24 @@ def parse_header(data: bytes) -> DspHeader:
     loop_start, loop_end = struct.unpack(">II", data[16:24])
     coefs = list(struct.unpack(">16h", data[0x1C:0x3C]))
     pred_scale, yn1, yn2 = struct.unpack(">Hhh", data[0x3E:0x44])
-    return DspHeader(num_samples, num_nibbles, rate, loop_flag, fmt, loop_start, loop_end, coefs,
-                     pred_scale, yn1, yn2)
+    return DspHeader(
+        num_samples,
+        num_nibbles,
+        rate,
+        loop_flag,
+        fmt,
+        loop_start,
+        loop_end,
+        coefs,
+        pred_scale,
+        yn1,
+        yn2,
+    )
 
 
-def decode(data: bytes, header: DspHeader | None = None, max_samples: int | None = None) -> list[int]:
+def decode(
+    data: bytes, header: DspHeader | None = None, max_samples: int | None = None
+) -> list[int]:
     """Decode a .dsp file (header + frames) to 16-bit samples."""
     h = header or parse_header(data)
     out: list[int] = []

@@ -28,7 +28,9 @@ def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--units", type=Path, default=Path("config/GEAE8P/units.txt"))
     ap.add_argument("--vendor", type=Path, default=Path("vendor/mwcc/GC"))
     ap.add_argument("--out", type=Path, default=Path("build/src"))
@@ -39,17 +41,26 @@ def main() -> int:
     for src, version, flags in load_units(args.units):
         cc = args.vendor / version / "mwcceppc.exe"
         if not cc.exists():
-            print(f"{src}: compiler GC/{version} missing; run tools/fetch_toolchain.py --versions {version}", file=sys.stderr)
+            print(
+                f"{src}: compiler GC/{version} missing; run tools/fetch_toolchain.py --versions {version}",
+                file=sys.stderr,
+            )
             return 2
         obj = args.out / (src.stem + ".o")
         # -nosyspath stops the compiler looking beside the source for "quoted" headers
-        proc = subprocess.run([str(cc), "-c", *flags, "-i", str(src.parent), str(src), "-o", str(obj)], capture_output=True, text=True)
+        proc = subprocess.run(
+            [str(cc), "-c", *flags, "-i", str(src.parent), str(src), "-o", str(obj)],
+            capture_output=True,
+            text=True,
+        )
         if proc.returncode != 0:
             print(f"{src}: compile failed\n{proc.stdout}{proc.stderr}")
             failures += 1
             continue
         print(f"== {src} (mwcc {version})")
-        check = subprocess.run([sys.executable, "tools/matchcheck.py", str(obj)], capture_output=True, text=True)
+        check = subprocess.run(
+            [sys.executable, "tools/matchcheck.py", str(obj)], capture_output=True, text=True
+        )
         print(check.stdout.rstrip())
         failures += check.returncode != 0
     print("all units match" if not failures else f"{failures} unit(s) differ")

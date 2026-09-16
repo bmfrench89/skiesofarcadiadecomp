@@ -18,7 +18,9 @@ import zipfile
 from pathlib import Path
 
 ARCHIVE = "https://files.decomp.dev/compilers_latest.zip"
-OBJDIFF = "https://github.com/encounter/objdiff/releases/download/v3.8.1/objdiff-cli-windows-x86_64.exe"
+OBJDIFF = (
+    "https://github.com/encounter/objdiff/releases/download/v3.8.1/objdiff-cli-windows-x86_64.exe"
+)
 
 
 def fetch(url: str) -> bytes:
@@ -28,8 +30,12 @@ def fetch(url: str) -> bytes:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--versions", default="1.3.2", help="comma-separated GameCube compiler versions")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--versions", default="1.3.2", help="comma-separated GameCube compiler versions"
+    )
     ap.add_argument("--vendor", type=Path, default=Path("vendor"))
     ap.add_argument("--objdiff", action="store_true", help="also fetch objdiff-cli")
     args = ap.parse_args()

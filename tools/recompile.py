@@ -177,7 +177,10 @@ def main() -> int:
         if dc_files:
             ndir = args.out / "decomp"
             ndir.mkdir(parents=True, exist_ok=True)
-            proc = toolchain.cl([*toolchain.CFLAGS, "/c", "/Iinclude", *dc_defines, f"/Fo{ndir}/", *dc_files], cwd=".")
+            proc = toolchain.cl(
+                [*toolchain.CFLAGS, "/c", "/Iinclude", *dc_defines, f"/Fo{ndir}/", *dc_files],
+                cwd=".",
+            )
             if proc.returncode != 0:
                 print(proc.stdout[-2000:], file=sys.stderr)
                 return 1

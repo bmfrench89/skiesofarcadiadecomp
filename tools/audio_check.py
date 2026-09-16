@@ -61,11 +61,15 @@ def best_offset(hay: np.ndarray, needle: np.ndarray) -> tuple[int, float]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("wav", type=Path)
     ap.add_argument("dsp", type=Path, help="one channel's .dsp (the _L or _R file)")
     ap.add_argument("--seconds", type=float, default=6.0, help="length of the excerpt to match")
-    ap.add_argument("--start", type=float, default=5.0, help="where in the stream the excerpt starts")
+    ap.add_argument(
+        "--start", type=float, default=5.0, help="where in the stream the excerpt starts"
+    )
     args = ap.parse_args()
 
     pcm, rate = read_wav(args.wav)
@@ -83,10 +87,20 @@ def main() -> int:
     hay0 = hay - hay.mean()
 
     off, coef = best_offset(hay0, needle)
-    print(f"stream: {h.sample_rate} Hz, {h.num_samples / h.sample_rate:.1f} s; recording: {rate} Hz, {len(hay) / rate:.1f} s")
-    print(f"best match at {off / rate:.2f} s into the recording (stream time {args.start:.1f} s): correlation {coef:.3f}")
-    print("verdict:", "the stream plays as the disc holds it" if coef > 0.5 else
-          "weak match -- pitch, decode or timing differ" if coef > 0.15 else "no match")
+    print(
+        f"stream: {h.sample_rate} Hz, {h.num_samples / h.sample_rate:.1f} s; recording: {rate} Hz, {len(hay) / rate:.1f} s"
+    )
+    print(
+        f"best match at {off / rate:.2f} s into the recording (stream time {args.start:.1f} s): correlation {coef:.3f}"
+    )
+    print(
+        "verdict:",
+        "the stream plays as the disc holds it"
+        if coef > 0.5
+        else "weak match -- pitch, decode or timing differ"
+        if coef > 0.15
+        else "no match",
+    )
     return 0 if coef > 0.5 else 1
 
 
