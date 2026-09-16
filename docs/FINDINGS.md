@@ -476,3 +476,25 @@ character on deck is flat blue (a lighting or material-source detail),
 there is no fog (BP 0xEE-0xF2 are set but ignored) and no mipmapping.
 Input scripting had to move from retrace numbers to the game's own frame
 count: the intro's timing is wall-clock while frames are not.
+
+
+## 10. ▲ Audio and the rest of the hardware
+
+- The AX microcode this game ships (hash `0x4E8A8B21`) encodes a voice's
+  mixer control differently from the later builds the SDK headers
+  describe: L and R are always mixed; bit 0 adds aux A, bit 1 aux B, bit 2
+  surround, bit 3 enables the ramps. With the later encoding every voice
+  mixed into nothing and the game was silent while reporting thousands of
+  running voices.
+- The buffers the microcode exchanges with the CPU (aux upload and
+  download, LRS upload, set-LR, download-and-mix) are 32-bit samples,
+  three channels of 160; only the final output to the AI DMA buffer is
+  16-bit, right sample first.
+- Sega's driver runs its own effects pass on the CPU each frame: the main
+  bus is uploaded, and the next frame's list replaces the main bus with
+  the processed result (`SET_OPPOSITE_LR`) and adds the rest
+  (`MIX_AUXB_NOWRITE`) before output. A mixer that skips those two
+  commands still produces sound, but not the game's mix.
+- The memory card is reported unlocked from the start, so the SDK never
+  runs its DSP unlock microcode; a blank 59-block image is enough for
+  the game to offer formatting.

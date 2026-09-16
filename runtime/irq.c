@@ -58,6 +58,13 @@ int si_irq_pending(void);
 void si_poll(void);
 void si_report(void);
 #define IRQ_PI_SI 20
+int exi_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
+int exi_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+unsigned exi_irq_pending(void);
+void exi_report(void);
+#define IRQ_EXI_0_TC 10
+#define IRQ_EXI_1_TC 13
+#define IRQ_EXI_2_TC 16
 
 #define TB_HZ 40500000ull
 #define VI_PERIOD_TICKS (TB_HZ / 60)
@@ -121,6 +128,7 @@ int device_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     if (size == 4 && ea == 0xCC003000u) { *out = g_pi_cause | PI_RSWST_RELEASED; return 1; }
     if (size == 4 && ea == 0xCC003004u) { *out = g_pi_mask; return 1; }
     if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { *out = ai_read(s, ea); return 1; }
+    if (exi_read(s, ea, size, out)) return 1;
     if (si_read(s, ea, size, out)) return 1;
     if (dsp_read(s, ea, size, out)) return 1;
     if (aram_read(s, ea, size, out)) return 1;
@@ -139,6 +147,7 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     if (size == 4 && ea == 0xCC003000u) { g_pi_cause &= ~(uint32_t)v; return; } /* write-one-to-clear */
     if (size == 4 && ea == 0xCC003004u) { g_pi_mask = (uint32_t)v; return; }
     if (size == 4 && ea >= 0xCC006C00u && ea < 0xCC006C10u) { ai_write(s, ea, (uint32_t)v); return; }
+    if (exi_write(s, ea, size, v)) return;
     if (si_write(s, ea, size, v)) return;
     if (dsp_write(s, ea, size, v)) return;
     if (aram_write(s, ea, size, v)) return;
@@ -151,7 +160,7 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 static uint32_t g_dec_value;
 static uint64_t g_dec_set;
 static int g_dec_armed;
-static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count, g_si_count;
+static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count, g_si_count, g_exi_count;
 
 void dec_write(CpuState* s, uint32_t v)
 {
@@ -346,6 +355,18 @@ static void deliver_pending(CpuState* s)
         }
     }
 
+    /* EXI: a completed transfer on a channel whose interrupt is enabled. */
+    {
+        unsigned bits = exi_irq_pending();
+        static const unsigned irqs[3] = {IRQ_EXI_0_TC, IRQ_EXI_1_TC, IRQ_EXI_2_TC};
+        unsigned ch;
+        for (ch = 0; ch < 3; ch++) {
+            if (!((bits >> ch) & 1)) continue;
+            handler = interrupt_handler(s, irqs[ch]);
+            if (handler) { g_exi_count++; call_guest_handler(s, handler, irqs[ch]); }
+        }
+    }
+
     /* SI: a direct transfer completed, or polled data is waiting. */
     if (si_irq_pending()) {
         handler = interrupt_handler(s, IRQ_PI_SI);
@@ -402,6 +423,7 @@ void irq_report(void)
     aram_report();
     dsp_report();
     si_report();
+    exi_report();
     fprintf(stderr, "[irq] %llu SI interrupts delivered\n", (unsigned long long)g_si_count);
     fprintf(stderr, "[irq] %llu DSP mails, %llu AI DMA blocks, %llu ARAM DMAs delivered\n",
             (unsigned long long)g_dsp_count, (unsigned long long)g_aid_count,

@@ -10,9 +10,10 @@
  * the 8-byte reply in INBUFH/INBUFL with RDST set in SISR, optionally
  * interrupting. PADRead reads INBUF; reading INBUFL clears RDST.
  *
- * Input comes from a script for now (SOA_PAD="frame:buttons,..." -- e.g.
- * "1700:start,1800:a" holds START from the game's frame 1700 and A from
- * 1800, each for 10 frames), later from a window and real gamepads.
+ * Input comes from the window when there is one, else from a script
+ * (SOA_PAD="frame:buttons,..." -- e.g. "1700:start,1800:a+sup" holds
+ * START from the game's frame 1700, and A with the stick up from 1800,
+ * each for 10 frames; sup/sdown/sleft/sright move the stick).
  *
  *   0xCC006400 + 12*ch  SICnOUTBUF   0xCC006404 + 12*ch  SICnINBUFH   +8 INBUFL
  *   0xCC006430  SIPOLL      0xCC006434  SICOMCSR    0xCC006438  SISR
@@ -53,7 +54,7 @@ static int g_present[4] = {1, 0, 0, 0};
 
 /* ---- scripted controller ------------------------------------------------ */
 
-typedef struct { unsigned frame; uint16_t buttons; } PadEvent;
+typedef struct { unsigned frame; uint16_t buttons; uint8_t stick[2]; } PadEvent;
 static PadEvent g_script[64];
 static int g_script_n = -1;
 #define HOLD_FRAMES 10
@@ -80,14 +81,24 @@ static void script_init(void)
         uint16_t buttons = 0;
         if (end == p || *end != ':') break;
         p = end + 1;
+        uint8_t stick[2] = {128, 128};
         while (*p && *p != ',') {
             const char* q = p;
+            size_t len;
             while (*q && *q != ',' && *q != '+') q++;
-            buttons |= button_named(p, (size_t)(q - p));
+            len = (size_t)(q - p);
+            /* sup/sdown/sleft/sright move the main stick; everything else is a button */
+            if (len == 3 && strncmp(p, "sup", 3) == 0) stick[1] = 255;
+            else if (len == 5 && strncmp(p, "sdown", 5) == 0) stick[1] = 0;
+            else if (len == 5 && strncmp(p, "sleft", 5) == 0) stick[0] = 0;
+            else if (len == 6 && strncmp(p, "sright", 6) == 0) stick[0] = 255;
+            else buttons |= button_named(p, len);
             p = *q == '+' ? q + 1 : q;
         }
         g_script[g_script_n].frame = frame;
         g_script[g_script_n].buttons = buttons;
+        g_script[g_script_n].stick[0] = stick[0];
+        g_script[g_script_n].stick[1] = stick[1];
         g_script_n++;
         if (*p == ',') p++;
     }
@@ -98,15 +109,20 @@ uint64_t irq_retrace_count(void);
 
 unsigned gx_frame_count(void);
 
-static uint16_t buttons_now(void)
+static uint16_t buttons_now(uint8_t stick[2])
 {
     static uint16_t last;
     uint64_t frame = gx_frame_count(); /* the game's frames, not fields: deterministic against its logic */
     uint16_t b = 0;
     int i;
+    stick[0] = stick[1] = 128;
     if (g_script_n < 0) script_init();
     for (i = 0; i < g_script_n; i++)
-        if (frame >= g_script[i].frame && frame < g_script[i].frame + HOLD_FRAMES) b |= g_script[i].buttons;
+        if (frame >= g_script[i].frame && frame < g_script[i].frame + HOLD_FRAMES) {
+            b |= g_script[i].buttons;
+            if (g_script[i].stick[0] != 128) stick[0] = g_script[i].stick[0];
+            if (g_script[i].stick[1] != 128) stick[1] = g_script[i].stick[1];
+        }
     if (b != last) {
         fprintf(stderr, "[si] frame %llu (retrace %llu): buttons %04X\n", (unsigned long long)frame, (unsigned long long)irq_retrace_count(), b);
         last = b;
@@ -122,7 +138,7 @@ static void pad_report(uint8_t out[8])
 {
     uint16_t b;
     uint8_t stick[2] = {128, 128}, cstick[2] = {128, 128}, trig[2] = {0, 0};
-    if (!window_pad(&b, stick, cstick, trig)) b = buttons_now();
+    if (!window_pad(&b, stick, cstick, trig)) b = buttons_now(stick);
     out[0] = (uint8_t)((b >> 8) & 0x1F);           /* 0 0 1? S Y X B A -- bit 5 (use origin) clear */
     out[1] = (uint8_t)(0x80 | (b & 0x7F));         /* 1 L R Z U D R L */
     out[2] = stick[0]; out[3] = stick[1];          /* main stick */

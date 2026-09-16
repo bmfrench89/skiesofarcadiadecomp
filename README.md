@@ -48,6 +48,9 @@ gen\soa.exe extracted
 `extract.py` unpacks the disc into `extracted/` (gitignored, never committed).
 `recompile.py` translates the whole executable to C into `gen/` (also
 gitignored), compiles it with MSVC and links the runtime into `gen/soa.exe`.
+The default compiles the translated code without optimisation (fast to
+build, fine for testing); add `--optimize` for a release build of it, which
+takes longer but runs the game faster.
 The function inventory it uses is in `config/` and is the only thing derived
 from the game that the repository carries: addresses, sizes and names.
 

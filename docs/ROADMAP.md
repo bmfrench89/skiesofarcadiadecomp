@@ -117,7 +117,7 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **4.4** DVD | M | **Done at the DI register level** (`runtime/dvd.c` reads `extracted/disc.iso`); the SDK's DVD stack runs recompiled. Arena-hi must sit at the FST, as the apploader leaves it.  `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
 | `[x]` | **4.5** VI + retrace | M | **Done**: DI0 status bit, 60 Hz of guest timebase, `VIWaitForRetrace` sleeps and wakes the main thread every frame.  **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
 | `[x]` | **4.6** PAD input | S | **Done**: SI model (`runtime/si.c`), keyboard and XInput gamepad through the window (`runtime/window.c`), and a scripted controller (`SOA_PAD=frame:buttons,...`) for headless runs.  SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
-| `[ ]` | **4.7** CARD saves | M | Memory-card emulation. **Acceptance includes importing a save from a real card or Dolphin** — users judge the port on this |
+| `[~]` | **4.7** CARD saves | M | **EXI bus and a slot-A memory card modelled** (`runtime/exi.c`: a 59-block image at `build/cards/slotA.raw` the game formats itself, reported unlocked so the DSP unlock microcode is never needed; RTC and a valid SRAM too). Not yet exercised by a save. Importing a save from a real card or Dolphin is still the acceptance test |
 
 ---
 
