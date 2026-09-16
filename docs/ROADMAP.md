@@ -73,10 +73,10 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[x]` | **2.1** Run `dtk dol split` | S | **Done** with slice 8.1: 254 SDK names, the 11-section split, `config/GEAE8P/` |
-| `[ ]` | **2.2** Harvest self-naming strings | S | ~87 names from diagnostic strings. Yields ~8 *SDK* names — useful, but v1 badly over-estimated this vector |
+| `[x]` | **2.2** Harvest self-naming strings | S | **Done:** 61 functions named from diagnostic strings that name their own routine (`config/names.txt`, merged by `tools/inventory.py`): the script VM's handlers (`scpt*`), the async loader (`akFioReadASync`), effects, `DVDReadAsync` |
 | `[ ]` | **2.3** Build one donor SDK | M | `mariopartyrd/marioparty4` — the only confirmed `0x2301` banner match. ~+89 names. **Do not budget for building all four repos**; a second donor adds ~8 |
 | `[ ]` | **2.4** Signature match + triage | M | Ranked report, manual confirmation, false-positive check (size agreement is not verification). Populate `config/symbols.toml` |
-| `[ ]` | **2.5** Delimit the replacement set | S | The contiguous SDK block `0x802319E0`–`0x80266770` marked as HLE candidates |
+| `[x]` | **2.5** Delimit the replacement set | S | **Done:** the SDK block `0x802319E0`–`0x80266854` is split per library in `config/GEAE8P/splits.txt` (`sdk/*`), the middleware library `0x80266854`–`0x802AC7DC` as `lib/middleware.c`; the HLE bindings in `config/hle.txt` name what the runtime replaces |
 
 **Exit / M2:** we know which code to throw away.
 

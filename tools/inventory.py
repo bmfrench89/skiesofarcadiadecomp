@@ -29,6 +29,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--dtk", type=Path, default=None, help="dtk symbols.txt to take names from")
+    ap.add_argument("--names", type=Path, default=Path("config/names.txt"), help="hand/string-recovered names")
     ap.add_argument("--out", type=Path, default=Path("config"))
     args = ap.parse_args()
 
@@ -49,7 +50,11 @@ def main() -> int:
     if dtk_syms:
         print(f"dtk symbols: {len(dtk_syms):,} loaded from {args.dtk}")
 
-    rows = S.build_inventory(dol, functions, dtk_syms)
+    names = S.load_names(args.names)
+    if names:
+        print(f"recovered names: {len(names):,} loaded from {args.names}")
+
+    rows = S.build_inventory(dol, functions, dtk_syms, names)
     named = sum(1 for r in rows if r["source"] != "auto")
     print(f"named functions: {named:,} of {len(rows):,}")
 

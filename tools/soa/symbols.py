@@ -112,21 +112,44 @@ TSV_COLUMNS = (
 )
 
 
-def name_for(address: int, dtk_by_addr: dict[int, Symbol]) -> tuple[str, str]:
+def load_names(path: Path) -> dict[int, tuple[str, str]]:
+    """config/names.txt: ``address<TAB>name<TAB>evidence`` -> {address: (name, evidence)}.
+
+    Names recovered by hand or from the binary's own diagnostic strings; they
+    fill in where the SDK signature database has nothing.
+    """
+    out: dict[int, tuple[str, str]] = {}
+    if not Path(path).exists():
+        return out
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        addr, name, evidence = (line.split("\t") + ["", ""])[:3]
+        out[int(addr, 16)] = (name.strip(), evidence.strip() or "names")
+    return out
+
+
+def name_for(
+    address: int, dtk_by_addr: dict[int, Symbol], names: dict[int, tuple[str, str]] | None = None
+) -> tuple[str, str]:
     """Best display name for a function and where it came from."""
     sym = dtk_by_addr.get(address)
     if sym is not None and sym.kind == "function" and not sym.is_placeholder:
         return sym.name, "dtk"
+    if names and address in names:
+        return names[address][0], "string"
     return f"fn_{address:08X}", "auto"
 
 
-def build_inventory(dol, functions: dict, dtk_symbols: list[Symbol] | None = None) -> list[dict]:
+def build_inventory(
+    dol, functions: dict, dtk_symbols: list[Symbol] | None = None, names: dict[int, tuple[str, str]] | None = None
+) -> list[dict]:
     """Rows for functions.tsv, one per recovered function."""
     dtk_by_addr = {s.address: s for s in (dtk_symbols or []) if s.kind == "function"}
     rows = []
     for entry in sorted(functions):
         fn = functions[entry]
-        name, source = name_for(entry, dtk_by_addr)
+        name, source = name_for(entry, dtk_by_addr, names)
         rows.append(
             {
                 "address": entry,
