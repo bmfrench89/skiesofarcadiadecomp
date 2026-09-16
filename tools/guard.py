@@ -58,6 +58,7 @@ FORBIDDEN_DIRS = {
     "gen",
     "build",
     "dist",
+    "scratch",
 }
 
 # A tracked text file this large is almost certainly not source.

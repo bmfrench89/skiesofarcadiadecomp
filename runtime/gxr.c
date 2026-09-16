@@ -63,7 +63,7 @@ int gxr_enabled(void)
         g_enabled = env && atoi(env) ? 1 : 0;
         g_frames_every = every ? (unsigned)atoi(every) : 0;
         g_cull_flip = getenv("SOA_CULLFLIP") ? 1 : 0;
-        g_debug = getenv("SOA_GXR_DEBUG") ? 1 : 0;
+        g_debug = getenv("SOA_GXR_DEBUG") ? atoi(getenv("SOA_GXR_DEBUG")) : 0;
         g_debug_lights = getenv("SOA_GXR_LIGHTS") ? atoi(getenv("SOA_GXR_LIGHTS")) : 0;
         g_draw_limit = getenv("SOA_GXR_DRAWS") ? (unsigned)atoi(getenv("SOA_GXR_DRAWS")) : 0;
     }
@@ -700,7 +700,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
     if ((cull == 1 && area < 0.0f) || (cull == 2 && area > 0.0f) || cull == 3) return; /* back = negative here */
     if (g_cull_flip) area = -area;
 
-    if (g_debug && t_tid <= 1 && g_tris <= 8)
+    if (g_debug && t_tid <= 1 && (g_tris <= 8 || (g_debug > 1 && g_draw_no >= (unsigned)g_debug))) /* SOA_GXR_DEBUG=N: also every triangle from draw N on */
         fprintf(stderr, "[gxr] tri (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) area %.1f scissor %d,%d-%d,%d\n",
                 a->sx, a->sy, a->depth, b->sx, b->sy, b->depth, c->sx, c->sy, c->depth, area, sc->x0, sc->y0, sc->x1, sc->y1);
     minx = (int)floorf(fminf(a->sx, fminf(b->sx, c->sx)));
@@ -1062,7 +1062,8 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     DrawCmd* D;
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
-    if (g_draw_limit && ++g_draw_no > g_draw_limit) return; /* SOA_GXR_DRAWS=N: stop after N draws */
+    ++g_draw_no;
+    if (g_draw_limit && g_draw_no > g_draw_limit) return; /* SOA_GXR_DRAWS=N: stop after N draws */
     /* Headless snapshots (SOA_FRAMES=N): only the frames being written are
      * worth rasterizing; the game then runs at full speed between them. */
     if (g_frames_every && !g_png_path[0] && (g_frame_no % g_frames_every) != 0) return;

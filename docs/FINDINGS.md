@@ -544,9 +544,19 @@ run of 55,000 frames at three times real time ended only at its
 watchdog. The last unresolved indirect branches (four switches whose
 bound check is a `bgtlr`) were found the hard way -- the first field
 loader dispatches through one -- and are now resolved statically like
-the other 292. Not yet verified: the battle's top message window
-renders empty while attack animations play; names, numbers and gauges
-render, so it may simply have had nothing to say.
+the other 292.
+
+**Text.** Dialogue, item names, character names and the battle's action
+window were all blank while stat labels, enemy names and damage numbers
+drew fine. A captured dialogue frame explained it: the game renders each
+glyph from its `AFNT` font into a 24x24 I4 texture in main memory and
+draws it as a quad on texture map 7 read through texture coordinate 0.
+The renderer took the coordinate scale (`SU_SSIZE`/`TSIZE`) from the
+*map's* register pair, which the game never writes, so every glyph was
+sampled at its blank corner texel. Those registers are indexed by
+coordinate: the SDK writes the dimensions of whatever map a stage samples
+into the registers of the coordinate that stage uses. One index change,
+and the Alfonso scene reads "We've finally found her...".
 
 - Giving DVD commands and ARAM DMAs realistic completion times (seek plus
   transfer; a short delay) removed the `memFree Error`s: with instant

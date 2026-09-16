@@ -487,8 +487,12 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         C->w = (int)w; C->h = (int)h;
         C->wrap_s = mode0 & 3; C->wrap_t = (mode0 >> 2) & 3;
         C->linear = (mode0 >> 4) & 1;
-        C->scale_s = (float)((bp[0x30 + 2 * map] & 0xFFFF) + 1);
-        C->scale_t = (float)((bp[0x31 + 2 * map] & 0xFFFF) + 1);
+        /* SU_SSIZE/TSIZE are indexed by texture *coordinate*, not by map: the SDK
+         * writes the dimensions of the map a stage samples into the registers of
+         * the coordinate that stage uses (a glyph on map 7 read through coord 0
+         * scales by SU0). */
+        C->scale_s = (float)((bp[0x30 + 2 * S->texcoord] & 0xFFFF) + 1);
+        C->scale_t = (float)((bp[0x31 + 2 * S->texcoord] & 0xFFFF) + 1);
     }
 }
 

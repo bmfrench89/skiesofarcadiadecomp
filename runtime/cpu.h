@@ -129,14 +129,21 @@ extern uint32_t g_watch_addr, g_watch_len;
 void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 #define WATCH(ea, size, v)     do { if ((uint32_t)((ea) - g_watch_addr) < g_watch_len) watch_hit(s, (ea), (size), (v)); } while (0)
 
+/* The write-gather pipe takes most of the guest's stores (every vertex component
+ * the game submits); it goes straight to the GX parser, skipping the MMIO bookkeeping. */
+void gx_pipe_write(CpuState* s, unsigned size, uint64_t v);
+static inline int is_gather_pipe(uint32_t ea) { return (ea & 0xFFFFFF00u) == 0xCC008000u; }
+
 static inline void mem_w8(CpuState* s, uint32_t ea, uint8_t v)
 {
+    if (is_gather_pipe(ea)) { gx_pipe_write(s, 1, v); return; }
     if (is_mmio(ea)) { mmio_write8(s, ea, v); return; }
     WATCH(ea, 1, v);
     *mem_ptr(s, ea) = v;
 }
 static inline void mem_w16(CpuState* s, uint32_t ea, uint16_t v)
 {
+    if (is_gather_pipe(ea)) { gx_pipe_write(s, 2, v); return; }
     if (is_mmio(ea)) { mmio_write16(s, ea, v); return; }
     WATCH(ea, 2, v);
     v = BSWAP16(v);
@@ -144,6 +151,7 @@ static inline void mem_w16(CpuState* s, uint32_t ea, uint16_t v)
 }
 static inline void mem_w32(CpuState* s, uint32_t ea, uint32_t v)
 {
+    if (is_gather_pipe(ea)) { gx_pipe_write(s, 4, v); return; }
     if (is_mmio(ea)) { mmio_write32(s, ea, v); return; }
     WATCH(ea, 4, v);
     v = BSWAP32(v);
@@ -151,6 +159,7 @@ static inline void mem_w32(CpuState* s, uint32_t ea, uint32_t v)
 }
 static inline void mem_w64(CpuState* s, uint32_t ea, uint64_t v)
 {
+    if (is_gather_pipe(ea)) { gx_pipe_write(s, 8, v); return; }
     if (is_mmio(ea)) { mmio_write64(s, ea, v); return; }
     WATCH(ea, 8, v);
     v = BSWAP64(v);

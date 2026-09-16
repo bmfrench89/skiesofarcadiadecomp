@@ -340,6 +340,8 @@ void gx_pipe_write(CpuState* s, unsigned size, uint64_t v)
     pipe_flush(s);
 }
 
+uint64_t gx_pipe_bytes(void) { return g_bytes; }
+
 /* ---- MMIO ------------------------------------------------------------- */
 
 int gx_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)

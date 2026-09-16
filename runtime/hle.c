@@ -20,6 +20,7 @@ static uint64_t g_gp_bytes;
 static uint64_t g_syscalls;
 
 void hle_report(void);
+uint64_t gx_pipe_bytes(void);
 
 /* A poll loop against a register we answer with zero never ends. Instead of
  * timing out, notice it: a long run of reads with no write in between, or
@@ -137,7 +138,7 @@ void hle_report(void)
     }
     fprintf(stderr, "[hle] %llu MMIO accesses over %u registers; %llu bytes to the gather pipe; "
             "%llu syscalls\n", (unsigned long long)total, distinct,
-            (unsigned long long)g_gp_bytes, (unsigned long long)g_syscalls);
+            (unsigned long long)(g_gp_bytes + gx_pipe_bytes()), (unsigned long long)g_syscalls);
     /* The busiest registers say what the guest is waiting on. */
     {
         uint32_t shown;

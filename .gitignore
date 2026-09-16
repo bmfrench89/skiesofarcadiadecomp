@@ -46,3 +46,6 @@ venv/
 *.pkl
 *.sqlite
 *.db
+
+# scratch outputs (decoded captures, rendered frames) never belong in the tree
+scratch/
