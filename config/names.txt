@@ -62,3 +62,8 @@
 0x80210B44	scptTskDestruct	self-naming string
 0x802126C8	scptInitial	self-naming string
 0x8023AB88	DVDReadAsync	self-naming string
+0x8025EF48	strncmp	MSL source match
+0x8025F0B0	strcat	MSL source match
+0x8025F0DC	strncpy	MSL source match
+0x8025F120	strcpy	MSL word-copy strcpy
+0x8025F1F4	atoi	calls __strtol with base 10

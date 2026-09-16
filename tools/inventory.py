@@ -30,6 +30,12 @@ def main() -> int:
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--dtk", type=Path, default=None, help="dtk symbols.txt to take names from")
     ap.add_argument("--names", type=Path, default=Path("config/names.txt"), help="hand/string-recovered names")
+    ap.add_argument(
+        "--dtk-project",
+        type=Path,
+        default=Path("config/GEAE8P/symbols.txt"),
+        help="decomp-toolkit symbols file to carry the recovered names into (fn_ entries only)",
+    )
     ap.add_argument("--out", type=Path, default=Path("config"))
     args = ap.parse_args()
 

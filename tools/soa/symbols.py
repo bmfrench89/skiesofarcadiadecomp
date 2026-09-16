@@ -129,6 +129,20 @@ def load_names(path: Path) -> dict[int, tuple[str, str]]:
     return out
 
 
+def apply_names_to_dtk(path: Path, names: dict[int, tuple[str, str]]) -> int:
+    """Rename placeholder ``fn_XXXXXXXX`` entries of a dtk symbols file in place."""
+    out = []
+    renamed = 0
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        m = re.match(r"fn_([0-9A-F]{8}) = (.*)", line)
+        if m and int(m.group(1), 16) in names:
+            line = f"{names[int(m.group(1), 16)][0]} = {m.group(2)}"
+            renamed += 1
+        out.append(line)
+    Path(path).write_text("\n".join(out) + "\n", encoding="utf-8")
+    return renamed
+
+
 def name_for(
     address: int, dtk_by_addr: dict[int, Symbol], names: dict[int, tuple[str, str]] | None = None
 ) -> tuple[str, str]:
