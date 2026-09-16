@@ -52,6 +52,7 @@ static uint64_t g_pixels_t[MAX_THREADS], g_rej_depth_t[MAX_THREADS], g_rej_alpha
 #define g_rej_depth g_rej_depth_t[t_tid]
 #define g_rej_alpha g_rej_alpha_t[t_tid]
 static int g_cull_flip, g_debug;
+static int g_dbg_x = -1, g_dbg_y = -1; /* SOA_GXR_PIXEL=x,y: narrate every fragment landing on one pixel */
 static int g_debug_lights;
 static unsigned g_draw_limit, g_draw_no;
 
@@ -63,6 +64,7 @@ int gxr_enabled(void)
         g_enabled = env && atoi(env) ? 1 : 0;
         g_frames_every = every ? (unsigned)atoi(every) : 0;
         g_cull_flip = getenv("SOA_CULLFLIP") ? 1 : 0;
+        if (getenv("SOA_GXR_PIXEL")) sscanf(getenv("SOA_GXR_PIXEL"), "%d,%d", &g_dbg_x, &g_dbg_y);
         g_debug = getenv("SOA_GXR_DEBUG") ? atoi(getenv("SOA_GXR_DEBUG")) : 0;
         g_debug_lights = getenv("SOA_GXR_LIGHTS") ? atoi(getenv("SOA_GXR_LIGHTS")) : 0;
         g_draw_limit = getenv("SOA_GXR_DRAWS") ? (unsigned)atoi(getenv("SOA_GXR_DRAWS")) : 0;
@@ -629,6 +631,13 @@ static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], co
 {
     uint8_t out[4];
     int alpha_ok = 1;
+    if (x == g_dbg_x && y == g_dbg_y) {
+        uint8_t o[4]; int ok = 1;
+        tev_pixel(&D->tev, col, tex, o, &ok);
+        fprintf(stderr, "[gxr] pixel %d,%d: col0 %d,%d,%d,%d tex0 %.3f,%.3f lod %.2f depth %.6f z-buf %.6f -> tev %d,%d,%d,%d alpha_ok %d blend %d z_en %d z_func %u\n",
+                x, y, col[0][0], col[0][1], col[0][2], col[0][3], tex[0][0], tex[0][1], tex[0][3], depth,
+                (float)g_efb_z[y][x] / 16777215.0f, o[0], o[1], o[2], o[3], ok, D->px.blend_en, D->px.z_en, D->px.z_func);
+    }
     /* Z before texturing (PE_CONTROL ztop) or after: order matters only for
      * alpha-tested pixels; test late unless ztop is set. */
     if (D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
@@ -755,11 +764,17 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
             int j;
             for (j = 0; j < 3; j++) {
                 float base = e[j]->b * py + e[j]->c; /* w at x = 0 */
-                if (e[j]->a > 0.0f) { int lim = (int)ceilf(-base / e[j]->a - 0.5f); if (lim > xs) xs = lim; }
-                else if (e[j]->a < 0.0f) { int lim = (int)floorf(-base / e[j]->a - 0.5f); if (lim < xe) xe = lim; }
+                /* Compare in float before converting: a nearly horizontal edge has an x
+                 * coefficient that is a rounding crumb, and -base/a runs to billions,
+                 * which an int conversion turns into INT_MIN and an empty row. */
+                if (e[j]->a > 0.0f) { float lim = ceilf(-base / e[j]->a - 0.5f); if (lim > (float)xs) xs = lim > 1e8f ? xe + 1 : (int)lim; }
+                else if (e[j]->a < 0.0f) { float lim = floorf(-base / e[j]->a - 0.5f); if (lim < (float)xe) xe = lim < -1e8f ? xs - 1 : (int)lim; }
                 else if (base < 0.0f) { xs = xe + 1; break; }
             }
         }
+        if (g_dbg_x >= 0 && y == g_dbg_y)
+            fprintf(stderr, "[gxr] row %d of tri (%.1f,%.1f)(%.1f,%.1f)(%.1f,%.1f): span %d..%d; e0 %g,%g,%g e1 %g,%g,%g e2 %g,%g,%g box %d..%d\n",
+                    y, v[0]->sx, v[0]->sy, v[1]->sx, v[1]->sy, v[2]->sx, v[2]->sy, xs, xe, e0.a, e0.b, e0.c, e1.a, e1.b, e1.c, e2.a, e2.b, e2.c, minx, maxx);
         if (xs > xe) continue;
         px0 = (float)xs + 0.5f;
         for (n = 0; n < nattr; n++) av[n] = attr[n].a * px0 + attr[n].b * py + attr[n].c;
@@ -900,6 +915,10 @@ static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, co
     Vertex in[3], out[16];
     unsigned n, i;
     int inside = (a->z + a->w >= 0.0f && a->w > 0.0f) && (b->z + b->w >= 0.0f && b->w > 0.0f) && (c->z + c->w >= 0.0f && c->w > 0.0f);
+    if (g_debug > 1 && t_tid <= 1 && g_draw_no >= (unsigned)g_debug)
+        fprintf(stderr, "[gxr] draw %u clip-space (%.3f,%.3f,%.3f,%.3f) (%.3f,%.3f,%.3f,%.3f) (%.3f,%.3f,%.3f,%.3f) tex0 (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f)\n",
+                g_draw_no, a->x, a->y, a->z, a->w, b->x, b->y, b->z, b->w, c->x, c->y, c->z, c->w,
+                a->tex[0][0], a->tex[0][1], b->tex[0][0], b->tex[0][1], c->tex[0][0], c->tex[0][1]);
     if (inside) {
         in[0] = *a; in[1] = *b; in[2] = *c;
         for (i = 0; i < 3; i++) to_screen(&D->rc, &in[i]);

@@ -559,6 +559,16 @@ music at 0.52, under the voices and effects the game mixes over it. So the
 ADPCM decode, the sample-rate conversion and the stream refills through
 ARAM are right. In 7.5 minutes of recording 104 samples clip.
 
+**The title's black wedges.** The title backdrop is two tall cloud quads;
+each lost a diagonal slab. The rasteriser computes each row's span from
+the three edge functions, and for a horizontal edge the x coefficient is
+not zero but a rounding crumb (-1.2e-10). Dividing by it gave a limit in
+the billions, which the int conversion turned into INT_MIN, and the row
+was dropped wherever that edge happened to be the binding one. The limits
+are now compared in floating point before conversion. `SOA_GXR_PIXEL=x,y`
+narrates every fragment that lands on one pixel, which is how the missing
+fragments were found.
+
 **Speed.** With every frame rasterised (640x480, eight worker threads) the
 port holds 59 retraces a second through the opening with the game thread
 about two-thirds idle; the renderer's main-thread share is under a fifth of

@@ -80,6 +80,7 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
 | `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
+| `SOA_GXR_DEBUG=N` / `SOA_GXR_DRAWS=N` / `SOA_GXR_PIXEL=x,y` | renderer forensics in `--replay`: triangles from draw N on, stop after N draws, narrate one pixel |
 
 ## Repository layout
 
