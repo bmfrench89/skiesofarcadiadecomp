@@ -41,7 +41,10 @@ Junk runs are regenerated (slice 0.5): the seed's 17 words feed a 521-word lagge
 Fibonacci generator with lag 32, shifted and byte-swapped once at initialisation and
 advanced four times, then forwarded by the run's disc offset modulo the 32 KiB sector.
 GameCube games routinely read past a file's declared end, and `disc.iso` now returns
-there what the drive returns.
+there what the drive returns. Two checks on the real image: every run within one 32 KiB
+sector carries the identical seed (68 sectors with several runs, no exceptions), so the
+seed is the sector's and the forward-by-offset step is right; and 22 runs span a sector
+boundary, so the generator must keep running across one rather than re-seed.
 
 ---
 
