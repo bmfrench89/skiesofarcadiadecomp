@@ -1135,6 +1135,11 @@ void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
         if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) { gxr_flush(); return; }
 }
 
+long gxr_presented(void)
+{
+    return g_workers > 0 ? g_frames_presented / g_workers : g_frames_presented;
+}
+
 const uint8_t* gxr_screen(int* w, int* h)
 {
     *w = g_screen_w; *h = g_screen_h;

@@ -29,6 +29,7 @@ int gx_replay(CpuState* s, const char* base);
 void gxr_enable(int on);
 void gxr_set_output(const char* png_path);
 void watch_init(void);
+void window_start(void);
 int irq_in_handler(void);
 
 /* A loop that never touches hardware never trips the MMIO spin detector, so
@@ -221,6 +222,15 @@ int main(int argc, char** argv)
         return gx_replay(&s, argv[2]);
     }
     start_watchdog(&s);
+    {
+        /* A window when rendering for a person: SOA_RENDER=1 without
+         * headless snapshots, unless SOA_WINDOW=0. */
+        const char* r = getenv("SOA_RENDER");
+        const char* w = getenv("SOA_WINDOW");
+        int want = r && atoi(r) && !getenv("SOA_FRAMES");
+        if (w) want = atoi(w) != 0;
+        if (want) window_start();
+    }
     ENTRY_FN(&s);
 
     fprintf(stderr, "[boot] entry point returned\n");

@@ -114,15 +114,20 @@ static uint16_t buttons_now(void)
     return b;
 }
 
-/* The 8-byte controller report: buttons, main stick, C stick, triggers. */
+int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
+
+/* The 8-byte controller report: buttons, main stick, C stick, triggers.
+ * Live input from the window when there is one, else the script. */
 static void pad_report(uint8_t out[8])
 {
-    uint16_t b = buttons_now();
+    uint16_t b;
+    uint8_t stick[2] = {128, 128}, cstick[2] = {128, 128}, trig[2] = {0, 0};
+    if (!window_pad(&b, stick, cstick, trig)) b = buttons_now();
     out[0] = (uint8_t)((b >> 8) & 0x1F);           /* 0 0 1? S Y X B A -- bit 5 (use origin) clear */
     out[1] = (uint8_t)(0x80 | (b & 0x7F));         /* 1 L R Z U D R L */
-    out[2] = 128; out[3] = 128;                    /* main stick */
-    out[4] = 128; out[5] = 128;                    /* C stick */
-    out[6] = 0; out[7] = 0;                        /* triggers */
+    out[2] = stick[0]; out[3] = stick[1];          /* main stick */
+    out[4] = cstick[0]; out[5] = cstick[1];        /* C stick */
+    out[6] = trig[0]; out[7] = trig[1];            /* triggers */
 }
 
 /* ---- transfers -------------------------------------------------------- */
