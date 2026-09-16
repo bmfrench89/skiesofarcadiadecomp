@@ -184,6 +184,7 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t value);
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
 void gxr_report(void);
 void gxr_reset_efb(void);
+void gxr_flush(void);
 
 static void load_bp(CpuState* s, uint32_t v)
 {
@@ -455,6 +456,7 @@ int gx_replay(CpuState* s, const char* base)
 
     gxr_reset_efb();
     done = parse(s, fifo, len, 0);
+    gxr_flush();
     fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);
     gx_report();
     free(fifo);

@@ -14,14 +14,43 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+double g_gxr_time[T_COUNT];
+double gxr_clock(void)
+{
+#ifdef _WIN32
+    static double freq;
+    LARGE_INTEGER c;
+    if (freq == 0.0) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = (double)f.QuadPart; }
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / freq;
+#else
+    return 0.0;
+#endif
+}
+
 uint8_t g_efb[EFB_H][EFB_W][4];
 uint32_t g_efb_z[EFB_H][EFB_W];
 
 static int g_enabled = -1;
 static unsigned g_frames_every, g_frame_no;
 static char g_png_path[512];
-static uint64_t g_tris, g_pixels, g_lines, g_points, g_clipped, g_verts_bad;
-static uint64_t g_copies_tex, g_copies_xfb, g_rej_depth, g_rej_alpha, g_rej_bary;
+static uint64_t g_tris, g_lines, g_points, g_clipped, g_verts_bad;
+static uint64_t g_copies_tex, g_copies_xfb, g_rej_bary;
+
+/* Rasterization is row-parallel: worker threads each take every Nth row of
+ * every triangle in a draw, and the main thread is participant 0. Counters
+ * touched per pixel are per thread. */
+#define MAX_THREADS 16
+static int g_nthreads = 1;
+static __declspec(thread) int t_tid;
+static uint64_t g_pixels_t[MAX_THREADS], g_rej_depth_t[MAX_THREADS], g_rej_alpha_t[MAX_THREADS];
+#define g_pixels g_pixels_t[t_tid]
+#define g_rej_depth g_rej_depth_t[t_tid]
+#define g_rej_alpha g_rej_alpha_t[t_tid]
 static int g_cull_flip, g_debug;
 static unsigned g_draw_limit, g_draw_no;
 
@@ -44,6 +73,7 @@ int gxr_enabled(void)
  * captured registers. */
 void gxr_reset_efb(void)
 {
+    gxr_flush();
     const uint32_t* bp = gx_bp_regs();
     uint32_t ar = bp[0x4F], gb = bp[0x50], z = bp[0x51] & 0xFFFFFFu;
     uint8_t col[4] = {(uint8_t)(ar & 0xFF), (uint8_t)((gb >> 8) & 0xFF), (uint8_t)(gb & 0xFF), (uint8_t)((ar >> 8) & 0xFF)};
@@ -384,9 +414,42 @@ static void transform(CpuState* s, const VertexIn* in, Vertex* out)
     }
 }
 
-/* ---- viewport, scissor -------------------------------------------------- */
+/* ---- draw commands ------------------------------------------------------
+ * A draw is parsed, transformed and queued by the main thread; worker
+ * threads rasterize queued draws in order, each taking every Nth row, so
+ * per-pixel ordering is preserved and the game keeps running meanwhile.
+ * EFB copies and clears wait for the queue to drain (gxr_flush). */
+
+#define QUEUE_CAP 4096
+#define ARENA_BYTES (48u << 20)
 
 typedef struct { int x0, y0, x1, y1; } Rect;
+
+typedef struct {
+    int blend_en, logic_en, col_upd, alpha_upd, subtract;
+    unsigned sfac, dfac, lop;
+    int const_alpha; /* -1 when not enabled */
+    int z_en, z_upd, ztop;
+    unsigned z_func;
+} PixelCfg;
+
+typedef struct {
+    Rect scissor;
+    unsigned cull;
+    float wd, ht, zrange, xorig, yorig, farz; /* viewport, offsets applied */
+} RasterCfg;
+
+typedef struct {
+    int kind; /* 0 draw, 1 EFB copy (with optional clear) */
+    TevSetup tev;
+    PixelCfg px;
+    RasterCfg rc;
+    unsigned ntex, nchan, prim, count;
+    const Vertex* v;
+    /* copy: the registers as they were, and the command word */
+    uint32_t cp_v, cp_tl, cp_wh, cp_dest, cp_stride, cp_ar, cp_gb, cp_z;
+    CpuState* s;
+} DrawCmd;
 
 static void scissor_rect(const uint32_t* bp, Rect* r)
 {
@@ -402,49 +465,65 @@ static void scissor_rect(const uint32_t* bp, Rect* r)
     if (r->y1 > EFB_H - 1) r->y1 = EFB_H - 1;
 }
 
-static void to_screen(const uint32_t* xf, const uint32_t* bp, Vertex* v)
+static void raster_prepare(const uint32_t* xf, const uint32_t* bp, RasterCfg* rc)
 {
-    float wd = xff(xf, 0x101A), ht = xff(xf, 0x101B), zrange = xff(xf, 0x101C);
-    float xorig = xff(xf, 0x101D), yorig = xff(xf, 0x101E), farz = xff(xf, 0x101F);
     uint32_t off = bp[0x59];
-    float xoff = (float)((off & 0x3FF) * 2), yoff = (float)(((off >> 10) & 0x3FF) * 2);
-    float iw = v->w != 0.0f ? 1.0f / v->w : 0.0f;
-    v->sx = xorig - xoff + v->x * iw * wd;
-    v->sy = yorig - yoff + v->y * iw * ht;
-    v->depth = (farz + v->z * iw * zrange) / 16777216.0f;
+    scissor_rect(bp, &rc->scissor);
+    rc->cull = (bp[0] >> 14) & 3;
+    rc->wd = xff(xf, 0x101A); rc->ht = xff(xf, 0x101B); rc->zrange = xff(xf, 0x101C);
+    rc->xorig = xff(xf, 0x101D) - (float)((off & 0x3FF) * 2);
+    rc->yorig = xff(xf, 0x101E) - (float)(((off >> 10) & 0x3FF) * 2);
+    rc->farz = xff(xf, 0x101F);
 }
 
-/* ---- rasterization ------------------------------------------------------ */
-
-static void blend_pixel(const uint32_t* bp, int x, int y, const uint8_t src[4])
+static void pixel_prepare(const uint32_t* bp, PixelCfg* px)
 {
-    uint32_t cmode = bp[0x41], cmode1 = bp[0x42];
-    uint8_t* dst = g_efb[y][x];
-    int blend_en = cmode & 1, logic_en = (cmode >> 1) & 1, col_upd = (cmode >> 3) & 1, alpha_upd = (cmode >> 4) & 1;
-    unsigned dfac = (cmode >> 5) & 7, sfac = (cmode >> 8) & 7, subtract = (cmode >> 11) & 1, lop = (cmode >> 12) & 15;
-    int out[4], i;
-    int sa = src[3], da = dst[3];
-    if (cmode1 & 0x100) sa = (int)(cmode1 & 0xFF); /* constant alpha for the destination write */
+    uint32_t cmode = bp[0x41], cmode1 = bp[0x42], zmode = bp[0x40];
+    px->blend_en = cmode & 1; px->logic_en = (cmode >> 1) & 1;
+    px->col_upd = (cmode >> 3) & 1; px->alpha_upd = (cmode >> 4) & 1;
+    px->dfac = (cmode >> 5) & 7; px->sfac = (cmode >> 8) & 7;
+    px->subtract = (cmode >> 11) & 1; px->lop = (cmode >> 12) & 15;
+    px->const_alpha = (cmode1 & 0x100) ? (int)(cmode1 & 0xFF) : -1;
+    px->z_en = zmode & 1; px->z_func = (zmode >> 1) & 7; px->z_upd = (zmode >> 4) & 1;
+    px->ztop = (bp[0x43] >> 6) & 1;
+}
 
-    if (blend_en) {
+static void to_screen(const RasterCfg* rc, Vertex* v)
+{
+    float iw = v->w != 0.0f ? 1.0f / v->w : 0.0f;
+    v->sx = rc->xorig + v->x * iw * rc->wd;
+    v->sy = rc->yorig + v->y * iw * rc->ht;
+    v->depth = (rc->farz + v->z * iw * rc->zrange) / 16777216.0f;
+}
+
+/* ---- pixels --------------------------------------------------------------- */
+
+static inline void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t src[4])
+{
+    uint8_t* dst = g_efb[y][x];
+    int out[4], i;
+    int sa = px->const_alpha >= 0 ? px->const_alpha : src[3], da = dst[3];
+
+    if (px->blend_en) {
+        int sf, df;
+        switch (px->sfac) {
+        case 0: sf = 0; break; case 1: sf = 255; break; case 2: sf = -1; break; case 3: sf = -2; break;
+        case 4: sf = src[3]; break; case 5: sf = 255 - src[3]; break; case 6: sf = da; break; default: sf = 255 - da; break;
+        }
+        switch (px->dfac) {
+        case 0: df = 0; break; case 1: df = 255; break; case 2: df = -1; break; case 3: df = -2; break;
+        case 4: df = src[3]; break; case 5: df = 255 - src[3]; break; case 6: df = da; break; default: df = 255 - da; break;
+        }
         for (i = 0; i < 3; i++) {
-            int sf, df, r;
-            switch (sfac) {
-            case 0: sf = 0; break; case 1: sf = 255; break; case 2: sf = dst[i]; break; case 3: sf = 255 - dst[i]; break;
-            case 4: sf = src[3]; break; case 5: sf = 255 - src[3]; break; case 6: sf = da; break; default: sf = 255 - da; break;
-            }
-            switch (dfac) {
-            case 0: df = 0; break; case 1: df = 255; break; case 2: df = src[i]; break; case 3: df = 255 - src[i]; break;
-            case 4: df = src[3]; break; case 5: df = 255 - src[3]; break; case 6: df = da; break; default: df = 255 - da; break;
-            }
-            if (subtract) r = dst[i] - src[i];
-            else r = (src[i] * sf + dst[i] * df + 127) / 255;
+            int s_f = sf == -1 ? dst[i] : (sf == -2 ? 255 - dst[i] : sf);
+            int d_f = df == -1 ? src[i] : (df == -2 ? 255 - src[i] : df);
+            int r = px->subtract ? dst[i] - src[i] : (src[i] * s_f + dst[i] * d_f + 127) / 255;
             out[i] = r < 0 ? 0 : (r > 255 ? 255 : r);
         }
-    } else if (logic_en) {
+    } else if (px->logic_en) {
         for (i = 0; i < 3; i++) {
             int sv = src[i], dv = dst[i], r;
-            switch (lop) {
+            switch (px->lop) {
             case 0: r = 0; break; case 1: r = sv & dv; break; case 2: r = sv & ~dv; break; case 3: r = sv; break;
             case 4: r = ~sv & dv; break; case 5: r = dv; break; case 6: r = sv ^ dv; break; case 7: r = sv | dv; break;
             case 8: r = ~(sv | dv); break; case 9: r = ~(sv ^ dv); break; case 10: r = ~dv; break; case 11: r = sv | ~dv; break;
@@ -455,40 +534,35 @@ static void blend_pixel(const uint32_t* bp, int x, int y, const uint8_t src[4])
     } else {
         out[0] = src[0]; out[1] = src[1]; out[2] = src[2];
     }
-    if (col_upd) { dst[0] = (uint8_t)out[0]; dst[1] = (uint8_t)out[1]; dst[2] = (uint8_t)out[2]; }
-    if (alpha_upd) dst[3] = (uint8_t)sa;
+    if (px->col_upd) { dst[0] = (uint8_t)out[0]; dst[1] = (uint8_t)out[1]; dst[2] = (uint8_t)out[2]; }
+    if (px->alpha_upd) dst[3] = (uint8_t)sa;
 }
 
-static int depth_test(const uint32_t* bp, int x, int y, float depth)
+static inline int depth_test(const PixelCfg* px, int x, int y, float depth)
 {
-    uint32_t zmode = bp[0x40];
     uint32_t z = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f));
     uint32_t cur = g_efb_z[y][x];
     int pass;
-    if (!(zmode & 1)) return 1;
-    switch ((zmode >> 1) & 7) {
+    if (!px->z_en) return 1;
+    switch (px->z_func) {
     case 0: pass = 0; break; case 1: pass = z < cur; break; case 2: pass = z == cur; break; case 3: pass = z <= cur; break;
     case 4: pass = z > cur; break; case 5: pass = z != cur; break; case 6: pass = z >= cur; break; default: pass = 1; break;
     }
-    if (pass && ((zmode >> 4) & 1)) g_efb_z[y][x] = z;
+    if (pass && px->z_upd) g_efb_z[y][x] = z;
     return pass;
 }
 
-static const TevSetup* g_T; /* the current draw's TEV setup */
-static unsigned g_ntex;      /* texcoord slots to interpolate (bit mask) */
-
-static void shade(const uint32_t* bp, int x, int y, const int col[2][4], const float tex[8][3], float depth)
+static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][3], float depth)
 {
     uint8_t out[4];
     int alpha_ok = 1;
     /* Z before texturing (PE_CONTROL ztop) or after: order matters only for
      * alpha-tested pixels; test late unless ztop is set. */
-    int ztop = (bp[0x43] >> 6) & 1;
-    if (ztop && !depth_test(bp, x, y, depth)) { g_rej_depth++; return; }
-    tev_pixel(g_T, col, tex, out, &alpha_ok);
+    if (D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    tev_pixel(&D->tev, col, tex, out, &alpha_ok);
     if (!alpha_ok) { g_rej_alpha++; return; }
-    if (!ztop && !depth_test(bp, x, y, depth)) { g_rej_depth++; return; }
-    blend_pixel(bp, x, y, out);
+    if (!D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    blend_pixel(&D->px, x, y, out);
     g_pixels++;
 }
 
@@ -508,11 +582,11 @@ static Plane plane_of(const Vertex* v0, const Vertex* v1, const Vertex* v2, floa
 
 #define MAX_ATTR (2 + 8 + 8 * 3) /* depth, 1/w, two colours, eight texcoords */
 
-static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b, const Vertex* c)
+static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
-    Rect sc;
+    const Rect* sc = &D->rc.scissor;
     float area = (b->sx - a->sx) * (c->sy - a->sy) - (c->sx - a->sx) * (b->sy - a->sy);
-    unsigned cull = (bp[0] >> 14) & 3;
+    unsigned cull = D->rc.cull;
     int minx, miny, maxx, maxy, x, y;
     float inv_area;
     Plane e0, e1, e2;                 /* barycentric weights, positive inside */
@@ -525,20 +599,18 @@ static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b
     if (g_cull_flip) area = -area;
     if ((cull == 1 && area < 0.0f) || (cull == 2 && area > 0.0f) || cull == 3) return; /* back = negative here */
     if (g_cull_flip) area = -area;
-    g_tris++;
 
-    scissor_rect(bp, &sc);
-    if (g_debug && g_tris <= 8)
+    if (g_debug && t_tid <= 1 && g_tris <= 8)
         fprintf(stderr, "[gxr] tri (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) area %.1f scissor %d,%d-%d,%d\n",
-                a->sx, a->sy, a->depth, b->sx, b->sy, b->depth, c->sx, c->sy, c->depth, area, sc.x0, sc.y0, sc.x1, sc.y1);
+                a->sx, a->sy, a->depth, b->sx, b->sy, b->depth, c->sx, c->sy, c->depth, area, sc->x0, sc->y0, sc->x1, sc->y1);
     minx = (int)floorf(fminf(a->sx, fminf(b->sx, c->sx)));
     maxx = (int)ceilf(fmaxf(a->sx, fmaxf(b->sx, c->sx)));
     miny = (int)floorf(fminf(a->sy, fminf(b->sy, c->sy)));
     maxy = (int)ceilf(fmaxf(a->sy, fmaxf(b->sy, c->sy)));
-    if (minx < sc.x0) minx = sc.x0;
-    if (miny < sc.y0) miny = sc.y0;
-    if (maxx > sc.x1) maxx = sc.x1;
-    if (maxy > sc.y1) maxy = sc.y1;
+    if (minx < sc->x0) minx = sc->x0;
+    if (miny < sc->y0) miny = sc->y0;
+    if (maxx > sc->x1) maxx = sc->x1;
+    if (maxy > sc->y1) maxy = sc->y1;
     if (minx > maxx || miny > maxy) return;
 
     /* Orient so the weights are positive inside. */
@@ -558,12 +630,13 @@ static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b
         for (i = 0; i < 2; i++) {
             const float* c0 = &v[0]->col[i].r; const float* c1 = &v[1]->col[i].r; const float* c2 = &v[2]->col[i].r;
             ci[i] = nattr;
+            if (!((D->nchan >> i) & 1)) continue;
             for (k = 0; k < 4; k++)
                 attr[nattr++] = plane_of(v[0], v[1], v[2], c0[k] * iw0, c1[k] * iw1, c2[k] * iw2, inv_area);
         }
         for (i = 0; i < 8; i++) {
             ti[i] = -1;
-            if (!((g_ntex >> i) & 1)) continue;
+            if (!((D->ntex >> i) & 1)) continue;
             ti[i] = nattr;
             for (k = 0; k < 3; k++)
                 attr[nattr++] = plane_of(v[0], v[1], v[2], v[0]->tex[i][k] * iw0, v[1]->tex[i][k] * iw1, v[2]->tex[i][k] * iw2, inv_area);
@@ -572,41 +645,53 @@ static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b
 
     for (y = miny; y <= maxy; y++) {
         float py = (float)y + 0.5f;
-        float px0 = (float)minx + 0.5f;
-        float w0 = e0.a * px0 + e0.b * py + e0.c, w1 = e1.a * px0 + e1.b * py + e1.c, w2 = e2.a * px0 + e2.b * py + e2.c;
         float av[MAX_ATTR];
-        int n;
+        float px0;
+        int n, xs = minx, xe = maxx;
+        if (g_nthreads > 1 && (unsigned)y % (unsigned)g_nthreads != (unsigned)(t_tid - 1)) continue;
+        /* The row's span: each weight w = a*x + b*y + c must be >= 0. */
+        {
+            const Plane* e[3] = {&e0, &e1, &e2};
+            int j;
+            for (j = 0; j < 3; j++) {
+                float base = e[j]->b * py + e[j]->c; /* w at x = 0 */
+                if (e[j]->a > 0.0f) { int lim = (int)ceilf(-base / e[j]->a - 0.5f); if (lim > xs) xs = lim; }
+                else if (e[j]->a < 0.0f) { int lim = (int)floorf(-base / e[j]->a - 0.5f); if (lim < xe) xe = lim; }
+                else if (base < 0.0f) { xs = xe + 1; break; }
+            }
+        }
+        if (xs > xe) continue;
+        px0 = (float)xs + 0.5f;
         for (n = 0; n < nattr; n++) av[n] = attr[n].a * px0 + attr[n].b * py + attr[n].c;
-        for (x = minx; x <= maxx; x++) {
-            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
-                float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
-                int col[2][4];
-                float tex[8][3];
-                for (i = 0; i < 2; i++)
-                    for (k = 0; k < 4; k++) {
-                        int cv = (int)(av[ci[i] + k] * w * 255.0f + 0.5f);
-                        col[i][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
-                    }
-                for (i = 0; i < 8; i++) {
-                    if (ti[i] < 0) { tex[i][0] = tex[i][1] = 0.0f; tex[i][2] = 1.0f; continue; }
-                    tex[i][0] = av[ti[i]] * w; tex[i][1] = av[ti[i] + 1] * w; tex[i][2] = av[ti[i] + 2] * w;
+        for (x = xs; x <= xe; x++) {
+            float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
+            float w255 = w * 255.0f;
+            int col[2][4];
+            float tex[8][3];
+            for (i = 0; i < 2; i++) {
+                if (!((D->nchan >> i) & 1)) { col[i][0] = col[i][1] = col[i][2] = col[i][3] = 0; continue; }
+                for (k = 0; k < 4; k++) {
+                    int cv = (int)(av[ci[i] + k] * w255 + 0.5f);
+                    col[i][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
                 }
-                shade(bp, x, y, col, tex, av[di]);
-            } else g_rej_bary++;
-            w0 += e0.a; w1 += e1.a; w2 += e2.a;
+            }
+            for (i = 0; i < 8; i++) {
+                if (ti[i] < 0) continue;
+                tex[i][0] = av[ti[i]] * w; tex[i][1] = av[ti[i] + 1] * w; tex[i][2] = av[ti[i] + 2] * w;
+            }
+            shade(D, x, y, col, tex, av[di]);
             for (n = 0; n < nattr; n++) av[n] += attr[n].a;
         }
     }
 }
 
-static void raster_line(const uint32_t* bp, const Vertex* a, const Vertex* b)
+static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
 {
-    Rect sc;
+    const Rect* sc = &D->rc.scissor;
     float dx = b->sx - a->sx, dy = b->sy - a->sy;
     float len = fmaxf(fabsf(dx), fabsf(dy));
     int n = (int)ceilf(len), i;
     unsigned t, k;
-    scissor_rect(bp, &sc);
     g_lines++;
     if (n < 1) n = 1;
     for (i = 0; i <= n; i++) {
@@ -614,7 +699,7 @@ static void raster_line(const uint32_t* bp, const Vertex* a, const Vertex* b)
         int x = (int)floorf(a->sx + dx * f), y = (int)floorf(a->sy + dy * f);
         int col[2][4];
         float tex[8][3];
-        if (x < sc.x0 || x > sc.x1 || y < sc.y0 || y > sc.y1) continue;
+        if (x < sc->x0 || x > sc->x1 || y < sc->y0 || y > sc->y1) continue;
         for (t = 0; t < 2; t++) {
             const float* ca = &a->col[t].r; const float* cb = &b->col[t].r;
             for (k = 0; k < 4; k++) {
@@ -624,24 +709,23 @@ static void raster_line(const uint32_t* bp, const Vertex* a, const Vertex* b)
         }
         for (t = 0; t < 8; t++)
             for (k = 0; k < 3; k++) tex[t][k] = a->tex[t][k] + (b->tex[t][k] - a->tex[t][k]) * f;
-        shade(bp, x, y, col, tex, a->depth + (b->depth - a->depth) * f);
+        shade(D, x, y, col, tex, a->depth + (b->depth - a->depth) * f);
     }
 }
 
-static void raster_point(const uint32_t* bp, const Vertex* a)
+static void raster_point(const DrawCmd* D, const Vertex* a)
 {
-    Rect sc;
+    const Rect* sc = &D->rc.scissor;
     int x = (int)floorf(a->sx), y = (int)floorf(a->sy);
     int col[2][4];
     unsigned t, k;
-    scissor_rect(bp, &sc);
     g_points++;
-    if (x < sc.x0 || x > sc.x1 || y < sc.y0 || y > sc.y1) return;
+    if (x < sc->x0 || x > sc->x1 || y < sc->y0 || y > sc->y1) return;
     for (t = 0; t < 2; t++) {
         const float* ca = &a->col[t].r;
         for (k = 0; k < 4; k++) { int cv = (int)(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
     }
-    shade(bp, x, y, col, a->tex, a->depth);
+    shade(D, x, y, col, a->tex, a->depth);
 }
 
 /* ---- clipping ----------------------------------------------------------- */
@@ -669,7 +753,6 @@ static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
 {
     Vertex tmp[16];
     unsigned m = 0, i;
-    /* near: z + w >= 0 */
     for (i = 0; i < n; i++) {
         const Vertex* a = &in[i];
         const Vertex* b = &in[(i + 1) % n];
@@ -682,7 +765,6 @@ static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
         if (m >= 14) break;
     }
     n = m; m = 0;
-    /* w > epsilon */
     for (i = 0; i < n; i++) {
         const Vertex* a = &tmp[i];
         const Vertex* b = &tmp[(i + 1) % n];
@@ -697,123 +779,235 @@ static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
     return m;
 }
 
-static void emit_triangle(const uint32_t* xf, const uint32_t* bp, const Vertex* a, const Vertex* b, const Vertex* c)
+static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
     Vertex in[3], out[16];
     unsigned n, i;
     int inside = (a->z + a->w >= 0.0f && a->w > 0.0f) && (b->z + b->w >= 0.0f && b->w > 0.0f) && (c->z + c->w >= 0.0f && c->w > 0.0f);
     if (inside) {
         in[0] = *a; in[1] = *b; in[2] = *c;
-        for (i = 0; i < 3; i++) to_screen(xf, bp, &in[i]);
-        raster_triangle(bp, &in[0], &in[1], &in[2]);
+        for (i = 0; i < 3; i++) to_screen(&D->rc, &in[i]);
+        raster_triangle(D, &in[0], &in[1], &in[2]);
         return;
     }
     in[0] = *a; in[1] = *b; in[2] = *c;
     n = clip_polygon(in, 3, out);
     if (n < 3) {
-        g_clipped++;
-        if (g_debug && g_clipped <= 6)
-            fprintf(stderr, "[gxr] clipped: (%.2f,%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f,%.2f)" "\n",
+        if (t_tid <= 1) g_clipped++;
+        if (g_debug && t_tid <= 1 && g_clipped <= 6)
+            fprintf(stderr, "[gxr] clipped: (%.2f,%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f,%.2f)\n",
                     a->x, a->y, a->z, a->w, b->x, b->y, b->z, b->w, c->x, c->y, c->z, c->w);
         return;
     }
-    for (i = 0; i < n; i++) to_screen(xf, bp, &out[i]);
-    for (i = 1; i + 1 < n; i++) raster_triangle(bp, &out[0], &out[i], &out[i + 1]);
+    for (i = 0; i < n; i++) to_screen(&D->rc, &out[i]);
+    for (i = 1; i + 1 < n; i++) raster_triangle(D, &out[0], &out[i], &out[i + 1]);
 }
 
-/* ---- draw ---------------------------------------------------------------- */
+static void run_copy(const DrawCmd* D);
+static void workers_start(void);
+void gxr_flush(void);
+
+static void draw_command(const DrawCmd* D)
+{
+    const Vertex* v = D->v;
+    unsigned count = D->count, i;
+    if (D->kind == 1) { run_copy(D); return; }
+    switch (D->prim) {
+    case 0x80: /* quads */
+        for (i = 0; i + 3 < count; i += 4) {
+            emit_triangle(D, &v[i], &v[i + 1], &v[i + 2]);
+            emit_triangle(D, &v[i], &v[i + 2], &v[i + 3]);
+        }
+        break;
+    case 0x90: /* triangles */
+        for (i = 0; i + 2 < count; i += 3) emit_triangle(D, &v[i], &v[i + 1], &v[i + 2]);
+        break;
+    case 0x98: /* strip */
+        for (i = 2; i < count; i++) {
+            if (i & 1) emit_triangle(D, &v[i - 1], &v[i - 2], &v[i]);
+            else emit_triangle(D, &v[i - 2], &v[i - 1], &v[i]);
+        }
+        break;
+    case 0xA0: /* fan */
+        for (i = 2; i < count; i++) emit_triangle(D, &v[0], &v[i - 1], &v[i]);
+        break;
+    case 0xA8: /* lines: one thread only */
+        if (t_tid > 1) break;
+        for (i = 0; i + 1 < count; i += 2) {
+            Vertex a = v[i], b = v[i + 1];
+            if (a.w <= 0.0f || b.w <= 0.0f) continue;
+            to_screen(&D->rc, &a); to_screen(&D->rc, &b);
+            raster_line(D, &a, &b);
+        }
+        break;
+    case 0xB0: /* line strip */
+        if (t_tid > 1) break;
+        for (i = 1; i < count; i++) {
+            Vertex a = v[i - 1], b = v[i];
+            if (a.w <= 0.0f || b.w <= 0.0f) continue;
+            to_screen(&D->rc, &a); to_screen(&D->rc, &b);
+            raster_line(D, &a, &b);
+        }
+        break;
+    case 0xB8: /* points */
+        if (t_tid > 1) break;
+        for (i = 0; i < count; i++) {
+            Vertex a = v[i];
+            if (a.w <= 0.0f) continue;
+            to_screen(&D->rc, &a);
+            raster_point(D, &a);
+        }
+        break;
+    default: break;
+    }
+}
+
+/* ---- the queue and its workers ----------------------------------------- */
+
+static DrawCmd* g_queue;
+static volatile LONG g_q_tail;                 /* commands published */
+static volatile LONG g_cursor[MAX_THREADS + 1]; /* per worker: next command to run */
+static uint8_t* g_arena;
+static size_t g_arena_used;
+static int g_workers; /* worker threads; the main thread (tid 0) only produces */
+
+#ifdef _WIN32
+static DWORD WINAPI worker(LPVOID arg)
+{
+    int id = (int)(intptr_t)arg; /* 1..workers */
+    t_tid = id;
+    for (;;) {
+        unsigned spins = 0;
+        while (g_cursor[id] >= g_q_tail) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        draw_command(&g_queue[g_cursor[id]]);
+        InterlockedIncrement(&g_cursor[id]);
+    }
+}
+#endif
+
+static void workers_start(void)
+{
+    const char* env = getenv("SOA_THREADS");
+    int n = env ? atoi(env) : 0, i;
+    g_queue = (DrawCmd*)malloc(sizeof(DrawCmd) * QUEUE_CAP);
+    g_arena = (uint8_t*)malloc(ARENA_BYTES);
+#ifdef _WIN32
+    if (n <= 0) {
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        n = (int)si.dwNumberOfProcessors / 2;
+        if (n < 1) n = 1;
+    }
+    if (n > MAX_THREADS) n = MAX_THREADS;
+    for (i = 1; i <= n; i++) {
+        HANDLE h = CreateThread(NULL, 0, worker, (LPVOID)(intptr_t)i, 0, NULL);
+        if (!h) { n = i - 1; break; }
+        CloseHandle(h);
+    }
+#else
+    n = 0;
+#endif
+    g_workers = n;
+    g_nthreads = n > 0 ? n : 1;
+    fprintf(stderr, "[gxr] rasterizing on %d worker thread%s\n", n, n == 1 ? "" : "s");
+}
+
+static int g_pending_n; /* queued copy destinations (defined with the copies below) */
+static int g_started;   /* worker pool created */
+
+/* Wait for every queued draw to finish, then recycle the queue. */
+void gxr_flush(void)
+{
+    int i;
+    if (!g_queue) return;
+    for (i = 1; i <= g_workers; i++)
+        while (g_cursor[i] < g_q_tail) YieldProcessor();
+    g_q_tail = 0;
+    for (i = 1; i <= g_workers; i++) g_cursor[i] = 0;
+    g_arena_used = 0;
+    g_pending_n = 0;
+    tex_graveyard_empty();
+}
+
+static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
 
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize)
+{
+    TIMED(T_DRAW, gxr_draw_inner(s, op, count, verts, vsize));
+}
+
+static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize)
 {
     const uint32_t* xf = gx_xf_regs();
     const uint32_t* bp = gx_bp_regs();
     unsigned prim = op & 0xF8, vat = op & 7, i;
     const uint8_t* p = verts;
     Vertex* v;
+    DrawCmd* D;
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
     if (g_draw_limit && ++g_draw_no > g_draw_limit) return; /* SOA_GXR_DRAWS=N: stop after N draws */
     /* Headless snapshots (SOA_FRAMES=N): only the frames being written are
      * worth rasterizing; the game then runs at full speed between them. */
     if (g_frames_every && !g_png_path[0] && (g_frame_no % g_frames_every) != 0) return;
+    if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
-    g_T = tev_prepare(bp);
-    g_ntex = tev_used_tex(g_T) & ((1u << (xf[0x103F] & 15)) - 1u);
-    v = (Vertex*)malloc(sizeof(Vertex) * count);
-    if (!v) return;
+
+    if (g_q_tail >= QUEUE_CAP || g_arena_used + sizeof(Vertex) * count > ARENA_BYTES || tex_graveyard_full()) gxr_flush();
+    v = (Vertex*)(g_arena + g_arena_used);
+    g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
+    D = &g_queue[g_q_tail];
+    D->kind = 0;
+    TIMED(T_PREPARE, tev_prepare(bp, &D->tev));
+    pixel_prepare(bp, &D->px);
+    raster_prepare(xf, bp, &D->rc);
+    D->ntex = D->tev.used_tex & ((1u << (xf[0x103F] & 15)) - 1u);
+    D->nchan = D->tev.used_chan;
+    D->prim = prim; D->count = count; D->v = v;
     for (i = 0; i < count; i++) {
         VertexIn in;
         p = decode_vertex(s, p, vat, &in);
         transform(s, &in, &v[i]);
     }
-    switch (prim) {
-    case 0x80: /* quads */
-        for (i = 0; i + 3 < count; i += 4) {
-            emit_triangle(xf, bp, &v[i], &v[i + 1], &v[i + 2]);
-            emit_triangle(xf, bp, &v[i], &v[i + 2], &v[i + 3]);
-        }
-        break;
-    case 0x90: /* triangles */
-        for (i = 0; i + 2 < count; i += 3) emit_triangle(xf, bp, &v[i], &v[i + 1], &v[i + 2]);
-        break;
-    case 0x98: /* strip */
-        for (i = 2; i < count; i++) {
-            if (i & 1) emit_triangle(xf, bp, &v[i - 1], &v[i - 2], &v[i]);
-            else emit_triangle(xf, bp, &v[i - 2], &v[i - 1], &v[i]);
-        }
-        break;
-    case 0xA0: /* fan */
-        for (i = 2; i < count; i++) emit_triangle(xf, bp, &v[0], &v[i - 1], &v[i]);
-        break;
-    case 0xA8: /* lines */
-        for (i = 0; i + 1 < count; i += 2) {
-            Vertex a = v[i], b = v[i + 1];
-            if (a.w <= 0.0f || b.w <= 0.0f) continue;
-            to_screen(xf, bp, &a); to_screen(xf, bp, &b);
-            raster_line(bp, &a, &b);
-        }
-        break;
-    case 0xB0: /* line strip */
-        for (i = 1; i < count; i++) {
-            Vertex a = v[i - 1], b = v[i];
-            if (a.w <= 0.0f || b.w <= 0.0f) continue;
-            to_screen(xf, bp, &a); to_screen(xf, bp, &b);
-            raster_line(bp, &a, &b);
-        }
-        break;
-    case 0xB8: /* points */
-        for (i = 0; i < count; i++) {
-            Vertex a = v[i];
-            if (a.w <= 0.0f) continue;
-            to_screen(xf, bp, &a);
-            raster_point(bp, &a);
-        }
-        break;
-    default: break;
+    if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
+    if (g_workers > 0) {
+        InterlockedIncrement(&g_q_tail); /* publish: the workers pick it up */
+    } else {
+        t_tid = 1;
+        draw_command(D);
+        g_q_tail = 0;
+        g_arena_used = 0;
     }
-    free(v);
 }
 
 /* ---- EFB copy and clear ---------------------------------------------------- */
 
-static void efb_clear(const uint32_t* bp, int x0, int y0, int w, int h)
+/* Rows this thread owns: every Nth when workers exist, all otherwise. */
+static inline int my_row(int y)
 {
-    uint32_t ar = bp[0x4F], gb = bp[0x50], z = bp[0x51] & 0xFFFFFFu;
+    return g_nthreads <= 1 || (unsigned)y % (unsigned)g_nthreads == (unsigned)(t_tid - 1);
+}
+
+static void efb_clear(uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, int w, int h)
+{
+    uint32_t z = zreg & 0xFFFFFFu;
     uint8_t col[4] = {(uint8_t)(ar & 0xFF), (uint8_t)((gb >> 8) & 0xFF), (uint8_t)(gb & 0xFF), (uint8_t)((ar >> 8) & 0xFF)};
     int x, y;
-    for (y = y0; y < y0 + h && y < EFB_H; y++)
+    for (y = y0; y < y0 + h && y < EFB_H; y++) {
+        if (y < 0 || !my_row(y)) continue;
         for (x = x0; x < x0 + w && x < EFB_W; x++) {
-            if (x < 0 || y < 0) continue;
+            if (x < 0) continue;
             memcpy(g_efb[y][x], col, 4);
             g_efb_z[y][x] = z;
         }
+    }
 }
 
 /* Write an EFB rectangle into memory as a texture (GXCopyTex). Tiled like
  * the formats the sampler decodes. */
-static void copy_to_texture(CpuState* s, const uint32_t* bp, uint32_t v, int x0, int y0, int w, int h)
+static void copy_to_texture(CpuState* s, uint32_t dest_reg, uint32_t v, int x0, int y0, int w, int h)
 {
-    uint32_t dest = (bp[0x4B] & 0x1FFFFFu) << 5;
+    uint32_t dest = (dest_reg & 0x1FFFFFu) << 5;
     unsigned tpf = (v >> 3) & 15;
     unsigned fmt = tpf / 2 + (tpf & 1) * 8; /* EFBCopyFormat */
     int intensity = (v >> 15) & 1, half = (v >> 9) & 1;
@@ -855,6 +1049,8 @@ static void copy_to_texture(CpuState* s, const uint32_t* bp, uint32_t v, int x0,
     if ((dest & MEM_MASK) + (size_t)((oh + th - 1) / th) * ((ow + tw - 1) / tw) * bpt > MEM1_SIZE) return;
     base = mem_ptr(s, dest | 0x80000000u);
     for (y = 0; y < oh; y++) {
+        if (!my_row(half ? 2 * y : y) && !(half && my_row(2 * y + 1))) continue;
+        if (half && !my_row(2 * y)) continue; /* half-scale rows are flushed before queueing */
         for (x = 0; x < ow; x++) {
             int sx = x0 + (half ? 2 * x : x), sy = y0 + (half ? 2 * y : y);
             uint8_t px[4] = {0, 0, 0, 255};
@@ -896,26 +1092,95 @@ static void copy_to_texture(CpuState* s, const uint32_t* bp, uint32_t v, int x0,
     g_copies_tex++;
 }
 
+static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
+static int g_screen_w = EFB_W, g_screen_h = 480;
+static volatile LONG g_frames_presented; /* copies to the screen completed by all rows */
+
 static void copy_to_screen(int x0, int y0, int w, int h)
 {
-    char path[512];
-    static uint8_t* buf;
     int x, y;
-    g_copies_xfb++;
-    if (g_png_path[0]) snprintf(path, sizeof path, "%s", g_png_path);
-    else if (g_frames_every && (g_frame_no % g_frames_every) == 0) snprintf(path, sizeof path, "build/frames/%04u.png", g_frame_no);
-    else { g_frame_no++; return; }
-    g_frame_no++;
-    if (!buf) buf = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
-    for (y = 0; y < h; y++)
-        for (x = 0; x < w; x++) {
-            int sx = x0 + x, sy = y0 + y;
-            uint8_t* o = buf + ((size_t)y * w + x) * 4;
+    for (y = 0; y < h && y < EFB_H; y++) {
+        int sy = y0 + y;
+        if (!my_row(y)) continue;
+        for (x = 0; x < w && x < EFB_W; x++) {
+            int sx = x0 + x;
+            uint8_t* o = g_screen[y][x];
             if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) { memcpy(o, g_efb[sy][sx], 3); o[3] = 255; }
             else { o[0] = o[1] = o[2] = 0; o[3] = 255; }
         }
-    if (!png_write_rgba(path, buf, w, h, w * 4)) fprintf(stderr, "[gxr] cannot write %s\n", path);
+    }
+}
+
+static void run_copy(const DrawCmd* D)
+{
+    int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
+    int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
+    if (D->cp_v & 0x4000u) copy_to_screen(x0, y0, w, h);
+    else copy_to_texture(D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
+    if (D->cp_v & 0x800u) efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+    if (D->cp_v & 0x4000u) InterlockedIncrement(&g_frames_presented);
+}
+
+/* Copy destinations still in the queue: a texture decoded from one of
+ * them must wait for it. */
+typedef struct { uint32_t addr, bytes; } Pending;
+static Pending g_pending[QUEUE_CAP];
+static int g_pending_n;
+
+void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
+{
+    int i;
+    addr &= MEM_MASK;
+    for (i = 0; i < g_pending_n; i++)
+        if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) { gxr_flush(); return; }
+}
+
+const uint8_t* gxr_screen(int* w, int* h)
+{
+    *w = g_screen_w; *h = g_screen_h;
+    return &g_screen[0][0][0];
+}
+
+static void write_frame_png(const char* path, int w, int h)
+{
+    if (!png_write_rgba(path, &g_screen[0][0][0], w, h, EFB_W * 4)) fprintf(stderr, "[gxr] cannot write %s\n", path);
     else fprintf(stderr, "[gxr] wrote %s (%dx%d)\n", path, w, h);
+}
+
+static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
+{
+    DrawCmd* D;
+    int x0 = (int)(bp[0x49] & 0x3FF), y0 = (int)((bp[0x49] >> 10) & 0x3FF);
+    int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
+    int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
+    if (!g_started) { g_started = 1; workers_start(); }
+    tex_set_memory(s);
+    if (half) gxr_flush(); /* a half-scale copy reads rows other workers own */
+    if (g_q_tail >= QUEUE_CAP) gxr_flush();
+    D = &g_queue[g_q_tail];
+    D->kind = 1; D->s = s;
+    D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
+    D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
+    if (to_screen) { g_screen_w = w > EFB_W ? EFB_W : w; g_screen_h = h > EFB_H ? EFB_H : h; g_copies_xfb++; }
+    else {
+        if (g_pending_n < QUEUE_CAP) {
+            g_pending[g_pending_n].addr = ((bp[0x4B] & 0x1FFFFFu) << 5) & MEM_MASK;
+            g_pending[g_pending_n].bytes = (uint32_t)w * (uint32_t)h * 4u; /* generous */
+            g_pending_n++;
+        }
+        g_copies_tex++;
+    }
+    if (g_workers > 0) InterlockedIncrement(&g_q_tail);
+    else { t_tid = 1; draw_command(D); g_q_tail = 0; g_arena_used = 0; }
+
+    if (to_screen) {
+        char path[512];
+        int want = 0;
+        if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
+        else if (g_frames_every && (g_frame_no % g_frames_every) == 0) { snprintf(path, sizeof path, "build/frames/%04u.png", g_frame_no); want = 1; }
+        g_frame_no++;
+        if (want) { gxr_flush(); TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h)); }
+    }
 }
 
 void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
@@ -929,21 +1194,25 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
         return;
     }
     if (reg == 0x52 && gxr_enabled()) { /* EFB copy (GXCopyTex / GXCopyDisp) */
-        int x0 = (int)(bp[0x49] & 0x3FF), y0 = (int)((bp[0x49] >> 10) & 0x3FF);
-        int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
-        tex_set_memory(s);
-        if (v & 0x4000u) copy_to_screen(x0, y0, w, h);
-        else copy_to_texture(s, bp, v, x0, y0, w, h);
-        if (v & 0x800u) efb_clear(bp, x0, y0, w, h);
-        if (v & 0x4000u) tex_invalidate_all(); /* textures may have been rewritten by now */
+        TIMED(T_COPY, enqueue_copy(s, bp, v));
+        return;
     }
+    if (reg == 0x45 && (v & 2) && gxr_enabled()) gxr_flush(); /* GXDrawDone: the CPU may read results now */
 }
 
 void gxr_report(void)
 {
+    /* No flush: the watchdog thread reports while the main thread produces. */
     if (!gxr_enabled()) return;
+    fprintf(stderr, "[gxr] time: draw %.2fs (prepare %.2fs, decode %.2fs), copies %.2fs, png %.2fs\n",
+            g_gxr_time[T_DRAW], g_gxr_time[T_PREPARE], g_gxr_time[T_DECODE], g_gxr_time[T_COPY], g_gxr_time[T_PNG]);
+    {
+        uint64_t px = 0, rd = 0, ra = 0;
+        int i;
+        for (i = 0; i < MAX_THREADS; i++) { px += g_pixels_t[i]; rd += g_rej_depth_t[i]; ra += g_rej_alpha_t[i]; }
     fprintf(stderr, "[gxr] %llu triangles, %llu lines, %llu points; %llu pixels shaded (%llu outside, %llu failed alpha, %llu failed depth); %llu clipped away; %llu bad vertex refs; %llu texture copies, %llu screen copies\n",
             (unsigned long long)g_tris, (unsigned long long)g_lines, (unsigned long long)g_points,
-            (unsigned long long)g_pixels, (unsigned long long)g_rej_bary, (unsigned long long)g_rej_alpha, (unsigned long long)g_rej_depth, (unsigned long long)g_clipped, (unsigned long long)g_verts_bad,
+            (unsigned long long)px, (unsigned long long)g_rej_bary, (unsigned long long)ra, (unsigned long long)rd, (unsigned long long)g_clipped, (unsigned long long)g_verts_bad,
             (unsigned long long)g_copies_tex, (unsigned long long)g_copies_xfb);
+    }
 }

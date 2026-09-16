@@ -30,16 +30,80 @@ typedef struct {
     uint32_t addr, fmt, w, h, tlut_off, tlut_fmt;
     uint8_t* rgba; /* w*h*4 */
     uint64_t stamp;
+    uint32_t hash;
 } TexEntry;
 
-#define TEX_CACHE 96
+#define TEX_CACHE 256
 static TexEntry g_cache[TEX_CACHE];
 static uint64_t g_stamp;
+
+/* Queued draws hold pointers into the cache, so nothing is freed until the
+ * queue has drained: freed textures wait here. */
+#define GRAVE_CAP 512
+static uint8_t* g_grave[GRAVE_CAP];
+static int g_grave_n;
+
+static void tex_free_later(uint8_t* p)
+{
+    if (!p) return;
+    if (g_grave_n < GRAVE_CAP) g_grave[g_grave_n++] = p;
+    else free(p); /* only after the caller ignored tex_graveyard_full */
+}
+
+int tex_graveyard_full(void) { return g_grave_n >= GRAVE_CAP - 64; }
+
+void tex_graveyard_empty(void)
+{
+    int i;
+    for (i = 0; i < g_grave_n; i++) free(g_grave[i]);
+    g_grave_n = 0;
+}
 
 void tex_invalidate_all(void)
 {
     int i;
-    for (i = 0; i < TEX_CACHE; i++) { free(g_cache[i].rgba); g_cache[i].rgba = NULL; g_cache[i].addr = 0; }
+    for (i = 0; i < TEX_CACHE; i++) { tex_free_later(g_cache[i].rgba); g_cache[i].rgba = NULL; g_cache[i].addr = 0; }
+}
+
+/* Bytes a texture occupies in memory, from its tiled layout. */
+static uint32_t texture_bytes(uint32_t fmt, uint32_t w, uint32_t h)
+{
+    unsigned tw, th, bpt;
+    switch (fmt) {
+    case 0: case 8: tw = 8; th = 8; bpt = 32; break;
+    case 1: case 2: case 9: tw = 8; th = 4; bpt = 32; break;
+    case 6: tw = 4; th = 4; bpt = 64; break;
+    case 14: tw = 8; th = 8; bpt = 32; break;
+    default: tw = 4; th = 4; bpt = 32; break;
+    }
+    return ((w + tw - 1) / tw) * ((h + th - 1) / th) * bpt;
+}
+
+/* A cheap fingerprint of the source bytes (and the palette): 64 words
+ * spread over the data. Catches textures the game rewrites in place. */
+static uint32_t source_hash(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off)
+{
+    uint32_t bytes = texture_bytes(fmt, w, h), hsh = 2166136261u, i;
+    const uint8_t* base;
+    if (!g_s || (addr & MEM_MASK) + bytes > MEM1_SIZE) return 0;
+    base = mem_ptr(g_s, addr);
+    for (i = 0; i < 64; i++) {
+        uint32_t off = (uint32_t)(((uint64_t)bytes * i) / 64) & ~3u;
+        uint32_t wv;
+        if (off + 4 > bytes) break;
+        memcpy(&wv, base + off, 4);
+        hsh = (hsh ^ wv) * 16777619u;
+    }
+    if (fmt == 8 || fmt == 9 || fmt == 10) {
+        uint32_t n = fmt == 8 ? 32 : (fmt == 9 ? 512 : 32768);
+        for (i = 0; i < 64; i++) {
+            uint32_t off = (tlut_off + ((n * i) / 64 & ~3u)) & ((1u << 20) - 1);
+            uint32_t wv;
+            memcpy(&wv, g_tmem + off, 4);
+            hsh = (hsh ^ wv) * 16777619u;
+        }
+    }
+    return hsh;
 }
 
 void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes)
@@ -51,7 +115,7 @@ void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes
     for (i = 0; i < TEX_CACHE; i++) {
         TexEntry* e = &g_cache[i];
         if (e->rgba && (e->fmt == 8 || e->fmt == 9 || e->fmt == 10) && e->tlut_off < tmem_off + bytes && e->tlut_off + 32768 > tmem_off) {
-            free(e->rgba); e->rgba = NULL; e->addr = 0;
+            tex_free_later(e->rgba); e->rgba = NULL; e->addr = 0;
         }
     }
 }
@@ -239,19 +303,28 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
 {
     int i, victim = 0;
     uint64_t oldest = ~0ull;
+    uint32_t hsh;
+    gxr_texture_hazard(addr, texture_bytes(fmt, w, h));
+    hsh = source_hash(addr, fmt, w, h, tlut_off);
     for (i = 0; i < TEX_CACHE; i++) {
         TexEntry* e = &g_cache[i];
         if (e->rgba && e->addr == addr && e->fmt == fmt && e->w == w && e->h == h && e->tlut_off == tlut_off && e->tlut_fmt == tlut_fmt) {
             e->stamp = ++g_stamp;
+            if (e->hash != hsh) { /* rewritten in place: decode again */
+                tex_free_later(e->rgba);
+                TIMED(T_DECODE, e->rgba = decode_texture(addr, fmt, w, h, tlut_off, tlut_fmt));
+                e->hash = hsh;
+            }
             return e;
         }
         if (e->stamp < oldest) { oldest = e->stamp; victim = i; }
     }
     {
         TexEntry* e = &g_cache[victim];
-        free(e->rgba);
+        tex_free_later(e->rgba);
         e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
-        e->rgba = decode_texture(addr, fmt, w, h, tlut_off, tlut_fmt);
+        TIMED(T_DECODE, e->rgba = decode_texture(addr, fmt, w, h, tlut_off, tlut_fmt));
+        e->hash = hsh;
         e->stamp = ++g_stamp;
         return e;
     }
@@ -259,35 +332,27 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
 
 /* ---- per-draw setup ------------------------------------------------------ */
 
-typedef struct {
-    uint8_t texmap, texcoord, texen, chan;
-    uint8_t rswap[4], tswap[4];
-    uint8_t ca, cb, cc, cd, aa, ab, ac, ad;
-    uint8_t cbias, cop, cclamp, cshift, cdest;
-    uint8_t abias, aop, aclamp, ashift, adest;
-    int konst[4];
-} Stage;
+static uint8_t color_index(unsigned sel, int i)
+{
+    switch (sel) {
+    case 0: return (uint8_t)i;       case 1: return 3;
+    case 2: return (uint8_t)(4 + i); case 3: return 7;
+    case 4: return (uint8_t)(8 + i); case 5: return 11;
+    case 6: return (uint8_t)(12 + i); case 7: return 15;
+    case 8: return (uint8_t)(BANK_TEX + i); case 9: return BANK_TEX + 3;
+    case 10: return (uint8_t)(BANK_RAS + i); case 11: return BANK_RAS + 3;
+    case 12: return BANK_ONE; case 13: return BANK_HALF;
+    case 14: return (uint8_t)(BANK_KONST + i); default: return BANK_ZERO;
+    }
+}
 
-typedef struct {
-    const uint8_t* rgba;
-    int w, h;
-    unsigned wrap_s, wrap_t;
-    int linear;
-    float scale_s, scale_t;
-} TexCfg;
-
-struct TevSetup {
-    unsigned stages;
-    Stage st[16];
-    TexCfg tex[8];
-    unsigned used_tex;   /* bit per texcoord slot read by an enabled stage */
-    unsigned used_chan;  /* bit per rasterized channel read */
-    int aref0, aref1;
-    unsigned acomp0, acomp1, alogic;
-    int reg_init[4][4];
-};
-
-static TevSetup g_setup;
+static uint8_t alpha_index(unsigned sel)
+{
+    switch (sel) {
+    case 0: return 3; case 1: return 7; case 2: return 11; case 3: return 15;
+    case 4: return BANK_TEX + 3; case 5: return BANK_RAS + 3; case 6: return BANK_KONST + 3; default: return BANK_ZERO;
+    }
+}
 
 /* Color and konst registers are written through BP 0xE0-0xE7; bit 23 of the
  * RA half says which set. Kept here, latched as the writes arrive. */
@@ -321,9 +386,8 @@ static int konst_value(unsigned sel, int channel)
     return 0;
 }
 
-const TevSetup* tev_prepare(const uint32_t* bp)
+void tev_prepare(const uint32_t* bp, TevSetup* T)
 {
-    TevSetup* T = &g_setup;
     unsigned st, i, j;
     uint32_t ac = bp[0xF3];
 
@@ -354,6 +418,11 @@ const TevSetup* tev_prepare(const uint32_t* bp)
         S->tswap[0] = k0 & 3; S->tswap[1] = (k0 >> 2) & 3; S->tswap[2] = k1 & 3; S->tswap[3] = (k1 >> 2) & 3;
         for (i = 0; i < 3; i++) S->konst[i] = konst_value(kc, (int)i);
         S->konst[3] = konst_value(ka, 3);
+        for (i = 0; i < 3; i++) {
+            S->ia[i] = color_index(S->ca, (int)i); S->ib[i] = color_index(S->cb, (int)i);
+            S->ic[i] = color_index(S->cc, (int)i); S->id[i] = color_index(S->cd, (int)i);
+        }
+        S->ja = alpha_index(S->aa); S->jb = alpha_index(S->ab); S->jc = alpha_index(S->ac); S->jd = alpha_index(S->ad);
         if (S->texen) T->used_tex |= 1u << S->texcoord;
         if (S->chan < 2) T->used_chan |= 1u << S->chan;
     }
@@ -377,26 +446,33 @@ const TevSetup* tev_prepare(const uint32_t* bp)
         te = texture(addr, fmt, w, h, tlut_off, tlut_fmt);
         C->rgba = te->rgba;
         C->w = (int)w; C->h = (int)h;
+        C->mask_s = (w & (w - 1)) == 0 ? (int)w - 1 : -1;
+        C->mask_t = (h & (h - 1)) == 0 ? (int)h - 1 : -1;
         C->wrap_s = mode0 & 3; C->wrap_t = (mode0 >> 2) & 3;
         C->linear = (mode0 >> 4) & 1;
         C->scale_s = (float)((bp[0x30 + 2 * map] & 0xFFFF) + 1);
         C->scale_t = (float)((bp[0x31 + 2 * map] & 0xFFFF) + 1);
     }
-    return T;
 }
-
-unsigned tev_used_tex(const TevSetup* T) { return T->used_tex; }
-unsigned tev_used_chan(const TevSetup* T) { return T->used_chan; }
 
 /* ---- sampling ----------------------------------------------------------- */
 
-static inline int wrap(int i, int size, unsigned mode)
+static inline int fast_floor(float f)
+{
+    int i = (int)f;
+    return f < (float)i ? i - 1 : i;
+}
+
+static inline int wrap(int i, int size, int mask, unsigned mode)
 {
     switch (mode) {
     case 0: return i < 0 ? 0 : (i >= size ? size - 1 : i);
-    case 1: i %= size; return i < 0 ? i + size : i;
+    case 1:
+        if (mask >= 0) return i & mask;
+        i %= size; return i < 0 ? i + size : i;
     default: {
         int period = 2 * size;
+        if (mask >= 0) { i &= period - 1; return i < size ? i : period - 1 - i; }
         i %= period;
         if (i < 0) i += period;
         return i < size ? i : period - 1 - i;
@@ -404,19 +480,22 @@ static inline int wrap(int i, int size, unsigned mode)
     }
 }
 
+static int g_notex = -1;
 static inline void sample(const TexCfg* C, float s, float t, uint8_t out[4])
 {
     float u = s * C->scale_s, v = t * C->scale_t;
+    if (g_notex < 0) g_notex = getenv("SOA_GXR_NOTEX") ? 1 : 0;
+    if (g_notex) { out[0] = out[1] = out[2] = out[3] = 200; return; }
     if (!C->rgba || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
     if (!C->linear) {
-        int x = wrap((int)floorf(u), C->w, C->wrap_s), y = wrap((int)floorf(v), C->h, C->wrap_t);
+        int x = wrap(fast_floor(u), C->w, C->mask_s, C->wrap_s), y = wrap(fast_floor(v), C->h, C->mask_t, C->wrap_t);
         memcpy(out, C->rgba + ((size_t)y * C->w + x) * 4, 4);
     } else {
         float fu = u - 0.5f, fv = v - 0.5f;
-        int x0 = (int)floorf(fu), y0 = (int)floorf(fv);
+        int x0 = fast_floor(fu), y0 = fast_floor(fv);
         int ax = (int)((fu - (float)x0) * 256.0f), ay = (int)((fv - (float)y0) * 256.0f);
-        int xa = wrap(x0, C->w, C->wrap_s), xb = wrap(x0 + 1, C->w, C->wrap_s);
-        int ya = wrap(y0, C->h, C->wrap_t), yb = wrap(y0 + 1, C->h, C->wrap_t);
+        int xa = wrap(x0, C->w, C->mask_s, C->wrap_s), xb = wrap(x0 + 1, C->w, C->mask_s, C->wrap_s);
+        int ya = wrap(y0, C->h, C->mask_t, C->wrap_t), yb = wrap(y0 + 1, C->h, C->mask_t, C->wrap_t);
         const uint8_t* p00 = C->rgba + ((size_t)ya * C->w + xa) * 4;
         const uint8_t* p10 = C->rgba + ((size_t)ya * C->w + xb) * 4;
         const uint8_t* p01 = C->rgba + ((size_t)yb * C->w + xa) * 4;
@@ -449,79 +528,59 @@ static inline int compare(unsigned mode, int a, int b)
     }
 }
 
-/* Color input selector (GX_CC_*) for channel i. */
-static inline int cin(unsigned sel, int i, int reg[4][4], const uint8_t texc[4], const uint8_t rasc[4], const int konst[4])
-{
-    switch (sel) {
-    case 0: return reg[0][i]; case 1: return reg[0][3];
-    case 2: return reg[1][i]; case 3: return reg[1][3];
-    case 4: return reg[2][i]; case 5: return reg[2][3];
-    case 6: return reg[3][i]; case 7: return reg[3][3];
-    case 8: return texc[i];   case 9: return texc[3];
-    case 10: return rasc[i];  case 11: return rasc[3];
-    case 12: return 255;      case 13: return 128;
-    case 14: return konst[i]; default: return 0;
-    }
-}
-
-static inline int ain(unsigned sel, int reg[4][4], const uint8_t texc[4], const uint8_t rasc[4], const int konst[4])
-{
-    switch (sel) {
-    case 0: return reg[0][3]; case 1: return reg[1][3]; case 2: return reg[2][3]; case 3: return reg[3][3];
-    case 4: return texc[3]; case 5: return rasc[3]; case 6: return konst[3]; default: return 0;
-    }
-}
-
 /* Runs the stages for one pixel. ras[]: rasterized channel colors 0..255;
  * tex[]: texture coordinates per texcoord slot (s, t, q). */
 void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], uint8_t out[4], int* alpha_pass)
 {
     unsigned st;
-    int reg[4][4];
-    int i, j;
-    for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) reg[i][j] = T->reg_init[i][j];
+    int bank[BANK_SIZE];
+    int i;
+    memcpy(bank, T->reg_init, sizeof(int) * 16);
+    bank[BANK_ONE] = 255; bank[BANK_HALF] = 128; bank[BANK_ZERO] = 0;
+    bank[BANK_TEX] = bank[BANK_TEX + 1] = bank[BANK_TEX + 2] = bank[BANK_TEX + 3] = 0;
+    bank[BANK_RAS] = bank[BANK_RAS + 1] = bank[BANK_RAS + 2] = bank[BANK_RAS + 3] = 0;
 
     for (st = 0; st < T->stages; st++) {
         const Stage* S = &T->st[st];
-        uint8_t texc[4] = {0, 0, 0, 0}, rasc[4] = {0, 0, 0, 0}, tmp[4];
+        uint8_t tmp[4];
+        int* dc = &bank[S->cdest * 4];
 
         if (S->texen) {
             const float* tc = tex[S->texcoord];
             float q = tc[2];
             float s = q != 0.0f ? tc[0] / q : tc[0];
-            float t = q != 0.0f ? tc[1] / q : tc[1];
-            sample(&T->tex[S->texmap], s, t, tmp);
-            for (i = 0; i < 4; i++) texc[i] = tmp[S->tswap[i]];
+            float tt = q != 0.0f ? tc[1] / q : tc[1];
+            sample(&T->tex[S->texmap], s, tt, tmp);
+            for (i = 0; i < 4; i++) bank[BANK_TEX + i] = tmp[S->tswap[i]];
         }
         if (S->chan < 2) {
             const int* r = ras[S->chan];
-            tmp[0] = (uint8_t)r[0]; tmp[1] = (uint8_t)r[1]; tmp[2] = (uint8_t)r[2]; tmp[3] = (uint8_t)r[3];
-            for (i = 0; i < 4; i++) rasc[i] = tmp[S->rswap[i]];
+            for (i = 0; i < 4; i++) bank[BANK_RAS + i] = r[S->rswap[i]];
         }
+        bank[BANK_KONST] = S->konst[0]; bank[BANK_KONST + 1] = S->konst[1];
+        bank[BANK_KONST + 2] = S->konst[2]; bank[BANK_KONST + 3] = S->konst[3];
 
-        /* Color */
+        /* Colour */
         if (S->cbias != 3) {
+            int bias = S->cbias == 1 ? 128 : S->cbias == 2 ? -128 : 0;
+            int res[3];
             for (i = 0; i < 3; i++) {
-                int a = cin(S->ca, i, reg, texc, rasc, S->konst) & 0xFF;
-                int b = cin(S->cb, i, reg, texc, rasc, S->konst) & 0xFF;
-                int c = cin(S->cc, i, reg, texc, rasc, S->konst) & 0xFF;
-                int d = cin(S->cd, i, reg, texc, rasc, S->konst);
+                int a = bank[S->ia[i]] & 0xFF, b = bank[S->ib[i]] & 0xFF, c = bank[S->ic[i]] & 0xFF, d = bank[S->id[i]];
                 int cc = c + (c >> 7);
                 int v = (a * (256 - cc) + b * cc + 128) >> 8;
                 int r;
                 if (S->cop) v = -v;
-                r = d + v + (S->cbias == 1 ? 128 : S->cbias == 2 ? -128 : 0);
+                r = d + v + bias;
                 if (S->cshift == 1) r <<= 1; else if (S->cshift == 2) r <<= 2; else if (S->cshift == 3) r >>= 1;
-                reg[S->cdest][i] = S->cclamp ? clamp255(r) : clamp_s11(r);
+                res[i] = S->cclamp ? clamp255(r) : clamp_s11(r);
             }
+            dc[0] = res[0]; dc[1] = res[1]; dc[2] = res[2];
         } else {
             unsigned cmp = (S->cshift << 1) | S->cop;
             int a[3], b[3], c[3], d[3], res;
             for (i = 0; i < 3; i++) {
-                a[i] = cin(S->ca, i, reg, texc, rasc, S->konst) & 0xFF;
-                b[i] = cin(S->cb, i, reg, texc, rasc, S->konst) & 0xFF;
-                c[i] = cin(S->cc, i, reg, texc, rasc, S->konst);
-                d[i] = cin(S->cd, i, reg, texc, rasc, S->konst);
+                a[i] = bank[S->ia[i]] & 0xFF; b[i] = bank[S->ib[i]] & 0xFF;
+                c[i] = bank[S->ic[i]]; d[i] = bank[S->id[i]];
             }
             switch (cmp >> 1) {
             case 0: res = cmp & 1 ? a[0] == b[0] : a[0] > b[0]; break;
@@ -532,33 +591,30 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], ui
             for (i = 0; i < 3; i++) {
                 int r = res == -1 ? ((cmp & 1 ? a[i] == b[i] : a[i] > b[i]) ? c[i] : 0) : (res ? c[i] : 0);
                 r += d[i];
-                reg[S->cdest][i] = S->cclamp ? clamp255(r) : clamp_s11(r);
+                dc[i] = S->cclamp ? clamp255(r) : clamp_s11(r);
             }
         }
         /* Alpha */
-        if (S->abias != 3) {
-            int a = ain(S->aa, reg, texc, rasc, S->konst) & 0xFF;
-            int b = ain(S->ab, reg, texc, rasc, S->konst) & 0xFF;
-            int c = ain(S->ac, reg, texc, rasc, S->konst) & 0xFF;
-            int d = ain(S->ad, reg, texc, rasc, S->konst);
-            int cc = c + (c >> 7);
-            int v = (a * (256 - cc) + b * cc + 128) >> 8, r;
-            if (S->aop) v = -v;
-            r = d + v + (S->abias == 1 ? 128 : S->abias == 2 ? -128 : 0);
-            if (S->ashift == 1) r <<= 1; else if (S->ashift == 2) r <<= 2; else if (S->ashift == 3) r >>= 1;
-            reg[S->adest][3] = S->aclamp ? clamp255(r) : clamp_s11(r);
-        } else {
-            unsigned cmp = (S->ashift << 1) | S->aop;
-            int a = ain(S->aa, reg, texc, rasc, S->konst) & 0xFF;
-            int b = ain(S->ab, reg, texc, rasc, S->konst) & 0xFF;
-            int c = ain(S->ac, reg, texc, rasc, S->konst);
-            int d = ain(S->ad, reg, texc, rasc, S->konst);
-            int res = cmp & 1 ? a == b : a > b;
-            reg[S->adest][3] = S->aclamp ? clamp255(d + (res ? c : 0)) : clamp_s11(d + (res ? c : 0));
+        {
+            int* da = &bank[S->adest * 4 + 3];
+            if (S->abias != 3) {
+                int a = bank[S->ja] & 0xFF, b = bank[S->jb] & 0xFF, c = bank[S->jc] & 0xFF, d = bank[S->jd];
+                int cc = c + (c >> 7);
+                int v = (a * (256 - cc) + b * cc + 128) >> 8, r;
+                if (S->aop) v = -v;
+                r = d + v + (S->abias == 1 ? 128 : S->abias == 2 ? -128 : 0);
+                if (S->ashift == 1) r <<= 1; else if (S->ashift == 2) r <<= 2; else if (S->ashift == 3) r >>= 1;
+                *da = S->aclamp ? clamp255(r) : clamp_s11(r);
+            } else {
+                unsigned cmp = (S->ashift << 1) | S->aop;
+                int a = bank[S->ja] & 0xFF, b = bank[S->jb] & 0xFF, c = bank[S->jc], d = bank[S->jd];
+                int res = cmp & 1 ? a == b : a > b;
+                *da = S->aclamp ? clamp255(d + (res ? c : 0)) : clamp_s11(d + (res ? c : 0));
+            }
         }
     }
 
-    for (i = 0; i < 4; i++) out[i] = (uint8_t)clamp255(reg[0][i]);
+    for (i = 0; i < 4; i++) out[i] = (uint8_t)clamp255(bank[i]);
 
     /* Alpha compare (PE_ALPHA_COMPARE, GXSetAlphaCompare). */
     {
