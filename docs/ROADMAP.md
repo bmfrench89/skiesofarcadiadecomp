@@ -174,7 +174,7 @@ Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 | `[x]` | **8.1** dtk-compatible splits | M | **Done:** `config/GEAE8P/` (config.yml, splits.txt, symbols.txt) drives `dtk dol split` on the user's own DOL: 23 objects, the SDK split per library (os, dvd, vi, gx, exi, si, MetroTRK, MSL, ...), the middleware library (807 functions) and the game (5,362) as units of their own, ready to be subdivided as decompilation names files |
 | `[x]` | **8.2** mwcc build pipeline | M | **Done:** `tools/fetch_toolchain.py` fetches the Metrowerks compilers into `vendor/`; `tools/decomp.py` builds every unit in `config/GEAE8P/units.txt` with the compiler and flags it names and `tools/matchcheck.py` compares each function with the executable word for word. First unit: MSL `strlen` and `strchr`, byte-matching with mwcc 1.3.2 `-O4,p` |
 | `[x]` | **8.3** Function swap-in harness | M | **Done:** decompiled functions are compiled natively (`dc_*`) and bound in `config/hle.txt` through adapters in `runtime/decomp_swap.c`, so the port runs them instead of the translation; the translation survives as `recomp_fn_*` and `SOA_SELFTEST=1` runs each pair on the same guest memory with random inputs (nine string and memory routines, 200 rounds). Byte-oriented routines only until decompiled code reads wider fields through byte-order-aware accessors |
-| `[~]` | **8.4** Decomp grind | XL | **Started:** 12 functions match word for word (nine MSL string/memory routines, three of the game's ARAM cache helpers); the game code is mwcc 1.3.2 `-O4,p` like its libraries. `src/soa/aramcache_wip.c` holds two routines still being matched |
+| `[~]` | **8.4** Decomp grind | XL | **Started:** 41 functions match word for word across 15 units (MSL string, memory, wide-char and numeric routines, the AR and ARQ libraries, and six of the game's ARAM cache helpers) — 0.18% of `.text`; nine of them run in the port through `config/hle.txt`. The game code is mwcc 1.3.2 `-O4,p` like its libraries; `src/sdk/ar/` needs 1.2.5n |
 
 ---
 
@@ -214,6 +214,11 @@ Phases 2 and 3 remain independent and can proceed in parallel.
 ---
 
 ## Immediate next actions
+
+See [PLAN.md](PLAN.md) for these sequenced into tracks, with an acceptance
+criterion and a size for each item, and for the work deliberately not taken.
+Its first item is **D1**: commit the scripted scenarios these slices are all
+judged by, since they exist only in shell history, and add a run checker.
 
 1. **4.7** — CARD saves: reach a save point in scripted play and round-trip a save
 2. **7.2** / **7.3** — battles beyond the tutorial and the hold; the ship and overworld sections
