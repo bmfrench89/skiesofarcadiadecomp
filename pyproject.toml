@@ -1,3 +1,11 @@
+[project]
+name = "soa-port"
+version = "0.1.0"
+requires-python = ">=3.14"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "capstone>=5.0"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py314"

@@ -119,10 +119,10 @@ class Insn:
     @property
     def target(self) -> int | None:
         """Resolved target for a direct branch, else None."""
-        if self.mnemonic == "b":
-            return self.imm if self.aa_bit else (self.addr + self.imm) & 0xFFFFFFFF
-        if self.mnemonic == "bc":
-            return self.imm if self.aa_bit else (self.addr + self.imm) & 0xFFFFFFFF
+        if self.mnemonic in ("b", "bc"):
+            # Mask both paths: an absolute branch with a negative displacement
+            # must wrap to a 32-bit address, not stay a negative Python int.
+            return (self.imm if self.aa_bit else self.addr + self.imm) & 0xFFFFFFFF
         return None
 
     @property
@@ -172,10 +172,10 @@ def decode(word: int, addr: int = 0) -> Insn:
     elif op == 31:
         entry = _decode_op31(word)
     elif op == 59:
-        entry = isa.FLOAT_A.get((word >> 1) & 0x1F)
+        entry = isa.FLOAT_A_SINGLE.get((word >> 1) & 0x1F)
     elif op == 63:
         ext5 = (word >> 1) & 0x1F
-        entry = isa.FLOAT_A.get(ext5) if ext5 >= 18 else None
+        entry = isa.FLOAT_A_DOUBLE.get(ext5) if ext5 >= 18 else None
         if entry is None:
             entry = isa.OP63_X.get((word >> 1) & 0x3FF)
     else:
@@ -185,6 +185,12 @@ def decode(word: int, addr: int = 0) -> Insn:
         return Insn(addr=addr, word=word)
 
     mnemonic, form, allowed = entry
+
+    # The compare instructions carry an L field at bit 21 selecting a 64-bit
+    # compare. The 750CL is 32-bit only, so L=1 is an invalid form and must not
+    # be silently decoded as the 32-bit instruction.
+    if mnemonic in ("cmp", "cmpl", "cmpi", "cmpli") and (word >> 21) & 1:
+        return Insn(addr=addr, word=word)
     rc_bit, oe_bit, lk_bit, aa_bit = _flags(word, allowed)
 
     kw = dict(
@@ -242,7 +248,12 @@ def decode(word: int, addr: int = 0) -> Insn:
     elif form is Form.XFX:
         kw.update(rd=_rd(word))
         if mnemonic in ("mfspr", "mtspr", "mftb"):
-            kw["spr"] = spr_number(word)
+            spr = spr_number(word)
+            kw["spr"] = spr
+            # The time-base halves are separate mnemonics: TBL (268) is mftb,
+            # TBU (269) is mftbu.
+            if mnemonic == "mftb" and spr == isa.SPR_TBU:
+                kw["mnemonic"] = "mftbu"
         elif mnemonic == "mtcrf":
             kw["imm"] = (word >> 12) & 0xFF
 

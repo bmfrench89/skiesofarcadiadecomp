@@ -43,7 +43,6 @@ AA = 1 << 3  # absolute address
 # --------------------------------------------------------------------------
 
 PRIMARY: dict[int, tuple[str, Form, int]] = {
-    2: ("tdi", Form.D, 0),
     3: ("twi", Form.D, 0),
     7: ("mulli", Form.D, 0),
     8: ("subfic", Form.D, 0),
@@ -175,7 +174,6 @@ OP31: dict[int, tuple[str, Form, int]] = {
     316: ("xor", Form.X, RC),
     339: ("mfspr", Form.XFX, 0),
     343: ("lhax", Form.X, 0),
-    370: ("tlbia", Form.X, 0),
     371: ("mftb", Form.XFX, 0),
     375: ("lhaux", Form.X, 0),
     407: ("sthx", Form.X, 0),
@@ -226,14 +224,34 @@ OP31: dict[int, tuple[str, Form, int]] = {
 # 63 uses 10-bit extended opcodes for X-form ops and 5-bit for A-form.
 # --------------------------------------------------------------------------
 
-# A-form (5-bit extended opcode, bits 26-30) — shared by 59 and 63
-FLOAT_A: dict[int, tuple[str, Form, int]] = {
+# A-form, 5-bit extended opcode (bits 26-30).
+#
+# Opcodes 59 and 63 share the extended-opcode values but NOT the instructions:
+# 59 is the single-precision family, 63 the double-precision one. Decoding 59
+# against the double table silently mislabels every `fadds` as `fadd`, which
+# matters because `fadds` rounds its result to single precision and `fadd` does
+# not. The two tables are deliberately separate to make that impossible.
+#
+# Neither table has 22: the 750CL implements neither fsqrt nor fsqrts.
+# 24 (fres) is single-only; 23 (fsel) and 26 (frsqrte) are double-only.
+
+FLOAT_A_SINGLE: dict[int, tuple[str, Form, int]] = {
+    18: ("fdivs", Form.A, RC),
+    20: ("fsubs", Form.A, RC),
+    21: ("fadds", Form.A, RC),
+    24: ("fres", Form.A, RC),
+    25: ("fmuls", Form.A, RC),
+    28: ("fmsubs", Form.A, RC),
+    29: ("fmadds", Form.A, RC),
+    30: ("fnmsubs", Form.A, RC),
+    31: ("fnmadds", Form.A, RC),
+}
+
+FLOAT_A_DOUBLE: dict[int, tuple[str, Form, int]] = {
     18: ("fdiv", Form.A, RC),
     20: ("fsub", Form.A, RC),
     21: ("fadd", Form.A, RC),
-    22: ("fsqrt", Form.A, RC),
     23: ("fsel", Form.A, RC),
-    24: ("fres", Form.A, RC),
     25: ("fmul", Form.A, RC),
     26: ("frsqrte", Form.A, RC),
     28: ("fmsub", Form.A, RC),
@@ -318,6 +336,9 @@ PS_X: dict[int, tuple[str, Form, int]] = {
 # special purpose registers
 # --------------------------------------------------------------------------
 
+SPR_TBL = 268  # time base, lower half
+SPR_TBU = 269  # time base, upper half
+
 SPR_NAMES: dict[int, str] = {
     1: "XER",
     8: "LR",
@@ -325,6 +346,8 @@ SPR_NAMES: dict[int, str] = {
     18: "DSISR",
     19: "DAR",
     22: "DEC",
+    268: "TBL",
+    269: "TBU",
     25: "SDR1",
     26: "SRR0",
     27: "SRR1",
