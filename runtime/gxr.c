@@ -474,7 +474,10 @@ static int depth_test(const uint32_t* bp, int x, int y, float depth)
     return pass;
 }
 
-static void shade(const uint32_t* bp, int x, int y, const Color4 col[2], const float tex[8][3], float depth)
+static const TevSetup* g_T; /* the current draw's TEV setup */
+static unsigned g_ntex;      /* texcoord slots to interpolate (bit mask) */
+
+static void shade(const uint32_t* bp, int x, int y, const int col[2][4], const float tex[8][3], float depth)
 {
     uint8_t out[4];
     int alpha_ok = 1;
@@ -482,12 +485,28 @@ static void shade(const uint32_t* bp, int x, int y, const Color4 col[2], const f
      * alpha-tested pixels; test late unless ztop is set. */
     int ztop = (bp[0x43] >> 6) & 1;
     if (ztop && !depth_test(bp, x, y, depth)) { g_rej_depth++; return; }
-    tev_pixel(bp, col, tex, out, &alpha_ok);
+    tev_pixel(g_T, col, tex, out, &alpha_ok);
     if (!alpha_ok) { g_rej_alpha++; return; }
     if (!ztop && !depth_test(bp, x, y, depth)) { g_rej_depth++; return; }
     blend_pixel(bp, x, y, out);
     g_pixels++;
 }
+
+/* Plane equation of a value linear in screen space: v = a*x + b*y + c. */
+typedef struct { float a, b, c; } Plane;
+
+static Plane plane_of(const Vertex* v0, const Vertex* v1, const Vertex* v2, float p0, float p1, float p2, float inv_area)
+{
+    Plane P;
+    float dx1 = v1->sx - v0->sx, dy1 = v1->sy - v0->sy, dx2 = v2->sx - v0->sx, dy2 = v2->sy - v0->sy;
+    float dp1 = p1 - p0, dp2 = p2 - p0;
+    P.a = (dp1 * dy2 - dp2 * dy1) * inv_area;
+    P.b = (dp2 * dx1 - dp1 * dx2) * inv_area;
+    P.c = p0 - P.a * v0->sx - P.b * v0->sy;
+    return P;
+}
+
+#define MAX_ATTR (2 + 8 + 8 * 3) /* depth, 1/w, two colours, eight texcoords */
 
 static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b, const Vertex* c)
 {
@@ -495,8 +514,12 @@ static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b
     float area = (b->sx - a->sx) * (c->sy - a->sy) - (c->sx - a->sx) * (b->sy - a->sy);
     unsigned cull = (bp[0] >> 14) & 3;
     int minx, miny, maxx, maxy, x, y;
-    float ia, iwa, iwb, iwc;
-    unsigned ntex = gx_xf_regs()[0x103F] & 15, i, k;
+    float inv_area;
+    Plane e0, e1, e2;                 /* barycentric weights, positive inside */
+    Plane attr[MAX_ATTR];             /* perspective-corrected attributes (value/w) */
+    int nattr = 0, ci[2], ti[8], di, wi;
+    unsigned i, k;
+    const Vertex* v[3];
 
     if (area == 0.0f) return;
     if (g_cull_flip) area = -area;
@@ -518,39 +541,60 @@ static void raster_triangle(const uint32_t* bp, const Vertex* a, const Vertex* b
     if (maxy > sc.y1) maxy = sc.y1;
     if (minx > maxx || miny > maxy) return;
 
-    ia = 1.0f / area;
-    iwa = a->w != 0.0f ? 1.0f / a->w : 1.0f;
-    iwb = b->w != 0.0f ? 1.0f / b->w : 1.0f;
-    iwc = c->w != 0.0f ? 1.0f / c->w : 1.0f;
+    /* Orient so the weights are positive inside. */
+    v[0] = a; v[1] = b; v[2] = c;
+    if (area < 0.0f) { v[1] = c; v[2] = b; area = -area; }
+    inv_area = 1.0f / area;
+    e0 = plane_of(v[0], v[1], v[2], 1.0f, 0.0f, 0.0f, inv_area);
+    e1 = plane_of(v[0], v[1], v[2], 0.0f, 1.0f, 0.0f, inv_area);
+    e2 = plane_of(v[0], v[1], v[2], 0.0f, 0.0f, 1.0f, inv_area);
+
+    {
+        float iw0 = v[0]->w != 0.0f ? 1.0f / v[0]->w : 1.0f;
+        float iw1 = v[1]->w != 0.0f ? 1.0f / v[1]->w : 1.0f;
+        float iw2 = v[2]->w != 0.0f ? 1.0f / v[2]->w : 1.0f;
+        di = nattr; attr[nattr++] = plane_of(v[0], v[1], v[2], v[0]->depth, v[1]->depth, v[2]->depth, inv_area);
+        wi = nattr; attr[nattr++] = plane_of(v[0], v[1], v[2], iw0, iw1, iw2, inv_area);
+        for (i = 0; i < 2; i++) {
+            const float* c0 = &v[0]->col[i].r; const float* c1 = &v[1]->col[i].r; const float* c2 = &v[2]->col[i].r;
+            ci[i] = nattr;
+            for (k = 0; k < 4; k++)
+                attr[nattr++] = plane_of(v[0], v[1], v[2], c0[k] * iw0, c1[k] * iw1, c2[k] * iw2, inv_area);
+        }
+        for (i = 0; i < 8; i++) {
+            ti[i] = -1;
+            if (!((g_ntex >> i) & 1)) continue;
+            ti[i] = nattr;
+            for (k = 0; k < 3; k++)
+                attr[nattr++] = plane_of(v[0], v[1], v[2], v[0]->tex[i][k] * iw0, v[1]->tex[i][k] * iw1, v[2]->tex[i][k] * iw2, inv_area);
+        }
+    }
 
     for (y = miny; y <= maxy; y++) {
         float py = (float)y + 0.5f;
+        float px0 = (float)minx + 0.5f;
+        float w0 = e0.a * px0 + e0.b * py + e0.c, w1 = e1.a * px0 + e1.b * py + e1.c, w2 = e2.a * px0 + e2.b * py + e2.c;
+        float av[MAX_ATTR];
+        int n;
+        for (n = 0; n < nattr; n++) av[n] = attr[n].a * px0 + attr[n].b * py + attr[n].c;
         for (x = minx; x <= maxx; x++) {
-            float px = (float)x + 0.5f;
-            float w0 = ((b->sx - px) * (c->sy - py) - (c->sx - px) * (b->sy - py)) * ia;
-            float w1 = ((c->sx - px) * (a->sy - py) - (a->sx - px) * (c->sy - py)) * ia;
-            float w2 = 1.0f - w0 - w1;
-            float pa, pb, pc, denom, depth;
-            Color4 col[2];
-            float tex[8][3];
-            if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) { g_rej_bary++; continue; }
-            /* perspective-correct weights */
-            pa = w0 * iwa; pb = w1 * iwb; pc = w2 * iwc;
-            denom = pa + pb + pc;
-            if (denom == 0.0f) continue;
-            pa /= denom; pb /= denom; pc /= denom;
-            depth = w0 * a->depth + w1 * b->depth + w2 * c->depth;
-            for (i = 0; i < 2; i++) {
-                col[i].r = pa * a->col[i].r + pb * b->col[i].r + pc * c->col[i].r;
-                col[i].g = pa * a->col[i].g + pb * b->col[i].g + pc * c->col[i].g;
-                col[i].b = pa * a->col[i].b + pb * b->col[i].b + pc * c->col[i].b;
-                col[i].a = pa * a->col[i].a + pb * b->col[i].a + pc * c->col[i].a;
-            }
-            for (i = 0; i < 8; i++) {
-                if (i >= ntex) { tex[i][0] = tex[i][1] = 0; tex[i][2] = 1; continue; }
-                for (k = 0; k < 3; k++) tex[i][k] = pa * a->tex[i][k] + pb * b->tex[i][k] + pc * c->tex[i][k];
-            }
-            shade(bp, x, y, col, tex, depth);
+            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+                float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
+                int col[2][4];
+                float tex[8][3];
+                for (i = 0; i < 2; i++)
+                    for (k = 0; k < 4; k++) {
+                        int cv = (int)(av[ci[i] + k] * w * 255.0f + 0.5f);
+                        col[i][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
+                    }
+                for (i = 0; i < 8; i++) {
+                    if (ti[i] < 0) { tex[i][0] = tex[i][1] = 0.0f; tex[i][2] = 1.0f; continue; }
+                    tex[i][0] = av[ti[i]] * w; tex[i][1] = av[ti[i] + 1] * w; tex[i][2] = av[ti[i] + 2] * w;
+                }
+                shade(bp, x, y, col, tex, av[di]);
+            } else g_rej_bary++;
+            w0 += e0.a; w1 += e1.a; w2 += e2.a;
+            for (n = 0; n < nattr; n++) av[n] += attr[n].a;
         }
     }
 }
@@ -561,26 +605,25 @@ static void raster_line(const uint32_t* bp, const Vertex* a, const Vertex* b)
     float dx = b->sx - a->sx, dy = b->sy - a->sy;
     float len = fmaxf(fabsf(dx), fabsf(dy));
     int n = (int)ceilf(len), i;
-    unsigned ntex = gx_xf_regs()[0x103F] & 15, t, k;
+    unsigned t, k;
     scissor_rect(bp, &sc);
     g_lines++;
     if (n < 1) n = 1;
     for (i = 0; i <= n; i++) {
         float f = (float)i / (float)n;
         int x = (int)floorf(a->sx + dx * f), y = (int)floorf(a->sy + dy * f);
-        Color4 col[2];
+        int col[2][4];
         float tex[8][3];
         if (x < sc.x0 || x > sc.x1 || y < sc.y0 || y > sc.y1) continue;
         for (t = 0; t < 2; t++) {
-            col[t].r = a->col[t].r + (b->col[t].r - a->col[t].r) * f;
-            col[t].g = a->col[t].g + (b->col[t].g - a->col[t].g) * f;
-            col[t].b = a->col[t].b + (b->col[t].b - a->col[t].b) * f;
-            col[t].a = a->col[t].a + (b->col[t].a - a->col[t].a) * f;
+            const float* ca = &a->col[t].r; const float* cb = &b->col[t].r;
+            for (k = 0; k < 4; k++) {
+                int cv = (int)((ca[k] + (cb[k] - ca[k]) * f) * 255.0f + 0.5f);
+                col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
+            }
         }
-        for (t = 0; t < 8; t++) {
-            if (t >= ntex) { tex[t][0] = tex[t][1] = 0; tex[t][2] = 1; continue; }
+        for (t = 0; t < 8; t++)
             for (k = 0; k < 3; k++) tex[t][k] = a->tex[t][k] + (b->tex[t][k] - a->tex[t][k]) * f;
-        }
         shade(bp, x, y, col, tex, a->depth + (b->depth - a->depth) * f);
     }
 }
@@ -589,10 +632,16 @@ static void raster_point(const uint32_t* bp, const Vertex* a)
 {
     Rect sc;
     int x = (int)floorf(a->sx), y = (int)floorf(a->sy);
+    int col[2][4];
+    unsigned t, k;
     scissor_rect(bp, &sc);
     g_points++;
     if (x < sc.x0 || x > sc.x1 || y < sc.y0 || y > sc.y1) return;
-    shade(bp, x, y, a->col, a->tex, a->depth);
+    for (t = 0; t < 2; t++) {
+        const float* ca = &a->col[t].r;
+        for (k = 0; k < 4; k++) { int cv = (int)(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
+    }
+    shade(bp, x, y, col, a->tex, a->depth);
 }
 
 /* ---- clipping ----------------------------------------------------------- */
@@ -688,6 +737,8 @@ void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, un
      * worth rasterizing; the game then runs at full speed between them. */
     if (g_frames_every && !g_png_path[0] && (g_frame_no % g_frames_every) != 0) return;
     tex_set_memory(s);
+    g_T = tev_prepare(bp);
+    g_ntex = tev_used_tex(g_T) & ((1u << (xf[0x103F] & 15)) - 1u);
     v = (Vertex*)malloc(sizeof(Vertex) * count);
     if (!v) return;
     for (i = 0; i < count; i++) {

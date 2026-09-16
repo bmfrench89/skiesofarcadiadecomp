@@ -37,7 +37,11 @@ void gxr_report(void);
 void gxr_reset_efb(void);
 
 /* TEV / textures (gxr_tev.c) */
-void tev_pixel(const uint32_t* bp, const Color4 ras[2], const float tex[8][3], uint8_t out[4], int* alpha_pass);
+typedef struct TevSetup TevSetup;
+const TevSetup* tev_prepare(const uint32_t* bp);
+unsigned tev_used_tex(const TevSetup* T);
+unsigned tev_used_chan(const TevSetup* T);
+void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], uint8_t out[4], int* alpha_pass);
 void tev_register_written(uint32_t reg, uint32_t v);
 void tex_invalidate_all(void);
 void tex_set_memory(CpuState* s);

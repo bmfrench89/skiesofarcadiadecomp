@@ -3,6 +3,11 @@
  * TEV combiner stages. Register layouts follow the hardware (BP register
  * numbers in comments); the arithmetic follows the documented fixed-point
  * combiner: lerp in 8.8, bias, shift, clamp to 8 or 11 bits.
+ *
+ * Everything that can be decided per draw is decided once, in
+ * tev_prepare: stage selectors, konst values, swap tables, and the decoded
+ * textures with their scale and wrap modes. The per-pixel path then only
+ * indexes.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
@@ -19,13 +24,7 @@ void tex_set_memory(CpuState* s)
     g_s = s;
 }
 
-void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes)
-{
-    if (tmem_off + bytes > sizeof g_tmem || (src & MEM_MASK) + bytes > MEM1_SIZE) return;
-    memcpy(g_tmem + tmem_off, mem_ptr(s, src), bytes);
-}
-
-/* ---- texture decode --------------------------------------------------- */
+/* ---- texture cache ------------------------------------------------------ */
 
 typedef struct {
     uint32_t addr, fmt, w, h, tlut_off, tlut_fmt;
@@ -42,6 +41,22 @@ void tex_invalidate_all(void)
     int i;
     for (i = 0; i < TEX_CACHE; i++) { free(g_cache[i].rgba); g_cache[i].rgba = NULL; g_cache[i].addr = 0; }
 }
+
+void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes)
+{
+    int i;
+    if (tmem_off + bytes > sizeof g_tmem || (src & MEM_MASK) + bytes > MEM1_SIZE) return;
+    memcpy(g_tmem + tmem_off, mem_ptr(s, src), bytes);
+    /* palettised textures decoded through this range are stale now */
+    for (i = 0; i < TEX_CACHE; i++) {
+        TexEntry* e = &g_cache[i];
+        if (e->rgba && (e->fmt == 8 || e->fmt == 9 || e->fmt == 10) && e->tlut_off < tmem_off + bytes && e->tlut_off + 32768 > tmem_off) {
+            free(e->rgba); e->rgba = NULL; e->addr = 0;
+        }
+    }
+}
+
+/* ---- texture decode --------------------------------------------------- */
 
 static void tlut_color(uint32_t tlut_off, uint32_t tlut_fmt, unsigned index, uint8_t* out)
 {
@@ -242,62 +257,37 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
     }
 }
 
-/* ---- sampling ----------------------------------------------------------- */
+/* ---- per-draw setup ------------------------------------------------------ */
 
-static int wrap(int i, int size, unsigned mode)
-{
-    if (size <= 0) return 0;
-    switch (mode) {
-    case 0: return i < 0 ? 0 : (i >= size ? size - 1 : i); /* clamp */
-    case 1: i %= size; return i < 0 ? i + size : i;         /* repeat */
-    default: {                                              /* mirror */
-        int period = 2 * size;
-        i %= period;
-        if (i < 0) i += period;
-        return i < size ? i : period - 1 - i;
-    }
-    }
-}
+typedef struct {
+    uint8_t texmap, texcoord, texen, chan;
+    uint8_t rswap[4], tswap[4];
+    uint8_t ca, cb, cc, cd, aa, ab, ac, ad;
+    uint8_t cbias, cop, cclamp, cshift, cdest;
+    uint8_t abias, aop, aclamp, ashift, adest;
+    int konst[4];
+} Stage;
 
-static void sample(const uint32_t* bp, unsigned map, float s, float t, uint8_t out[4])
-{
-    unsigned rb = map < 4 ? map : 0x20 + (map - 4);
-    uint32_t mode0 = bp[0x80 + rb], image0 = bp[0x88 + rb], image3 = bp[0x94 + rb], tlut = bp[0x98 + rb];
-    uint32_t w = (image0 & 0x3FF) + 1, h = ((image0 >> 10) & 0x3FF) + 1, fmt = (image0 >> 20) & 15;
-    uint32_t addr = (image3 & 0x1FFFFF) << 5;
-    uint32_t tlut_off = (tlut & 0x3FF) << 9, tlut_fmt = (tlut >> 10) & 3;
-    const TexEntry* te = texture(addr, fmt, w, h, tlut_off, tlut_fmt);
-    unsigned wrap_s = mode0 & 3, wrap_t = (mode0 >> 2) & 3;
-    int linear = (mode0 >> 4) & 1;
-    /* Texture coordinate scale (SU_TS0/TS1, GXSetTexCoordScaleManually / GXLoadTexObj). */
-    float u = s * (float)((bp[0x30 + 2 * map] & 0xFFFF) + 1);
-    float v = t * (float)((bp[0x31 + 2 * map] & 0xFFFF) + 1);
+typedef struct {
+    const uint8_t* rgba;
+    int w, h;
+    unsigned wrap_s, wrap_t;
+    int linear;
+    float scale_s, scale_t;
+} TexCfg;
 
-    if (!te->rgba) { out[0] = out[1] = out[2] = out[3] = 0; return; }
-    if (!linear) {
-        int x = wrap((int)floorf(u), (int)w, wrap_s), y = wrap((int)floorf(v), (int)h, wrap_t);
-        memcpy(out, te->rgba + ((size_t)y * w + x) * 4, 4);
-    } else {
-        float fu = u - 0.5f, fv = v - 0.5f;
-        int x0 = (int)floorf(fu), y0 = (int)floorf(fv);
-        float ax = fu - (float)x0, ay = fv - (float)y0;
-        int xa = wrap(x0, (int)w, wrap_s), xb = wrap(x0 + 1, (int)w, wrap_s);
-        int ya = wrap(y0, (int)h, wrap_t), yb = wrap(y0 + 1, (int)h, wrap_t);
-        const uint8_t* p00 = te->rgba + ((size_t)ya * w + xa) * 4;
-        const uint8_t* p10 = te->rgba + ((size_t)ya * w + xb) * 4;
-        const uint8_t* p01 = te->rgba + ((size_t)yb * w + xa) * 4;
-        const uint8_t* p11 = te->rgba + ((size_t)yb * w + xb) * 4;
-        int i;
-        for (i = 0; i < 4; i++) {
-            float top = p00[i] + (p10[i] - p00[i]) * ax;
-            float bot = p01[i] + (p11[i] - p01[i]) * ax;
-            float val = top + (bot - top) * ay;
-            out[i] = (uint8_t)(val + 0.5f);
-        }
-    }
-}
+struct TevSetup {
+    unsigned stages;
+    Stage st[16];
+    TexCfg tex[8];
+    unsigned used_tex;   /* bit per texcoord slot read by an enabled stage */
+    unsigned used_chan;  /* bit per rasterized channel read */
+    int aref0, aref1;
+    unsigned acomp0, acomp1, alogic;
+    int reg_init[4][4];
+};
 
-/* ---- TEV ---------------------------------------------------------------- */
+static TevSetup g_setup;
 
 /* Color and konst registers are written through BP 0xE0-0xE7; bit 23 of the
  * RA half says which set. Kept here, latched as the writes arrive. */
@@ -323,26 +313,129 @@ void tev_register_written(uint32_t reg, uint32_t v)
     }
 }
 
-static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
-static int clamp_s11(int v) { return v < -1024 ? -1024 : (v > 1023 ? 1023 : v); }
-
-static void swap_apply(const uint32_t* bp, unsigned table, const uint8_t in[4], uint8_t out[4])
-{
-    uint32_t k0 = bp[0xF6 + 2 * table], k1 = bp[0xF7 + 2 * table];
-    unsigned sel[4] = {k0 & 3, (k0 >> 2) & 3, k1 & 3, (k1 >> 2) & 3};
-    int i;
-    for (i = 0; i < 4; i++) out[i] = in[sel[i]];
-}
-
-static int konst_value(unsigned sel, const uint8_t konst[4][4], int channel)
+static int konst_value(unsigned sel, int channel)
 {
     if (sel < 8) { int v = (8 - (int)sel) * 32; return v > 255 ? 255 : v; }
-    if (sel >= 12 && sel < 16) return channel < 3 ? konst[sel - 12][channel] : konst[sel - 12][3];
-    if (sel >= 16 && sel < 32) return konst[(sel - 16) & 3][(sel - 16) >> 2];
+    if (sel >= 12 && sel < 16) return channel < 3 ? g_tev_konst[sel - 12][channel] : g_tev_konst[sel - 12][3];
+    if (sel >= 16 && sel < 32) return g_tev_konst[(sel - 16) & 3][(sel - 16) >> 2];
     return 0;
 }
 
-static int compare(unsigned mode, int a, int b)
+const TevSetup* tev_prepare(const uint32_t* bp)
+{
+    TevSetup* T = &g_setup;
+    unsigned st, i, j;
+    uint32_t ac = bp[0xF3];
+
+    T->stages = ((bp[0] >> 10) & 15) + 1;
+    T->used_tex = 0;
+    T->used_chan = 0;
+    for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) T->reg_init[i][j] = g_tev_reg[i][j];
+    T->aref0 = ac & 0xFF; T->aref1 = (ac >> 8) & 0xFF;
+    T->acomp0 = (ac >> 16) & 7; T->acomp1 = (ac >> 19) & 7; T->alogic = (ac >> 22) & 3;
+
+    for (st = 0; st < T->stages; st++) {
+        Stage* S = &T->st[st];
+        uint32_t tref = bp[0x28 + st / 2] >> ((st & 1) * 12);
+        uint32_t cenv = bp[0xC0 + 2 * st], aenv = bp[0xC1 + 2 * st];
+        uint32_t ksel = bp[0xF6 + st / 2];
+        unsigned kc = (st & 1) ? (ksel >> 14) & 31 : (ksel >> 4) & 31;
+        unsigned ka = (st & 1) ? (ksel >> 19) & 31 : (ksel >> 9) & 31;
+        unsigned rs = aenv & 3, ts = (aenv >> 2) & 3;
+        uint32_t k0, k1;
+        S->texmap = tref & 7; S->texcoord = (tref >> 3) & 7; S->texen = (tref >> 6) & 1; S->chan = (tref >> 7) & 7;
+        S->cd = cenv & 15; S->cc = (cenv >> 4) & 15; S->cb = (cenv >> 8) & 15; S->ca = (cenv >> 12) & 15;
+        S->cbias = (cenv >> 16) & 3; S->cop = (cenv >> 18) & 1; S->cclamp = (cenv >> 19) & 1; S->cshift = (cenv >> 20) & 3; S->cdest = (cenv >> 22) & 3;
+        S->ad = (aenv >> 4) & 7; S->ac = (aenv >> 7) & 7; S->ab = (aenv >> 10) & 7; S->aa = (aenv >> 13) & 7;
+        S->abias = (aenv >> 16) & 3; S->aop = (aenv >> 18) & 1; S->aclamp = (aenv >> 19) & 1; S->ashift = (aenv >> 20) & 3; S->adest = (aenv >> 22) & 3;
+        k0 = bp[0xF6 + 2 * rs]; k1 = bp[0xF7 + 2 * rs];
+        S->rswap[0] = k0 & 3; S->rswap[1] = (k0 >> 2) & 3; S->rswap[2] = k1 & 3; S->rswap[3] = (k1 >> 2) & 3;
+        k0 = bp[0xF6 + 2 * ts]; k1 = bp[0xF7 + 2 * ts];
+        S->tswap[0] = k0 & 3; S->tswap[1] = (k0 >> 2) & 3; S->tswap[2] = k1 & 3; S->tswap[3] = (k1 >> 2) & 3;
+        for (i = 0; i < 3; i++) S->konst[i] = konst_value(kc, (int)i);
+        S->konst[3] = konst_value(ka, 3);
+        if (S->texen) T->used_tex |= 1u << S->texcoord;
+        if (S->chan < 2) T->used_chan |= 1u << S->chan;
+    }
+
+    /* textures: decode (cached) and resolve sampling state per map used */
+    for (i = 0; i < 8; i++) T->tex[i].rgba = NULL;
+    for (st = 0; st < T->stages; st++) {
+        Stage* S = &T->st[st];
+        unsigned map = S->texmap, rb;
+        TexCfg* C;
+        uint32_t mode0, image0, image3, tlut, w, h, fmt, addr, tlut_off, tlut_fmt;
+        const TexEntry* te;
+        if (!S->texen) continue;
+        C = &T->tex[map];
+        if (C->rgba) continue;
+        rb = map < 4 ? map : 0x20 + (map - 4);
+        mode0 = bp[0x80 + rb]; image0 = bp[0x88 + rb]; image3 = bp[0x94 + rb]; tlut = bp[0x98 + rb];
+        w = (image0 & 0x3FF) + 1; h = ((image0 >> 10) & 0x3FF) + 1; fmt = (image0 >> 20) & 15;
+        addr = (image3 & 0x1FFFFF) << 5;
+        tlut_off = (tlut & 0x3FF) << 9; tlut_fmt = (tlut >> 10) & 3;
+        te = texture(addr, fmt, w, h, tlut_off, tlut_fmt);
+        C->rgba = te->rgba;
+        C->w = (int)w; C->h = (int)h;
+        C->wrap_s = mode0 & 3; C->wrap_t = (mode0 >> 2) & 3;
+        C->linear = (mode0 >> 4) & 1;
+        C->scale_s = (float)((bp[0x30 + 2 * map] & 0xFFFF) + 1);
+        C->scale_t = (float)((bp[0x31 + 2 * map] & 0xFFFF) + 1);
+    }
+    return T;
+}
+
+unsigned tev_used_tex(const TevSetup* T) { return T->used_tex; }
+unsigned tev_used_chan(const TevSetup* T) { return T->used_chan; }
+
+/* ---- sampling ----------------------------------------------------------- */
+
+static inline int wrap(int i, int size, unsigned mode)
+{
+    switch (mode) {
+    case 0: return i < 0 ? 0 : (i >= size ? size - 1 : i);
+    case 1: i %= size; return i < 0 ? i + size : i;
+    default: {
+        int period = 2 * size;
+        i %= period;
+        if (i < 0) i += period;
+        return i < size ? i : period - 1 - i;
+    }
+    }
+}
+
+static inline void sample(const TexCfg* C, float s, float t, uint8_t out[4])
+{
+    float u = s * C->scale_s, v = t * C->scale_t;
+    if (!C->rgba || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
+    if (!C->linear) {
+        int x = wrap((int)floorf(u), C->w, C->wrap_s), y = wrap((int)floorf(v), C->h, C->wrap_t);
+        memcpy(out, C->rgba + ((size_t)y * C->w + x) * 4, 4);
+    } else {
+        float fu = u - 0.5f, fv = v - 0.5f;
+        int x0 = (int)floorf(fu), y0 = (int)floorf(fv);
+        int ax = (int)((fu - (float)x0) * 256.0f), ay = (int)((fv - (float)y0) * 256.0f);
+        int xa = wrap(x0, C->w, C->wrap_s), xb = wrap(x0 + 1, C->w, C->wrap_s);
+        int ya = wrap(y0, C->h, C->wrap_t), yb = wrap(y0 + 1, C->h, C->wrap_t);
+        const uint8_t* p00 = C->rgba + ((size_t)ya * C->w + xa) * 4;
+        const uint8_t* p10 = C->rgba + ((size_t)ya * C->w + xb) * 4;
+        const uint8_t* p01 = C->rgba + ((size_t)yb * C->w + xa) * 4;
+        const uint8_t* p11 = C->rgba + ((size_t)yb * C->w + xb) * 4;
+        int i;
+        for (i = 0; i < 4; i++) {
+            int top = p00[i] * (256 - ax) + p10[i] * ax;
+            int bot = p01[i] * (256 - ax) + p11[i] * ax;
+            out[i] = (uint8_t)((top * (256 - ay) + bot * ay + 32768) >> 16);
+        }
+    }
+}
+
+/* ---- TEV ---------------------------------------------------------------- */
+
+static inline int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+static inline int clamp_s11(int v) { return v < -1024 ? -1024 : (v > 1023 ? 1023 : v); }
+
+static inline int compare(unsigned mode, int a, int b)
 {
     switch (mode) {
     case 0: return 0;
@@ -356,78 +449,80 @@ static int compare(unsigned mode, int a, int b)
     }
 }
 
-/* Runs the stages for one pixel. ras[]: rasterized channel colors 0..1;
- * tex[]: texture coordinates per texcoord slot. Writes RGBA 0..255. */
-void tev_pixel(const uint32_t* bp, const Color4 ras[2], const float tex[8][3], uint8_t out[4], int* alpha_pass)
+/* Color input selector (GX_CC_*) for channel i. */
+static inline int cin(unsigned sel, int i, int reg[4][4], const uint8_t texc[4], const uint8_t rasc[4], const int konst[4])
 {
-    unsigned stages = ((bp[0] >> 10) & 15) + 1, st;
+    switch (sel) {
+    case 0: return reg[0][i]; case 1: return reg[0][3];
+    case 2: return reg[1][i]; case 3: return reg[1][3];
+    case 4: return reg[2][i]; case 5: return reg[2][3];
+    case 6: return reg[3][i]; case 7: return reg[3][3];
+    case 8: return texc[i];   case 9: return texc[3];
+    case 10: return rasc[i];  case 11: return rasc[3];
+    case 12: return 255;      case 13: return 128;
+    case 14: return konst[i]; default: return 0;
+    }
+}
+
+static inline int ain(unsigned sel, int reg[4][4], const uint8_t texc[4], const uint8_t rasc[4], const int konst[4])
+{
+    switch (sel) {
+    case 0: return reg[0][3]; case 1: return reg[1][3]; case 2: return reg[2][3]; case 3: return reg[3][3];
+    case 4: return texc[3]; case 5: return rasc[3]; case 6: return konst[3]; default: return 0;
+    }
+}
+
+/* Runs the stages for one pixel. ras[]: rasterized channel colors 0..255;
+ * tex[]: texture coordinates per texcoord slot (s, t, q). */
+void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][3], uint8_t out[4], int* alpha_pass)
+{
+    unsigned st;
     int reg[4][4];
     int i, j;
-    for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) reg[i][j] = g_tev_reg[i][j];
+    for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) reg[i][j] = T->reg_init[i][j];
 
-    for (st = 0; st < stages; st++) {
-        uint32_t tref = bp[0x28 + st / 2] >> ((st & 1) * 12);
-        unsigned texmap = tref & 7, texcoord = (tref >> 3) & 7, texen = (tref >> 6) & 1, chan = (tref >> 7) & 7;
-        uint32_t cenv = bp[0xC0 + 2 * st], aenv = bp[0xC1 + 2 * st];
-        uint32_t ksel = bp[0xF6 + st / 2];
-        unsigned kc = (st & 1) ? (ksel >> 14) & 31 : (ksel >> 4) & 31;
-        unsigned ka = (st & 1) ? (ksel >> 19) & 31 : (ksel >> 9) & 31;
-        unsigned rswap = aenv & 3, tswap = (aenv >> 2) & 3;
+    for (st = 0; st < T->stages; st++) {
+        const Stage* S = &T->st[st];
         uint8_t texc[4] = {0, 0, 0, 0}, rasc[4] = {0, 0, 0, 0}, tmp[4];
-        int konstc[4];
-        int in_c[16][3], in_a[8];
-        int sel_d = cenv & 15, sel_c = (cenv >> 4) & 15, sel_b = (cenv >> 8) & 15, sel_a = (cenv >> 12) & 15;
-        unsigned bias = (cenv >> 16) & 3, op = (cenv >> 18) & 1, clamp = (cenv >> 19) & 1, shift = (cenv >> 20) & 3, dest = (cenv >> 22) & 3;
-        int asel_d = (aenv >> 4) & 7, asel_c = (aenv >> 7) & 7, asel_b = (aenv >> 10) & 7, asel_a = (aenv >> 13) & 7;
-        unsigned abias = (aenv >> 16) & 3, aop = (aenv >> 18) & 1, aclamp = (aenv >> 19) & 1, ashift = (aenv >> 20) & 3, adest = (aenv >> 22) & 3;
 
-        if (texen) {
-            float q = tex[texcoord][2];
-            float s = q != 0.0f ? tex[texcoord][0] / q : tex[texcoord][0];
-            float t = q != 0.0f ? tex[texcoord][1] / q : tex[texcoord][1];
-            sample(bp, texmap, s, t, tmp);
-            swap_apply(bp, tswap, tmp, texc);
+        if (S->texen) {
+            const float* tc = tex[S->texcoord];
+            float q = tc[2];
+            float s = q != 0.0f ? tc[0] / q : tc[0];
+            float t = q != 0.0f ? tc[1] / q : tc[1];
+            sample(&T->tex[S->texmap], s, t, tmp);
+            for (i = 0; i < 4; i++) texc[i] = tmp[S->tswap[i]];
         }
-        if (chan < 2) {
-            tmp[0] = (uint8_t)clamp255((int)(ras[chan].r * 255.0f + 0.5f));
-            tmp[1] = (uint8_t)clamp255((int)(ras[chan].g * 255.0f + 0.5f));
-            tmp[2] = (uint8_t)clamp255((int)(ras[chan].b * 255.0f + 0.5f));
-            tmp[3] = (uint8_t)clamp255((int)(ras[chan].a * 255.0f + 0.5f));
-            swap_apply(bp, rswap, tmp, rasc);
+        if (S->chan < 2) {
+            const int* r = ras[S->chan];
+            tmp[0] = (uint8_t)r[0]; tmp[1] = (uint8_t)r[1]; tmp[2] = (uint8_t)r[2]; tmp[3] = (uint8_t)r[3];
+            for (i = 0; i < 4; i++) rasc[i] = tmp[S->rswap[i]];
         }
-        for (i = 0; i < 3; i++) konstc[i] = konst_value(kc, g_tev_konst, i);
-        konstc[3] = konst_value(ka, g_tev_konst, 3);
-
-        for (i = 0; i < 3; i++) {
-            in_c[0][i] = reg[0][i]; in_c[1][i] = reg[0][3];
-            in_c[2][i] = reg[1][i]; in_c[3][i] = reg[1][3];
-            in_c[4][i] = reg[2][i]; in_c[5][i] = reg[2][3];
-            in_c[6][i] = reg[3][i]; in_c[7][i] = reg[3][3];
-            in_c[8][i] = texc[i];   in_c[9][i] = texc[3];
-            in_c[10][i] = rasc[i];  in_c[11][i] = rasc[3];
-            in_c[12][i] = 255;      in_c[13][i] = 128;
-            in_c[14][i] = konstc[i]; in_c[15][i] = 0;
-        }
-        in_a[0] = reg[0][3]; in_a[1] = reg[1][3]; in_a[2] = reg[2][3]; in_a[3] = reg[3][3];
-        in_a[4] = texc[3]; in_a[5] = rasc[3]; in_a[6] = konstc[3]; in_a[7] = 0;
 
         /* Color */
-        if (bias != 3) {
+        if (S->cbias != 3) {
             for (i = 0; i < 3; i++) {
-                int a = in_c[sel_a][i] & 0xFF, b = in_c[sel_b][i] & 0xFF, c = in_c[sel_c][i] & 0xFF, d = in_c[sel_d][i];
+                int a = cin(S->ca, i, reg, texc, rasc, S->konst) & 0xFF;
+                int b = cin(S->cb, i, reg, texc, rasc, S->konst) & 0xFF;
+                int c = cin(S->cc, i, reg, texc, rasc, S->konst) & 0xFF;
+                int d = cin(S->cd, i, reg, texc, rasc, S->konst);
                 int cc = c + (c >> 7);
-                int lerp = a * (256 - cc) + b * cc;
-                int v = (lerp + 128) >> 8;
+                int v = (a * (256 - cc) + b * cc + 128) >> 8;
                 int r;
-                if (op) v = -v;
-                r = d + v + (bias == 1 ? 128 : bias == 2 ? -128 : 0);
-                if (shift == 1) r <<= 1; else if (shift == 2) r <<= 2; else if (shift == 3) r >>= 1;
-                reg[dest][i] = clamp ? clamp255(r) : clamp_s11(r);
+                if (S->cop) v = -v;
+                r = d + v + (S->cbias == 1 ? 128 : S->cbias == 2 ? -128 : 0);
+                if (S->cshift == 1) r <<= 1; else if (S->cshift == 2) r <<= 2; else if (S->cshift == 3) r >>= 1;
+                reg[S->cdest][i] = S->cclamp ? clamp255(r) : clamp_s11(r);
             }
         } else {
-            unsigned cmp = (shift << 1) | op;
+            unsigned cmp = (S->cshift << 1) | S->cop;
             int a[3], b[3], c[3], d[3], res;
-            for (i = 0; i < 3; i++) { a[i] = in_c[sel_a][i] & 0xFF; b[i] = in_c[sel_b][i] & 0xFF; c[i] = in_c[sel_c][i]; d[i] = in_c[sel_d][i]; }
+            for (i = 0; i < 3; i++) {
+                a[i] = cin(S->ca, i, reg, texc, rasc, S->konst) & 0xFF;
+                b[i] = cin(S->cb, i, reg, texc, rasc, S->konst) & 0xFF;
+                c[i] = cin(S->cc, i, reg, texc, rasc, S->konst);
+                d[i] = cin(S->cd, i, reg, texc, rasc, S->konst);
+            }
             switch (cmp >> 1) {
             case 0: res = cmp & 1 ? a[0] == b[0] : a[0] > b[0]; break;
             case 1: { int av = (a[1] << 8) | a[0], bv = (b[1] << 8) | b[0]; res = cmp & 1 ? av == bv : av > bv; break; }
@@ -437,27 +532,29 @@ void tev_pixel(const uint32_t* bp, const Color4 ras[2], const float tex[8][3], u
             for (i = 0; i < 3; i++) {
                 int r = res == -1 ? ((cmp & 1 ? a[i] == b[i] : a[i] > b[i]) ? c[i] : 0) : (res ? c[i] : 0);
                 r += d[i];
-                reg[dest][i] = clamp ? clamp255(r) : clamp_s11(r);
+                reg[S->cdest][i] = S->cclamp ? clamp255(r) : clamp_s11(r);
             }
         }
         /* Alpha */
-        if (abias != 3) {
-            int a = in_a[asel_a] & 0xFF, b = in_a[asel_b] & 0xFF, c = in_a[asel_c] & 0xFF, d = in_a[asel_d];
+        if (S->abias != 3) {
+            int a = ain(S->aa, reg, texc, rasc, S->konst) & 0xFF;
+            int b = ain(S->ab, reg, texc, rasc, S->konst) & 0xFF;
+            int c = ain(S->ac, reg, texc, rasc, S->konst) & 0xFF;
+            int d = ain(S->ad, reg, texc, rasc, S->konst);
             int cc = c + (c >> 7);
-            int lerp = a * (256 - cc) + b * cc;
-            int v = (lerp + 128) >> 8, r;
-            if (aop) v = -v;
-            r = d + v + (abias == 1 ? 128 : abias == 2 ? -128 : 0);
-            if (ashift == 1) r <<= 1; else if (ashift == 2) r <<= 2; else if (ashift == 3) r >>= 1;
-            reg[adest][3] = aclamp ? clamp255(r) : clamp_s11(r);
+            int v = (a * (256 - cc) + b * cc + 128) >> 8, r;
+            if (S->aop) v = -v;
+            r = d + v + (S->abias == 1 ? 128 : S->abias == 2 ? -128 : 0);
+            if (S->ashift == 1) r <<= 1; else if (S->ashift == 2) r <<= 2; else if (S->ashift == 3) r >>= 1;
+            reg[S->adest][3] = S->aclamp ? clamp255(r) : clamp_s11(r);
         } else {
-            unsigned cmp = (ashift << 1) | aop;
-            int a = in_a[asel_a] & 0xFF, b = in_a[asel_b] & 0xFF, c = in_a[asel_c], d = in_a[asel_d];
-            int res;
-            switch (cmp >> 1) { /* the wide compares use the color inputs; approximate with alpha */
-            default: res = cmp & 1 ? a == b : a > b; break;
-            }
-            reg[adest][3] = aclamp ? clamp255(d + (res ? c : 0)) : clamp_s11(d + (res ? c : 0));
+            unsigned cmp = (S->ashift << 1) | S->aop;
+            int a = ain(S->aa, reg, texc, rasc, S->konst) & 0xFF;
+            int b = ain(S->ab, reg, texc, rasc, S->konst) & 0xFF;
+            int c = ain(S->ac, reg, texc, rasc, S->konst);
+            int d = ain(S->ad, reg, texc, rasc, S->konst);
+            int res = cmp & 1 ? a == b : a > b;
+            reg[S->adest][3] = S->aclamp ? clamp255(d + (res ? c : 0)) : clamp_s11(d + (res ? c : 0));
         }
     }
 
@@ -465,11 +562,8 @@ void tev_pixel(const uint32_t* bp, const Color4 ras[2], const float tex[8][3], u
 
     /* Alpha compare (PE_ALPHA_COMPARE, GXSetAlphaCompare). */
     {
-        uint32_t ac = bp[0xF3];
-        int ref0 = ac & 0xFF, ref1 = (ac >> 8) & 0xFF;
-        unsigned comp0 = (ac >> 16) & 7, comp1 = (ac >> 19) & 7, logic = (ac >> 22) & 3;
-        int p0 = compare(comp0, out[3], ref0), p1 = compare(comp1, out[3], ref1);
-        switch (logic) {
+        int p0 = compare(T->acomp0, out[3], T->aref0), p1 = compare(T->acomp1, out[3], T->aref1);
+        switch (T->alogic) {
         case 0: *alpha_pass = p0 && p1; break;
         case 1: *alpha_pass = p0 || p1; break;
         case 2: *alpha_pass = p0 != p1; break;
