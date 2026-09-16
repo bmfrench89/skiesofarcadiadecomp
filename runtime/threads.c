@@ -60,6 +60,36 @@ static GuestThread g_threads[MAX_THREADS];
 static GuestThread* g_resuming; /* set by the loader for guest_resumed */
 static void* g_main_fiber;
 static CpuState* g_s;
+static uint64_t g_saves, g_resumes, g_switches;
+
+void threads_report(void)
+{
+    int i, n = 0;
+    for (i = 0; i < MAX_THREADS; i++) n += g_threads[i].ctx != 0;
+    fprintf(stderr, "[threads] %d guest threads seen; %llu context saves, %llu resumes, %llu fiber switches\n",
+            n, (unsigned long long)g_saves, (unsigned long long)g_resumes,
+            (unsigned long long)g_switches);
+
+    /* A parked thread's guest stack says what it is waiting in: EABI keeps
+     * the back chain at 0(r1) and the saved LR at 4(caller r1). */
+    for (i = 0; i < MAX_THREADS; i++) {
+        GuestThread* t = &g_threads[i];
+        uint32_t sp, depth;
+        if (!t->ctx || !g_s) continue;
+        sp = t->saved.gpr[1];
+        fprintf(stderr, "  thread ctx %08X parked at lr %08X, r1 %08X; backtrace:", t->ctx,
+                t->saved.lr, sp);
+        for (depth = 0; depth < 14 && sp >= 0x80000000u && sp < 0x81800000u; depth++) {
+            uint32_t prev = mem_r32(g_s, sp);
+            uint32_t ret;
+            if (prev <= sp || prev >= 0x81800000u) break;
+            ret = mem_r32(g_s, prev + 4);
+            fprintf(stderr, " %08X", ret);
+            sp = prev;
+        }
+        fprintf(stderr, "\n");
+    }
+}
 
 uint32_t irq_interrupted_context(void);
 void irq_return_from_handler(void);
@@ -181,6 +211,7 @@ void guest_resumed(CpuState* s)
     restore(t, s);
     s->gpr[3] = 1; /* OSSaveContext "returns" 1 the second time */
     irq_abandon_delivery(); /* any delivery on the way here is over */
+    g_resumes++;
 }
 
 /* OSSaveContext(ctx) -- 0x80233544. */
@@ -197,6 +228,7 @@ void fn_80233544(CpuState* s)
     mem_w32(s, ctx + CTX_GPR + 4 * 3, 1); /* the guest's own setjmp trick */
     memcpy(&t->saved, s, sizeof *s);
     s->gpr[3] = 0;
+    g_saves++;
 }
 
 #ifdef _WIN32
@@ -245,6 +277,7 @@ void fn_802335C4(CpuState* s)
             g_resuming = t;
             longjmp(t->jmp, 1); /* same fiber: unwind to its savepoint */
         }
+        g_switches++;
         SwitchToFiber(t->fiber);
         resume_self(); /* we were switched back: go to our own savepoint */
     }
