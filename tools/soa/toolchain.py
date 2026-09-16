@@ -67,13 +67,26 @@ def msvc_env() -> dict[str, str] | None:
     return env if "INCLUDE" in env else None
 
 
+def cl_path() -> str | None:
+    """Full path of cl.exe in the MSVC environment, or None when there is none.
+
+    The environment captured from vcvars spells the variable ``Path`` on some
+    installs and ``PATH`` on others; look it up without regard to case.
+    """
+    env = msvc_env()
+    if env is None:
+        return None
+    path = next((v for k, v in env.items() if k.upper() == "PATH"), "")
+    return shutil.which("cl", path=path)
+
+
 def cl(args: list[str], cwd: Path | str) -> subprocess.CompletedProcess:
     env = msvc_env()
     if env is None:
         raise RuntimeError("MSVC not found")
     # CreateProcess searches the *parent's* PATH for the executable, not the
     # child environment we pass, so resolve cl.exe against the captured one.
-    exe = shutil.which("cl", path=env.get("PATH", ""))
+    exe = cl_path()
     if exe is None:
         raise RuntimeError("cl.exe not on the MSVC PATH")
     return subprocess.run(

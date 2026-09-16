@@ -274,7 +274,7 @@ int main(void) {
 """
 
 
-@pytest.mark.skipif(toolchain.msvc_env() is None, reason="MSVC not installed")
+@pytest.mark.skipif(toolchain.cl_path() is None, reason="MSVC not installed")
 def test_paired_singles_compile_and_run(tmp_path):
     """psq_l f1,0(r6),0,GQR0 ; ps_add f1,f1,f1 ; psq_st f1,8(r6),0,GQR0 ;
     psq_st f2,16(r6),0,GQR1 ; blr  -- with f2 = (1.0, 0.5) quantized to u8 x256.
@@ -306,7 +306,7 @@ def test_paired_singles_compile_and_run(tmp_path):
     assert "ps=(3,5) f32=(3,5) u8=(255,128)" in run.stdout
 
 
-@pytest.mark.skipif(toolchain.msvc_env() is None, reason="MSVC not installed")
+@pytest.mark.skipif(toolchain.cl_path() is None, reason="MSVC not installed")
 def test_translate_compile_and_run(tmp_path):
     """stw r4,0(r6); lwz r5,0(r6); add r3,r3,r5; blr  -- run natively."""
     words = [stw(4, 6, 0), lwz(5, 6, 0), add(3, 3, 5), BLR]
