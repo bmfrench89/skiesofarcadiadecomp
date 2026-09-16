@@ -239,9 +239,11 @@ def decode(word: int, addr: int = 0) -> Insn:
         kw.update(rd=_rd(word), ra=_ra(word), rb=_rb(word), rc=_rc_reg(word))
 
     elif form is Form.XL:
+        # For the CR logical ops the three slots are crbD, crbA, crbB.
         kw.update(
             bo=_rd(word),
             bi=_ra(word),
+            rb=_rb(word),
             crf_d=(word >> 23) & 7,
             crf_s=(word >> 18) & 7,
         )

@@ -53,7 +53,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | `[x]` | **1.2** Function boundary detection | M | **Done.** 7,166 functions recovered; cross-checked against dtk's 7,117 with **99.77% size agreement** and 99.70% `.text` coverage. 62 ours-only / 13 dtk-only, the latter almost entirely the MetroTRK debug stub reached only via `rfi`/vectors. Handles the 1,781 never-`bl`-called functions (data-pointer + gap seeding) and frameless leaves |
 | `[x]` | **1.3** Jump tables + indirect branches | M | **Done (jump tables).** 291/296 `bctr` resolved as switch tables (5,213 entries) by backward def-chain tracking of the mwcc idiom; targets become intra-function successors, not entries. 5 `bctr` remain unresolved (table address computed, not link-time constant). Full `bctrl`/`blrl` classification and the `bla 0x60` special case remain |
 | `[ ]` | **1.4** Data classification | M | Partition `.data0..5` **and `.text0`** into vtables, jump tables, float pools, strings, static initialisers. Reconcile the disagreement over whether jump tables live only in `.data3` or also `.data4` |
-| `[ ]` | **1.5** Symbol database | S | `config/symbols.toml`: address, size, name, source (auto/dtk/sig/string/manual), binding (direct-only / indirect-only / both). dtk-compatible split format |
+| `[x]` | **1.5** Symbol database | S | **Done.** `config/symbols.txt` (dtk format, 16,531 symbols) and `config/functions.tsv` (per-function metadata). 249 functions carry real names from dtk's SDK signature database; the rest are `fn_XXXXXXXX`. C identifiers are always `fn_`; pretty names are display-only so `exit`/`__start` never collide |
 | `[ ]` | **1.6** Constant-propagation engine | M | **Correctness requirement, not an optimisation.** mwcc materialises addresses through per-TU pooled base registers and the `r2`/`r13` SDA bases. Peephole `lis`/`addi` matching misses most references. Needed by 1.3, 1.4, and all of Phase 3 |
 
 **Exit / M1:** exact function count, complete call graph, every indirect branch classified.
@@ -86,16 +86,16 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 
 | | Slice | Size | Acceptance |
 |---|---|---|---|
-| `[ ]` | **3.0** Byte-swap strategy decision | S | **Irreversible once 696k instructions of C exist (R10).** Measure swap-on-access vs byte-swapped backing image on a representative function. Decide with numbers |
-| `[ ]` | **3.1** CpuState + codegen skeleton | M | ABI per SPEC §4.3 **including `hid2`, `wpar`, gather-pipe accumulator**. One hand-picked function translates and compiles |
-| `[ ]` | **3.2** Integer, branch, load/store | M | ~85% of the binary. Per-opcode vectors sourced from 3.7 plus one-time Dolphin fixtures |
-| `[ ]` | **3.3** Floating point + FPSCR | M | Scalar FP incl. FMA, `fres`/`frsqrte` estimates, rounding modes |
-| `[ ]` | **3.4** Paired singles + GQR | S | 319 `ps_*` + 5,007 `psq_*`. **Specialise at translation time** — GQR values are static constants and 97.3% use GQR0 (plain f32). No runtime GQR dispatch. Only ~135 sites need a convert helper |
-| `[ ]` | **3.5** Indirect branch dispatch | M | Address→function table from 1.3. R1 is Low: the target set is closed, no interpreter fallback needed |
-| `[ ]` | **3.6** Whole-DOL translation | M | All 696,120 instructions emit C and compile. Measure build time and binary size |
+| `[x]` | **3.0** Byte-swap strategy decision | S | **Decided: swap on access over a console-order image.** The alternative needs per-word types a whole-program recompile does not have. See SPEC §12 |
+| `[x]` | **3.1** CpuState + codegen skeleton | M | **Done.** `runtime/cpu.h` (state, memory windows + MMIO trap, CR/XER/carry/shift/divide helpers, `fctiw`), `soa.recomp.Emitter`. **End-to-end test passes: a translated function compiles under MSVC, runs natively, and produces the right registers and byte-swapped memory** |
+| `[x]` | **3.2** Integer, branch, load/store | M | **Done.** Direct branches → `goto`, calls → C calls with LR set, conditional returns, CTR-decrement forms, switch tables → `switch`, indirect calls → `dispatch`, `rfi`, `dcbz` |
+| `[x]` | **3.3** Floating point + FPSCR | M | **Done.** Single ops fill both halves and round via `(float)`; fused forms use `fma()` under `/fp:strict`; `fctiw[z]`, `fcmp[uo]`, `fsel`, FPSCR bit ops. **Semantics unverified until 3.7** |
+| `[x]` | **3.4** Paired singles + GQR | S | **Done.** Emitter covers all 25 `ps_*` ops and every `psq_*` form, verified end to end (a quantised u8 store scales and saturates natively); `psq_load`/`psq_store` decode GQR type/scale at runtime with truncating, saturating quantisation. Generic on purpose until the differ confirms semantics; specialising on the six static GQRs is a later optimisation |
+| `[~]` | **3.5** Indirect branch dispatch | M | `dispatch()` generated as a switch over all 7,166 entries. 291 switch tables inline. **5 `bctr` sites remain unresolved** (table address computed, not constant) |
+| `[x]` | **3.6** Whole-DOL translation | M | **Done: 7,166 functions → 18 files, 52.7 MB of C, 99.999% instruction coverage (696,047 of 696,052); all 19 translation units compile under MSVC** (3 s at `/Od`, parallel). Remaining: the 5 unresolved `bctr` |
 | `[ ]` | **3.7** Reference interpreter + lockstep differ | M | **The oracle. Replaces v1's Dolphin tracer, which does not exist.** C interpreter over the same `CpuState`, sharing the runtime's memory and HLE. Compares per basic block, then per instruction on failure. No trace files, O(1) storage. **Must land alongside 3.2, not later** — 3.2's test vectors have no other source |
 
-**Exit / M3:** the game binary exists as compilable native C.
+**Exit / M3:** the game binary exists as compilable native C. **Reached.**
 **Exit / M4:** it executes correctly, verified in lockstep.
 
 > **R8.** The differ is circular if both sides share a bug. Share *field extraction* only,

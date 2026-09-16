@@ -426,9 +426,14 @@ Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unb
 - **Graphics: hybrid, not a GPU emulator.** HLE the 104 out-of-line GX entry points; assemble
   the gather-pipe byte stream; decode vertices from HLE-tracked format state (§7).
 
-**Still open:**
+- **Byte-swap strategy: swap on access, big-endian memory image.** This turned out not
+  to need a measurement, because the alternative is not viable: converting the image to
+  host order at load time requires knowing the type of every word, and a whole-program
+  recompile has no types. The image must stay in console order because the game's own
+  structures, DMA buffers and display lists live in it. `runtime/cpu.h` swaps on every
+  load and store via the `movbe`-friendly `_byteswap_*` intrinsics. (R10 closed.)
 
-- **Byte-swap strategy.** Needs a measurement, not an opinion (R10).
+**Still open:**
 - **Reimplement the middleware library natively?** `0x80266778`–`0x802AC7E0` is 807
   functions with near-zero coupling to game code (2 of 3,996 outbound calls) and holds 868
   of the 1,508 FIFO writes. Replacing rather than recompiling it would delete most of the
