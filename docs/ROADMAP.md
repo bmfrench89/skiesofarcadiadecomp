@@ -172,7 +172,7 @@ Runs alongside Phases 5–7 once M3 lands. Never blocks the critical path.
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[x]` | **8.1** dtk-compatible splits | M | **Done:** `config/GEAE8P/` (config.yml, splits.txt, symbols.txt) drives `dtk dol split` on the user's own DOL: 23 objects, the SDK split per library (os, dvd, vi, gx, exi, si, MetroTRK, MSL, ...), the middleware library (807 functions) and the game (5,362) as units of their own, ready to be subdivided as decompilation names files |
-| `[ ]` | **8.2** mwcc build pipeline | M | Hand-written C compiles to byte-matching objects |
+| `[x]` | **8.2** mwcc build pipeline | M | **Done:** `tools/fetch_toolchain.py` fetches the Metrowerks compilers into `vendor/`; `tools/decomp.py` builds every unit in `config/GEAE8P/units.txt` with the compiler and flags it names and `tools/matchcheck.py` compares each function with the executable word for word. First unit: MSL `strlen` and `strchr`, byte-matching with mwcc 1.3.2 `-O4,p` |
 | `[ ]` | **8.3** Function swap-in harness | M | Differential test proves a decompiled function equivalent to its recompiled twin |
 | `[ ]` | **8.4** Decomp grind | XL | Function by function, indefinitely |
 

@@ -82,6 +82,20 @@ recompiler reads its own inventory in `config/functions.tsv` and
 `config/symbols.txt`; the two symbol files carry the same addresses and
 names from different tools.
 
+## Decompiling functions
+
+Hand-written C lives under `src/`, compiled with the original Metrowerks
+compiler and checked byte for byte against the executable:
+
+    python tools/fetch_toolchain.py          # once: the compilers into vendor/
+    python tools/decomp.py                   # build every unit, compare every function
+
+`config/GEAE8P/units.txt` names each unit's source, compiler version and
+flags. A function counts as done when `tools/matchcheck.py` reports MATCH;
+`tools/disasm.py <name>` shows the target when it does not. The port keeps
+running the recompiled code either way: matching functions are proof of
+understanding, and slice 8.3 will let them replace their recompiled twins.
+
 ## Commits
 
 Small, self-contained commits with a subject line that says what changed and
