@@ -403,6 +403,24 @@ def test_dead_branch_at_function_tail_is_absorbed():
     assert fns[BASE].blocks[BASE + 12].terminator == "dead"
 
 
+def test_materialized_pointer_is_a_function_boundary():
+    """A function whose address is taken with lis/addi is an entry, and a `b`
+    into it from the function before it is a tail call, not inner flow."""
+    #  0: stwu ; 4: lis r3,hi ; 8: addi r3,r3,lo (= BASE+20) ; 12: blr
+    # 16: b +4 (-> 20) -- a preceding function tail-calling into it
+    # 20: stwu ; 24: blr   -- the handler; nothing bl-calls it, no data word holds it
+    target = BASE + 20
+    hi, lo = target >> 16, target & 0xFFFF
+    if lo & 0x8000:
+        hi += 1
+    words = [stwu(-16), addis(3, hi), addi(3, 3, lo), BLR, b(4), stwu(-32), BLR]
+    dol = make_dol(words)
+    assert target in cfg.find_materialized_pointers(dol)
+    fns, _ = cfg.build_iterative(dol)
+    assert target in fns
+    assert fns[BASE + 16].end == BASE + 20  # the tail-caller stops at the boundary
+
+
 def test_tail_called_frameless_leaf_merges_into_caller():
     """Documented limitation: a leaf reached only by `b` and nothing else is
     walked as part of its caller, so no separate boundary is recovered.

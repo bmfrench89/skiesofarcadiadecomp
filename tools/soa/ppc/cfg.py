@@ -502,6 +502,42 @@ def find_code_pointers(dol) -> set[int]:
     return found
 
 
+def find_materialized_pointers(dol, code: CodeView | None = None) -> set[int]:
+    """Addresses of .text formed in registers by a lis/addi or lis/ori pair.
+
+    A function whose address is *taken* this way -- to install a handler, pass
+    a callback, or fill a table at runtime -- may never be bl-called and never
+    appear as a data-section word. OSDefaultExceptionHandler was one: it is
+    written into the exception table by OSExceptionInit through exactly this
+    idiom, and nothing else references it.
+    """
+    code = code or CodeView(dol)
+    lo = min(s.address for s in dol.text)
+    hi = max(s.end for s in dol.text)
+    found: set[int] = set()
+    for section in dol.text:
+        insns = [code.at(a) for a in range(section.address, section.end, 4)]
+        for k, i in enumerate(insns):
+            if i is None or not i.valid or i.mnemonic != "addis" or i.ra != 0:
+                continue
+            for j in range(k + 1, min(k + 9, len(insns))):
+                n = insns[j]
+                if n is None or not n.valid:
+                    break
+                if n.mnemonic == "addi" and n.ra == i.rd:
+                    value = ((i.imm << 16) + n.imm) & 0xFFFFFFFF
+                elif n.mnemonic == "ori" and n.rd == i.rd and n.ra == i.rd:
+                    value = ((i.imm << 16) | n.imm) & 0xFFFFFFFF
+                elif i.rd in gpr_defs(n):
+                    break  # the high half was overwritten before a low half arrived
+                else:
+                    continue
+                if lo <= value < hi and not (value & 3):
+                    found.add(value)
+                break
+    return found
+
+
 # The two ways mwcc opens a function: establish a frame, or (for a leaf that
 # still calls something) save the link register first.
 _MFLR_R0 = 0x7C0802A6
@@ -579,16 +615,26 @@ def build_iterative(
     # can prune it. Making gap starts terminators was self-reinforcing: once a
     # label was mis-promoted, every later round saw the owner's branch to it as
     # a tail call and the fragment could never be reabsorbed.
-    hard = {dol.entry_point} | find_bl_targets(dol)
-    hard = {a for a in hard if code.contains(a)} - case_labels
-    pointers = {a for a in find_code_pointers(dol) if code.contains(a)} - case_labels
-    soft: set[int] = set()
-
     # mwcc lays functions end to end in the main text section, so once switch
     # tables are resolved any hole there is a function nothing references --
     # even one with no recognisable prologue. The small init/vector section
     # contains data, so there a gap must still *look* like a function.
     main_text = max(dol.text, key=lambda s: s.size)
+
+    def plausible_entry(a: int) -> bool:
+        insn = code.at(a)
+        if insn is None or not insn.valid:
+            return False
+        return main_text.contains(a) or _looks_like_entry(code, a)
+
+    hard = {dol.entry_point} | find_bl_targets(dol)
+    # An address formed in registers is an address taken: a function entry
+    # unless it is a switch label. It is hard so that a `b` into it is a tail
+    # call, which keeps the neighbour that precedes it from swallowing it.
+    hard |= {a for a in find_materialized_pointers(dol, code) if plausible_entry(a)}
+    hard = {a for a in hard if code.contains(a)} - case_labels
+    pointers = {a for a in find_code_pointers(dol) if code.contains(a)} - case_labels
+    soft: set[int] = set()
 
     def gap_entry(start: int, end: int) -> int | None:
         """Where the function in a gap begins: the first word that decodes.

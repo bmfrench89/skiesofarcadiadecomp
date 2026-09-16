@@ -5423,7 +5423,10 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x8023227C	28	__OSSetExceptionHandler	dtk	0	1	0	0	0	0
 0x80232298	20	__OSGetExceptionHandler	dtk	0	1	0	0	0	0
 0x802322AC	152	OSExceptionVector	dtk	0	1	0	0	0	0
+0x80232304	64	fn_80232304	auto	0	1	0	0	0	0
+0x80232314	48	fn_80232314	auto	0	1	0	0	0	0
 0x80232344	92	fn_80232344	auto	1	0	0	1	0	0
+0x80232348	88	OSDefaultExceptionHandler	dtk	1	0	0	1	0	0
 0x802323A0	56	__OSPSInit	dtk	1	0	3	0	0	0
 0x802323D8	20	fn_802323D8	auto	0	1	0	0	0	0
 0x802323EC	44	OSRegisterVersion	dtk	1	0	1	0	0	0
@@ -5433,7 +5436,7 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x802326C4	104	OSSetAlarm	dtk	1	0	4	0	0	0
 0x8023272C	124	fn_8023272C	auto	1	0	4	0	0	0
 0x802327A8	284	fn_802327A8	auto	1	0	4	0	0	0
-0x802328C4	640	DecrementerExceptionCallback	dtk	1	0	9	0	0	0
+0x80232AF4	640	DecrementerExceptionHandler	dtk	1	0	9	0	0	0
 0x80232B44	8	OSGetArenaHi	dtk	0	1	0	0	0	0
 0x80232B4C	8	OSGetArenaLo	dtk	0	1	0	0	0	0
 0x80232B54	8	OSSetArenaHi	dtk	0	1	0	0	0	0
@@ -5480,6 +5483,7 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x80234F3C	820	fn_80234F3C	auto	1	0	4	0	0	0
 0x80235270	772	fn_80235270	auto	1	0	1	0	0	0
 0x80235574	20	OSDisableInterrupts	dtk	0	1	0	0	0	0
+0x80235580	8	fn_80235580	auto	0	1	0	0	0	0
 0x80235588	20	OSEnableInterrupts	dtk	0	1	0	0	0	0
 0x8023559C	36	OSRestoreInterrupts	dtk	0	1	0	0	0	0
 0x802355C0	28	__OSSetInterruptHandler	dtk	0	1	0	0	0	0
@@ -5488,7 +5492,7 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x80235664	728	fn_80235664	auto	0	1	0	0	0	0
 0x8023593C	136	__OSMaskInterrupts	dtk	1	0	3	0	0	0
 0x802359C4	136	__OSUnmaskInterrupts	dtk	1	0	3	0	0	0
-0x80235A4C	916	fn_80235A4C	auto	1	0	5	0	0	0
+0x80235D90	916	ExternalInterruptHandler	dtk	1	0	5	0	0	0
 0x80235DE0	24	__OSModuleInit	dtk	0	1	0	0	0	0
 0x80235DF8	12	fn_80235DF8	auto	0	1	0	0	0	0
 0x80235E04	12	fn_80235E04	auto	0	1	0	0	0	0
@@ -5554,7 +5558,7 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x802389A0	84	__init_cpp	dtk	1	1	0	0	0	0
 0x802389F4	32	_ExitProcess	dtk	1	0	1	0	0	0
 0x80238A14	40	DBInit	dtk	0	1	0	0	0	0
-0x80238A3C	88	fn_80238A3C	auto	1	0	3	0	0	0
+0x80238A84	88	__DBExceptionDestination	dtk	0	0	3	0	0	0
 0x80238A94	28	__DBIsExceptionMarked	dtk	0	1	0	0	0	0
 0x80238AB0	80	DBPrintf	dtk	1	1	0	0	0	0
 0x80238B00	44	fn_80238B00	auto	0	1	0	0	0	0
@@ -6094,6 +6098,7 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x80257BEC	8	fn_80257BEC	auto	0	1	0	0	0	0
 0x80257BF4	8	fn_80257BF4	auto	0	1	0	0	0	0
 0x80257BFC	60	fn_80257BFC	auto	0	1	0	0	0	0
+0x80257C38	560	TRKInterruptHandler	dtk	0	0	5	0	0	0
 0x80257E68	280	TRKSwapAndGo	dtk	0	0	4	0	0	0
 0x80257F80	16	TRKTargetSetInputPendingPtr	dtk	0	1	0	0	0	0
 0x80257F90	540	fn_80257F90	auto	1	0	1	0	0	0
@@ -6118,14 +6123,18 @@ address	size	name	source	frame	leaf	calls	tail_calls	jump_tables	unresolved
 0x8025920C	332	fn_8025920C	auto	1	0	5	0	0	0
 0x80259358	292	fn_80259358	auto	1	0	1	0	0	0
 0x80259480	8	fn_80259480	auto	0	1	0	0	0	0
+0x80259488	8	fn_80259488	auto	0	1	0	0	0	0
 0x80259490	8	fn_80259490	auto	0	1	0	0	0	0
+0x80259498	8	fn_80259498	auto	0	1	0	0	0	0
+0x802594A0	148	InitMetroTRK	dtk	0	0	6	0	0	0
 0x80259534	76	TRKInitializeTarget	dtk	1	0	1	0	0	0
 0x80259580	64	fn_80259580	auto	0	1	0	0	0	0
 0x802595C0	32	EnableMetroTRKInterrupts	dtk	1	0	1	0	0	0
 0x802595E0	396	TRKSaveExtended1Block	dtk	0	1	0	0	0	0
+0x8025976C	44	fn_8025976C	auto	0	1	0	0	0	0
 0x80259798	440	TRKRestoreExtended1Block	dtk	0	1	0	0	0	0
 0x80259950	8	fn_80259950	auto	0	1	0	0	0	0
-0x8025999C	7660	TRKLoadContext	dtk	0	0	5	0	0	0
+0x8025999C	136	TRKLoadContext	dtk	0	0	0	1	0	0
 0x80259A24	4	TRKUARTInterruptHandler	dtk	0	1	0	0	0	0
 0x80259A28	36	TRK_board_display	dtk	1	0	1	0	0	0
 0x80259A4C	48	UnreserveEXI2Port	dtk	1	1	0	0	0	0

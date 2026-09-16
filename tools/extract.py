@@ -43,6 +43,11 @@ def main() -> int:
     ap.add_argument("image", type=Path, help="disc image (.rvz, .iso, .gcm)")
     ap.add_argument("--out", type=Path, default=Path("extracted"))
     ap.add_argument("--force", action="store_true", help="allow a non-GEAE8P disc")
+    ap.add_argument(
+        "--iso",
+        action="store_true",
+        help="also write <out>/disc.iso, the flat image the runtime's DVD model reads from",
+    )
     args = ap.parse_args()
 
     if not args.image.exists():
@@ -88,6 +93,20 @@ def main() -> int:
     if written != fst.total_bytes:
         print(f"WARNING: expected {fst.total_bytes:,} bytes", file=sys.stderr)
         return 1
+
+    if args.iso:
+        # DVDRead works in disc offsets, so the runtime wants the disc flat.
+        image = open_image(args.image)
+        total = getattr(image, "iso_size", None) or args.image.stat().st_size
+        chunk = 4 << 20
+        started = time.time()
+        with open(args.out / "disc.iso", "wb") as out:
+            done = 0
+            while done < total:
+                n = min(chunk, total - done)
+                out.write(image.read(done, n))
+                done += n
+        print(f"disc.iso: {done:,} bytes in {time.time() - started:.1f}s")
     print(f"system files in {args.out / 'sys'}/ (boot.bin, bi2.bin, main.dol, fst.bin)")
     return 0
 
