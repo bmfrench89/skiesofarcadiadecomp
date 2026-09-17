@@ -80,10 +80,20 @@ how it went.
   40,960 bytes, twice. A selftest covers the command set end to end,
   including that reverting any one of the three fixes fails it.
 
+- The card mounts. `tools/cardformat.py` writes a formatted image by
+  laying down the five system blocks the way the game's own format
+  routine lays them down: the identity block with its serial derived
+  from the flash identifier through the SDK's own pseudorandom
+  sequence, both directory copies, both allocation tables, and every
+  checksum the mount recomputes. No Dolphin image was needed to get
+  there. Traced through a real run, `__CARDVerify` returns 0 and the
+  game's own card layer receives it: the first successful mount.
+
 ## Open
 
-- Saves: the card is read but never written. A blank image has nothing
-  to load, and no scripted playthrough has reached a save point.
+- Saves: the card mounts and is read, but the game has still never
+  written to it. That needs a save point, and no scripted playthrough
+  has reached one.
 - The battleship's searchlight beams render dark; every step matches the
   hardware rules as modelled, so a reference capture is needed.
 - Beyond the hold: the ship and overworld sections, and the long tail of

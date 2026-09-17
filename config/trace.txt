@@ -14,3 +14,68 @@
 0x8022AD64  CacheFetchSlot@r30
 0x801C63EC  LoadStart
 0x801C6B78  LoadDone@r31
+
+# ---- the memory card mount verdict ------------------------------------------
+# Why the card has never mounted, in the registers trace.c prints: r3-r7, r31
+# and r1. Where the value lives in r28-r30 -- which is where CARDDoMount keeps
+# its result -- the line is placed on the failure arm instead, so a site firing
+# at all is the answer. Diagnostic only; nothing fires without SOA_TRACE=1.
+# Read them with the counters on: SOA_TRACE=1 SOA_CARD_VERBOSE=1.
+
+# The verdict itself: who mounts, what comes back, what the game does with it.
+0x80248DCC  CardMountAsync          # r3 chan, r4 workArea, r5 detach, r6 attach; lr says which of the four callers
+0x80248F58  CardMountAsyncRet       # the one epilogue: r3 is what CARDMountAsync (and CARDDoMount) returns
+0x80248C94  CardMountCallback       # r3 chan, r4 the result the callback is handed
+0x80248C58  CardMountFailed         # CARDDoMount unmounting: r3 chan, r4 the code it gave up with
+0x80248D28  CardVerifyResult        # r3 = __CARDVerify: 0 READY, -6 BROKEN, -13 ENCODING. The line that says -6 today
+0x801A2578  GameCardMountResult     # r3 = the settled code fn_801A2500 polled out of CARDGetResultCode
+
+# Which check failed. Each of these is reached only on its own arm.
+0x802488E8  MountExiId              # r3 = the EXI device ID about to be tested
+0x802488EC  MountIsCardVerdict      # r3 = __CARDIsCard's boolean (0 rejects the ID)
+0x802488DC  MountNoExiId            # EXIGetID returned 0 -> -3 NOCARD
+0x802488FC  MountNotACard           # __CARDIsCard rejected the ID -> -2 WRONGDEVICE
+0x802489A4  MountNoProbe            # EXIProbe returned 0 -> -3 NOCARD
+0x802489BC  MountCardLocked         # status bit 0x40 clear, so __CARDUnlock runs; the model answers 0x41, so never
+0x80248B64  MountFlashIdSum         # SRAM byte 58+chan is not the complement of flashID[chan] -> -5 IOERROR
+0x80248BB0  MountSramIdMismatch     # the step-1 vendor check -> -2; only reachable for cid 0x8000000x
+0x80248BCC  MountIntEnabled         # r3 = __CARDEnableInterrupt's result
+0x8024803C  VerifyIdVerdict         # r3 = CARDVerifyID's return, before dir and fat are looked at
+0x80248064  VerifyDirFat            # r3 = CARDVerifyFat's error count, r31 = CARDVerifyDir's; their sum must be 0
+0x80247904  VerifyIdSizeField       # r3 = the image's size halfword; firing at all means the device ID passed
+0x80247910  VerifyIdHeader          # device ID at +32 not 0, or size at +34 not card->size -> -6
+0x80247A14  VerifyIdSum             # r3 = the stored checksum, r6/r7 = the computed sum and inverse
+0x80247A30  VerifyIdSumBad          # the 508-byte checksum pair disagreed -> -6
+0x80247AD0  VerifyIdFlashBad        # a descrambled serial byte is not the SRAM flash ID -> -6
+0x80247B2C  VerifyIdEncoding        # r3 = the font encoding CARDInit cached; a seeded image must carry it at +36
+0x80247B3C  VerifyIdEncodingBad     # encoding mismatch -> -13
+0x80247B44  VerifyIdOk              # CARDVerifyID passed
+
+# Progress, and the two model assumptions worth checking against a real run.
+0x802488BC  CardDoMount             # r3 = r31 = the control block; with SOA_TRACE_DUMP=1, word 9 is mountStep
+0x80248C28  CardMountRead           # r3 chan, r4 card address, r5 8192, r6 destination, r7 CARDMountCallback
+0x80248C2C  CardMountReadRet        # r3 = __CARDRead's return
+0x802478F8  VerifyIdBlock           # r3 = the ID block just read; SOA_TRACE_DUMP=1 shows word 8 = deviceID:size
+0x802454E8  CardReadLatency         # r5 = the dummy bytes __CARDReadSegment sends; exi.c assumes four
+0x801A2650  GameCardMountDone       # r3 = fn_801A2500's 0/1 verdict after CARDCheckExAsync
+0x801A2714  GameCardFormatPath      # r3 = the settled code in fn_801A2670; 0, -6 or -13 set the state word at r13-30112 that a later entry turns into CARDFormatAsync
+0x801A2A0C  GameCardMenuResult      # r3 = the code the boot card screen branches on
+0x801A36B0  GameCardProbeMountRet   # r3 = CARDMountAsync's immediate return in the title's per-slot poll
+
+# ---- the first write --------------------------------------------------------
+# Once a seeded image mounts with one damaged system block, CARDCheckExAsync
+# repairs it, and that repair is the first byte this port has ever written to a
+# card: one sector erase, then the block reprogrammed 128 bytes at a time. These
+# sites follow that chain and name the three ways it can fail. Diagnostic only.
+
+0x80248184  CardCheckExRepairDir    # the one-error arm: dir[bad] becomes current, the good twin is copied over it; r6 = the control block, r31 = CARDVerifyDir's error count
+0x802481D0  CardCheckExRepairFat    # the same for the allocation table; r6 = the control block
+0x80247704  CardUpdateDirErase      # bl __CARDEraseSector: r3 chan, r4 = sectorSize * ((currentDir - workArea) >> 13), the byte address of the sector about to be erased
+0x802474A0  CardUpdateFatErase      # the same from __CARDUpdateFatBlock; r4 is the table block's byte address
+0x80245678  CardEraseSector         # r3 chan, r4 the byte address, r5 the callback; command 0xF1, and the model erases one 0x2000 sector
+0x80247044  CardWrite               # r3 chan, r4 card address, r5 length, r6 source, r7 callback; 0x80247078 cuts the length into len >> 7 page programs
+0x802455A0  CardWritePage           # r3 = card->xferAddr just loaded from +176: the byte address of this 128-byte page program; fires 64 times per 8192-byte block
+0x80244AEC  CardExiHandlerDone      # r3 chan, r4 the result __CARDExiHandler hands the transfer callback: 0 is a page programmed, anything else is the save failing
+0x80244A84  CardExiStatusBad        # the card reported status & 0x18, a program or erase error -> -5 IOERROR; exi.c answers a constant 0x41, so firing means the model changed
+0x80244A4C  CardExiFatalLock        # EXILock(chan, 0, 0) found channel 0 held, so the transfer ends -128 FATAL with no EXIUnlock; the RTC and SRAM share this channel
+0x80244F1C  CardTimeout             # the OSAlarm __CARDStart armed beat the card: r3 chan, r4 = -5. 100 ms per page program (0x80245368), longer for an erase

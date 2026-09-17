@@ -81,14 +81,14 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_NOSOUND=1` | no audio device |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
-| `SOA_CARD=path` | memory card image for slot A (default `build/cards/slotA.raw`, created blank on the first write) |
+| `SOA_CARD=path` | memory card image for slot A (default `build/cards/slotA.raw`, created blank on the first write; `tools/cardformat.py write` makes one the game will mount) |
 | `SOA_CARD_VERBOSE=1` | one `[card]` line per EXI transaction: the frame, the device, the command and the card address |
 | `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
 | `SOA_GXR_DEBUG=N` / `SOA_GXR_DRAWS=N` / `SOA_GXR_PIXEL=x,y` | renderer forensics in `--replay`: triangles from draw N on, stop after N draws, narrate one pixel |
 
 ## Repository layout
 
-- `tools/` — disc extraction, analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, tests
+- `tools/` — disc extraction, analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, the memory-card formatter (`cardformat.py`), tests
 - `runtime/` — the native runtime: CPU helpers, memory and MMIO, device models, threads, the software GX, the window
 - `config/` — analysis metadata: the function inventory, HLE bindings, hooks, tracepoints; `config/GEAE8P/` is the decomp-toolkit project (splits and symbols)
 - `src/`, `include/` — hand-decompiled units, compiled with the original Metrowerks compiler and checked word for word against the executable (`tools/decomp.py`)

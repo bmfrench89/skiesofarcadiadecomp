@@ -13,12 +13,12 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 41 across 15 units — 0.18% of `.text` |
 | Of those, running in the port | 9 (`config/hle.txt`) |
-| Python tests | 251 in 15 files |
+| Python tests | 328 in 16 files |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
-| Captured frames usable as a corpus | 20 in `build/fifo`; 13 of them have a reference PNG |
+| Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
 | `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
-| Memory card bytes read or written, ever | 0: every log says `card 0 bytes read, 0 written`, and no run has been made since B2 changed the device model underneath that line |
+| Memory card bytes read, ever | 81,920 — the card mounts (2026-09-17). Written: still 0 |
 | Saved runs that played a sample | 0 of 27: every `[audio]` line says "(no output device)" |
 
 The port boots, plays the opening, wins the first battle and walks the
@@ -40,10 +40,10 @@ person's shell history. What is still unchecked is the game itself: no saved
 run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
-**Start here:** D1, A1 and A2 were the first three, and are built; what is
-left of A2 is a sweep only the owner's machine can run, and what is left of D1
-is a README table. So: A3, then A4, which every timing claim below depends on.
-After that, any track, cold.
+**Start here:** A1, A2 and D1 are done and run; B1, B2, B3 and the first two
+stages of B4 are done, so the card mounts and only the write is left. Next is
+**A3**, then **A4**, which every timing claim below depends on. B4's last
+stage needs D3. After that, any track, cold.
 
 ---
 
@@ -246,28 +246,55 @@ bytes. **First two met. The third needs a save, so it waits on B4.**
 Three stages, cheapest first, since only the last needs navigation. With
 B3's logging you can see which frame the probe lands on and script thirty
 seconds around it — `SOA_PAD="1600:start,1700:sdown,1750:a"` is the shape —
-exercising probe, mount and read. Then pre-seed a Dolphin-formatted blank so
-Continue runs. Only then drive to a save point, which needs D3: nobody knows
-how far in the first save point is, and the first real write will probably
-expose a fourth defect, the way the first real ARAM fetch did.
-*What B3 leaves you:* `SOA_CARD_VERBOSE=1` names the frame of every
-transaction, so the probe no longer has to be guessed at. The selftest's own
-image carries an ID block `CARDVerifyID` would accept — encoding 0, device ID
-0, size 4, and a serial that descrambles to the flash ID SRAM presents — but
-its directory and FAT blocks are never written, so `__CARDVerify` would still
-call it BROKEN; pointing `SOA_CARD` at it is the cheapest way to see what the
-game does with a card it considers broken, before any Dolphin image exists.
-Two things nobody has looked at and the first run will answer: a
-never-formatted card reads back all 0xFF, whose 8188-byte directory checksum
-is 0xF002 rather than the 0xFFFF stored, so that too verifies BROKEN rather
-than blank; and `card_checksum` in the device model has only ever run over
-508 bytes, while every directory and FAT block a save writes is checksummed
-over 8188 by the game's own code.
+exercising probe, mount and read. Then pre-seed a formatted blank so the
+mount succeeds and Continue runs; that no longer needs Dolphin. Only then
+drive to a save point, which needs D3: nobody knows how far in the first
+save point is, and the first real write will probably expose a fourth
+defect, the way the first real ARAM fetch did.
+
+*What you have for the middle stage:* `tools/cardformat.py`, which writes an
+image `__CARDVerify` accepts and judges any image without building the port.
+
+    python tools/cardformat.py write --damage dir   # build/cards/slotA.raw
+    python tools/cardformat.py verify <image>       # what the mount would return
+    python tools/cardformat.py show <image>         # every field, and any file on it
+
+It lays the five system blocks down the way `__CARDFormatRegionAsync`
+(0x802491F8) lays them down, and `verify` re-runs `__CARDIsCard`,
+`CARDVerifyID`, `CARDVerifyDir` and `CARDVerifyFat` in CARDDoMount's own
+order, naming the check the mount would stop at. `--damage dir` breaks one
+directory copy's checksum on purpose: one error is what `CARDCheckExAsync`
+(0x802480AC) repairs in place rather than refusing, and that repair is the
+cheapest first write there is — one sector erase and then 64 page programs
+(`__CARDWrite` 0x80247078 cuts the length into `len >> 7` of them), with no
+button pressed and no save point reached. `SOA_CARD_VERBOSE=1` names the
+frame of every transaction, and the tracepoints under "the first write" in
+`config/trace.txt` follow the chain from the repair arm through each page
+program and name the three ways it can fail: a status error, a fatal
+`EXILock` on the shared channel 0, and the 100 ms per-page `OSAlarm` beating
+the card.
+
+*Two things that were open here are now answered without a run.* A
+never-formatted card never reaches a directory checksum: `CARDVerifyID`
+loads the device ID at +32 (`802478F0 lhz r0,32(r3)`), reads 0xFFFF where 0
+is required and returns -6 at 0x80247910, and `__CARDVerify` hands that
+straight back at 0x80248044 without calling `CARDVerifyDir`. The 0xF002 an
+erased 8188-byte span checksums to is right, but only reachable behind a
+valid ID block. And the 8188-byte span itself is no longer untested: the
+formatter's checksum is checked over both spans against a second
+implementation, and `runtime/exi.c`'s `card_checksum` is byte-for-byte the
+same function. What is left of that paragraph is that pointing `SOA_CARD` at
+the selftest's image shows a card the game considers broken *beyond repair*
+— it fails four system-block checks, not one, so it drives the format offer;
+`write --damage dir` is the image that drives the repair.
 
 *Done:* the image round-trips both ways — Dolphin shows a Skies of Arcadia
 Legends file with its banner, and a Dolphin-made save loads from the title.
-Whether a blank image draws a format offer is an observation to record, not
-a criterion: no mount has ever succeeded, so nobody has seen one.
+There is now a cheaper criterion for the mount stage, and it comes first:
+the game mounts a `cardformat write` image, and `cardformat show` reads back
+the block the repair rewrote. Whether a blank image draws a format offer is
+an observation to record, not a criterion: no mount has ever succeeded, so
+nobody has seen one.
 
 ---
 
