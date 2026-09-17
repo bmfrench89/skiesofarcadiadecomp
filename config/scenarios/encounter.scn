@@ -1,0 +1,39 @@
+# A random encounter in the hold, which needs nothing but walking for long
+# enough. The battle system entered from the field rather than from a script.
+name: encounter
+summary: Walk the ship's hold for twenty minutes of game time until a fight starts.
+frames: 30000
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+pad: 15000:sup#1200,16500:sleft#600,18000:sup@900#400,19000:sright@1100#300
+env: SOA_RENDER=1
+env: SOA_SNAP=500
+env: SOA_SPEED=3
+
+shows: a battle entered from the field: the encounter transition, the battle
+shows:   packages fetched from the ARAM cache a second time, and the return to
+shows:   the same field map afterwards.
+shows: whether the field keeps its footing over tens of thousands of frames.
+shows:   build/boot_field.log mashed A from frame 14710 to 55360 without loading
+shows:   anything new, which is what open-loop scripting looks like when it has
+shows:   run out of reach (PLAN, track D).
+
+evidence: docs/PROGRESS.md, "Three 25-minute mixed-input runs at triple speed:
+evidence:   menus, random encounters, a game over and a restart from the title,
+evidence:   no errors" -- build/boot_monkey2.log, boot_monkey3.log and
+evidence:   boot_monkey4.log. Those are the runs that prove encounters happen
+evidence:   under a script; this scenario is the cheap version of them.
+evidence: build/boot_field.log for the hold itself (see hold.scn).
+
+note: Whether an encounter lands inside this frame budget is what the run
+note:   tells you, not something the checks assert: the encounter rate is the
+note:   game's own, the guest clock is the host clock scaled (PLAN D4), and an
+note:   invariant that depends on either would drift. The stick events are
+note:   reconstructions for the reason hold.scn gives.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

@@ -1,0 +1,35 @@
+# The first battle. The deck fight against the Valuan soldiers, which is the
+# first thing in the game that exercises the ARAM package cache end to end.
+name: battle
+summary: The opening through to the first battle and out the other side.
+frames: 12000
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_RENDER=1
+env: SOA_SNAP=100
+
+shows: the battle transition, which was the first logic divergence that was
+shows:   not a missing device: sixteen battle packages staged into ARAM at boot
+shows:   and pulled back by one ARAM-to-main DMA, which used to run as a store
+shows:   (FINDINGS "The ARAM package cache").
+shows: the battle itself: the command wheel, target selection, Vyse's and
+shows:   Aika's attacks with their camera cuts, the round counter, the enemy
+shows:   turn, the win, and the story continuing into /field/a201a.mld.
+shows: battle music under voices and effects, which correlates at 0.52 with
+shows:   the disc stream (FINDINGS "Streamed music, checked").
+
+evidence: build/boot_battle2.log: 19 scripted events, A every 150 frames out
+evidence:   to frame 12000, 120 snapshots at SOA_SNAP=100.
+evidence: build/boot_battle.log and build/boot_battle_r.log are the same run
+evidence:   with the predecessor script -- 64 explicit events, the last an A at
+evidence:   frame 10350 -- which is why the battle used to look stuck: the
+evidence:   sixty-fourth press landed on the command menu and the game then
+evidence:   waited for input that never came. That run is what the @150 repeat
+evidence:   was added for; do not go back to a finite list of presses.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

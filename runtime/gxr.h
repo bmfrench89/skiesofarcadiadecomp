@@ -45,6 +45,10 @@ void gxr_reset_efb(void);
 void gxr_flush(void);
 void gxr_texture_hazard(uint32_t addr, uint32_t bytes); /* flush if a queued copy writes there */
 const uint8_t* gxr_screen(int* w, int* h);           /* the last frame copied out (RGBA, EFB_W stride) */
+/* FNV-1a over that frame's pixels, the value SOA_HASH prints as
+ * "[gxr] frame <n> <w>x<h> hash <16 hex digits>" once per presented frame.
+ * Call it after gxr_flush(): a frame is only complete once the workers are. */
+uint64_t gxr_screen_hash(void);
 
 /* TEV / textures (gxr_tev.c) */
 

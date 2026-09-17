@@ -1,0 +1,27 @@
+# Frame hashes for the captures in build/fifo, written by
+#     python tools/scenario.py replay --bless
+# and checked by the same command without --bless. Columns: the capture's
+# name, sha256 over its .fifo, .regs and .ram files, and FNV-1a over the
+# frame gen/soa.exe --replay renders from them (gxr_screen_hash, gxr.c).
+# The captures themselves are game data and stay out of the repository, so
+# the middle column is what ties a row to the bytes it was measured from.
+0100	a6b3bbd56bb3d101	ced8f6518129ba7a
+0300	2163f6a542110e89	060aa3991d5675e2
+0500	55aedbc5e2bdf2fb	18188c9e9ce5bbdb
+0700	c8e8bccc80e30a0d	43e4f07acb6eb6bc
+11900	099b092374f8443b	8397a025bf14b446
+12000	4fed558fa4f6e370	2bd2ed4ef6cb6f64
+12100	62cbaa5ac33c1e99	a299e090100d8908
+1500	d1eab7fbe6659929	eb9e8561b21e23d4
+1550	730ddc9d762a191a	fc04ba2005866c58
+2000	85f9cfd246c1ddef	1b89d592cb4ff90a
+2050	ee4690d1f9cf3967	b0baac995859366f
+2100	8ccfb83e1914a21d	57b709d297ec6a66
+3600	56238af3bebc2805	9c2182e069c8ccae
+3900	5d2d9f9b2b19a5ef	869f6e7b38bd6dcf
+4200	ddbf2e0d46ea2909	c578bff49aa236a5
+4500	8ae72dcfe1bf8109	0f89308762dd59e5
+4800	4773102f4c86aa0e	0eac6675b0820237
+6000	05354eb85cafd0b9	2c785779ddb30ad9
+6300	4d219df0b57b922e	cb0f4ecac3dc2a5a
+8000	314b1861fe5d4cca	f672349f32fb0053

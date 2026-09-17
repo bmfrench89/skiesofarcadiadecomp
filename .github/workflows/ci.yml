@@ -31,7 +31,7 @@ jobs:
           bad=$(git rev-list --objects --all \
             | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' \
             | awk '$1=="blob"' \
-            | grep -Ei '\.(rvz|iso|gcm|ciso|wbfs|nkit|dol|rel|elf|gvr|tpl|mld|mlk|mll|sml|samp|dsp|sct|std|sst|tec|enp|ect|evp|lmt|bnr|map)$' \
+            | grep -Ei '\.(rvz|iso|gcm|ciso|wbfs|nkit|dol|rel|elf|gvr|tpl|mld|mlk|mll|sml|samp|dsp|sct|std|sst|tec|enp|ect|evp|lmt|bnr|map|bin)$' \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::game data found in git history"
@@ -78,3 +78,73 @@ jobs:
 
       - name: Format check
         run: ruff format --check tools/
+
+  # The C is the port. Everything above this job checks the Python that builds
+  # the port, which until now left every line of runtime/ compiled nowhere but
+  # the owner's machine -- and a runtime that several agents had edited was
+  # found broken by a local build, not by CI.
+  #
+  # COVERED: every runtime/*.c (22 files today), each compiled on its own with
+  # /c and the flags in tools/soa/toolchain.py, plus the handful of warnings
+  # that mean a call does not match the function it names (an implicit
+  # declaration first among them) promoted to errors, since nothing here
+  # links. No file is skipped: the ones that name recompiled or decompiled
+  # symbols (main.c, decomp_swap.c, selftest.c) declare them themselves, so
+  # nothing needs gen/functions.h to compile, and no stub headers exist under
+  # tools/citest/. If a runtime file ever does need generated code, it goes in
+  # the UNCOVERED table at the top of tools/citest/compile_runtime.py with a
+  # reason, and the job's log names it. Also covered: the two units
+  # config/GEAE8P/units.txt marks native (src/sdk/msl/string.c and mem.c),
+  # built with the /Ddc_* renames tools/recompile.py derives, linked against
+  # runtime/decomp_shims.c and a driver, and checked routine by routine
+  # against the host C library -- eight decompiled bodies and, for memset, the
+  # wrapper only: its fill is __fill_mem, which nobody has decompiled and
+  # which runtime/decomp_shims.c answers with the host memset. And the
+  # renderer's own two pixel checks, linked without the game (gx.c, gxr.c,
+  # gxr_tev.c, png.c and two stubs) and run: a full-screen quad must cover
+  # 307200 pixels and the title screen's cloud triangle must come out whole.
+  #
+  # NOT COVERED, and not claimed to be: linking soa.exe, anything under gen/
+  # (recompiling needs the user's own disc, which never exists here), every
+  # device model and the guest side of runtime/selftest.c, the mwcc
+  # byte-for-byte match (tools/decomp.py needs the vendored compiler), the
+  # replay corpus (the captures are game data: tools/scenario.py replay runs
+  # that sweep on a machine that has them), and every check that reads
+  # extracted/. A green tick here means the C compiles, those MSL routines
+  # behave like libc, and the rasterizer still fills a triangle -- nothing
+  # about the game running.
+  native:
+    name: Runtime compiles (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # No toolchain is installed here. windows-latest already ships Visual
+      # Studio 2022 with the C++ tools, and tools/soa/toolchain.py finds it
+      # through vswhere and runs vcvars64.bat exactly as it does on a
+      # developer machine, so CI and the owner's build use the same compiler
+      # and the same flags. All three scripts fail loudly rather than skipping
+      # when there is no cl.exe, since a check that quietly does nothing is
+      # worse than no check.
+      #
+      # No pip install either: dc_check.py imports tools/recompile.py for one
+      # helper, and that import graph is stdlib-only today. That is a real
+      # constraint on a file this job does not otherwise touch, so
+      # tools/tests/test_citest.py asserts it rather than leaving it to be
+      # discovered here.
+      - name: Compile every runtime/*.c
+        run: python tools/citest/compile_runtime.py
+
+      # Byte-matching a decompiled routine says nothing about how it is called.
+      # This links the natively compiled twins to a driver and compares each
+      # one with the host C library on generated inputs -- no game data needed.
+      - name: Decompiled MSL routines against the host C library
+        run: python tools/citest/dc_check.py
+
+      # The only check here that looks at a pixel. Everything above would pass
+      # for a renderer that drew nothing at all.
+      - name: Renderer pixel checks
+        run: python tools/citest/render_check.py

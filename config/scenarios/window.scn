@@ -1,0 +1,40 @@
+# The one thing every other scenario here cannot show: the port with a window
+# open, which is where its frame rate comes from.
+name: window
+summary: The opening in a window at 2x, so the frame rate is the one a person sees.
+frames: 7500
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_RENDER=1
+env: SOA_WINDOW=1
+
+shows: the window path itself: window.c opens at 2x, the UI thread pumps the
+shows:   message loop, and live keyboard input is merged with the script rather
+shows:   than replacing it (pad_report in runtime/si.c), so the run drives
+shows:   itself and you can still press something.
+shows: the port's headline rate. Divide the [gxr] line's screen copies by the
+shows:   [irq] line's VI retraces and halve the retraces: the game presents every
+shows:   other field, so 667 copies against 1495 retraces is 26.7 game frames
+shows:   per guest second against its own 30 fps cap.
+
+evidence: build/boot_window.log, the only run in build/ with a [window] line:
+evidence:   "[window] open at 2x", 1495 VI retraces, 667 screen copies, 102339
+evidence:   triangles, 792,513,505 fragments shaded. It is where every windowed
+evidence:   number in PLAN.md and FINDINGS.md comes from.
+
+note: The script here is a reconstruction. boot_window.log has no [si] line at
+note:   all -- that run was driven by hand at the keyboard -- so what is written
+note:   above is the standard opening script, not what that session pressed. The
+note:   counters it is compared against are still that session's.
+note: SOA_WINDOW=1 is doing real work: SOA_PAD normally means nobody is
+note:   watching, and main.c would run this headless without it.
+note: A windowed run is the one place the rate is wall-clock time rather than
+note:   guest time, so do not set SOA_SPEED here, and do not set SOA_HASH, which
+note:   flushes the workers on every frame presented.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

@@ -59,6 +59,7 @@ static int g_cull_flip, g_debug;
 static int g_dbg_x = -1, g_dbg_y = -1; /* SOA_GXR_PIXEL=x,y: narrate every fragment landing on one pixel */
 static int g_debug_lights;
 static unsigned g_draw_limit, g_draw_no;
+static int g_hash; /* SOA_HASH set to anything: hash every frame the port presents */
 
 int gxr_enabled(void)
 {
@@ -72,6 +73,7 @@ int gxr_enabled(void)
         g_debug = getenv("SOA_GXR_DEBUG") ? atoi(getenv("SOA_GXR_DEBUG")) : 0;
         g_debug_lights = getenv("SOA_GXR_LIGHTS") ? atoi(getenv("SOA_GXR_LIGHTS")) : 0;
         g_draw_limit = getenv("SOA_GXR_DRAWS") ? (unsigned)atoi(getenv("SOA_GXR_DRAWS")) : 0;
+        g_hash = getenv("SOA_HASH") ? 1 : 0;
     }
     return g_enabled;
 }
@@ -720,6 +722,16 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
     unsigned i, k;
     const Vertex* v[3];
     float lod[8] = {0, 0, 0, 0, 0, 0, 0, 0}, dlod[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    /* One slot per texcoord: s, t, q and the level of detail. A TEV stage may
+     * name any of the eight whether this draw supplies it or not, and what it
+     * reads then is defined -- the console keeps eight coordinates and only
+     * refreshes the ones the XF generates. This renderer's transform unit
+     * writes (0, 0, 1) into every ungenerated slot, so hold the unsupplied
+     * ones at that value here as well: a stage naming one samples texel (0, 0)
+     * of its map, the same result the line and point paths already give,
+     * rather than whatever the stack held, which made the frame depend on how
+     * many worker threads were rasterizing. */
+    float tex[8][4];
 
     if (area == 0.0f) return;
     if (g_cull_flip) area = -area;
@@ -763,6 +775,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
                 attr[nattr++] = plane_of(v[0], v[1], v[2], c0[k] * iw0, c1[k] * iw1, c2[k] * iw2, inv_area);
         }
         for (i = 0; i < 8; i++) {
+            tex[i][0] = 0.0f; tex[i][1] = 0.0f; tex[i][2] = 1.0f; tex[i][3] = 0.0f;
             ti[i] = -1;
             if (!((D->ntex >> i) & 1)) continue;
             ti[i] = nattr;
@@ -811,7 +824,6 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
             float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
             float w255 = w * 255.0f;
             int col[2][4];
-            float tex[8][4];
             for (i = 0; i < 2; i++) {
                 if (!((D->nchan >> i) & 1)) { col[i][0] = col[i][1] = col[i][2] = col[i][3] = 0; continue; }
                 for (k = 0; k < 4; k++) {
@@ -1314,6 +1326,28 @@ const uint8_t* gxr_screen(int* w, int* h)
     return &g_screen[0][0][0];
 }
 
+static uint64_t fnv1a(uint64_t h, const uint8_t* p, size_t n)
+{
+    while (n--) { h ^= *p++; h *= 1099511628211ULL; }
+    return h;
+}
+
+/* FNV-1a over the pixels the port would present, so two runs can be compared
+ * without keeping a PNG of either. The size goes in first -- a frame that
+ * changes shape is a different frame -- then the rows in screen order, only
+ * the part of each row this frame covers. Nothing here depends on which
+ * worker produced a row, so the value is the same at any SOA_THREADS, and
+ * every caller hashes after gxr_flush() so the frame is finished. */
+uint64_t gxr_screen_hash(void)
+{
+    uint8_t dim[4] = {(uint8_t)(g_screen_w >> 8), (uint8_t)g_screen_w,
+                      (uint8_t)(g_screen_h >> 8), (uint8_t)g_screen_h};
+    uint64_t h = fnv1a(14695981039346656037ULL, dim, sizeof dim);
+    int y;
+    for (y = 0; y < g_screen_h; y++) h = fnv1a(h, g_screen[y][0], (size_t)g_screen_w * 4);
+    return h;
+}
+
 /* Nothing else creates build/frames, so the first SOA_SNAP run on a clean
  * tree used to write nothing and say only that it could not. */
 static void ensure_frames_dir(void)
@@ -1368,7 +1402,19 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         unsigned frame = gx_frame_count(); /* the front end increments it after this copy, so this is the frame being presented */
         if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
         else if (g_snap_every && (frame % g_snap_every) == 0) { ensure_frames_dir(); snprintf(path, sizeof path, "build/frames/%04u.png", frame); want = 1; }
-        if (want) { gxr_flush(); TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h)); }
+        /* The PNG and the hash both describe the finished frame, so wait here
+         * for the rows of this copy every other worker owns. The hash is taken
+         * from the same buffer the PNG is written from and at the same point,
+         * so it does not depend on whether a PNG is being written. */
+        if (want || g_hash) gxr_flush();
+        if (want) TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h));
+        /* One line per presented frame, for a tool to diff between runs:
+         * "[gxr] frame <n> <w>x<h> hash <16 hex digits>". Note that SOA_SNAP
+         * skips rasterizing the frames it is not writing, so in that mode only
+         * the frames that get a PNG have a hash worth comparing. */
+        if (g_hash)
+            fprintf(stderr, "[gxr] frame %u %dx%d hash %016llx\n", frame, g_screen_w, g_screen_h,
+                    (unsigned long long)gxr_screen_hash());
     }
 }
 

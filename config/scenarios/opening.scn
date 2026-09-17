@@ -1,0 +1,35 @@
+# The opening cutscene: the longest stretch of the game that needs no
+# navigation at all, and the one with the most rendering in it.
+name: opening
+summary: The Valuan bridge and the boarding, advanced by one A press every 150 frames.
+frames: 7500
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_RENDER=1
+env: SOA_SNAP=100
+
+shows: ten minutes of scripted story: Alfonso and Galcian on the Valuan
+shows:   bridge, the helmsman, Vyse and Aika boarding -- all of it drawn by the
+shows:   software GX from the game's own command stream.
+shows: dialogue text, which was blank until the texture coordinate scale
+shows:   registers were indexed by coordinate rather than by map (FINDINGS
+shows:   "Text"). A frame with no glyphs in it is that defect returning.
+shows: the searchlight beams, the one open rendering defect (PLAN C1): they
+shows:   draw as near-black slabs with lit rims around frame 4000.
+
+evidence: build/boot_text.log: 19 scripted events, START/A pairs to 3240 and
+evidence:   then A at 3600, 3750, 3900 ... 7350 -- one press every 150 frames,
+evidence:   which is the @150 repeat. Snapshots every 100 frames.
+evidence: build/boot_wav.log is this script exactly -- 19 events -- over a
+evidence:   longer budget with the WAV writer attached. build/boot_text2.log is
+evidence:   the same nineteen with eight more events after them that its own
+evidence:   button transitions never show: stick deflections, lost the way
+evidence:   hold.scn describes. It is not this script, and is here as the run
+evidence:   that carried the A repeat out to frame 45000 without trouble.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

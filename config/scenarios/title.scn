@@ -1,0 +1,23 @@
+# The title screen. The shortest scenario there is: it needs no assets past
+# the ones the boot path loads, and it fails first when the boot path breaks.
+name: title
+summary: Boot through the logos to the title screen, press START, then New Game.
+frames: 2000
+pad: 1600:start,1640:a
+env: SOA_RENDER=1
+env: SOA_SNAP=50
+
+shows: the whole boot path, which is most of the runtime: the DOL loaded and
+shows:   entered, OS init, the DVD reads that stage the title, the DSP booted,
+shows:   the first EFB copies, and the title backdrop's two cloud quads (the
+shows:   rasteriser's row-span bug lived in those, FINDINGS "The title's black
+shows:   wedges").
+shows: that the SI model delivers a scripted press: START at frame 1600 is
+shows:   taken by the title, A at 1640 chooses New Game.
+
+evidence: build/boot_title.log, which prints "[si] 2 scripted controller
+evidence:   events" and then frame 1600 buttons 1000 (START), 1610 buttons 0000,
+evidence:   frame 1640 buttons 0100 (A), 1650 buttons 0000 -- a press at 1600 and
+evidence:   another at 1640, each released after the default ten-frame hold.
+evidence: the same log writes build/frames/NNNN.png every 50 frames, which is
+evidence:   where SOA_SNAP=50 comes from.

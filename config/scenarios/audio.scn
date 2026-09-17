@@ -1,0 +1,34 @@
+# Record what the game plays, for tools/audio_check.py to correlate against
+# the disc's own stream.
+name: audio
+summary: The opening, headless, with every mixed sample written to a WAV file.
+frames: 11500
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_WAV=build/opening.wav
+env: SOA_NOSOUND=1
+
+shows: the AX mixer and the AI DMA path end to end: the report's [ax] line
+shows:   counts mixed frames and voice-frames, [audio] counts DMA blocks and
+shows:   the peak sample.
+shows: the streamed music, which is the one audio path with a reference:
+shows:   python tools/audio_check.py build/opening.wav extracted/sound/m01_L.dsp
+shows:   correlates the opening theme at 0.85 on both channels, the battle music
+shows:   at 0.52 under the voices mixed over it (FINDINGS "Streamed music,
+shows:   checked").
+
+evidence: build/boot_wav.log: 19 scripted events, A every 150 frames out to
+evidence:   11400, no [gxr] line (headless, no rendering), and build/opening.wav
+evidence:   beside it is what that run wrote.
+
+note: SOA_NOSOUND=1 keeps the run off the machine's sound device, which it
+note:   would otherwise wait on; the WAV is written either way. Every saved
+note:   report so far says "(no output device)", so no sample from this port has
+note:   ever reached a speaker (PLAN E3).
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

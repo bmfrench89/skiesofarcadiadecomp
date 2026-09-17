@@ -1,0 +1,51 @@
+# Twenty-five minutes of mixed input. The longest scripted run the port has
+# survived, and the only evidence that a game over and a restart work.
+name: monkey
+summary: The hold and its menus mashed with five buttons on five different periods.
+frames: 126000
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+pad: 14000:start@3000,14250:b@500,15000:z@2900,20000:x@2100,26000:y@2300
+env: SOA_RENDER=1
+env: SOA_SNAP=1000
+env: SOA_SPEED=3
+
+shows: menus opened and closed at random (START and B), random encounters,
+shows:   a game over, and a restart from the title -- all three of the saved
+shows:   runs did that without an error.
+shows: how the port behaves when nothing is choreographed: five buttons on
+shows:   periods that share no common factor visit combinations no hand-written
+shows:   script would reach.
+shows: the frame-count spread that PLAN D4 is about: the three saved runs
+shows:   presented 126,521 / 121,795 / 124,051 frames against 269,343 / 269,381
+shows:   / 269,335 retraces -- a 4% swing for the same script, because the guest
+shows:   clock is the host wall clock scaled by SOA_SPEED.
+
+evidence: build/boot_monkey2.log, 28 scripted events. Twenty-four of them are
+evidence:   visible in its own button transitions: the nineteen-event preamble,
+evidence:   START from 14000 every 3000 frames, B from 14250 every 500, Z from
+evidence:   15000 every 2900, X from 20000 every 2100, Y from 26000 every 2300.
+evidence: build/boot_monkey3.log (30 events) is the same idea with B from
+evidence:   17000 every 900, Y from 18000 every 2500, X from 19000 every 2700, Z
+evidence:   from 21000 every 3100, START from 16000 every 4100;
+evidence:   build/boot_monkey4.log (29 events) with B from 16000 every 1100, Y
+evidence:   from 17000 every 2900, X from 18000 every 3300, START from 15000
+evidence:   every 3700. Either makes a second seed of this scenario.
+
+note: boot_monkey2.log holds 28 events and shows 24, so four stick events are
+note:   missing here that the original had: the logs print buttons only
+note:   (buttons_now in runtime/si.c). This scenario leaves the stick alone
+note:   rather than invent four; add them with --env SOA_PAD=... if you want the
+note:   walking back, which replaces this script wholesale -- --check reads the
+note:   environment it is about to pass, so it expects the events you gave it,
+note:   not the ones in this file.
+note: About twenty-five minutes of wall time at SOA_SPEED=3. The port's own
+note:   watchdog will not stop it -- it resets on every presented frame -- so
+note:   SOA_FRAMES is what ends the run.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

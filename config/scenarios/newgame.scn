@@ -1,0 +1,25 @@
+# Through the title into the first scene, with nothing repeating: the last
+# scenario whose whole script is explicit, and the one that boots fastest.
+name: newgame
+summary: Nine START/A pairs from 1600 to 3240: the title, New Game, the first dialogue.
+frames: 3400
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+env: SOA_RENDER=1
+env: SOA_SNAP=100
+
+shows: the handover from the title into the opening: the first field and
+shows:   character assets load, the game's own scene script starts running, and
+shows:   dialogue advances on A.
+shows: a press pair every 200 frames is deliberately slower than the game
+shows:   needs; it is the shape that survives when a scene takes longer to load
+shows:   than expected.
+
+evidence: build/boot_early.log ("[si] 19 scripted controller events") and
+evidence:   build/boot_capture.log ("[si] 18 scripted controller events"): both
+evidence:   print START at 1600, 1800, 2000 ... 3200 and A forty frames after
+evidence:   each, with nothing between. boot_early's nineteenth event is the
+evidence:   3600:a@150 repeat the longer scenarios here use; its run ended
+evidence:   before frame 3600, so the log never shows it firing.
+evidence: SOA_SNAP=100 is boot_early.log's snapshot interval.

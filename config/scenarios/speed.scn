@@ -1,0 +1,30 @@
+# How fast the port runs when nothing is drawn. The measurement behind "about
+# ten times real time" -- and a cheap regression test for the pipe fast path.
+name: speed
+summary: The opening headless at ten times guest speed, rendering nothing.
+frames: 10000
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_SPEED=10
+
+shows: the write-gather pipe fast path, where guest stores go straight to the
+shows:   GX parser and nothing is rasterised.
+shows: the report's [irq] retrace count against the wall time you measure
+shows:   yourself: the saved run managed 594 retraces a second, about ten times
+shows:   the console's 59.94. No saved log records wall time (PLAN A4), so time
+shows:   the command if you want the rate.
+
+evidence: build/boot_speed.log: 19 scripted events, no [gxr] line, 71,287 VI
+evidence:   retraces inside its 120-second watchdog, which is the 594 a second
+evidence:   quoted in FINDINGS "Speed" and in PLAN's opening table.
+
+note: SOA_SPEED scales the guest clock the host wall clock drives, so every
+note:   device completion moves with it and sound cannot keep up. It is for
+note:   exploration and throughput, not for anything that has to sound right.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

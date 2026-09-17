@@ -1,0 +1,52 @@
+# The Valuan ship's hold: the first place the player is in control, and so
+# the first scenario whose script has to move the stick as well as press A.
+name: hold
+summary: Past the battle into the ship's hold, then walk Vyse with the stick.
+frames: 16500
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+pad: 15000:sup#900,16000:sleft#400
+env: SOA_RENDER=1
+env: SOA_SNAP=300
+env: SOA_SPEED=3
+env: SOA_FIFO_DUMP=15200,15800,16300
+
+shows: the first field map the port ever reached: Vyse walks where the stick
+shows:   sends him, the minimap draws in the corner, and the room loads its
+shows:   neighbours (a201a, a200a, a101b) and their music.
+shows: the field loader's dispatch through the last four unresolved switches
+shows:   (a bound check by conditional return), which the first field loader
+shows:   uses (FINDINGS "Into the field").
+
+evidence: build/boot_field.log: 21 scripted events, of which the log shows 19
+evidence:   -- the same preamble and A repeat as every other scenario here. The
+evidence:   run reached the hold, kept loading assets until just after frame
+evidence:   14710, and ran on to frame 55360 at SOA_SPEED=3 with snapshots every
+evidence:   300 frames.
+evidence: build/boot_explore.log and build/boot_verify.log are the same
+evidence:   21-event script over shorter budgets.
+
+note: The three SOA_FIFO_DUMP frames are not from boot_field.log; they are here
+note:   because the whole replay corpus stops at frame 12100 -- logos, title,
+note:   opening, first battle -- and a field map is where the port spends most
+note:   of its time and none of what it is checked on. 15200, 15800 and 16300
+note:   land after the hold has loaded and inside this scenario's budget, and
+note:   the walking above is what makes them different from each other. They
+note:   cost about 25 MB each in build/fifo, which is gitignored, and nothing
+note:   else about the run changes. Drop the line if all you want is the run.
+note: The two stick events here are a reconstruction, not a recovery. The saved
+note:   logs print buttons only (buttons_now in runtime/si.c), so the 21-event
+note:   script in boot_field.log shows 19 events and hides 2 -- which is how we
+note:   know exactly two stick events existed, and nothing at all about what
+note:   they were. The pair below holds the stick up for 900 frames from 15000
+note:   and left for 400 from 16000, chosen to begin after the hold has finished
+note:   loading. Anything read off them is an observation about this script, not
+note:   about the original run. PLAN D3 (SOA_PAD_RECORD) is the fix for the
+note:   whole class of loss.
+note: The first nine START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. From 3600 one A press every 150
+note:   frames advances everything after that. Every saved run in build/ that
+note:   got past the title begins with exactly these nineteen events.

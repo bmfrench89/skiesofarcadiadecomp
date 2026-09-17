@@ -1,0 +1,40 @@
+# Capture FIFO frames for the renderer corpus. This is where build/fifo came
+# from, and how a new reference frame is made.
+name: capture
+summary: Run the opening headless and dump three command streams for --replay.
+frames: 4500
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+env: SOA_FIFO_DUMP=3600,3900,4200
+
+shows: the capture path: each named frame writes build/fifo/NNNN.fifo (the
+shows:   command stream), NNNN.regs (the CP, XF and BP registers as the frame
+shows:   started) and NNNN.ram (a 24 MB image of MEM1), which gen/soa.exe
+shows:   --replay renders offline with no game running.
+shows: that the GP front end understands every byte the game sends: the run's
+shows:   own report ends with "0 unknown bytes", which is one of the four
+shows:   invariants --check asserts.
+
+evidence: build/boot_capture.log: 18 scripted events and "[gx] captured frame
+evidence:   3600", "3900", "4200" with their command-byte counts. No [gxr] line
+evidence:   in that log, because it ran without SOA_RENDER.
+evidence: build/boot_title.log captured frames 2000, 2050 and 2100 the same
+evidence:   way; build/fifo holds 20 captures in total.
+
+note: Nothing is rendered here (no SOA_RENDER), so the run prints no [gxr]
+note:   line and the bad-vertex-reference invariant cannot be checked. That is
+note:   the point of the scenario: capture fast, replay later.
+note: The .ram files are game memory images -- game data, 24 MB each -- and
+note:   the .fifo streams are the game's own commands. build/ is gitignored and
+note:   all of it stays there.
+note: The eighteen START/A pairs are the standard preamble: START at 1600
+note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
+note:   follow walk the first dialogue boxes. Every saved run in build/ that got
+note:   past the title begins with exactly these.
+note: This is the one scenario here that stops at the preamble: the other nine
+note:   add "3600:a@150" and go on pressing A. boot_capture.log says "[si] 18
+note:   scripted controller events" and its last press is the A at 3240, so the
+note:   three frames it captured are what the opening does on its own with
+note:   nobody touching the controller -- which is why they replay the same way
+note:   every time. Add the repeat and the captures are of different frames.

@@ -13,9 +13,9 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 41 across 15 units — 0.18% of `.text` |
 | Of those, running in the port | 9 (`config/hle.txt`) |
-| Python tests | 167 in 11 files |
-| Native code compiled by CI | none: `runtime/` is 7,481 lines |
-| Frame or audio check CI can run | none: `selftest.c` and `tools/audio_check.py` both need a built binary and a dump |
+| Python tests | 229 in 13 files |
+| Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
+| Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 20 in `build/fifo`; 13 of them have a reference PNG |
 | `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
 | Memory card bytes read or written, ever | 0: every log says `card 0 bytes read, 0 written` |
@@ -32,44 +32,73 @@ wall-clock time at all, so every rate here is per *guest* second and equals
 wall time only at `SOA_SPEED=1`; the evidence that headless runs hold about
 ten times real time is FINDINGS.md's 594 retraces a second at `SOA_SPEED=10`.
 
-What the port cannot do is tell you tomorrow that it still does all that.
-Nothing checks a pixel, a sample or a counter automatically, and the
-scripted runs everything above is judged by exist only in shell history.
+What the port could not do, until A1 and D1, was tell you tomorrow that it
+still does all that. CI now compiles every line of the runtime and checks two
+synthetic frames pixel by pixel, and the scripted runs everything above is
+judged by are committed in `config/scenarios/` instead of living in one
+person's shell history. What is still unchecked is the game itself: no saved
+run's counters, no sample, and no captured frame is compared with anything
+until someone runs the A2 sweep.
 
-**Start here:** D1, because those scripts are the highest-decay asset in the
-project; then A1, twenty lines of YAML that put 7,481 lines of C under CI;
-then A2. After that, any track, cold.
+**Start here:** D1, A1 and A2 were the first three, and are built; what is
+left of A2 is a sweep only the owner's machine can run, and what is left of D1
+is a README table. So: A3, then A4, which every timing claim below depends on.
+After that, any track, cold.
 
 ---
 
 ## Track A — Ground truth
 
-**A1. Compile the runtime in CI, then the render self-tests** — *hours, then a day.*
-CI runs pytest and ruff only: none of the 7,481 lines of C that are the port
-is compiled anywhere but the owner's machine. Compile every `runtime/*.c` with `/c`
-on the windows-latest runner — no `gen/`, no disc, no linking — and in the
-same job compile `src/sdk/msl/string.c` and `mem.c` with the `/Ddc_*`
-renames `recompile.py:53` builds, checking the nine against host libc: that
-half needs no game data and catches the defects F3 describes. Then the
-longer half, a renderer-only binary from `gx.c`, `gxr.c`, `gxr_tev.c` and
-`png.c` (none reference recompiled code) plus about twelve stubs, running
-the checks at `selftest.c:102-158`.
-*Done:* a syntax error in any `runtime/*.c` fails CI, the nine `dc_` twins
-agree with libc there, and the renderer binary builds and exits 0 from a
-checkout with no `extracted/`.
+**A1. Compile the runtime in CI, then the render self-tests** — *built.*
+**Built.** The `native` job in `.github/workflows/ci.yml` runs three steps on
+windows-latest, each of which fails loudly rather than skipping when there is
+no `cl.exe`: `tools/citest/compile_runtime.py` compiles all 22 `runtime/*.c`
+with `/c` and the flags in `tools/soa/toolchain.py`, plus nine warnings
+promoted to errors (C4013 first: nothing links here, so an implicit
+declaration is the only sign a rename left a caller behind);
+`tools/citest/dc_check.py` builds `src/sdk/msl/string.c` and `mem.c` with the
+`/Ddc_*` renames `recompile.py` derives, links them to
+`tools/citest/dc_driver.c` and compares nine routines with host libc over
+3,000 generated cases each; and `tools/citest/render_check.py` links `gx.c`,
+`gxr.c`, `gxr_tev.c`, `png.c` and `tools/citest/render_driver.c` — two stubs,
+`hle_report` and `mmio_read32`, were all the renderer needed — and runs the
+two pixel checks from `selftest.c:102-158` with no disc and no `gen/`. The
+recipe in the driver is a verbatim copy of `selftest.c`'s, since that one is
+static in a file that cannot link outside the port;
+`tools/tests/test_citest.py` compares the two texts so the copy cannot drift,
+and also holds the `UNCOVERED` escape hatch and the stdlib-only import graph
+the no-pip job depends on.
+*Left:* `memset`'s fill is not really covered — `mem.c`'s `memset` wraps
+`__fill_mem`, which `decomp_shims.c` answers with the host `memset`, so only
+the wrapper is checked until F3 decompiles the worker. The renderer binary
+prints its frame hash but asserts only the pixel counts: `ceilf`/`floorf` at
+a span boundary is where two MSVC versions would differ, and nobody has run
+two.
 
-**A2. Frame hashes and a replay corpus check** — *hours.*
-Nothing compares a replayed capture to anything. Hash the screen rows beside
-the PNG write at `gxr.c:1365-1372` and replay all 20 captures at
-`SOA_THREADS` 1, 2, 3 and 8, which also pins the row-ownership rule
-(`gxr.c:1156`) that lines and points break at `gxr.c:988-1013`. `--replay`
-overwrites `<base>.png` (`main.c:348-354`) and 7 captures have no reference
-PNG, so the manifest comes from the first clean sweep. Fix `float tex[8][4]`
-(`gxr.c:814`) first — filled only where `ti[i] >= 0` while
-`gxr_tev.c:612-618` indexes any slot a stage names, so an unsupplied
-coordinate reads stack and differs by thread count. Local only: a capture's
-24 MB `.ram` can never be committed, and `main.c:319-327` wants
-`extracted/sys/` before `--replay`.
+**A2. Frame hashes and a replay corpus check** — *hours, and the sweep is not run.*
+**Built.** `SOA_HASH=1` makes `enqueue_copy` (`gxr.c`) print `[gxr] frame N
+WxH hash <16 hex>` for every presented frame, FNV-1a over the rows after a
+`gxr_flush()`, so the value is the finished frame whether or not a PNG is
+being written. `float tex[8][4]` is fixed: all eight slots are seeded with
+`(0,0,1,0)` — what `transform()` writes into ungenerated slots — before the
+per-pixel loop overwrites the supplied ones, so an unsupplied coordinate no
+longer reads stack and no longer depends on the thread count. `python
+tools/scenario.py replay --bless` is the sweep: every capture in `build/fifo`
+at `SOA_THREADS` 1, 2, 3 and 8, twice over, one hash line demanded per
+replay, reference PNGs copied to `build/fifo/ref-before` first because
+`--replay` overwrites them, and `config/fifo_manifest.tsv` written with the
+capture's name, sha256 over its own `.fifo`/`.regs`/`.ram`, and the frame
+hash. The input column is what lets a row mean anything on a machine that
+cannot have the capture. Without `--bless` the same sweep checks against the
+manifest.
+*Left:* nobody has run it. It needs a built `gen/soa.exe`, `extracted/sys/`
+(`main.c` wants the disc even for `--replay`) and the captures, so it is the
+owner's to run — and until it has been, the manifest does not exist and the
+hashes are an emitter with a reader and no data. The sweep pins the row
+ownership rule for triangles only: `raster_line` and `raster_point` draw on
+every worker with no `my_row` test, and the corpus contains no line or point
+draw to catch it with. `hold.scn` now captures three field frames to widen a
+corpus that otherwise stops at frame 12100.
 *Done:* 20/20 unchanged twice at every thread count, and the right captures
 named after a one-line change to blending.
 
@@ -242,21 +271,27 @@ asset load lands just after `[si] frame 14710` and the run then mashed A
 until frame 55,360 without loading anything new. A script can advance
 dialogue and win a fight; it cannot walk to a door.
 
-**D1. A scenario library and a run checker** — *a day.*
-First item in the plan. The scripts that produced everything the port is
-judged by exist only in shell history — `build/` holds 31 boot logs and not
-one scenario — and five items across three tracks (B4, C1, D5, E1, E3) are
-all "run a scripted session and read the report". Commit them, button names
-and not game data, as named scenarios, plus a driver that runs one headless
-and asserts on the report. The parts exist: `SOA_PAD` parsing at
-`si.c:77-121`, `SOA_STRICT` exiting 8 with a backtrace at the first
-unmodelled MMIO (`hle.c:97-107`), counters in every `*_report`. Nothing here
-waits on D3. Assert only invariants that cannot drift — exit code, zero
-unmodelled MMIO, zero unknown FIFO bytes, zero bad vertex refs — and add the
-map list once D2 names the files and D4 makes them repeatable, since retrace
-runs off the wall clock while the pad script is keyed to frames. Fix
-`README.md:75` in passing: it describes `SOA_FRAMES` as doing `SOA_SNAP`'s
-job.
+**D1. A scenario library and a run checker** — *done, bar one line of README.*
+**Built.** `config/scenarios/` holds eleven `.scn` files — title, newgame,
+capture, opening, battle, hold, encounter, monkey, audio, speed, window —
+each with the pad script, the frame budget, the environment, what it shows, and an
+`evidence:` line naming the log in `build/` or the section of FINDINGS it was
+recovered from. `tools/scenario.py` lists them, prints the command for one in
+three shells, runs one headless, and checks a run or a saved log against the
+four invariants that cannot drift (exit code, zero unmodelled MMIO with
+`SOA_STRICT` on, zero unknown FIFO bytes, zero bad vertex refs), plus a fifth
+look at the input: a script the port did not read as written makes the other
+four true about a run that drove nothing. The two counters also fail at zero
+with nothing behind them, since a renderer that drew nothing would otherwise
+pass. What could not be recovered is labelled: the logs print buttons only,
+so the stick events in `hold`, `encounter` and `monkey` are reconstructions
+or absent, and `window`'s whole script is one, since the only windowed run
+saved was driven by hand. Each file says which.
+*Left:* `README.md:75` still describes `SOA_FRAMES` as doing `SOA_SNAP`'s
+job, the README table has no row for `SOA_SNAP`, `SOA_STRICT` or `SOA_HASH`,
+and neither README nor CONTRIBUTING mentions `config/scenarios/`,
+`tools/scenario.py` or `tools/citest/` at all — the library is invisible to
+anyone who has not read this file. The map list still waits on D2 and D4.
 *Done:* one command runs the title scenario end to end, prints what it
 checked, and exits non-zero naming the invariant when one breaks.
 
