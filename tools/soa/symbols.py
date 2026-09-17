@@ -129,17 +129,43 @@ def load_names(path: Path) -> dict[int, tuple[str, str]]:
     return out
 
 
-def apply_names_to_dtk(path: Path, names: dict[int, tuple[str, str]]) -> int:
-    """Rename placeholder ``fn_XXXXXXXX`` entries of a dtk symbols file in place."""
+_DTK_PLACEHOLDER = re.compile(r"(fn_([0-9A-Fa-f]{8})) = (\S+?):0x([0-9A-Fa-f]+)(;.*)?$")
+
+
+def apply_names_to_dtk(path: Path, names: dict[int, tuple[str, str]], write: bool = True) -> int:
+    """Carry recovered names into a dtk symbols file, returning how many landed.
+
+    This is what puts our names in ``build/dtk/obj/``, which objdiff matches by
+    name: that build is generated from ``config/GEAE8P/symbols.txt``, a
+    separate file from our own ``config/symbols.txt``, so without this pass the
+    two disagree about every name in ``config/names.txt``.
+
+    Only placeholder ``fn_XXXXXXXX`` entries are renamed, so dtk's own SDK
+    signature matches stand, and a name already used in the file is left alone
+    rather than duplicated -- two symbols of one name would make the diff
+    ambiguous in exactly the unit someone is working on. ``write=False``
+    reports the count without touching the file.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    taken = {line.split(" = ", 1)[0] for line in text.splitlines() if " = " in line}
     out = []
     renamed = 0
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        m = re.match(r"fn_([0-9A-F]{8}) = (.*)", line)
-        if m and int(m.group(1), 16) in names:
-            line = f"{names[int(m.group(1), 16)][0]} = {m.group(2)}"
-            renamed += 1
+    for line in text.splitlines():
+        m = _DTK_PLACEHOLDER.match(line)
+        if m:
+            placeholder, hexaddr, section, lineaddr, rest = m.groups()
+            address = int(hexaddr, 16)
+            # The address in the placeholder is the one in the entry; a file
+            # where they disagree is not one to rewrite by name.
+            name = names.get(address, (None,))[0]
+            if name and address == int(lineaddr, 16) and name not in taken:
+                line = f"{name} = {section}:0x{lineaddr}{rest or ''}"
+                taken.discard(placeholder)
+                taken.add(name)
+                renamed += 1
         out.append(line)
-    Path(path).write_text("\n".join(out) + "\n", encoding="utf-8")
+    if write and renamed:
+        Path(path).write_text("\n".join(out) + "\n", encoding="utf-8")
     return renamed
 
 
@@ -236,3 +262,30 @@ def symbols_from_inventory(
     # labels pass through so the file stays a complete map for dtk tooling.
     out.extend(s for s in passthrough or [] if s.kind != "function")
     return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python tools/soa/symbols.py [--dtk P] [--names P] [--dry-run]``
+
+    Applies config/names.txt to the decomp-toolkit project's symbol file, the
+    one build/dtk/obj/ is generated from. tools/inventory.py already writes our
+    own config/symbols.txt with these names; it does not touch dtk's, so until
+    it calls apply_names_to_dtk itself this is how the two are kept in step.
+    """
+    import argparse  # noqa: PLC0415 - only the command line needs it
+
+    ap = argparse.ArgumentParser(description=main.__doc__)
+    ap.add_argument("--dtk", type=Path, default=Path("config/GEAE8P/symbols.txt"))
+    ap.add_argument("--names", type=Path, default=Path("config/names.txt"))
+    ap.add_argument("--dry-run", action="store_true", help="count without writing")
+    args = ap.parse_args(argv)
+
+    names = load_names(args.names)
+    renamed = apply_names_to_dtk(args.dtk, names, write=not args.dry_run)
+    verb = "would rename" if args.dry_run else "renamed"
+    print(f"{verb} {renamed} of {len(names)} recovered names in {args.dtk}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

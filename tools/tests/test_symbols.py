@@ -64,3 +64,60 @@ def test_tsv_roundtrip(tmp_path):
     assert back[0x80005600]["size"] == 852
     assert back[0x80005600]["name"] == "fn_80005600"
     assert back[0x80005600]["jump_tables"] == 1
+
+
+DTK_FILE = (
+    "CARDInit = .text:0x80245758; // type:function size:0xAC scope:global\n"
+    "fn_80248884 = .text:0x80248884; // type:function size:0x410\n"
+    "fn_80248DCC = .text:0x80248DCC; // type:function size:0x1A0\n"
+    "lbl_80318360 = .data:0x80318360; // type:object size:0x220\n"
+)
+NAMES = {
+    0x80245758: ("CARDInit", "already here"),
+    0x80248884: ("CARDDoMount", "the mount state machine"),
+    0x80248DCC: ("CARDMountAsync", "the public entry"),
+}
+
+
+def test_apply_names_to_dtk_renames_placeholders_only(tmp_path):
+    path = tmp_path / "symbols.txt"
+    path.write_text(DTK_FILE, encoding="utf-8")
+    assert S.apply_names_to_dtk(path, NAMES) == 2
+    text = path.read_text(encoding="utf-8")
+    assert "CARDDoMount = .text:0x80248884; // type:function size:0x410" in text
+    assert "CARDMountAsync = .text:0x80248DCC; // type:function size:0x1A0" in text
+    # dtk's own name stands, and a non-function entry is not our business.
+    assert "CARDInit = .text:0x80245758; // type:function size:0xAC scope:global" in text
+    assert "lbl_80318360 = .data:0x80318360" in text
+    # Running it again has nothing left to do.
+    assert S.apply_names_to_dtk(path, NAMES) == 0
+
+
+def test_apply_names_to_dtk_will_not_duplicate_a_name(tmp_path):
+    # The file already calls something CARDDoMount: renaming here would leave
+    # two symbols of one name, and objdiff matches by name.
+    path = tmp_path / "symbols.txt"
+    path.write_text(
+        "CARDDoMount = .text:0x80248000; // type:function size:0x10\n"
+        "fn_80248884 = .text:0x80248884; // type:function size:0x410\n",
+        encoding="utf-8",
+    )
+    assert S.apply_names_to_dtk(path, NAMES) == 0
+    assert "fn_80248884 = .text:0x80248884" in path.read_text(encoding="utf-8")
+
+
+def test_apply_names_to_dtk_dry_run_counts_without_writing(tmp_path):
+    path = tmp_path / "symbols.txt"
+    path.write_text(DTK_FILE, encoding="utf-8")
+    assert S.apply_names_to_dtk(path, NAMES, write=False) == 2
+    assert path.read_text(encoding="utf-8") == DTK_FILE
+
+
+def test_apply_names_to_dtk_ignores_an_entry_that_moved(tmp_path):
+    # A placeholder whose name and address disagree is a file to fix, not to
+    # rewrite from a name table.
+    path = tmp_path / "symbols.txt"
+    path.write_text(
+        "fn_80248884 = .text:0x80249000; // type:function size:0x410\n", encoding="utf-8"
+    )
+    assert S.apply_names_to_dtk(path, NAMES) == 0

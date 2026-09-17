@@ -1,6 +1,10 @@
-# Function names recovered from diagnostic strings that name their own
-# routine ("scptLoad: Len is zero"). Only strings referenced by exactly one
-# function count. address<TAB>name<TAB>evidence. Merged by tools/inventory.py.
+# Names recovered by hand, one line per function:
+# address<TAB>name<TAB>evidence. Merged by tools/inventory.py, and applied
+# to config/GEAE8P/symbols.txt so build/dtk/obj/ carries them too. The
+# evidence column is what makes an entry trustworthy: it says what fixed
+# the name, so a reader can disagree with it. The first block below comes
+# from diagnostic strings that name their own routine ("scptLoad: Len is
+# zero"), counted only where exactly one function references the string.
 0x80005600	OSCheckHeap	self-naming string
 0x800A8FE0	eff_smoke2	self-naming string
 0x800BF9A0	eff_smoke3	self-naming string
@@ -86,3 +90,94 @@
 0x80243C74	ARQPostRequest	decompiled byte-for-byte (src/)
 0x80243DD0	ARQSetChunkSize	decompiled byte-for-byte (src/)
 0x80243DF0	ARQGetChunkSize	decompiled byte-for-byte (src/)
+
+# The Nintendo SDK memory-card library, recovered from the disassembly
+# (Track B1). A name with no note is the SDK's own, fixed by a call
+# sequence or a constant that can be nothing else; "our name" marks a
+# file-local static, whose spelling the binary cannot give back.
+0x802448E4	__CARDDefaultApiCallback	a bare blr; the callback CARDMountAsync, CARDReadAsync, CARDWriteAsync, CARDCreateAsync, CARDDeleteAsync and __CARDFormatRegionAsync all substitute when the caller passes none -- the six functions whose code materialises this address
+0x802448E8	__CARDSyncCallback	OSWakeupThread on the control block's thread queue (+140), the one CARDInit initialises; every sync wrapper passes it
+0x8024491C	__CARDExtHandler	the handler CARDMountAsync hands EXIAttach: clears attached, drops the EXI callback, cancels the alarm and reports NOCARD to the exi and detach callbacks
+0x802449F4	__CARDExiHandler	the EXI callback the mount installs: cancels the timeout, re-locks EXI, reads then clears the card status, IOERROR on status bits 0x18, retries while the counter at +168 lasts
+0x80244B0C	__CARDTxHandler	EXIDeselect then EXIUnlock, then card->txCallback (+200), with NOCARD when EXIProbe fails
+0x80244BB4	__CARDUnlockedHandler	the callback passed to every EXILock in this library: calls card->unlockCallback (+220) with 1, or with NOCARD when EXIProbe fails
+0x80244C38	__CARDEnableInterrupt	one 2-byte EXI immediate, 0x8100 | enable, between select and deselect
+0x80244CF8	__CARDReadStatus	2-byte EXI immediate 0x8300 then a 1-byte immediate read into the caller's status
+0x80244DE8	__CARDClearStatus	one 1-byte EXI immediate 0x89
+0x80244E94	CARDTimeoutHandler	static, our name: the OSAlarm handler; finds its channel by comparing the alarm address with each control block's, then reports IOERROR to card->exiCallback
+0x80244F38	CARDRetryTransfer	static, our name: re-selects the card, re-arms the timeout from the command byte (100 ms for 0xF2, a size-scaled one for 0xF1/0xF3/0xF5) and re-issues the DMA
+0x80245274	__CARDStart	EXILock with __CARDUnlockedHandler, EXISelect at frequency 4, sets the timeout alarm from the command byte at card->[148] and records the tx and exi callbacks
+0x80245428	__CARDReadSegment	a five-byte command -- 0x52 and four address bytes -- then the latency bytes the EXI ID asks for and a 512-byte EXIDma
+0x8024555C	__CARDWritePage	a five-byte command -- 0xF2 and four address bytes -- then a 128-byte EXIDma
+0x80245678	__CARDEraseSector	a three-byte command -- 0xF1 and two address bytes, so a sector is named by any byte in it -- and no data phase
+0x80245758	CARDInit	returns early when both diskIDs are set, then OSRegisterVersion, OSInitAlarm, a thread queue and an alarm per control block, __CARDSetDiskID of the disc header at 0x80000000 and OSRegisterResetFunction
+0x8024580C	__CARDSetDiskID	sets both control blocks' diskID (+268), defaulting to the empty ID that follows the array at 0x80318580
+0x80245844	__CARDGetControlBlock	channel and diskID checks give FATAL, then NOCARD or BUSY; otherwise takes the block by setting result BUSY and clearing the api callback
+0x802458FC	__CARDPutControlBlock	stores the result when the card is still attached or the block was BUSY
+0x80245960	CARDGetResultCode	returns __CARDBlock[chan].result after the channel range check
+0x80245990	CARDFreeBlocks	free bytes from fat[3] * sectorSize and the count of empty directory entries
+0x80245AE0	__CARDSync	sleeps on the card's thread queue until CARDGetResultCode stops being BUSY
+0x80245F3C	__CARDUnlock	the mount calls it when the card status says locked and writes its 12-byte output into SRAM; it runs the DSP challenge and drives EXI itself
+0x80246E28	CARDReadSegmentCallback	static, our name: advances xferred, address and buffer by 512 and re-issues __CARDReadSegment until the segment count runs out
+0x80246F04	__CARDRead	stores address, buffer, the segment count (length >> 9) and the callback in the control block, then __CARDReadSegment
+0x80246F68	CARDWritePageCallback	static, our name: advances xferred, address and buffer by 128 and re-issues __CARDWritePage until the page count runs out
+0x80247044	__CARDWrite	stores address, buffer, the page count (length >> 7) and the callback, then __CARDWritePage; every system-block write goes through it
+0x802470A8	CARDGetXferredBytes	one lwz: the word at __CARDBlock[chan] + 184, the counter the page and segment callbacks advance by 128 and 512
+0x802470C0	__CARDGetFatBlock	returns card->currentFat (+136)
+0x802470C8	CARDFatWriteCallback	static, our name: swaps currentFat between workArea+0x6000 and +0x8000, copies the 8192 bytes across and calls the api callback
+0x8024719C	CARDFatEraseCallback	static, our name: after the erase, __CARDWrite of the 8192-byte FAT block at its own block index, completing in CARDFatWriteCallback
+0x80247264	__CARDAllocBlock	INSSPACE when fat[3] (free blocks) is short, links a chain from fat[4] wrapping at block 5 and card->cBlock, leaves the head at card->[190] and ends in __CARDUpdateFatBlock
+0x8024737C	__CARDFreeBlock	walks the chain from the given block clearing each entry and counting it back into fat[3], then __CARDUpdateFatBlock
+0x80247418	__CARDUpdateFatBlock	increments fat[2], __CARDCheckSum(&fat[2], 8188) into fat[0] and fat[1], DCStoreRange of 8192, then __CARDEraseSector of that block into CARDFatEraseCallback
+0x802474C4	__CARDGetDirBlock	returns card->currentDir (+132)
+0x802474CC	CARDDirWriteCallback	static, our name: the directory twin of CARDFatWriteCallback, swapping currentDir between workArea+0x2000 and +0x4000
+0x8024759C	CARDDirEraseCallback	static, our name: the directory twin of CARDFatEraseCallback
+0x80247664	__CARDUpdateDir	increments the check code at dir[127]+58, checksums 8188 bytes into +60 and +62, DCStoreRange, then __CARDEraseSector into CARDDirEraseCallback
+0x80247728	__CARDCheckSum	the unrolled u16 sum and sum-of-complements, 0xFFFF folded to 0, that every system block carries; called with 8188 or 508 bytes
+0x802478D8	CARDVerifyID	static, our name: checks the ID block's device ID and size against the card, its own 508-byte checksum, the 12 flash-ID bytes descrambled with the 0x41C64E6D/12345 sequence against SRAM flashID[chan], then the font encoding
+0x80247B5C	CARDVerifyDir	static, our name: checksums both directory blocks (workArea+0x2000 and +0x4000), prefers the higher check code, copies the good one over the bad and sets card->currentDir
+0x80247D9C	CARDVerifyFat	static, our name: the same over the two FAT blocks at workArea+0x6000 and +0x8000, setting card->currentFat
+0x80248020	__CARDVerify	CARDVerifyID, then CARDVerifyDir plus CARDVerifyFat, BROKEN unless both report no errors
+0x802480AC	CARDCheckExAsync	takes (chan, s32* xferBytes, callback) and zeroes xferBytes first; verifies, repairs the broken twin of each pair, then rebuilds the FAT by walking every directory entry's block chain
+0x8024863C	CARDIsCard	static, our name: the device-ID test CARDProbeEx and the mount apply to the EXI ID, rejecting a set high half, the low two bits, a size outside 4..128 and an ID whose sector-size table entry is zero or leaves fewer than 8 sectors
+0x80248708	CARDProbeEx	channel check, EXIProbeEx, EXIGetState bit 0x08, EXIGetID then CARDIsCard, reporting BUSY, NOCARD or WRONGDEVICE and filling the memSize and sectorSize outputs
+0x80248884	CARDDoMount	static, our name: the mount state machine over card->mountStep (+36) -- EXIGetID and the geometry tables, clear and read status, __CARDUnlock when status bit 0x40 is clear, the 12-byte flash ID checksummed into SRAM offset 58, __CARDEnableInterrupt, then five 8192-byte reads of the system area
+0x80248C94	CARDMountCallback	static, our name: advances mountStep and re-enters the mount, runs __CARDVerify after step 7, unmounts on NOCARD or IOERROR and re-locks EXI when __CARDUnlockedHandler reports 1
+0x80248DCC	CARDMountAsync	takes (chan, workArea, detachCallback, attachCallback); EXIAttach with __CARDExtHandler, clears mountStep and the block pointers, EXILock, then CARDDoMount. The synchronous CARDMount is not linked into this build
+0x80248F6C	CARDDoUnmount	static, our name: EXISetExiCallback(NULL), EXIDetach, OSCancelAlarm, attached cleared and card->result set to the code it is given
+0x80249008	CARDUnmount	the same teardown behind __CARDGetControlBlock, leaving result NOCARD
+0x802490B4	CARDFormatCallback	static, our name: steps card->formatStep (+40), 0-4 erasing the five system sectors and 5-9 writing them back, then points currentDir and currentFat at the first block of each pair
+0x802491F8	__CARDFormatRegionAsync	builds the ID block (0xFF fill, SRAM counter bias and language, an OSGetTime serial, the scrambled flash ID, the encoding argument), both directory and both FAT blocks, then erases sector 0 into CARDFormatCallback
+0x80249850	CARDFormatAsync	__CARDFormatRegionAsync with the font encoding CARDInit cached
+0x80249898	__CARDCompareFileName	static, our name: compares a directory entry's 32-byte name at +8 against a string, bounded at 32 and treating a shorter string as less
+0x80249900	__CARDAccess	NOFILE when the entry's game name starts 0xFF, else the 4-byte game name and 2-byte company against card->diskID, NOPERM when they differ
+0x80249998	__CARDIsPublic	NOFILE on an empty entry, READY when permission (+52) has bit 0x04, NOPERM otherwise
+0x802499C8	__CARDGetFileNo	scans the 127 directory entries with __CARDAccess and __CARDCompareFileName inlined, returning the index or NOFILE
+0x80249B18	CARDOpen	finds the file, then fills CARDFileInfo with the channel, file number, offset 0 and the entry's start block, calling a start block outside 5..cBlock BROKEN
+0x80249C90	CARDClose	sets fileInfo->fileNo to -1 between __CARDGetControlBlock and __CARDPutControlBlock
+0x80249CE4	CARDIsOpened	our name: an 8-byte stub returning 0, called as (card, fileNo); CARDDeleteAsync answers BUSY when it is non-zero, so it is the file-in-use test, compiled out of this build
+0x80249CEC	CARDCreateCallback	static, our name: fills the new directory entry from the disk ID, permission 0x04, the allocated start block and the time in seconds, then __CARDUpdateDir
+0x80249E1C	CARDCreateAsync	NAMETOOLONG past 32 characters, FATAL when the size is not a sector multiple, scans for a free entry and for the name already existing (EXIST), then __CARDAllocBlock into CARDCreateCallback
+0x8024A03C	__CARDSeek	validates the file number and start block, LIMIT when offset plus length passes the entry's length, sets card->fileInfo and walks the FAT chain to the block holding the offset
+0x8024A1F4	CARDReadCallback	static, our name: takes one sector off the remaining length, follows the FAT to the next block and issues the next __CARDRead
+0x8024A324	CARDReadAsync	requires 512-byte aligned length and offset, then __CARDSeek, __CARDAccess or __CARDIsPublic, DCInvalidateRange and __CARDRead into CARDReadCallback
+0x8024A46C	CARDRead	CARDReadAsync with __CARDSyncCallback, then __CARDSync
+0x8024A4B4	CARDWriteCallback	static, our name: takes one sector off the remaining length, stamps the entry's time and __CARDUpdateDir when the file is done, otherwise erases the next sector
+0x8024A624	CARDWriteEraseCallback	static, our name: __CARDWrite of one sector from card->buffer once the erase finishes, completing in CARDWriteCallback
+0x8024A6D4	CARDWriteAsync	__CARDSeek, sector-aligned length and offset, __CARDAccess, DCStoreRange, then __CARDEraseSector into CARDWriteEraseCallback
+0x8024A7E8	CARDDeleteCallback	static, our name: __CARDFreeBlock of the start block the delete saved at card->[190]
+0x8024A88C	CARDDeleteAsync	__CARDGetFileNo, the file-in-use test, saves the start block, fills the 64-byte entry with 0xFF and __CARDUpdateDir into CARDDeleteCallback
+0x8024A99C	CARDUpdateIconOffsets	static, our name: reads the banner format (+7) and the icon format (+48) two bits at a time, adding 3072 or 6144 for the banner and 1024 or 2048 per icon, filling the status block's offsets
+0x8024AB94	CARDGetStatus	copies game name, company, the 32-byte file name, length as blocks * sectorSize, time, banner and icon fields out of dir[fileNo], then CARDUpdateIconOffsets
+0x8024ACC0	CARDSetStatusAsync	writes banner format, icon address, icon format, icon speed and comment address back into the entry, re-stamps its time and __CARDUpdateDir
+0x8024AE34	CARDSetStatus	CARDSetStatusAsync with __CARDSyncCallback, then __CARDSync
+0x8024AE7C	CARDGetDirEntry	our name: copies the whole 64-byte directory entry for a file number out to the caller after __CARDAccess or __CARDIsPublic
+0x8024AF38	CARDSetDirEntryAsync	our name: writes a whole directory entry back, refusing a name another entry already holds (EXIST), then __CARDUpdateDir; the only caller is CARDSetAttributes
+0x8024B18C	CARDSetAttributes	reads the entry, stores the attribute byte at +52 (permission), writes it back with __CARDSyncCallback and waits in __CARDSync
+0x80263C90	EXISetExiCallback	stores the callback in the channel's EXI control block (0x8031D648, 64 bytes per channel) and returns the old one; the mount installs __CARDExiHandler through it
+0x80263E80	EXIProbe	__EXIProbe plus the cached device ID, TRUE or FALSE; the mount treats FALSE as NOCARD
+0x80263F00	EXIProbeEx	EXIProbe answered as 1, 0 or -1, which is how CARDProbeEx separates NOCARD from BUSY
+0x80263FB4	EXIAttach	probes, reads the ID, then sets state bit 0x08 and the ext callback for the channel; CARDMountAsync passes __CARDExtHandler
+0x802640C0	EXIDetach	clears state bit 0x08 with interrupts disabled; CARDDoUnmount and CARDUnmount call it
+0x80264A54	EXIGetState	returns the channel's state word (+12), the one EXIAttach and EXIDetach set bit 0x08 in; CARDProbeEx and CARDMountAsync test that bit
+0x80264A94	EXIGetID	EXILock and EXISelect, then a 2-byte immediate write of zero and a 4-byte immediate read, cached at 0x800030C0 + chan * 4; CARDProbeEx and the mount take the card's geometry from that ID

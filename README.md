@@ -80,6 +80,8 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_NOSOUND=1` | no audio device |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with a report (default 20; 0 disables) |
+| `SOA_CARD=path` | memory card image for slot A (default `build/cards/slotA.raw`, created blank on the first write) |
+| `SOA_CARD_VERBOSE=1` | one `[card]` line per EXI transaction: the frame, the device, the command and the card address |
 | `SOA_TRACE=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; a store watchpoint |
 | `SOA_GXR_DEBUG=N` / `SOA_GXR_DRAWS=N` / `SOA_GXR_PIXEL=x,y` | renderer forensics in `--replay`: triangles from draw N on, stop after N draws, narrate one pixel |
 

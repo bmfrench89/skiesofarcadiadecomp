@@ -13,12 +13,12 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 41 across 15 units — 0.18% of `.text` |
 | Of those, running in the port | 9 (`config/hle.txt`) |
-| Python tests | 229 in 13 files |
+| Python tests | 251 in 15 files |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 20 in `build/fifo`; 13 of them have a reference PNG |
 | `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
-| Memory card bytes read or written, ever | 0: every log says `card 0 bytes read, 0 written` |
+| Memory card bytes read or written, ever | 0: every log says `card 0 bytes read, 0 written`, and no run has been made since B2 changed the device model underneath that line |
 | Saved runs that played a sample | 0 of 27: every `[audio]` line says "(no output device)" |
 
 The port boots, plays the opening, wins the first battle and walks the
@@ -140,48 +140,107 @@ seconds and wall seconds reported separately.
 Roadmap 4.7, `[~]` in Phase 4, and the first of ROADMAP's three immediate
 next actions.
 
-**B1. Name the CARD library** — *hours.*
-Step zero, and it was missing: `config/functions.tsv` holds no `CARD` symbol
-at all and the 54 functions from 0x80247044 to 0x8024B28C are every one of
-them `fn_*`, while everything below navigates by SDK name — `EXIGetID` is
-`fn_80264A94`, `CARDProbeEx` is `fn_80248708`, the mount is `fn_80248884`.
-Recovering those twice out of a disassembly is most of what makes B2 feel
-long. Add them to `config/names.txt` with evidence, and wire
-`symbols.apply_names_to_dtk` in (F1) so `build/dtk/obj/` gets them too. Land
-F1's first half before regenerating the inventory: today that rename breaks
-11 of the 41 matches.
-*Done:* `python tools/disasm.py CARDMount` prints the mount, and the names
-appear in both symbol files.
+**B1. Name the CARD library** — *built, with one step left that needs the disc.*
+**Built.** `config/names.txt` carries 86 CARD and EXI entries with evidence,
+from `CARDDoMount` (0x80248884) and `EXIGetID` (0x80264A94) down to the
+callbacks the mount's state machine re-enters through. F1's first half is
+wired: `python tools/soa/symbols.py` applies them to
+`config/GEAE8P/symbols.txt`, and `tools/matchcheck.py` now resolves an
+object's `fn_XXXXXXXX` symbol by the address it spells before by name, so
+regenerating the inventory no longer unmatches a source nobody touched: the
+11 matches that rename used to cost are 0, checked by regenerating into a
+scratch directory and re-matching every unit, which still gives 41 of 41. `tools/tests/test_card.py` holds
+the file to its shape: three tab fields, evidence on every line, an address
+that is a function start, and a name that resolves to itself.
+*Left:* the names are in `names.txt` alone. The committed
+`config/functions.tsv` and both symbol files still spell the mount
+`fn_80248884`, because `tools/inventory.py` is what merges them and it reads
+the DOL. Until the owner runs it, `python tools/disasm.py CARDDoMount` says
+"unknown function" and every CARD name is reachable only by address.
+(`CARDMount` itself is not linked into this build — the game calls
+`CARDMountAsync` — so it cannot be the acceptance test.)
+*Done:* `python tools/inventory.py --dtk build/dtk-symbols.txt` (the flag is
+not optional: `--dtk` defaults to nothing, and without it the names dtk's
+signature database supplies drop out of `functions.tsv`, which is most of the
+425 it names with the flag) and `python tools/soa/symbols.py`, then `python
+tools/disasm.py CARDDoMount` prints the mount and `CARDDoMount` is in
+`config/symbols.txt` and `config/GEAE8P/symbols.txt`. Re-run `python
+tools/decomp.py` after: it stays at 41 of 41, which is the point of B1's
+ordering note.
 
-**B2. The three mount blockers** — *a day.*
-One piece of work: each is fatal alone, two confirmed by disassembly.
-`EXIGetID` writes a 2-byte command then reads 4 bytes, so the ID lands at
-transaction positions 2-5 while `exi.c:89-90` emits it at 5 and 6 — the read
-returns zero and the probe returns WRONGDEVICE. The mount then checksums the
-12-byte flash ID against SRAM offset 58, which `exi.c:152-172` leaves
-zeroed. And erase and program complete by the card's EXI interrupt, which
-nothing raises: `exi_irq_pending` (`exi.c:296-302`) reports only `CSR_TCINT`
-and `irq.c` maps only the three TC interrupts, so 9/12/15 are unreachable
-and every write waits out a 100 ms timeout. Honour command 0x81, set CSR bit
-1 after the deselect ending a 0xF1 or 0xF2 transaction, deliver 9/12/15 —
-that ordering is the difficulty, since the handler re-selects to read
-status.
+**B2. The three mount blockers** — *done.*
+All three are fixed in `runtime/exi.c` and `runtime/irq.c`, and the game has
+now been seen using them. On 2026-09-17 a 9,000-frame run driven to the title
+probed slot A at frame 3418 for the first time in this project: device ID
+`00000004`, clear status, read status `41`, enable interrupt, then 320 reads
+of 512 bytes covering card addresses 0 to 0x9E00 — the whole five-block
+system area — and the same again at frame 4292. `[exi]` reports 81,920 bytes
+read where every previous log in the repository said `card 0 bytes read`.
+Writes and the interrupt path remain unexercised by the game itself: with a
+blank image there is nothing to write yet, so both are covered only by the
+selftest. That is B4's job.
+
+- *The device ID.* `EXIGetID` writes a 2-byte command and then reads 4, so the
+  ID belongs at transaction positions 2–5, where `card_byte`'s command-0x00
+  case now puts it — masked `& 3`, so every immediate split the SDK might use
+  (4, 2+2, 1+1+1+1) lands the same four bytes. The value is `0x00000004`, which
+  `CARDIsCard` reads as 4 Mbit, sector-size index 0 (the 0x2000 the erase uses)
+  and latency index 0 (the four dummy bytes `__CARDReadSegment` sends), so the
+  ID and the geometry the rest of the model implements are one decision.
+- *The SRAM checksum.* `sram_init` recovers the flash ID from the image's own
+  ID block, descrambling it exactly as `CARDVerifyID` does, and stores the
+  complement of its byte sum at SRAM offset 58 — where `CARDDoMount` recomputes
+  it, `__OSLockSramEx` returning SRAM+20 and the store being `stb r0, 38(r3)`.
+  Deriving rather than inventing it is what makes an image formatted elsewhere
+  verify: the flash ID presented is the one that image was made with.
+- *The card's interrupt.* `card_byte` honours command 0x81, and
+  `card_deselected` latches `CSR_EXIINT` on the deselect that ends a 0xF1, 0xF2
+  or 0xF4. Latched, not re-derived: `__CARDExiHandler` clears the CSR bit first
+  and only then reads status, so a level-sensitive bit would still be set when
+  it returned and the handler would re-enter for ever. `exi_exi_irq_pending`
+  reports it gated by `CSR_EXIINTMSK`, which is the bit `EXILock` drives through
+  `SetExiInterruptMask`. `irq.c` delivers 9/12/15 ahead of the
+  transfer-complete 10/13/16 and re-reads both after *every* handler, not once
+  per pass — the deselect inside `__CARDTxHandler` is itself what raises the
+  next device interrupt, and one visit per pass would spend a delivery of the
+  100 ms alarm's margin on every page. The rounds are bounded, so a handler
+  that never clears its own bit costs a pass, not the run.
+
 *Done:* a run past frame 2000 reports a non-zero card read count in `[exi]`,
-where every log today says `card 0 bytes read, 0 written`.
+where every log today says `card 0 bytes read, 0 written`. **Not met: no run.**
 
-**B3. A card selftest, logging, and the plumbing** — *hours.*
-The command set is provably closed, so a host-side test shaped like the ARAM
-round-trip at `selftest.c:356-382` is cheap, and is what would have caught
-B2. Add `SOA_CARD_VERBOSE`: nothing logs EXI per transaction, which is why
-no saved log says which frame the game probes on. Fix the SRAM decode —
-`exi.c:190` computes `off = c->pos - 4` and ignores the command's offset
-field, so every read returns SRAM byte 0, and `exi.c:191` masks with
-`0xFFFFFF00`, so `cmd | (offset << 6) | 0x100` matches only offsets 0-3.
-Create the card directory (`build/cards/` is empty), accept
-`SOA_CARD=<path>`, flush after each page program.
-*Done:* the selftest covers ID, status, erase, program, read-back and the
-SRAM checksum; reverting any part of B2 fails it; a kill right after a save
-keeps the bytes.
+**B3. A card selftest, logging, and the plumbing** — *built.*
+**Built.** `SOA_SELFTEST=1` runs 26 card checks before anything else, against
+an image of its own (`build/cards/selftest.raw`, removed and rebuilt each run,
+its format time stamped from the clock so last run's bytes cannot pass for this
+run's): device ID, status, set-interrupt, clear-status, sector erase, page
+program, read array, the read latency on the DMA path, SRAM both ways by
+immediate and by DMA, the two SRAM checksums, four consecutive programs each
+with its own interrupt, the flush to disk, a reload from disk, and the byte
+counters `[exi]` prints. Reverting any one of B2's three fixes fails a check
+that names it — measured, one revert at a time, in a host harness — and so does
+deleting irq.c's EXI delivery block or renumbering it: the interrupt checks
+install `EXIIntrruptHandler` in the slot `deliver_pending` reads and count what
+arrives there, rather than reading back the predicate under test.
+
+The plumbing: `SOA_CARD=<path>` and `SOA_CARD_VERBOSE=1` (a `[card]` line per
+transaction; both now in README's switch table), `build/cards/` created on the
+first flush, and every framed erase or program written through to disk as it
+completes, so a kill mid-save keeps what landed. The SRAM decode honours the
+command's offset field and is byte-granular, which is what `__OSUnlockSramEx`
+committing from offset 20 needs.
+
+*Left:* none of it runs in CI. `main.c` bails out before `selftest()` without
+`sys/main.dol`, and `tools/citest/` links the renderer only, so the card checks
+run on the owner's machine or nowhere. What CI does hold is
+`tools/tests/test_card.py`, which pins the agreement between `exi.c`,
+`selftest.c`, `irq.c`, `names.txt` and the README — not the behaviour. A
+`tools/citest/card_check.py` in the shape of `render_check.py` would fix that:
+`exi.c`'s outside surface is `mem_r8`, `mem_w8`, `MEM_MASK`, `MEM1_SIZE` and
+`irq_retrace_count`, so it links against a handful of stubs.
+*Done:* the selftest covers ID, status, erase, program, read-back and the SRAM
+checksum; reverting any part of B2 fails it; a kill right after a save keeps the
+bytes. **First two met. The third needs a save, so it waits on B4.**
 
 **B4. Mount from the title, then round-trip a save** — *several days.*
 Three stages, cheapest first, since only the last needs navigation. With
@@ -191,6 +250,20 @@ exercising probe, mount and read. Then pre-seed a Dolphin-formatted blank so
 Continue runs. Only then drive to a save point, which needs D3: nobody knows
 how far in the first save point is, and the first real write will probably
 expose a fourth defect, the way the first real ARAM fetch did.
+*What B3 leaves you:* `SOA_CARD_VERBOSE=1` names the frame of every
+transaction, so the probe no longer has to be guessed at. The selftest's own
+image carries an ID block `CARDVerifyID` would accept — encoding 0, device ID
+0, size 4, and a serial that descrambles to the flash ID SRAM presents — but
+its directory and FAT blocks are never written, so `__CARDVerify` would still
+call it BROKEN; pointing `SOA_CARD` at it is the cheapest way to see what the
+game does with a card it considers broken, before any Dolphin image exists.
+Two things nobody has looked at and the first run will answer: a
+never-formatted card reads back all 0xFF, whose 8188-byte directory checksum
+is 0xF002 rather than the 0xFFFF stored, so that too verifies BROKEN rather
+than blank; and `card_checksum` in the device model has only ever run over
+508 bytes, while every directory and FAT block a save writes is checksummed
+over 8188 by the game's own code.
+
 *Done:* the image round-trips both ways — Dolphin shows a Skies of Arcadia
 Legends file with its banner, and a Dolphin-made save loads from the title.
 Whether a blank image draws a format offer is an observation to record, not

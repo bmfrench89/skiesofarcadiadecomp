@@ -63,9 +63,17 @@ void si_report(void);
 int exi_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int exi_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 unsigned exi_irq_pending(void);
+unsigned exi_exi_irq_pending(void);
 void exi_report(void);
+/* Two interrupts per channel, three apart: the device's own line, then the
+ * transfer-complete of the bus. __OSDispatchInterrupt tells them apart by
+ * number alone -- EXIIntrruptHandler recovers its channel as (irq - 9)/3 and
+ * TCIntrruptHandler as (irq - 10)/3 -- so both have to be delivered. */
+#define IRQ_EXI_0_EXI 9
 #define IRQ_EXI_0_TC 10
+#define IRQ_EXI_1_EXI 12
 #define IRQ_EXI_1_TC 13
+#define IRQ_EXI_2_EXI 15
 #define IRQ_EXI_2_TC 16
 
 #define TB_HZ 40500000ull
@@ -162,7 +170,8 @@ void device_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 static uint32_t g_dec_value;
 static uint64_t g_dec_set;
 static int g_dec_armed;
-static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count, g_si_count, g_exi_count;
+static uint64_t g_dec_count, g_dec_arms, g_di_count, g_pe_count, g_ar_count, g_dsp_count, g_aid_count, g_si_count,
+    g_exi_count, g_exid_count;
 
 void dec_write(CpuState* s, uint32_t v)
 {
@@ -188,6 +197,16 @@ static jmp_buf g_irq_jmp;
 static uint32_t g_irq_ctx;
 static int g_in_handler;
 static uint64_t g_delivered; /* handlers run, for the poll to notice */
+/* The same total, split by interrupt number, which is the only way a test can
+ * tell "the card's interrupt reached slot 9" from "something ran". The
+ * decrementer is delivered through the same call with exception number 8,
+ * which no interrupt source in this file uses. */
+static uint64_t g_delivered_by_number[32];
+
+uint64_t irq_delivered_count(unsigned number)
+{
+    return number < 32 ? g_delivered_by_number[number] : 0;
+}
 
 uint32_t irq_interrupted_context(void)
 {
@@ -264,17 +283,26 @@ static void call_guest_handler(CpuState* s, uint32_t handler, uint32_t number)
     g_irq_ctx = s->gpr[4];
     g_in_handler++;
     g_delivered++;
+    if (number < 32) g_delivered_by_number[number]++;
     if (setjmp(g_irq_jmp) == 0) dispatch(s, handler);
     g_in_handler--;
     g_irq_ctx = 0;
     regs_restore(s, &saved);
 }
 
-static uint32_t interrupt_handler(CpuState* s, uint32_t irq)
+/* Where the OS keeps the handler for one interrupt. Exported so that a test
+ * can install a handler in the very slot the delivery path reads, rather than
+ * in the table it assumes is in use. */
+uint32_t irq_handler_slot(CpuState* s, unsigned irq)
 {
     uint32_t table = mem_r32(s, INTERRUPT_TABLE_PTR);
     if (!table) table = OS_INTERRUPT_TABLE;
-    return mem_r32(s, table + 4 * irq);
+    return table + 4 * irq;
+}
+
+static uint32_t interrupt_handler(CpuState* s, uint32_t irq)
+{
+    return mem_r32(s, irq_handler_slot(s, irq));
 }
 
 static int g_pace = -1;
@@ -361,15 +389,36 @@ static void deliver_pending(CpuState* s)
         }
     }
 
-    /* EXI: a completed transfer on a channel whose interrupt is enabled. */
+    /* EXI: the device's own interrupt -- a memory card saying the program or
+     * erase it was left with has finished -- and a completed transfer. The
+     * device's is the higher priority of the two on the console, and taking it
+     * first means the handler that starts the next page finds a clean channel.
+     *
+     * Each handler can leave the other pending, so both are re-read after
+     * every one that runs rather than once per pass. A page program goes
+     * transfer-complete -> __CARDTxHandler -> EXIDeselect, and that deselect
+     * is what makes the card raise its own interrupt: visiting the channel
+     * once would leave the request for the next delivery, against a 100 ms
+     * alarm that was armed before the program started. The round count bounds
+     * the chain -- a handler that never clears its own CSR bit is a bug, not a
+     * reason to sit here -- and what is left over waits for the next pass. */
     {
-        unsigned bits = exi_irq_pending();
-        static const unsigned irqs[3] = {IRQ_EXI_0_TC, IRQ_EXI_1_TC, IRQ_EXI_2_TC};
-        unsigned ch;
-        for (ch = 0; ch < 3; ch++) {
-            if (!((bits >> ch) & 1)) continue;
-            handler = interrupt_handler(s, irqs[ch]);
-            if (handler) { g_exi_count++; call_guest_handler(s, handler, irqs[ch]); }
+        static const unsigned exi[3] = {IRQ_EXI_0_EXI, IRQ_EXI_1_EXI, IRQ_EXI_2_EXI};
+        static const unsigned tc[3] = {IRQ_EXI_0_TC, IRQ_EXI_1_TC, IRQ_EXI_2_TC};
+        unsigned ch, round;
+        for (round = 0; round < 4; round++) {
+            unsigned ran = 0;
+            for (ch = 0; ch < 3; ch++) {
+                if ((exi_exi_irq_pending() >> ch) & 1) {
+                    handler = interrupt_handler(s, exi[ch]);
+                    if (handler) { g_exid_count++; call_guest_handler(s, handler, exi[ch]); ran = 1; }
+                }
+                if ((exi_irq_pending() >> ch) & 1) {
+                    handler = interrupt_handler(s, tc[ch]);
+                    if (handler) { g_exi_count++; call_guest_handler(s, handler, tc[ch]); ran = 1; }
+                }
+            }
+            if (!ran) break;
         }
     }
 
@@ -430,7 +479,8 @@ void irq_report(void)
     dsp_report();
     si_report();
     exi_report();
-    fprintf(stderr, "[irq] %llu SI interrupts delivered\n", (unsigned long long)g_si_count);
+    fprintf(stderr, "[irq] %llu SI, %llu EXI transfer-complete, %llu EXI device interrupts delivered\n",
+            (unsigned long long)g_si_count, (unsigned long long)g_exi_count, (unsigned long long)g_exid_count);
     fprintf(stderr, "[irq] %llu DSP mails, %llu AI DMA blocks, %llu ARAM DMAs delivered\n",
             (unsigned long long)g_dsp_count, (unsigned long long)g_aid_count,
             (unsigned long long)g_ar_count);

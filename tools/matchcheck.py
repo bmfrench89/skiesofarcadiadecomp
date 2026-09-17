@@ -2,17 +2,21 @@
 
     python tools/matchcheck.py build/src/string.o [--dol extracted/sys/main.dol]
 
-Reads the object's symbol table, finds each function's address in the
-inventory (config/functions.tsv, by name), and compares the instruction words
-against the executable. Words that carry a relocation in the object (calls,
-address materialisations) are compared by opcode only, since the linker fills
-those in. Prints a per-function score; exit status is non-zero when any
-function differs. Analysis only: the executable is read, never written.
+Reads the object's symbol table, finds each function's address (from the
+symbol's own ``fn_XXXXXXXX`` name, else by name in config/functions.tsv or
+config/names.txt), and compares the instruction words against the executable.
+Words that carry a relocation in the object (calls, address materialisations)
+are compared by opcode only, since the linker fills those in. Prints a
+per-function score, and a count of the local symbols nothing resolved -- the
+one way a unit can report "all match" over code that was never compared.
+Exit status is non-zero when any function differs. Analysis only: the
+executable is read, never written.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
@@ -78,6 +82,60 @@ def read_elf(data: bytes):
     return sections, symbols, relocs
 
 
+_FN_ADDRESS = re.compile(r"fn_([0-9A-Fa-f]{8})\Z")
+
+
+def name_index(inventory: dict[int, dict], names: dict[int, tuple[str, str]] | None = None) -> dict:
+    """``name -> address``, from the inventory and from config/names.txt.
+
+    names.txt runs ahead of the inventory -- it is where a recovered name is
+    written first -- so a source that already spells a function the recovered
+    way resolves before the next regeneration, not after it. A name two
+    addresses claim resolves to neither: an ambiguous answer here would score
+    a function against someone else's bytes.
+    """
+    index: dict[str, int | None] = {}
+    for source in (
+        {addr: row["name"] for addr, row in inventory.items()},
+        {addr: name for addr, (name, _) in (names or {}).items()},
+    ):
+        for addr, name in source.items():
+            if index.setdefault(name, addr) != addr:
+                index[name] = None
+    return {name: addr for name, addr in index.items() if addr is not None}
+
+
+def resolve_address(symbol: str, inventory: dict[int, dict], index: dict[str, int]) -> int | None:
+    """Which executable function does an object's symbol stand for?
+
+    The address wins when the symbol carries one, because a unit that names a
+    function after its address means that address whatever config calls it
+    today -- config/functions.tsv is regenerated from the binary on its own
+    schedule, and a rename there must not unmatch a source nobody touched.
+    """
+    m = _FN_ADDRESS.match(symbol)
+    if m:
+        address = int(m.group(1), 16)
+        return address if address in inventory else None
+    return index.get(symbol)
+
+
+def unresolved_reason(symbol: str, bind: int) -> tuple[str, bool]:
+    """Why a symbol has no executable counterpart, and whether that is an error.
+
+    A symbol spelled after an address is a claim about the executable, so no
+    function starting there is a wrong claim whatever the symbol's binding says
+    -- not a helper to pass over. A local the compiler inlined at every call
+    site really does have no counterpart, and is the one case that is skipped;
+    anything else global is a name the inventory has never heard of.
+    """
+    if _FN_ADDRESS.match(symbol):
+        return "names an address where no function starts", True
+    if bind == 0:  # STB_LOCAL
+        return "static helper, inlined (no executable counterpart)", False
+    return "not in the inventory", True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -85,6 +143,7 @@ def main() -> int:
     ap.add_argument("object", type=Path)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--functions", type=Path, default=Path("config/functions.tsv"))
+    ap.add_argument("--names", type=Path, default=Path("config/names.txt"))
     ap.add_argument(
         "--show",
         type=int,
@@ -96,25 +155,28 @@ def main() -> int:
 
     dol = D.parse(args.dol.read_bytes())
     inventory = S.load_tsv(args.functions)
-    by_name = {row["name"]: addr for addr, row in inventory.items()}
+    index = name_index(inventory, S.load_names(args.names))
     sections, symbols, relocs = read_elf(args.object.read_bytes())
     data = args.object.read_bytes()
     failures = 0
+    skipped = 0
     for sym in symbols:
         if sym["type"] != 2 or sym["size"] == 0:  # STT_FUNC
             continue
         sec = sections[sym["shndx"]]
         ours = data[sec["off"] + sym["value"] : sec["off"] + sym["value"] + sym["size"]]
-        addr = by_name.get(sym["name"])
+        addr = resolve_address(sym["name"], inventory, index)
         if addr is None:
-            # A static helper the compiler inlined at every call site is still
-            # emitted in the object but has no counterpart in the executable.
-            if sym["bind"] == 0:  # STB_LOCAL
-                print(f"{sym['name']:24s} static helper, inlined (no executable counterpart)")
-                continue
-            print(f"{sym['name']:24s} not in the inventory")
-            failures += 1
+            note, fatal = unresolved_reason(sym["name"], sym["bind"])
+            print(f"{sym['name']:24s} {note}")
+            failures += int(fatal)
+            skipped += int(not fatal)
             continue
+        # The inventory's name for it, when the source spells it some other way.
+        also = inventory[addr]["name"]
+        label = (
+            sym["name"] if also in (sym["name"], f"fn_{addr:08X}") else f"{sym['name']} ({also})"
+        )
         target_size = inventory[addr]["size"]
         theirs = dol.read(addr, target_size)
         rel = relocs.get(sym["shndx"], {})
@@ -149,7 +211,7 @@ def main() -> int:
             + (" ..." if len(diffs) > 6 else "")
         )
         print(
-            f"{sym['name']:24s} {'MATCH' if ok else 'differs'}  {same}/{n} words  (object {len(ours)} bytes, executable {len(theirs)}){where}"
+            f"{label:24s} {'MATCH' if ok else 'differs'}  {same}/{n} words  (object {len(ours)} bytes, executable {len(theirs)}){where}"
         )
         if diffs and args.show:
             from soa.ppc.decode import decode as decode_insn  # noqa: PLC0415 - optional detail
@@ -169,6 +231,11 @@ def main() -> int:
                     else "(end)"
                 )
                 print(f"    +{4 * i:03X}  ours: {fa:32s} theirs: {fb}")
+    # Saying so is the point: a local symbol nothing resolves is the one way a
+    # unit can report "all match" over code that was never compared, so the
+    # number has to be in the log rather than inferred from its absence.
+    if skipped:
+        print(f"{skipped} local symbol(s) not compared")
     return 1 if failures else 0
 
 

@@ -71,10 +71,19 @@ how it went.
   the first decompiled code in the shipping path. Three of the
   game's ARAM cache helpers followed (`src/soa/aramcache.c`).
 
+- The memory card, read for the first time. Three defects each fatal on
+  their own kept every mount from starting: the device ID landed at the
+  wrong byte of the transaction, SRAM held no flash identifier for the
+  mount to checksum, and the card's completion interrupt was never
+  raised, so every write waited out a 100 ms timeout. With those fixed
+  the game probes slot A at frame 3418 and reads all five system blocks,
+  40,960 bytes, twice. A selftest covers the command set end to end,
+  including that reverting any one of the three fixes fails it.
+
 ## Open
 
-- Saves: the memory card model is in place but no save point has been
-  reached by scripted play.
+- Saves: the card is read but never written. A blank image has nothing
+  to load, and no scripted playthrough has reached a save point.
 - The battleship's searchlight beams render dark; every step matches the
   hardware rules as modelled, so a reference capture is needed.
 - Beyond the hold: the ship and overworld sections, and the long tail of
