@@ -12,6 +12,7 @@ env: SOA_RENDER=1
 env: SOA_SNAP=300
 env: SOA_SPEED=3
 env: SOA_FIFO_DUMP=15200,15800,16300
+env: SOA_FIFO_DIR=build/fifo-new
 
 shows: the first field map the port ever reached: Vyse walks where the stick
 shows:   sends him, the minimap draws in the corner, and the room loads its

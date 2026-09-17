@@ -738,6 +738,10 @@ def stream_run(
                 line = line.rstrip("\r\n")
                 lines.append(line)
                 fh.write(line + "\n")
+                # A long scenario prints little, so a buffered log stays empty
+                # for minutes: the one thing you want from a soak is to see it
+                # is still moving.
+                fh.flush()
                 if echo == "all" or (echo == "some" and not NOISE.match(line)):
                     print(line)
         code = proc.wait()
@@ -782,9 +786,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     full = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     full.update(env)
     # The capture path and the memory card write into directories they expect to
-    # exist already (gx.c frame_end, exi.c).
+    # exist already (gx.c frame_end, exi.c). A scenario that captures says where
+    # with SOA_FIFO_DIR, and says somewhere other than build/fifo: that corpus is
+    # what config/fifo_manifest.tsv pins, the streams are not in the repository,
+    # and a run that overwrites one invalidates its blessed hash with nothing to
+    # restore from.
     for sub in ("frames", "fifo", "cards"):
         (ROOT / "build" / sub).mkdir(parents=True, exist_ok=True)
+    if env.get("SOA_FIFO_DIR"):
+        (ROOT / env["SOA_FIFO_DIR"]).mkdir(parents=True, exist_ok=True)
     log = Path(args.log) if args.log else ROOT / "build" / f"scenario-{sc.name}.log"
     print(f"[scenario] {sc.name}: {sc.summary}")
     print(f"[scenario] {args.exe} {args.data}  ({', '.join(f'{k}={v}' for k, v in env.items())})")

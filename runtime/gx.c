@@ -50,9 +50,10 @@ static uint32_t g_last_unknown;
 
 /* ---- frame capture ---------------------------------------------------
  * SOA_FIFO_DUMP=a,b,c names frame numbers (frames end at a copy to the
- * XFB). For each, build/fifo/NNNN.regs holds the CP/XF/BP shadows as the
- * frame began, NNNN.fifo the bytes the CPU pushed during it, NNNN.ram all
- * of MEM1 as it ended: everything a replay needs to render it offline. */
+ * XFB). For each, NNNN.regs holds the CP/XF/BP shadows as the frame began,
+ * NNNN.fifo the bytes the CPU pushed during it, NNNN.ram all of MEM1 as it
+ * ended: everything a replay needs to render it offline. They go to
+ * SOA_FIFO_DIR, which defaults to build/fifo. */
 static uint8_t* g_cap;
 static size_t g_cap_len, g_cap_cap;
 static uint32_t g_cap_cp[0x100], g_cap_xf[0x1100], g_cap_bp[0x100];
@@ -108,11 +109,27 @@ static void write_file(const char* path, const void* data, size_t len)
     fclose(f);
 }
 
+/* Where captures land. build/fifo is the corpus config/fifo_manifest.tsv
+ * pins frame hashes against, so a capturing run must be able to write
+ * somewhere else: overwriting a capture silently invalidates the hash that
+ * was blessed from it, and the streams are not in the repository to restore
+ * from. SOA_FIFO_DIR is how a scenario says "not the corpus". */
+static const char* dump_dir(void)
+{
+    static const char* dir;
+    if (!dir) {
+        dir = getenv("SOA_FIFO_DIR");
+        if (!dir || !*dir) dir = "build/fifo";
+    }
+    return dir;
+}
+
 static void frame_end(CpuState* s)
 {
     char path[256];
     if (frame_wanted(g_frame)) {
-        snprintf(path, sizeof path, "build/fifo/%04u.regs", g_frame);
+        const char* dir = dump_dir();
+        snprintf(path, sizeof path, "%s/%04u.regs", dir, g_frame);
         {
             FILE* f = fopen(path, "wb");
             if (f) {
@@ -120,13 +137,14 @@ static void frame_end(CpuState* s)
                 fwrite(g_cap_xf, 4, 0x1100, f);
                 fwrite(g_cap_bp, 4, 0x100, f);
                 fclose(f);
-            } else fprintf(stderr, "[gx] cannot write %s (mkdir build/fifo)\n", path);
+            } else fprintf(stderr, "[gx] cannot write %s (mkdir %s)\n", path, dir);
         }
-        snprintf(path, sizeof path, "build/fifo/%04u.fifo", g_frame);
+        snprintf(path, sizeof path, "%s/%04u.fifo", dir, g_frame);
         write_file(path, g_cap, g_cap_len);
-        snprintf(path, sizeof path, "build/fifo/%04u.ram", g_frame);
+        snprintf(path, sizeof path, "%s/%04u.ram", dir, g_frame);
         write_file(path, s->mem, MEM1_SIZE);
-        fprintf(stderr, "[gx] captured frame %u: %zu command bytes\n", g_frame, g_cap_len);
+        fprintf(stderr, "[gx] captured frame %u into %s: %zu command bytes\n", g_frame, dir,
+                g_cap_len);
     }
     g_frame++;
     if (g_frame_limit && g_frame >= g_frame_limit) {

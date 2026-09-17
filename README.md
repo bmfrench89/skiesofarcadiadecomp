@@ -75,7 +75,8 @@ expect (triggers are L/R, the right shoulder is Z).
 | `SOA_FRAMES=n` | headless: write every nth frame to `build/frames/` and skip rendering the rest |
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames |
 | `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
-| `SOA_FIFO_DUMP=a,b` | capture those frames (`build/fifo/`) for `gen\soa.exe --replay build/fifo/000a` |
+| `SOA_FIFO_DUMP=a,b` | capture those frames for `gen\soa.exe --replay build/fifo/000a` |
+| `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
 | `SOA_NOSOUND=1` | no audio device |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |

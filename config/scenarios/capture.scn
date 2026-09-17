@@ -7,6 +7,7 @@ pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
 pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
 pad: 3200:start,3240:a
 env: SOA_FIFO_DUMP=3600,3900,4200
+env: SOA_FIFO_DIR=build/fifo-new
 
 shows: the capture path: each named frame writes build/fifo/NNNN.fifo (the
 shows:   command stream), NNNN.regs (the CP, XF and BP registers as the frame
