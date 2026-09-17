@@ -102,19 +102,89 @@ corpus that otherwise stops at frame 12100.
 *Done:* 20/20 unchanged twice at every thread count, and the right captures
 named after a one-line change to blending.
 
-**A3. Tripwires for what the runtime does not model** — *hours.*
+**A3. Tripwires for what the runtime does not model** — *built.*
 Two silent classes. Renderer: indirect and Z textures, fog range, zfreeze,
-TMEM preload, non-RGB8 EFB and BP 0xFE (BP_MASK — `080000` in every
-frame-start snapshot, never written in a captured stream) are unimplemented;
-warn once each from `gxr_bp_written`, with unsupported texture formats
-(`gxr_tev.c:295` paints magenta silently), cache evictions, wide lines and
-points, and `GX_BL_DSTALPHA` at RGB8. CPU: `mem_ptr` masks 0x01FFFFFF
-(`cpu.h:22,95-97`) into a 0x01800000 `calloc` (`main.c:314`), so an EA in
-`0x81800000-0x81FFFFFF` reads or writes up to 8 MB of host heap past the
-buffer (`mem_zero32` writes 32 bytes of it) while every device model
-bounds-checks. Allocate `MEM_MASK + 1`, warn once above `MEM1_SIZE`.
+TMEM preload, non-RGB8 EFB, BP_MASK, unsupported texture formats, cache
+evictions, wide lines and points and `GX_BL_DSTALPHA` at RGB8 are all
+unimplemented and drew something plausible instead. CPU: `mem_ptr` masks
+0x01FFFFFF into an image that was 0x01800000 long, so an EA in
+`0x81800000-0x81FFFFFF` read or wrote up to 8 MB of host heap past the buffer
+while every device model bounds-checks.
+**Built.** The CPU half is not the `MEM_MASK + 1` allocation this entry asked
+for, and the difference matters: the image is the mask's whole range plus the
+widest access that can start at its last byte (`cpu.h`'s `MEM_IMAGE_SIZE`),
+but only the first `MEM1_SIZE` of it is *committed* — the 8 MB above the RAM
+is reserved `PAGE_NOACCESS`, and a vectored exception handler (`mem_guard`,
+`main.c`) catches the access violation, commits the range, names the guest
+block and the address in one `[mem]` line with a backtrace, and continues. So
+the common load and store pay nothing at all: `mem_ptr` is still a mask and
+an add, and the detection is done by the page tables, which were walking that
+access anyway. It cannot flood, by construction rather than by discipline —
+the first fault commits the whole tail, so there is no uncommitted page left
+to fault on and the run carries on against zeroed scratch. The message
+therefore means *detected* once, not *happened* once.
+`SOA_MEMPOKE=addr[,addr...]` fires it on purpose before the disc is read (it
+refuses an address in the hardware window, which at that point is not set up
+yet). Off Windows, or if the reservation or the handler will not take, the
+whole range is ordinary zeroed memory: nothing reaches the host heap either
+way, there is just nothing to say that it tried. While the invariant was
+being written down, three unbounded writes into the image beside it were
+fixed: `load_dol`'s bound wrapped (every term is 32-bit and two come out of
+the file, so all of them are differences now), the FST `memcpy` had no bound
+at all and its destination underflowed for a file bigger than the arena, and
+`slurp` believed a negative length. The store path also lost a branch —
+`is_gather_pipe` implies `is_mmio`, so the pipe test is now nested inside the
+MMIO test and an ordinary store costs one compare instead of three.
+The renderer half warns once per condition from `bp_tripwire`,
+`draw_tripwire`, `decode_level` and the texture cache, each naming the
+register and value it was asked with and what we do instead. Two of them were
+built wrong the first time and are worth recording: the EFB copy filter is
+not a tripwire, because the game programs the seven-tap filter before the
+first frame of every run and leaves it there, so the line would be in every
+log and the channel would stop meaning "something unmodelled was asked for" —
+`gxr_report` states it at the end of the run instead, and C3 removes it. And
+the cache-eviction tripwire counted a session total, which ten evictions a
+frame reaches in under a second of ordinary play; it counts per frame now and
+speaks at a quarter of the cache in one frame, six times the heaviest frame
+in the corpus. BP_MASK fires on the *write* that the mask really does change
+bits outside of, not on the mask itself, because GXSetCoPlanar writes the
+mask and then the whole shadowed GEN_MODE and changes nothing outside it; the
+line-width threshold is two pixels, not "anything but exactly one", because
+the game programs 1.17 px in three captures.
+`tools/tests/test_gxr_tripwires.py` builds the renderer on its own the way
+`render_check.py` does and feeds it a synthetic stream: twelve conditions
+asked for twice, each saying exactly one line, and beside each one the value
+the game really does program, which has to stay silent.
+`tools/tests/test_memguard.py` does the CPU half, arithmetic over the
+constants plus a real build-and-run of the boot path with stubs.
+*Left:* the corpus half of the criterion has not been re-run here — the
+tripwires are silent on the census a reviewer decoded from all 23 captures,
+but `python tools/scenario.py replay` and the eleven scenarios are the
+owner's to run, and `scenario.py --check` counts only positives, so a stray
+`[gxr]` or `[mem]` line has to be read out of the log rather than failing an
+exit status. Two conditions have no synthetic coverage: an unsupported
+texture format and a cache eviction both need a real texture, which the
+stream above does not build. The warn-once flags are process-global with no
+reset entry point, which is invisible today because `main.c` replays one
+capture per process and `scenario.py` spawns a process per replay — but the
+obvious optimisation of several captures per process would let the first
+capture silence every one after it, and the fix (a `gxr_tripwires_reset()`
+called from `gx_replay`) needs `gx.c`. The BP tripwires fire on writes and
+the draw and copy ones on state, so a capture that merely *inherits* zfreeze,
+ZTEX2 or a non-RGB8 EFB renders wrong and says nothing: a silent corpus is
+evidence that nothing was asked for in those windows, not that nothing was in
+force. Three unbounded writes outside this entry's files are still open and
+guest-reachable: `dvd.c:95` (the length is a guest-written DMA register and
+the bound wraps, so a 4 GB `fread` into the image is two MMIO stores away),
+`gx.c:324` (the same wrap, with the length coming out of a display list) and
+the `decomp_swap.c` adapters, which mask once and then index as far as a
+guest-supplied length says. `tools/citest/render_driver.c` still allocates
+`MEM1_SIZE`, which is the thing `cpu.h` now documents as the bug.
+`threads.c:73` can read three bytes past the end of the RAM while walking a
+back chain, so the runtime's own crash reporter can trip the wire and blame
+the guest. The guard is Windows-only.
 *Done:* a synthetic stream setting each renderer condition warns once each,
-all 20 captures warn not at all, and a store to 0x81800000 warns instead of
+all 23 captures warn not at all, and a store to 0x81800000 warns instead of
 corrupting the heap.
 
 **A4. Make the profile tell the truth** — *a day.*
@@ -304,6 +374,25 @@ The feature set matches what this game uses closely: zero indirect stages in
 all 10,479 GEN_MODE writes, RGB8/Z24 in all 7,351 PE_CONTROL writes,
 trilinear never requested, zero line and point draws.
 
+**C0. Hand the workers off properly across a flush** — *hours, and do it before
+anything else here.*
+`gxr_flush` proves the workers *reached* the end of the queue and then rewrites
+`g_q_tail` and `g_cursor[]` underneath them while they are still spinning on
+both (`gxr.c:1233-1244` against `gxr.c:1193-1198`). The spin reads two
+unsynchronised `volatile LONG`s and C does not order the two loads, so a worker
+that reads the tail, is preempted while the producer resets both and empties the
+texture graveyard, then reads its cursor, leaves the spin and rasterizes
+`g_queue[0]` — a command from the batch just drained, whose texture pointers
+were handed back to the allocator moments earlier. That is a wild read on a
+rasterizer thread, layout-sensitive, with no guest overrun: the exact fault
+measured on 2026-09-17. It does not fire in today's binary only because of how
+MSVC happened to order the two loads, which is not a property anyone should rely
+on. Give the flush a real handshake: a generation counter the workers observe,
+or park them before the reset rather than merely waiting for them to catch up.
+*Done:* the workers cannot observe a reset tail with a stale cursor, argued from
+the code rather than from a run that happened not to crash; the 23 pinned frame
+hashes are unchanged at 1, 2, 3 and 8 threads.
+
 **C1. Dump vertex attributes, then settle the searchlights** — *a day.*
 The one known open rendering defect, and the measurement needs no console.
 `fifo.py:216-223` steps over the vertex payload without reading a byte, so
@@ -408,13 +497,67 @@ nothing in `runtime/` can write guest memory.
 *Done:* a run with `SOA_TRACE` unset prints the same file list the trace
 gives, and a poke changes what the matching dump reports.
 
-**D3. Record live input, replay it headlessly** — *hours.*
-The gate on B4's last stage and on D5. `window.c:163-213` reads keyboard and
-XInput every poll and stores nothing, and `SOA_PAD` expresses only twelve
-buttons and a full-deflection stick (`si.c:66-67,93-97`), which is why the
-stick in the saved monkey runs is invisible in their own logs (`si.c:150`
-prints buttons only). Add `SOA_PAD_RECORD=<path>` keyed by frame, and
-`SOA_PAD_FILE` to replay it.
+**D3. Record live input, replay it headlessly** — *built.*
+The gate on B4's last stage and on D5. `window.c` read the keyboard and
+XInput every poll and stored nothing, and `SOA_PAD` could express only twelve
+buttons and a full-deflection stick, which is why the stick in the saved
+monkey runs is invisible in their own logs.
+**Built.** `window_pad` now reports the whole controller — both sticks at
+their real positions, both triggers at their real values — and `si.c` writes
+what the port actually read to `SOA_PAD_RECORD=<path>`, keyed by the frame
+`gx.c` counts, one line per change, and replays it from `SOA_PAD_FILE=<path>`
+in place of every other input. A minute of play is a few hundred lines of
+text that can be read, annotated with `#` comments and cut by hand at the
+line where the save point was reached, which is how a usable recording will
+actually be made. While recording, the first read of a frame is that frame's
+input and the rest of the frame's reads are given the same thing, so a replay
+is exact rather than close.
+The rest of the entry is the ways a recording is not self-contained, each
+made visible rather than fixed, because the fix is D4. Frames are the right
+key for the game's logic — the guest consumes exactly one pad state per frame
+it presents, in all three saved runs — but they are not a clock: saved runs
+differ by 30% in retraces per frame between windowed rendering and headless,
+so the same input arrives at a different point in the game's own time. Each
+line therefore carries the retrace count it was read at (`#r930`), and a
+replay says how far it has drifted in guest time the moment it passes two
+seconds' worth. A `# config` line records the switches that change the frame
+rate and the memory card's path and size, and the replay prints both when
+they differ — the card because the D5 workflow creates a save and then
+replays the same recording against a title screen that now has a Continue
+entry. Both are comments, so a v1 recording and a hand-written line still
+replay. A file that ends with input still held — Ctrl-C, a kill, a crash, or
+a hand cut at the save point, which is most of them — has a neutral state
+added at load, so the replay lets go instead of holding a button for the rest
+of the run. The run ends by itself a little after the last line
+(`SOA_PAD_STOP`, default 120 frames of grace for whatever the last input
+started), through `gx.c`'s frame limit, so a headless replay needs no
+`SOA_FRAMES` guessed in advance. Each line is built in a buffer and written
+with one locked `fputs`, and a flag stops anything following the totals,
+because `si_report` runs on the thread that stops the run while the CPU
+thread is still playing — five `fprintf`s per line could be spliced, and the
+two halves the loader then rejected were the last two states of the run,
+which is exactly the save-point case. The replay cursor advances at most one
+entry per read, so a frame the guest never polls shifts a state by one read
+instead of dropping it, and the count is in the report. A second run with the
+same `SOA_PAD_RECORD` writes beside the first rather than over it.
+`tools/tests/test_padrec.py` builds `si.c` with a miniature guest and asserts
+the whole of the claim: a fake player who moves the stick and the C stick to
+values a script cannot express is recorded, replayed with no player at all,
+and the eight bytes the guest reads come back the same at the same frames —
+plus the drift line, the configuration line, the added release, the stop and
+the v1 file.
+*Left:* the `*Done:*` criterion cannot be evaluated yet. It is phrased "the
+same field maps in the same order per D2", and D2 is not built, so there is
+no `[progress]` file list to compare; and nobody has played the sixty seconds
+yet. The drift is reported, not removed: a long recording still walks off,
+and D4 is the only real fix. The RTC is still the host wall clock
+(`exi.c:436`), so anything the game seeds from it differs every run, input or
+no input — a `SOA_RTC=<seconds>` to pin it, written into the recording
+header, is the cheap fix and needs `exi.c`. Input during a frame that lasts
+seconds — a load — reaches neither the guest nor the file, which one state
+per frame cannot express. There is no `SetConsoleCtrlHandler` anywhere in
+`runtime/`, so Ctrl-C still loses the totals line; the loader's synthesised
+release is what makes that harmless rather than the writer.
 *Done:* sixty seconds played in the window, replayed headless, enters the
 same field maps in the same order per D2 and ends within a few frames.
 

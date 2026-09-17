@@ -1,0 +1,178 @@
+"""Tests for the bound on the guest memory image (PLAN A3).
+
+``mem_ptr`` masks an effective address with ``MEM_MASK`` and does nothing else
+with it, so the size of the image is the only thing between a guest address in
+the top eighth of the window -- 0x81800000 up, where the console has no RAM --
+and the host heap behind it. Two things are checked here.
+
+The first is arithmetic over the constants in ``runtime/cpu.h``: that the image
+covers every offset the mask can produce, plus the widest access that can start
+at the last of them. That is text, and runs on both legs of the matrix.
+
+The second builds the real boot path out of ``runtime/main.c`` plus stubs
+synthesised here and runs it, to see that an address up there is reported once
+and that the run carries on afterwards. It needs a compiler, so it skips where
+there is none, and it needs no disc: ``SOA_MEMPOKE`` is handled before the
+first file is opened.
+"""
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from soa import toolchain  # noqa: E402
+
+# Everything runtime/main.c calls out to. Stubbing them is what lets the boot
+# path link on its own; none of them is reached before SOA_MEMPOKE is.
+STUBS = """
+#include "cpu.h"
+void fn_80003140(CpuState* s) { (void)s; }
+void hle_report(void) {}
+void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
+void threads_init(CpuState* s) { (void)s; }
+void dvd_init(const char* p) { (void)p; }
+int selftest(CpuState* s) { (void)s; return 0; }
+int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
+void gxr_enable(int on) { (void)on; }
+void gxr_set_output(const char* p) { (void)p; }
+void watch_init(void) {}
+void window_start(void) {}
+void gx_set_frame_limit(unsigned f) { (void)f; }
+unsigned gx_frame_count(void) { return 0; }
+void gxr_draw_every_frame(void) {}
+int irq_in_handler(void) { return 0; }
+void guest_backtrace(CpuState* s, uint32_t sp) { (void)s; (void)sp; }
+uint32_t g_watch_addr, g_watch_len;
+void watch_hit(CpuState* s, uint32_t e, unsigned n, uint64_t v)
+{ (void)s; (void)e; (void)n; (void)v; }
+void gx_pipe_write(CpuState* s, unsigned n, uint64_t v) { (void)s; (void)n; (void)v; }
+uint8_t mmio_read8(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
+uint16_t mmio_read16(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
+uint32_t mmio_read32(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
+uint64_t mmio_read64(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
+void mmio_write8(CpuState* s, uint32_t e, uint8_t v) { (void)s; (void)e; (void)v; }
+void mmio_write16(CpuState* s, uint32_t e, uint16_t v) { (void)s; (void)e; (void)v; }
+void mmio_write32(CpuState* s, uint32_t e, uint32_t v) { (void)s; (void)e; (void)v; }
+void mmio_write64(CpuState* s, uint32_t e, uint64_t v) { (void)s; (void)e; (void)v; }
+"""
+
+
+def defines(path, names, known=None):
+    """The named object-like macros, evaluated, on top of any already known.
+    They are small integer expressions over each other, which Python spells the
+    same way once the C integer suffixes and the one cast are gone."""
+    text = (ROOT / path).read_text()
+    out = dict(known or {})
+    for name in names:
+        match = re.search(rf"^#define\s+{name}\s+([^\n]*)", text, re.M)
+        assert match, f"{path} no longer defines {name}"
+        expr = match.group(1).split("/*")[0].replace("(SIZE_T)", "").strip()
+        expr = re.sub(r"(?<=[0-9A-Fa-f])[uU]\b", "", expr)
+        out[name] = eval(expr, {"__builtins__": {}}, dict(out))  # noqa: S307
+    return out
+
+
+def test_the_image_covers_every_offset_the_mask_can_produce():
+    """The bug this file exists for: the mask spanned 32 MB and the image was
+    24, so 8 MB of guest addresses pointed into the host heap. The mask cannot
+    be narrowed to the RAM -- 24 MB is not a power of two -- so the image has
+    to be as wide as the mask instead."""
+    d = defines("runtime/cpu.h", ("MEM1_SIZE", "MEM_MASK", "MEM_IMAGE_SIZE"))
+    assert d["MEM_IMAGE_SIZE"] >= d["MEM_MASK"] + 1, "the mask reaches past the end of the image"
+    # ... and an access that starts at the last offset the mask can produce
+    # finishes inside the image too: mem_r64 and mem_w64 take 8 bytes from any
+    # address, and mem_zero32 takes a 32-byte line from an aligned one.
+    assert d["MEM_IMAGE_SIZE"] >= d["MEM_MASK"] + 1 + 8
+    assert d["MEM_IMAGE_SIZE"] >= (d["MEM_MASK"] + 1) // 32 * 32 + 32
+    # The premise of the tripwire: there is a gap, and it is the top eighth.
+    assert d["MEM1_SIZE"] < d["MEM_MASK"] + 1
+
+
+def test_the_boot_path_allocates_the_image_and_not_the_ram():
+    """MEM1_SIZE is the size of the console's memory and MEM_IMAGE_SIZE the
+    size of the buffer; allocating by the first is exactly the bug."""
+    main = (ROOT / "runtime" / "main.c").read_text()
+    assert re.search(r"^\s*s\.mem = mem_alloc\(&s\);", main, re.M), (
+        "s.mem no longer comes from mem_alloc"
+    )
+    alloc = main.split("static uint8_t* mem_alloc", 1)[1].split("\n}", 1)[0]
+    assert "calloc(1, MEM_IMAGE_SIZE)" in alloc, "the fallback allocation is not the whole image"
+    assert "calloc(1, MEM1_SIZE)" not in main, (
+        "something allocates the image at the size of the RAM"
+    )
+    # The reservation the guarded path makes has to hold the image as well:
+    # what it does not reserve, the tripwire cannot catch.
+    d = defines("runtime/cpu.h", ("MEM1_SIZE", "MEM_MASK", "MEM_IMAGE_SIZE"))
+    if "#define MEM_RESERVE_BYTES" in main:
+        d = defines("runtime/main.c", ("MEM_RESERVE_BYTES",), d)
+        assert d["MEM_RESERVE_BYTES"] >= d["MEM_IMAGE_SIZE"]
+
+
+needs_msvc = pytest.mark.skipif(
+    toolchain.cl_path() is None, reason="no MSVC: the boot path cannot be built here"
+)
+
+
+@needs_msvc
+def test_an_address_past_the_ram_is_reported_once_and_survived(tmp_path):
+    """Four stores past the end of the RAM, one of them through the uncached
+    alias and one straddling the boundary, produce one message between them --
+    a guest loop must not be able to turn the tripwire into a stream -- and
+    every one of them reads back what it wrote, so the run went on."""
+    exe = build(tmp_path)
+    out = run(exe, tmp_path, "0x81800000,0x81C00000,0xC1900000,0x817FFFFE")
+    assert out.count("past the console's 24 MB") == 1, out
+    assert re.search(r"\[mem\] a store from block [0-9A-F]{8} reached 81800000, past ", out), out
+    assert out.count("reads back DEADBEEF") == 4, out
+
+
+@needs_msvc
+def test_an_address_in_the_ram_says_nothing(tmp_path):
+    """The tripwire is only worth having if it is quiet in a working run."""
+    exe = build(tmp_path)
+    assert "past the console's 24 MB" not in run(exe, tmp_path, "0x80100000")
+    assert "[mem]" not in run(exe, tmp_path, None)
+
+
+def build(tmp_path):
+    (tmp_path / "stubs.c").write_text(STUBS)
+    exe = tmp_path / "boot.exe"
+    proc = toolchain.cl(
+        [
+            *toolchain.CFLAGS,
+            "/I",
+            str(ROOT / "runtime"),
+            str(ROOT / "runtime" / "main.c"),
+            str(tmp_path / "stubs.c"),
+            "/Fo" + str(tmp_path) + os.sep,
+            "/Fe" + str(exe),
+        ],
+        cwd=tmp_path,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    return exe
+
+
+def run(exe, tmp_path, poke):
+    """One boot, given a directory with no disc in it: main() pokes, then finds
+    no sys/main.dol and gives up, which is all this needs it to do."""
+    env = dict(os.environ)
+    env.pop("SOA_MEMPOKE", None)
+    if poke:
+        env["SOA_MEMPOKE"] = poke
+    proc = subprocess.run(
+        [str(exe), str(tmp_path / "no-disc-here")],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+    return proc.stdout + proc.stderr

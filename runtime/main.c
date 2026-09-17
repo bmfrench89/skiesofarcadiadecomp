@@ -148,6 +148,152 @@ static unsigned start_watchdog(CpuState* s, int windowed) { (void)s; (void)windo
 void watchdog_fallback(void) {}
 #endif
 
+/* ---- the MEM1 image, and the 8 MB of it that is not RAM ------------------
+ *
+ * mem_ptr masks an effective address with MEM_MASK and returns a pointer.
+ * That is the whole of the guest's address translation and it runs on every
+ * load and store in 55 MB of generated C, so it cannot afford to check
+ * anything. The mask covers 32 MB and the console has 24, which leaves the
+ * top eighth of the window -- 0x81800000 up, and its uncached and real-mode
+ * aliases -- pointing past the end of the RAM. Narrowing the mask is not on:
+ * 24 MB is not a power of two, so folding the range back would put a test on
+ * every guest memory access to pay for an address the game should never form.
+ *
+ * Instead the image is the mask's whole range, and the part of it above the
+ * RAM is reserved rather than committed. mem_ptr is untouched and the common
+ * case costs exactly what it cost before; a stray access lands in reserved
+ * address space and faults, and the handler below reports it, commits the
+ * range and lets the run carry on against zeroed pages rather than against
+ * the host heap. Committing all of it at the first fault is also what holds
+ * this to a single message: afterwards there is nothing left up there to
+ * fault on, so a guest loop cannot turn the tripwire into a stream.
+ */
+static int g_mem_guarded;
+
+#ifdef _WIN32
+/* Reserved past the mask's range as well, so an 8-byte load that starts in
+ * its last bytes has somewhere to land. 64K because that is the granularity
+ * VirtualAlloc reserves in. */
+#define MEM_RESERVE_BYTES ((SIZE_T)MEM_MASK + 1u + 0x10000u)
+static uint8_t* g_mem_base;
+static CpuState* g_mem_state;
+/* The thread that built the image is the one that runs the guest, so a fault
+ * on any other is the runtime's own code and s->pc belongs to neither it nor
+ * the moment. Say which kind of fault it was rather than print a block
+ * address that had nothing to do with it. */
+static DWORD g_mem_tid;
+
+static LONG CALLBACK mem_guard(EXCEPTION_POINTERS* ep)
+{
+    const EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    static volatile LONG reported;
+    uintptr_t off;
+    int storing, committed, guest;
+    /* Every other fault in the process belongs to somebody else. The
+     * subtraction is unsigned, so an address below the image gives a huge
+     * offset and falls out of the range test with it. */
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2 || !g_mem_base)
+        return EXCEPTION_CONTINUE_SEARCH;
+    off = (uintptr_t)er->ExceptionInformation[1] - (uintptr_t)g_mem_base;
+    if (off < MEM1_SIZE || off >= MEM_RESERVE_BYTES) return EXCEPTION_CONTINUE_SEARCH;
+    storing = er->ExceptionInformation[0] != 0;
+    guest = GetCurrentThreadId() == g_mem_tid;
+    /* Commit first: the report walks the guest stack, and that walk must not
+     * fault its way back in here. A commit that fails leaves the access
+     * violation standing and the process dies of it -- so say so first,
+     * because the message is the entire point of the mechanism and a bare
+     * access violation explains nothing. */
+    committed = VirtualAlloc(g_mem_base + MEM1_SIZE, MEM_RESERVE_BYTES - MEM1_SIZE, MEM_COMMIT,
+                             PAGE_READWRITE)
+                != NULL;
+    if (!InterlockedExchange(&reported, 1)) {
+        CpuState* s = g_mem_state;
+        char who[64];
+        if (guest) snprintf(who, sizeof who, "from block %08X", s ? s->pc : 0u);
+        else snprintf(who, sizeof who, "on a runtime thread, not the guest's");
+        /* Reported in the cached window, because the mask has already thrown
+         * away which of the three windows the guest used, and as the address
+         * the access reached rather than the one it started from: an access
+         * straddling the end of the RAM stops at the first byte past it. */
+        fprintf(stderr,
+                "[mem] %s %s reached %08X, past the console's 24 MB of RAM; the port "
+                "keeps zeroed scratch up there so that it does not reach the host heap. An address "
+                "up there means the port is not modelling something. Reported once.%s\n",
+                storing ? "a store" : "a load", who, 0x80000000u + (uint32_t)off,
+                committed ? "" : " The scratch could not be committed, so this access violation "
+                                 "stands and the process is about to die of it.");
+        /* Only for the thread the registers belong to, and only once the
+         * scratch is there to walk through. */
+        if (s && guest && committed) {
+            fprintf(stderr, "  backtrace from r1:");
+            guest_backtrace(s, s->gpr[1]);
+        }
+    }
+    return committed ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
+/* The image every window folds onto. Off Windows, and if the reservation or
+ * the handler will not take, the whole range is ordinary zeroed memory:
+ * nothing the guest can do reaches the host heap either way, there is just
+ * nothing to say that it tried. */
+static uint8_t* mem_alloc(CpuState* s)
+{
+#ifdef _WIN32
+    uint8_t* p = (uint8_t*)VirtualAlloc(NULL, MEM_RESERVE_BYTES, MEM_RESERVE, PAGE_NOACCESS);
+    if (p) {
+        if (VirtualAlloc(p, MEM1_SIZE, MEM_COMMIT, PAGE_READWRITE)
+            && AddVectoredExceptionHandler(1, mem_guard)) {
+            g_mem_base = p;
+            g_mem_state = s;
+            g_mem_tid = GetCurrentThreadId();
+            g_mem_guarded = 1;
+            return p;
+        }
+        VirtualFree(p, 0, MEM_RELEASE);
+    }
+    fprintf(stderr, "[mem] cannot reserve the guarded MEM1 window (error %lu); running without the "
+                    "out-of-range tripwire\n",
+            (unsigned long)GetLastError());
+#endif
+    (void)s;
+    return (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
+}
+
+/* SOA_MEMPOKE=addr[,addr...] stores a word at each guest address and reads it
+ * back, before the game runs. Nothing in a working run goes near the range the
+ * tripwire covers, which would leave the tripwire itself untested until the
+ * day it mattered; this is how to fire it on purpose, and a list of addresses
+ * past the RAM is how to see that it still only says so once. It happens
+ * before the disc is read, so it needs no disc. */
+static void mem_poke(CpuState* s)
+{
+    const char* p = getenv("SOA_MEMPOKE");
+    if (!p || !*p) return;
+    if (!g_mem_guarded)
+        fprintf(stderr, "[mem] SOA_MEMPOKE: no tripwire is armed, so an out-of-range address will be "
+                        "silent\n");
+    while (*p) {
+        char* end;
+        uint32_t ea = (uint32_t)strtoul(p, &end, 0);
+        if (end == p) break; /* not a number: stop rather than spin on it */
+        /* The hardware window is not memory and this runs before dvd_init,
+         * threads_init and the first GX state exist: a store to 0xCC008000
+         * would enter the write-gather pipe, and one to 0xCC006000 a device
+         * model that has not been set up. The switch is here to fire the
+         * tripwire, which is about RAM. */
+        if (is_mmio(ea))
+            fprintf(stderr, "[mem] SOA_MEMPOKE: %08X is in the hardware window (MMIO or the "
+                            "write-gather pipe), which is not set up yet; skipped\n", ea);
+        else {
+            mem_w32(s, ea, 0xDEADBEEFu);
+            fprintf(stderr, "[mem] SOA_MEMPOKE: %08X <- DEADBEEF, reads back %08X\n", ea,
+                    mem_r32(s, ea));
+        }
+        p = end + (*end == ',' ? 1 : 0);
+    }
+}
+
 #define ARENA_HI 0x81700000u
 #define GEKKO_PVR 0x00083214u
 
@@ -172,7 +318,11 @@ static uint8_t* slurp(const char* path, size_t* size)
     fseek(f, 0, SEEK_END);
     n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    buf = (uint8_t*)malloc((size_t)n);
+    /* A directory, or a file that cannot be seeked, gives a negative length,
+     * and malloc(0) may hand back nothing at all: either way the read below
+     * would run on a pointer this function never got. */
+    buf = n > 0 ? (uint8_t*)malloc((size_t)n) : NULL;
+    if (!buf) { fclose(f); fprintf(stderr, "cannot read %s\n", path); return NULL; }
     if (fread(buf, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(buf); return NULL; }
     fclose(f);
     *size = (size_t)n;
@@ -183,18 +333,27 @@ static uint8_t* slurp(const char* path, size_t* size)
 static int load_dol(uint8_t* mem, const uint8_t* dol, size_t size)
 {
     int i;
+    if (size < 0x100) { /* the header itself is read below */
+        fprintf(stderr, "main.dol is %zu bytes, too short to hold a DOL header\n", size);
+        return 0;
+    }
     for (i = 0; i < 18; i++) {
         uint32_t off = be32(dol + i * 4);
         uint32_t addr = be32(dol + 0x48 + i * 4);
         uint32_t len = be32(dol + 0x90 + i * 4);
+        uint32_t dest = addr & MEM_MASK;
         if (!len) continue;
-        if (off + len > size || (addr & MEM_MASK) + len > MEM1_SIZE) {
+        /* Offset, address and length all come out of the file and all three
+         * are 32-bit, so every bound here is written as a difference: as a
+         * sum, a corrupt or crafted header wraps it and the memcpy below
+         * copies gigabytes out of a small buffer into the image. */
+        if (off > size || len > size - off || dest >= MEM1_SIZE || len > MEM1_SIZE - dest) {
             fprintf(stderr, "DOL section %d out of range\n", i);
             return 0;
         }
-        memcpy(mem + (addr & MEM_MASK), dol + off, len);
+        memcpy(mem + dest, dol + off, len);
     }
-    /* BSS is already zero: the image came from calloc. */
+    /* BSS is already zero: the image comes back zeroed, however it was got. */
     return 1;
 }
 
@@ -283,6 +442,8 @@ static void usage(void)
             "                   off when a window is open; 0 disables it)\n"
             "  SOA_MMIO=1       log the first few accesses of every hardware register\n"
             "  SOA_PAD=f:btns   scripted controller, e.g. 1700:start (implies no window)\n"
+            "  SOA_MEMPOKE=a,b  store a word at each guest address before boot; an address past the\n"
+            "                   console's 24 MB, e.g. 0x81800000, fires the MEM1 tripwire\n"
             "The rest of the switches, and the keyboard mapping, are in README.md.\n");
 }
 
@@ -311,8 +472,9 @@ int main(int argc, char** argv)
         }
     }
 
-    s.mem = (uint8_t*)calloc(1, MEM1_SIZE);
+    s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
+    mem_poke(&s);
 
     snprintf(path, sizeof path, "%s/sys/main.dol", dir);
     dol = slurp(path, &dol_size);
@@ -329,7 +491,20 @@ int main(int argc, char** argv)
     if (!load_dol(s.mem, dol, dol_size)) return 1;
 
     /* The apploader parks the FST at the top of memory, 32-byte aligned, and
-     * ends the arena where it starts. */
+     * ends the arena where it starts. Both files are bounded before they are
+     * believed: boot.bin's header is read as far as 0x430, and an FST larger
+     * than the arena would make the subtraction below underflow into an
+     * arbitrary destination offset -- this is the one write into the image
+     * here that is not a device model's, so it carries its own bound. */
+    if (boot_size < 0x430) {
+        fprintf(stderr, "[boot] sys/boot.bin is %zu bytes; the disc header is 0x440\n", boot_size);
+        return 1;
+    }
+    if (fst_size == 0 || fst_size > ARENA_HI - 0x80000000u) {
+        fprintf(stderr, "[boot] sys/fst.bin is %zu bytes, which does not fit under the arena at "
+                        "%08X\n", fst_size, ARENA_HI);
+        return 1;
+    }
     fst_max = be32(boot + 0x42C);
     fst_addr = (ARENA_HI - (uint32_t)fst_size) & ~31u;
     memcpy(s.mem + (fst_addr & MEM_MASK), fst, fst_size);

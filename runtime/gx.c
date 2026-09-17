@@ -309,7 +309,9 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             base = g_cp[0xA0 + array] & 0x1FFFFFFFu;
             stride = g_cp[0xB0 + array] & 0xFFu;
             src = base + index * stride;
-            if ((src & MEM_MASK) + 4 * count <= MEM1_SIZE) {
+            /* count comes out of the command stream, so 4 * count can
+             * overflow and wrap the sum back under the limit. Subtract. */
+            if (count <= MEM1_SIZE / 4 && (src & MEM_MASK) <= MEM1_SIZE - 4 * count) {
                 for (i = 0; i < count; i++)
                     if (addr + i < 0x1100) g_xf[addr + i] = mem_r32(s, (src | 0x80000000u) + 4 * i);
             }
@@ -321,7 +323,8 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             addr = be32(p + off + 1);
             size = be32(p + off + 5);
             g_dl_calls++;
-            if (!in_display_list && (addr & MEM_MASK) + size <= MEM1_SIZE) {
+            /* size is the guest's, and the same wrap applies to it. */
+            if (!in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
                 size_t done = parse(s, mem_ptr(s, addr), size, 1);
                 if (done != size) {
                     static int warned;

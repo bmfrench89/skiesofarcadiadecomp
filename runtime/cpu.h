@@ -5,10 +5,12 @@
  * (SPEC section 4.3), so a decompiled or HLE'd function can replace a
  * recompiled one at link time without touching its callers.
  *
- * Memory is a single 24 MB big-endian image (SPEC section 5). The cached,
- * uncached and real-mode windows all resolve to it through MEM_MASK, and the
- * hardware range traps to the runtime's device models. Every load and store
- * byte-swaps on access: the image has to stay in console byte order because
+ * Memory is a single big-endian image (SPEC section 5). The cached, uncached
+ * and real-mode windows all resolve to it through MEM_MASK, and the hardware
+ * range traps to the runtime's device models. The console's RAM is the first
+ * MEM1_SIZE of the image; the rest exists because the mask is wider than the
+ * RAM is, and main.c arms it as a tripwire. Every load and store byte-swaps
+ * on access: the image has to stay in console byte order because
  * the game's own structures, DMA buffers and display lists live in it, and
  * nothing tells us the type of any given word.
  */
@@ -18,8 +20,28 @@
 #include <stdint.h>
 #include <string.h>
 
-#define MEM1_SIZE 0x01800000u
-#define MEM_MASK 0x01FFFFFFu
+#define MEM1_SIZE 0x01800000u /* the RAM the console has: 24 MB */
+#define MEM_MASK 0x01FFFFFFu  /* what mem_ptr narrows an address to: 32 MB */
+
+/* How big s->mem has to be, which is not MEM1_SIZE. mem_ptr does nothing to
+ * an effective address but mask it, and the mask is a power of two while the
+ * RAM is not, so every address in the top eighth of the window --
+ * 0x81800000..0x81FFFFFF and its uncached and real-mode aliases -- comes out
+ * as a live offset past the end of the RAM. An image of only MEM1_SIZE would
+ * hand the guest up to 8 MB of the host heap to read and write. The slack on
+ * top is for an access that starts at the last offset the mask can produce
+ * and runs past it: mem_r64 and mem_w64 move 8 bytes from any address at all,
+ * and dcbz's line is 32. The device models bound their own transfers by
+ * MEM1_SIZE, since that is where the real memory ends. */
+#define MEM_IMAGE_SIZE (MEM_MASK + 1u + 32u)
+
+/* main.c splits that image into a committed first MEM1_SIZE and a reserved
+ * tail, and VirtualAlloc rounds a commit up to a page: a MEM1_SIZE that was
+ * not a multiple of the 64K allocation granularity would commit part of the
+ * tail and leave the tripwire with a blind spot at the seam. */
+#if (MEM1_SIZE % 0x10000u) != 0
+#error "MEM1_SIZE must be a multiple of 64K or the guarded split in main.c is not exact"
+#endif
 
 #if defined(_MSC_VER)
 #include <stdlib.h>
@@ -48,10 +70,8 @@ struct CpuState {
     uint32_t gqr[8];
     uint32_t hid2, wpar;
     uint32_t spr[1024]; /* everything not modelled explicitly above */
-    uint32_t sr[16];    /* segment registers; OS init writes them, nothing reads */
-    uint8_t gp_buf[32]; /* write-gather pipe accumulator (SPEC section 7) */
-    uint32_t gp_len;
-    uint8_t* mem; /* MEM1 backing store, console byte order */
+    uint32_t sr[16]; /* segment registers; OS init writes them, nothing reads */
+    uint8_t* mem;    /* MEM1 backing store, console byte order */
     void* user;   /* runtime-private */
 };
 
@@ -130,37 +150,54 @@ void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 #define WATCH(ea, size, v)     do { if ((uint32_t)((ea) - g_watch_addr) < g_watch_len) watch_hit(s, (ea), (size), (v)); } while (0)
 
 /* The write-gather pipe takes most of the guest's stores (every vertex component
- * the game submits); it goes straight to the GX parser, skipping the MMIO bookkeeping. */
+ * the game submits); it goes straight to the GX parser, skipping the MMIO bookkeeping.
+ *
+ * Its page sits inside the hardware window, so is_gather_pipe(ea) implies
+ * is_mmio(ea) and the pipe test belongs inside the MMIO test rather than
+ * ahead of it: nesting them costs a store to ordinary memory -- which is
+ * nearly every store the guest makes -- one compare instead of three. */
 void gx_pipe_write(CpuState* s, unsigned size, uint64_t v);
 static inline int is_gather_pipe(uint32_t ea) { return (ea & 0xFFFFFF00u) == 0xCC008000u; }
 
 static inline void mem_w8(CpuState* s, uint32_t ea, uint8_t v)
 {
-    if (is_gather_pipe(ea)) { gx_pipe_write(s, 1, v); return; }
-    if (is_mmio(ea)) { mmio_write8(s, ea, v); return; }
+    if (is_mmio(ea)) {
+        if (is_gather_pipe(ea)) gx_pipe_write(s, 1, v);
+        else mmio_write8(s, ea, v);
+        return;
+    }
     WATCH(ea, 1, v);
     *mem_ptr(s, ea) = v;
 }
 static inline void mem_w16(CpuState* s, uint32_t ea, uint16_t v)
 {
-    if (is_gather_pipe(ea)) { gx_pipe_write(s, 2, v); return; }
-    if (is_mmio(ea)) { mmio_write16(s, ea, v); return; }
+    if (is_mmio(ea)) {
+        if (is_gather_pipe(ea)) gx_pipe_write(s, 2, v);
+        else mmio_write16(s, ea, v);
+        return;
+    }
     WATCH(ea, 2, v);
     v = BSWAP16(v);
     memcpy(mem_ptr(s, ea), &v, 2);
 }
 static inline void mem_w32(CpuState* s, uint32_t ea, uint32_t v)
 {
-    if (is_gather_pipe(ea)) { gx_pipe_write(s, 4, v); return; }
-    if (is_mmio(ea)) { mmio_write32(s, ea, v); return; }
+    if (is_mmio(ea)) {
+        if (is_gather_pipe(ea)) gx_pipe_write(s, 4, v);
+        else mmio_write32(s, ea, v);
+        return;
+    }
     WATCH(ea, 4, v);
     v = BSWAP32(v);
     memcpy(mem_ptr(s, ea), &v, 4);
 }
 static inline void mem_w64(CpuState* s, uint32_t ea, uint64_t v)
 {
-    if (is_gather_pipe(ea)) { gx_pipe_write(s, 8, v); return; }
-    if (is_mmio(ea)) { mmio_write64(s, ea, v); return; }
+    if (is_mmio(ea)) {
+        if (is_gather_pipe(ea)) gx_pipe_write(s, 8, v);
+        else mmio_write64(s, ea, v);
+        return;
+    }
     WATCH(ea, 8, v);
     v = BSWAP64(v);
     memcpy(mem_ptr(s, ea), &v, 8);

@@ -51,7 +51,10 @@ static uint64_t g_copies_tex, g_copies_xfb, g_rej_bary;
 #define MAX_THREADS 16
 static int g_nthreads = 1;
 static __declspec(thread) int t_tid;
-static uint64_t g_pixels_t[MAX_THREADS], g_rej_depth_t[MAX_THREADS], g_rej_alpha_t[MAX_THREADS];
+/* Indexed by t_tid, which is 1..MAX_THREADS for a worker and 0 for the thread
+ * that produces, so there are MAX_THREADS + 1 of each: at SOA_THREADS=16 the
+ * last worker used to write one element past these. */
+static uint64_t g_pixels_t[MAX_THREADS + 1], g_rej_depth_t[MAX_THREADS + 1], g_rej_alpha_t[MAX_THREADS + 1];
 #define g_pixels g_pixels_t[t_tid]
 #define g_rej_depth g_rej_depth_t[t_tid]
 #define g_rej_alpha g_rej_alpha_t[t_tid]
@@ -76,6 +79,147 @@ int gxr_enabled(void)
         g_hash = getenv("SOA_HASH") ? 1 : 0;
     }
     return g_enabled;
+}
+
+/* ---- tripwires -----------------------------------------------------------
+ *
+ * This rasterizer does not implement everything the hardware does, and where
+ * it falls short it draws something plausible and says nothing -- which makes
+ * a missing feature look exactly like a bug in a feature we do have. Each
+ * condition below speaks the first time the game asks for what we do not
+ * model, naming the register and value it asked with and what we do instead.
+ *
+ * Once per condition, not once overall: every call site keeps its own flag,
+ * so one going off leaves the rest armed. A line that repeats every frame is
+ * a line nobody reads.
+ *
+ * Every tripwire here runs on the guest thread that parses the command stream
+ * -- BP writes, draw setup and copies all do, and the rasterizer's workers
+ * reach none of it -- so the flags need no lock.
+ *
+ * Decoding all 23 captures config/fifo_manifest.tsv pins and running these
+ * conditions over their streams sets none of them off, and none is expected
+ * to fire in normal play; a line here is news. The one thing the
+ * game really does ask for and we really do not do -- the seven-tap EFB copy
+ * filter -- is programmed before the first frame of every run and left there,
+ * so it is not news and is not here: enqueue_copy counts it and gxr_report
+ * states it at the end of the run instead. A channel with a line in it every
+ * time stops meaning anything.
+ *
+ * Two trigger shapes, and the difference matters when reading a replay: the
+ * BP tripwires fire on a *write*, the draw and copy ones on the *state* a
+ * draw or copy reads. gx_replay loads a capture's frame-start register
+ * snapshot straight into the shadow without passing it through
+ * gxr_bp_written, so a feature a capture merely inherited -- zfreeze, ZTEX2,
+ * a non-RGB8 EFB -- is rendered wrong and says nothing. A silent corpus is
+ * evidence that nothing was *asked for* in those windows, not that nothing
+ * was in force. SOA_SNAP narrows the draw tripwires and not the BP ones for
+ * the same reason the other way round: gxr_draw_inner returns before
+ * draw_tripwire on a frame it is skipping, so a line, a point or a
+ * destination-alpha blend on such a frame says nothing -- correctly, since
+ * nothing was drawn and there is no picture to be wrong. What the game asked
+ * for is still caught on every frame that is written.
+ */
+#define WARN_ONCE(...)                    \
+    do {                                  \
+        static int said;                  \
+        if (!said) {                      \
+            said = 1;                     \
+            fprintf(stderr, __VA_ARGS__); \
+        }                                 \
+    } while (0)
+
+/* BP_MASK (BP 0xFE) says the next BP write changes only the bits it names,
+ * and we apply all 24 of them. That is only wrong when the write really
+ * carries a bit outside the mask that differs from what the register already
+ * holds -- and the SDK's one use of it, GXSetCoPlanar (mask 080000, then
+ * GEN_MODE), writes the whole shadowed GEN_MODE back, so every bit outside
+ * the mask is already what it says. The game does that from its first frame,
+ * so warning on the mask write itself is a line in every log of a port that
+ * renders correctly. Our own copy of the previous value is what tells the two
+ * apart; g_bp_seen keeps a register whose first write is masked from being
+ * compared against a zero we never saw written. */
+static uint32_t g_bp_prev[256];
+static uint8_t g_bp_seen[256];
+static uint32_t g_bp_mask = 0xFFFFFFu;
+
+/* The BP registers whose value alone says the game wants something we do not
+ * have. Called for every BP write, after the shadow has taken it. */
+static void bp_tripwire(const uint32_t* bp, uint32_t reg, uint32_t v)
+{
+    uint32_t mask = g_bp_mask, prev = g_bp_prev[reg & 0xFFu];
+    int seen = g_bp_seen[reg & 0xFFu];
+    g_bp_prev[reg & 0xFFu] = v;
+    g_bp_seen[reg & 0xFFu] = 1;
+    g_bp_mask = 0xFFFFFFu; /* the mask covers one write, then lapses */
+    if (reg == 0xFE) {
+        g_bp_mask = v & 0xFFFFFFu;
+        return;
+    }
+    if (mask != 0xFFFFFFu && seen && ((v ^ prev) & ~mask & 0xFFFFFFu))
+        WARN_ONCE("[gxr] BP_MASK %06X was in force for BP %02X %06X, which also changes %06X outside the mask; we apply all 24 bits, so those changed too and the register now differs from the hardware's by that much\n",
+                  mask, reg, v, (v ^ prev) & ~mask & 0xFFFFFFu);
+    switch (reg) {
+    case 0x00: /* GEN_MODE */
+        if ((v >> 16) & 7)
+            WARN_ONCE("[gxr] GEN_MODE %06X asks for %u indirect texture stage(s); indirect textures are not modelled, so the stages are dropped and each direct coordinate is sampled unperturbed\n",
+                      v, (v >> 16) & 7);
+        if ((v >> 19) & 1)
+            WARN_ONCE("[gxr] GEN_MODE %06X turns zfreeze on; the frozen depth plane is not modelled and depth stays per-triangle\n", v);
+        break;
+    case 0x43: /* PE_CONTROL */
+        if (v & 7)
+            WARN_ONCE("[gxr] PE_CONTROL %06X selects EFB pixel format %u; only RGB8 (0) is modelled, so the EFB keeps eight bits a channel whatever the game asked for\n",
+                      v, v & 7);
+        if ((v >> 3) & 7)
+            WARN_ONCE("[gxr] PE_CONTROL %06X selects EFB depth format %u; only linear 24-bit Z (0) is modelled, so compressed depth is stored and compared linear\n",
+                      v, (v >> 3) & 7);
+        break;
+    case 0x63: /* PRELOAD_MODE: writing it runs the preload, and the SDK writes zero to arm nothing */
+        if (v)
+            WARN_ONCE("[gxr] TMEM preload (BP 63 %06X from BP 60 %06X into BP 61 %06X / BP 62 %06X) is not modelled; every texture is decoded from main memory when a draw samples it, so one the game only preloads reads whatever is left at its address\n",
+                      v, bp[0x60], bp[0x61], bp[0x62]);
+        break;
+    case 0xE8: /* FOGRANGE */
+        if ((v >> 10) & 1)
+            WARN_ONCE("[gxr] FOGRANGE (BP E8 %06X) enables fog range adjustment about x=%u; the adjustment is not modelled and fog uses eye depth alone, so the edges of the screen fog too little\n",
+                      v, v & 0x3FF);
+        break;
+    case 0xF5: /* ZTEX2 */
+        if ((v >> 2) & 3)
+            WARN_ONCE("[gxr] ZTEX2 (BP F5 %06X) turns Z textures on (op %u, format %u); they are not modelled and a fragment's depth stays the interpolated one\n",
+                      v, (v >> 2) & 3, v & 3);
+        break;
+    default: break;
+    }
+}
+
+/* What a draw asks for that the pixel and primitive paths do not do. Called
+ * once per draw, from the setup that reads the same registers. */
+static void draw_tripwire(const uint32_t* bp, unsigned prim)
+{
+    uint32_t lp = bp[0x22], cmode = bp[0x41];
+    /* GXSetLineWidth and GXSetPointSize count in sixths of a pixel, so 6 is
+     * the one pixel raster_line and raster_point actually draw. The threshold
+     * is two pixels, not "anything but exactly one": the game programs
+     * linesize 7 -- 1.17 px -- in three of the captures, and drawing that one
+     * pixel wide is a rounding, not a missing feature. Twice the width it
+     * asked for is where the picture is visibly wrong. */
+    if ((prim == 0xA8 || prim == 0xB0) && (lp & 0xFF) >= 12)
+        WARN_ONCE("[gxr] LINEPTWIDTH (BP 22 %06X) asks for lines %.2f pixels wide; lines are drawn one pixel wide\n",
+                  lp, (double)(lp & 0xFF) / 6.0);
+    if (prim == 0xB8 && ((lp >> 8) & 0xFF) >= 12)
+        WARN_ONCE("[gxr] LINEPTWIDTH (BP 22 %06X) asks for points %.2f pixels across; points are drawn as single pixels\n",
+                  lp, (double)((lp >> 8) & 0xFF) / 6.0);
+    /* GX_BL_DSTALPHA and its inverse read the EFB alpha plane, which RGB8
+     * does not have: the console reads 1.0 there. We keep an alpha byte per
+     * EFB pixel and blend against that, which is a different picture. */
+    if ((cmode & 1) && (bp[0x43] & 7) == 0) {
+        unsigned sfac = (cmode >> 8) & 7, dfac = (cmode >> 5) & 7;
+        if (sfac >= 6 || dfac >= 6)
+            WARN_ONCE("[gxr] PE_CMODE0 %06X blends with a destination-alpha factor (src %u, dst %u) at EFB format RGB8, where the console has no alpha plane and reads 1.0; we blend against the alpha we kept\n",
+                      cmode, sfac, dfac);
+    }
 }
 
 /* The EFB persists across frames on the console; a replay starts from the
@@ -1036,6 +1180,10 @@ static volatile LONG g_cursor[MAX_THREADS + 1]; /* per worker: next command to r
 static uint8_t* g_arena;
 static size_t g_arena_used;
 static int g_workers; /* worker threads; the main thread (tid 0) only produces */
+/* Where a draw's TEV setup is built, before the slot it will be queued in has
+ * been chosen. Only the thread that parses the command stream touches it. */
+static TevSetup g_prep;
+static uint64_t g_prepare_flushes; /* draws whose setup had to wait for a queued copy */
 
 #ifdef _WIN32
 static DWORD WINAPI worker(LPVOID arg)
@@ -1123,11 +1271,25 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     tex_set_memory(s);
 
     if (g_q_tail >= QUEUE_CAP || g_arena_used + sizeof(Vertex) * count > ARENA_BYTES || tex_graveyard_full()) gxr_flush();
+    draw_tripwire(bp, prim);
+    /* Nothing of the queue's is claimed until tev_prepare has returned.
+     * Resolving a texture read from a destination a queued copy has not
+     * written yet makes it flush, and a flush takes the queue and the vertex
+     * arena back to the start: a slot or a vertex pointer taken before the
+     * call would name storage that is about to be handed out again, and the
+     * draw would be published at an index already holding a command the
+     * workers have run. The check above has left room for this draw, and a
+     * flush inside the call only ever leaves more. */
+    {
+        LONG tail = g_q_tail;
+        TIMED(T_PREPARE, tev_prepare(bp, &g_prep));
+        if (g_q_tail != tail) g_prepare_flushes++;
+    }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
     D = &g_queue[g_q_tail];
     D->kind = 0;
-    TIMED(T_PREPARE, tev_prepare(bp, &D->tev));
+    D->tev = g_prep;
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
     D->ntex = D->tev.used_tex & ((1u << (xf[0x103F] & 15)) - 1u);
@@ -1370,12 +1532,43 @@ static void write_frame_png(const char* path, int w, int h)
     else fprintf(stderr, "[gxr] wrote %s (%dx%d)\n", path, w, h);
 }
 
+/* The seven-tap EFB copy filter, which the game programs once and we do not
+ * run: counted here and stated by gxr_report, not warned about. See the
+ * tripwire header for why it is not in that channel. */
+static uint64_t g_copies_filtered;
+static uint32_t g_copy_filter[2];
+
 static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
     int x0 = (int)(bp[0x49] & 0x3FF), y0 = (int)((bp[0x49] >> 10) & 0x3FF);
     int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
     int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
+    /* The console runs a seven-tap vertical filter over the EFB as it copies
+     * -- six-bit weights for the three rows above, the row itself and the
+     * three below, summed over 64 -- and we take the centre row alone, so
+     * every copied pixel is softer on the console than ours. That is why no
+     * pixel-exact comparison against one converges, and it is PLAN C3's
+     * subject; when C3 lands, this counter and its line in gxr_report go. */
+    {
+        uint32_t f0 = bp[0x53], f1 = bp[0x54];
+        if ((f0 & 0x03FFFFu) | (f1 & 0x03FFFFu)) { /* any weight but the centre row's */
+            g_copies_filtered++;
+            g_copy_filter[0] = f0;
+            g_copy_filter[1] = f1;
+        }
+    }
+    /* Copy Y-scale (BP 4E) is 1.8 fixed point over the whole 24-bit field,
+     * and 000100 is the identity -- all the game has ever programmed, and it
+     * cannot move a pixel -- so this warns only when the copy is asked to
+     * rescale and we ignore it. Comparing the whole field matters both ways:
+     * a nine-bit compare would read 000300 as the identity and say nothing,
+     * and print 000200 as 0.000 while warning. Zero is not a request: it is
+     * the register never having been written, which is a synthetic stream
+     * rather than the game, and a scale of zero would copy nothing. */
+    if ((bp[0x4E] & 0xFFFFFFu) && (bp[0x4E] & 0xFFFFFFu) != 0x100u)
+        WARN_ONCE("[gxr] EFB copy Y-scale (BP 4E %06X) is %.3f, not 1.0; the copy is not scaled vertically, so the destination keeps the source's height\n",
+                  bp[0x4E], (double)(bp[0x4E] & 0xFFFFFFu) / 256.0);
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
     if (half) gxr_flush(); /* a half-scale copy reads rows other workers own */
@@ -1421,6 +1614,9 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
 void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
 {
     const uint32_t* bp = gx_bp_regs();
+    /* Only when there is a picture to be wrong: with the renderer off nothing
+     * is drawn, so nothing is drawn wrong. */
+    if (gxr_enabled()) bp_tripwire(bp, reg, v);
     if (reg >= 0xE0 && reg <= 0xE7) { tev_register_written(reg, v); return; }
     if (reg == 0x65) { /* TLUT load (GXLoadTlut): source from 0x64, tmem address and size here */
         uint32_t src = (bp[0x64] & 0x1FFFFFu) << 5;
@@ -1435,6 +1631,10 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
     if (reg == 0x45 && (v & 2) && gxr_enabled()) gxr_flush(); /* GXDrawDone: the CPU may read results now */
 }
 
+/* Defined in gxr_tev.c. A diagnostic for the report below rather than part of
+ * the renderer's interface, so it is declared here and not in gxr.h. */
+int tex_graveyard_peak(void);
+
 void gxr_report(void)
 {
     /* No flush: the watchdog thread reports while the main thread produces. */
@@ -1444,10 +1644,33 @@ void gxr_report(void)
     {
         uint64_t px = 0, rd = 0, ra = 0;
         int i;
-        for (i = 0; i < MAX_THREADS; i++) { px += g_pixels_t[i]; rd += g_rej_depth_t[i]; ra += g_rej_alpha_t[i]; }
+        for (i = 0; i <= MAX_THREADS; i++) { px += g_pixels_t[i]; rd += g_rej_depth_t[i]; ra += g_rej_alpha_t[i]; }
     fprintf(stderr, "[gxr] %llu triangles, %llu lines, %llu points; %llu pixels shaded (%llu outside, %llu failed alpha, %llu failed depth); %llu clipped away; %llu bad vertex refs; %llu texture copies, %llu screen copies\n",
             (unsigned long long)g_tris, (unsigned long long)g_lines, (unsigned long long)g_points,
             (unsigned long long)px, (unsigned long long)g_rej_bary, (unsigned long long)ra, (unsigned long long)rd, (unsigned long long)g_clipped, (unsigned long long)g_verts_bad,
             (unsigned long long)g_copies_tex, (unsigned long long)g_copies_xfb);
+    }
+    /* Two facts about lifetimes, stated when they happened at all, because
+     * between them they say whether a run took the paths the queue's rules are
+     * there for. The first is the only moment the renderer's own state moves
+     * under a draw that is being built; the second is how far past a fixed
+     * graveyard of 512 this run went, and every texture past that one is one
+     * that would have been handed back to the allocator with queued draws
+     * still pointing at it. */
+    if (g_prepare_flushes)
+        fprintf(stderr, "[gxr] %llu draws sampled a texture a queued copy had not written yet, and waited for it in the middle of their setup\n",
+                (unsigned long long)g_prepare_flushes);
+    if (tex_graveyard_peak())
+        fprintf(stderr, "[gxr] %d decoded textures waited to be freed at once, at the most\n", tex_graveyard_peak());
+    /* A standing limitation, stated once at the end rather than warned about
+     * at the first copy: the game programs the filter before the first frame
+     * of every run, so a tripwire line for it would be in every log and the
+     * tripwire channel would stop meaning "something unmodelled was asked
+     * for". PLAN C3 is the fix. */
+    if (g_copies_filtered) {
+        uint32_t f0 = g_copy_filter[0], f1 = g_copy_filter[1];
+        fprintf(stderr, "[gxr] %llu copies asked for the console's seven-tap vertical filter (BP 53 %06X, BP 54 %06X: %u,%u,%u,%u,%u,%u,%u over 64) and got the centre row alone, so this run is sharper and more aliased than the console (PLAN C3)\n",
+                (unsigned long long)g_copies_filtered, f0, f1, f0 & 0x3F, (f0 >> 6) & 0x3F,
+                (f0 >> 12) & 0x3F, (f0 >> 18) & 0x3F, f1 & 0x3F, (f1 >> 6) & 0x3F, (f1 >> 12) & 0x3F);
     }
 }

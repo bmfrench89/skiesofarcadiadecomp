@@ -19,6 +19,12 @@
 static CpuState* g_s;
 static uint8_t g_tmem[1u << 20];
 
+/* Tripwires, as in gxr.c: what this file does not model says so once and then
+ * keeps quiet. Neither of the two below can use that file's plain flag -- one
+ * wants a line per texture format, the other a line when a count crosses --
+ * but both run inside tev_prepare, on the guest thread that parses the
+ * command stream, so neither needs a lock. */
+
 void tex_set_memory(CpuState* s)
 {
     g_s = s;
@@ -38,27 +44,76 @@ typedef struct {
 #define TEX_CACHE 256
 static TexEntry g_cache[TEX_CACHE];
 static uint64_t g_stamp;
+/* Decoded textures thrown out to make room: the run's total, and how many in
+ * the frame g_evict_frame names. The tripwire below is about the second. */
+static unsigned g_evicted, g_evicted_in_frame, g_evict_frame;
 
-/* Queued draws hold pointers into the cache, so nothing is freed until the
- * queue has drained: freed textures wait here. */
-#define GRAVE_CAP 512
-static uint8_t* g_grave[GRAVE_CAP];
-static int g_grave_n;
+/* Two things hold pointers into the cache: every draw still in the queue, and
+ * the draw the producer is building right now. A decoded texture is therefore
+ * never handed straight back to the allocator -- it waits here until a flush
+ * has proved that neither can reach it -- and there is no number of waiting
+ * textures that it is safe to exceed, because exceeding it means freeing a
+ * buffer a worker thread is about to sample. So this list grows instead of
+ * overflowing. GRAVE_SOFT below is a hint to the producer that the waiting
+ * textures are piling up and it is a good moment to flush; nothing goes wrong
+ * if a caller sails past it. */
+#define GRAVE_SOFT 448
+static uint8_t** g_grave;
+static int g_grave_n, g_grave_cap, g_grave_peak;
+static unsigned g_grave_lost;
+
+/* The setup tev_prepare is filling, or NULL between draws. It is not in the
+ * queue yet, so draining the queue says nothing about it: a flush that happens
+ * while it is being built -- which is what a texture read from a destination a
+ * queued copy has not written yet does -- has to leave its textures alone and
+ * let the next flush take them. */
+static const TevSetup* g_building;
 
 static void tex_free_later(uint8_t* p)
 {
     if (!p) return;
-    if (g_grave_n < GRAVE_CAP) g_grave[g_grave_n++] = p;
-    else free(p); /* only after the caller ignored tex_graveyard_full */
+    if (g_grave_n == g_grave_cap) {
+        int cap = g_grave_cap ? g_grave_cap * 2 : 512;
+        uint8_t** grown = (uint8_t**)realloc(g_grave, (size_t)cap * sizeof *grown);
+        if (!grown) {
+            /* Out of memory for a pointer. Losing the texture costs its bytes;
+             * freeing it here would cost a worker reading freed memory, which
+             * is the whole reason this list exists. */
+            if (!g_grave_lost++)
+                fprintf(stderr, "[gxr] cannot grow the texture graveyard past %d entries; decoded textures are being leaked rather than freed while a queued draw may still sample them\n",
+                        g_grave_cap);
+            return;
+        }
+        g_grave = grown;
+        g_grave_cap = cap;
+    }
+    g_grave[g_grave_n++] = p;
+    if (g_grave_n > g_grave_peak) g_grave_peak = g_grave_n;
 }
 
-int tex_graveyard_full(void) { return g_grave_n >= GRAVE_CAP - 64; }
+int tex_graveyard_full(void) { return g_grave_n >= GRAVE_SOFT; }
+
+/* The high-water mark, for gxr_report: a run that passed 512 here is a run the
+ * old fixed-size list would have overflowed, and every texture past that one
+ * was freed while queued draws still pointed at it. */
+int tex_graveyard_peak(void) { return g_grave_peak; }
 
 void tex_graveyard_empty(void)
 {
-    int i;
-    for (i = 0; i < g_grave_n; i++) free(g_grave[i]);
-    g_grave_n = 0;
+    int i, keep = 0;
+    for (i = 0; i < g_grave_n; i++) {
+        uint8_t* p = g_grave[i];
+        int live = 0, j;
+        /* level[0] is the start of the single block a decode allocates for all
+         * of a texture's levels, which is the pointer that was queued here, so
+         * comparing against it finds every way the setup can still reach p. */
+        if (g_building)
+            for (j = 0; j < 8; j++)
+                if (g_building->tex[j].level[0] == p) { live = 1; break; }
+        if (live) g_grave[keep++] = p;
+        else free(p);
+    }
+    g_grave_n = keep;
 }
 
 void tex_invalidate_all(void)
@@ -113,7 +168,10 @@ void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes
     int i;
     if (tmem_off + bytes > sizeof g_tmem || (src & MEM_MASK) + bytes > MEM1_SIZE) return;
     memcpy(g_tmem + tmem_off, mem_ptr(s, src), bytes);
-    /* palettised textures decoded through this range are stale now */
+    /* Palettised textures decoded through this range are stale now. This runs
+     * from a BP write and not from a draw, so it can throw out every slot in
+     * the cache at a moment nothing chose, with a queue full of draws that
+     * still point at them; the graveyard absorbs that because it grows. */
     for (i = 0; i < TEX_CACHE; i++) {
         TexEntry* e = &g_cache[i];
         if (e->rgba && (e->fmt == 8 || e->fmt == 9 || e->fmt == 10) && e->tlut_off < tmem_off + bytes && e->tlut_off + 32768 > tmem_off) {
@@ -204,6 +262,18 @@ static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, 
     if (!out || !g_s) return;
     if ((addr & MEM_MASK) >= MEM1_SIZE) return;
     base = mem_ptr(g_s, addr);
+
+    /* A format with no case below paints magenta, which is indistinguishable
+     * from a texture the game meant to be magenta. One line per format rather
+     * than one overall: a second unhandled format is a second thing to build,
+     * and fmt is four bits, so the mask of what has been said is 16 flags. */
+    if (fmt == 7 || (fmt >= 11 && fmt != 14)) {
+        static unsigned said;
+        if (!(said & (1u << (fmt & 15)))) {
+            said |= 1u << (fmt & 15);
+            fprintf(stderr, "[gxr] texture format %u is not decoded (%ux%u at %08X); it draws magenta\n", fmt, w, h, addr);
+        }
+    }
 
     switch (fmt) {
     case 0: case 8: tw = 8; th = 8; bytes_per_tile = 32; break;       /* I4, C4 */
@@ -319,7 +389,14 @@ static void decode_texture(TexEntry* e, int nlevels)
     }
     out = (uint8_t*)calloc(total, 1);
     e->rgba = out;
-    if (!out) return;
+    if (!out) {
+        /* The levels still name the buffer the caller has just put in the
+         * graveyard, and this entry is about to be handed to a draw. Say there
+         * is no texture instead, which the sampler draws as transparent black. */
+        for (l = 0; l < MAX_MIPS; l++) e->level[l] = NULL;
+        e->nlevels = 0;
+        return;
+    }
     for (l = 0; l < e->nlevels; l++) {
         e->level[l] = out;
         decode_level(out, addr, e->fmt, (uint32_t)e->lw[l], (uint32_t)e->lh[l], e->tlut_off, e->tlut_fmt);
@@ -351,6 +428,30 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
     }
     {
         TexEntry* e = &g_cache[victim];
+        /* An empty slot is a first use; taking one that still holds a decode
+         * means the working set no longer fits, and that texture is decoded
+         * again the next time a draw wants it. What says the cache is too
+         * small is the rate, not the total: the heaviest captured frame wants
+         * 266 textures against these 256 slots and costs ten evictions, and
+         * at ten a frame a running total reaches 256 in under a second of
+         * ordinary play, so a total would report the cutscene the corpus was
+         * captured from as thrash. Count per frame instead and speak at a
+         * quarter of the cache in one frame, which is six times the heaviest
+         * frame we have measured. */
+        if (e->rgba) {
+            unsigned frame = gx_frame_count();
+            if (frame != g_evict_frame) { g_evict_frame = frame; g_evicted_in_frame = 0; }
+            g_evicted++;
+            if (++g_evicted_in_frame == TEX_CACHE / 4) {
+                static int said;
+                if (!said) {
+                    said = 1;
+                    fprintf(stderr, "[gxr] texture cache: %u decoded textures thrown out of %d slots in frame %u (%u this run), the last %08X (%ux%u fmt %u) to make room for %08X (%ux%u fmt %u); the working set does not fit and textures are being decoded repeatedly\n",
+                            g_evicted_in_frame, TEX_CACHE, frame, g_evicted, e->addr, e->w, e->h,
+                            e->fmt, addr, w, h, fmt);
+                }
+            }
+        }
         tex_free_later(e->rgba);
         e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
         TIMED(T_DECODE, decode_texture(e, nlevels));
@@ -457,8 +558,12 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         if (S->chan < 2) T->used_chan |= 1u << S->chan;
     }
 
-    /* textures: decode (cached) and resolve sampling state per map used */
+    /* textures: decode (cached) and resolve sampling state per map used.
+     * From here until the loop ends the setup names decoded textures, and a
+     * lookup below can flush; g_building is what keeps that flush from freeing
+     * the maps this draw has already resolved. */
     for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
+    g_building = T;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
         unsigned map = S->texmap, rb;
@@ -494,6 +599,10 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         C->scale_s = (float)((bp[0x30 + 2 * S->texcoord] & 0xFFFF) + 1);
         C->scale_t = (float)((bp[0x31 + 2 * S->texcoord] & 0xFFFF) + 1);
     }
+    /* The caller owns the setup from here: it queues the draw without letting
+     * anything flush in between, and once queued the queue's own rule covers
+     * it. */
+    g_building = NULL;
 }
 
 /* ---- sampling ----------------------------------------------------------- */

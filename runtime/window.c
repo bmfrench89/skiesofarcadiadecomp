@@ -6,6 +6,12 @@
  * Keyboard: arrows/WASD main stick, IJKL C-stick, X = A, Z = B, C = X,
  * V = Y, Enter/Space = START, R = Z, Q = L, E = R, T/F/G/H = D-pad,
  * Escape closes. Gamepad: the obvious mapping, triggers to L/R, RB to Z.
+ *
+ * window_pad() reports the whole controller -- both sticks at their real
+ * positions and both triggers at their real values, not just the twelve
+ * buttons -- because si.c writes that down under SOA_PAD_RECORD and replays
+ * it under SOA_PAD_FILE, and a recording that kept only the buttons could
+ * not repeat a walk across a field.
  */
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS
@@ -126,6 +132,11 @@ static unsigned __stdcall ui_thread(void* arg)
                 g_open = 0;
                 fprintf(stderr, "[window] closed\n");
                 hle_report();
+                /* Closing the window is how a recording session ends, and
+                 * _exit() does not flush stdio: without this the last of what
+                 * the player did would be lost in a buffer. gx.c's frame-limit
+                 * path does the same thing for the same reason. */
+                fflush(NULL);
                 _exit(0);
             }
             TranslateMessage(&msg);
@@ -159,7 +170,17 @@ int window_open(void)
 }
 
 /* Controller state for port 1 from the keyboard (when the window has the
- * focus) and gamepad 0. Returns 0 when there is no window. */
+ * focus) and gamepad 0. Returns 0 when there is no window.
+ *
+ * The two halves treat focus differently on purpose and it shows up in a
+ * recording: the keyboard is read only while the window is in front, so
+ * alt-tabbing releases every key, while the gamepad is read whatever has the
+ * focus and keeps driving the game. A recording is faithful to both -- it
+ * writes down what the port returned -- but a keyboard session interrupted
+ * by another window records the neutral input the guest really saw. */
+static int g_pad_present;
+static ULONGLONG g_pad_probe_at;
+
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2])
 {
     XINPUT_STATE xs;
@@ -184,8 +205,21 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
         if (K('J')) cx = 0; if (K('L')) cx = 255; if (K('I')) cy = 255; if (K('K')) cy = 0;
 #undef K
     }
+    /* XInputGetState on a port with nothing in it is a slow call: it goes out
+     * to the driver and comes back ERROR_DEVICE_NOT_CONNECTED. This runs on
+     * the guest thread at least twice per frame, so with no gamepad plugged
+     * in the port would be paying for the absence on the one thread whose
+     * rate decides how many frames a second of play takes -- which is the
+     * coordinate a recording is keyed by. Ask once a second while nothing is
+     * there; a pad plugged in mid-session is picked up within a second of
+     * plugging it in. The statics are safe unlocked because every caller of
+     * window_pad is si.c on the guest thread. */
     memset(&xs, 0, sizeof xs);
-    if (XInputGetState(0, &xs) == ERROR_SUCCESS) {
+    if (g_pad_present || GetTickCount64() >= g_pad_probe_at) {
+        g_pad_present = XInputGetState(0, &xs) == ERROR_SUCCESS;
+        if (!g_pad_present) g_pad_probe_at = GetTickCount64() + 1000;
+    }
+    if (g_pad_present) {
         const XINPUT_GAMEPAD* g = &xs.Gamepad;
         if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
         if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;

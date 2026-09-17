@@ -92,7 +92,11 @@ static void disc_read(CpuState* s, uint64_t offset, uint32_t addr, uint32_t leng
 {
     uint8_t* dst = mem_ptr(s, addr);
     size_t got = 0;
-    if ((addr & MEM_MASK) + length > MEM1_SIZE) {
+    /* The length comes from a guest store to the DI registers, so the bound
+     * has to hold for every value of it: offset + length overflows 32 bits
+     * and wraps back under MEM1_SIZE for a large enough length, which would
+     * pass a read of most of 4 GB into the image. Subtract instead of add. */
+    if (length > MEM1_SIZE || (addr & MEM_MASK) > MEM1_SIZE - length) {
         fprintf(stderr, "[dvd] read of %u bytes to %08X leaves MEM1\n", length, addr);
         return;
     }

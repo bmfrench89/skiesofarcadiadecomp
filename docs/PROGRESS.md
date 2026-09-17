@@ -89,6 +89,19 @@ how it went.
   there. Traced through a real run, `__CARDVerify` returns 0 and the
   game's own card layer receives it: the first successful mount.
 
+- Colours, corrected. Mounting the card made the game draw something it
+  never had, and that crashed the renderer: a worker thread reading a
+  texture buffer that had already been freed. Two defects, both
+  pre-existing. A draw captured its queue slot and vertex arena, then
+  looked up its textures, and that lookup could flush the queue and
+  reset both underneath it, so the workers re-ran a stale command
+  holding pointers the same flush had freed. Separately, a palette load
+  freed up to 256 cached textures in one call without the check that
+  bounds how many may be freed between drains. Fixing them changed 8 of
+  the 23 pinned captures, and the new frames are the correct ones: the
+  old renders were washed green and blue over whole scenes, with the
+  gold, maroon and skin tones missing. The manifest had pinned that.
+
 ## Open
 
 - Saves: the card mounts and is read, but the game has still never
