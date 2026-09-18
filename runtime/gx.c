@@ -363,9 +363,26 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
 static uint8_t g_pipe[PIPE_CAP];
 static size_t g_pipe_len;
 
+/* Set while this thread is inside the parse, and read by the sampler in
+ * main.c. A clock pair here is not affordable and that is measured, not
+ * argued: pipe_flush runs once per guest store to the gather pipe -- one
+ * saved run pushed 3,018,001,651 bytes through it -- and a benchmark shaped
+ * like the loop below puts the region at 4.8 ns, against 9.3 ns for the
+ * cheapest clock pair and 28.6 ns for QueryPerformanceCounter. A timer here
+ * would report mostly itself and would add seconds to the run it was timing.
+ * Two plain stores instead, which measure at nothing, and the sampler turns
+ * the share of its samples that land here into seconds. What that costs is
+ * resolution: the parse is one number for the whole run and never a duration
+ * for one flush. */
+int g_gx_parsing;
+
 static void pipe_flush(CpuState* s)
 {
-    size_t done = parse(s, g_pipe, g_pipe_len, 0);
+    int prev = g_gx_parsing;
+    size_t done;
+    g_gx_parsing = 1;
+    done = parse(s, g_pipe, g_pipe_len, 0);
+    g_gx_parsing = prev;
     if (done) {
         memmove(g_pipe, g_pipe + done, g_pipe_len - done);
         g_pipe_len -= done;

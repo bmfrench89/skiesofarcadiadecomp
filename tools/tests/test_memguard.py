@@ -32,9 +32,23 @@ from soa import toolchain  # noqa: E402
 # Everything runtime/main.c calls out to. Stubbing them is what lets the boot
 # path link on its own; none of them is reached before SOA_MEMPOKE is.
 STUBS = """
-#include "cpu.h"
+#include "gxr.h"
 void fn_80003140(CpuState* s) { (void)s; }
 void hle_report(void) {}
+void hle_clock_start(void) {}
+/* The renderer's phase words and its clock. main.c reads them for the profile
+ * it prints at the end of a run; this boot never gets that far, but it still
+ * has to link. */
+uint64_t g_gxr_ticks[T_COUNT];
+uint64_t g_gxr_phase_last;
+int g_gxr_phase;
+int g_gxr_tsc = 0;
+int g_gx_parsing;
+uint64_t gxr_qpc(void) { return 0; }
+void gxr_timing_init(void) {}
+void gxr_timing_finish(void) {}
+double gxr_seconds(uint64_t t) { (void)t; return 0.0; }
+double gxr_producer_span(void) { return 0.0; }
 void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }

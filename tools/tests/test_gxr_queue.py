@@ -221,7 +221,8 @@ def test_the_worker_decides_on_one_shared_word():
     worker now compares a count of its own against one word, so there is no
     pair left to order -- and that is the thing to keep, because it is what a
     reader can check without knowing what any thread is doing at the time."""
-    spin = re.search(r"while \((.*?)\) \{ if \(\+\+spins", worker_body())
+    body = re.sub(r"/\*.*?\*/", "", worker_body(), flags=re.S)
+    spin = re.search(r"while \((.*?)\)\s*\{\s*if \(\+\+spins", body)
     assert spin, worker_body()
     shared = set(re.findall(r"\bg_[a-z_]+", spin.group(1)))
     assert shared == {"g_published"}, f"the spin reads more than one shared word: {shared}"

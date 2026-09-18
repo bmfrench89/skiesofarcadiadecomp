@@ -112,8 +112,88 @@ extern uint32_t g_efb_z[EFB_H][EFB_W];
 
 int png_write_rgba(const char* path, const uint8_t* rgba, int w, int h, int stride);
 
-/* Phase timers (QueryPerformanceCounter ticks), reported by gxr_report. */
-typedef enum { T_DRAW, T_DECODE, T_COPY, T_PNG, T_PREPARE, T_COUNT } GxrTimer;
-extern double g_gxr_time[T_COUNT];
-double gxr_clock(void);
-#define TIMED(which, stmt) do { double _t0 = gxr_clock(); stmt; g_gxr_time[which] += gxr_clock() - _t0; } while (0)
+/* ---- phase accounting ----------------------------------------------------
+ *
+ * One word says which phase the thread that parses the command stream is in,
+ * and every boundary reads the clock once and charges the stretch since the
+ * last reading to the phase being left. Two things follow from that shape
+ * rather than from arithmetic afterwards. The buckets are disjoint, because
+ * one word holds one value: entering decode stops charging prepare for the
+ * duration, and leaving it resumes. And they sum to the span between the
+ * first reading and the last, because the readings telescope -- each one
+ * closes one bucket and opens the next. The timers this replaces nested,
+ * decode inside prepare inside draw, and printed as siblings, which is why
+ * they added up to more than the run.
+ *
+ * The state is plain rather than per-thread because every site that switches
+ * it runs on the producer: gxr_flush is producer-only by the queue's rules,
+ * tev_prepare and decode_texture are reached from it, and a worker uses the
+ * busy/idle pair in gxr.c instead. T_HOST is the residual -- translated guest
+ * code, the device models it calls, and the command-stream parse. The parse
+ * is not split out here because a clock pair at a gather-pipe store costs
+ * more than the store: the sampler in main.c splits it instead, off a marker
+ * that is two plain stores.
+ */
+typedef enum {
+    T_HOST,    /* not in the renderer: guest code, device models, the parse */
+    T_SETUP,   /* gxr_draw: vertex decode and transform into a queued command */
+    T_PREPARE, /* tev_prepare, less the texture decodes inside it */
+    T_DECODE,  /* decode_texture */
+    T_COPY,    /* enqueue_copy, less the PNG and the waits inside it */
+    T_PNG,     /* write_frame_png */
+    T_WAIT,    /* gxr_flush: the producer waiting for the workers to catch up */
+    T_RASTER,  /* draw_command on the producer, when there are no workers */
+    T_COUNT
+} GxrPhase;
+
+extern uint64_t g_gxr_ticks[T_COUNT]; /* charged by the switch below */
+extern uint64_t g_gxr_phase_last;     /* when the producer entered its current phase */
+extern int g_gxr_phase;               /* which phase that is; read by the sampler */
+extern int g_gxr_tsc;                 /* -1 undecided, 1 the TSC is usable, 0 use QPC */
+
+void gxr_timing_init(void);         /* decide the clock and fix the origin */
+void gxr_timing_finish(void);       /* fix the tick rate; gxr_report calls it */
+uint64_t gxr_qpc(void);             /* QueryPerformanceCounter, raw ticks */
+double gxr_seconds(uint64_t ticks); /* meaningful once gxr_timing_finish has run */
+double gxr_producer_span(void);     /* seconds the buckets above partition */
+double gxr_clock(void);             /* QueryPerformanceCounter as seconds */
+
+#ifdef _WIN32
+#include <intrin.h>
+#endif
+
+/* About 7 ns a read against QueryPerformanceCounter's 17, which matters
+ * because the worker loop reads it twice per queued command and a long run
+ * queues millions of them. Only where the counter is invariant (CPUID
+ * 80000007 EDX bit 8 says it runs at a constant rate across cores and power
+ * states); otherwise QPC, whose 100 ns step quantises one command's
+ * busy/idle split but not their sum, since the endpoints telescope. Not a
+ * serializing instruction, so an out-of-order core can move it by a few
+ * instructions: noise over regions of 100 ns and up, and nothing here
+ * measures anything shorter. */
+static inline uint64_t gxr_ticks(void)
+{
+#ifdef _WIN32
+    if (g_gxr_tsc > 0) return __rdtsc();
+    return gxr_qpc();
+#else
+    return 0; /* no clock off Windows; gxr_report says so rather than print zeros */
+#endif
+}
+
+/* Switch to phase p and return the phase left, so a caller can put it back. */
+static inline int gxr_phase(int p)
+{
+    int old = g_gxr_phase;
+    uint64_t n;
+    if (g_gxr_tsc < 0) gxr_timing_init();
+    n = gxr_ticks();
+    /* A thread moved to a core whose counter is behind reads backwards.
+     * Charge nothing rather than an interval the width of the wrap. */
+    if (n > g_gxr_phase_last) g_gxr_ticks[old] += n - g_gxr_phase_last;
+    g_gxr_phase_last = n;
+    g_gxr_phase = p;
+    return old;
+}
+
+#define TIMED(which, stmt) do { int _ph = gxr_phase(which); stmt; gxr_phase(_ph); } while (0)

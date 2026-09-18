@@ -10,6 +10,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "gxr.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,10 @@ void gx_set_frame_limit(unsigned frames);
 unsigned gx_frame_count(void);
 void gxr_draw_every_frame(void);
 int irq_in_handler(void);
+void hle_clock_start(void);
+/* Set while gx.c is inside the command-stream parse. The sampler reads it
+ * because a clock pair there would cost more than the parse. */
+extern int g_gx_parsing;
 
 /* A loop that never touches hardware never trips the MMIO spin detector, so
  * a second thread waits SOA_WATCHDOG seconds without a video frame and then
@@ -48,64 +53,440 @@ int irq_in_handler(void);
 #include <windows.h>
 static CpuState* g_state;
 
-/* Sample the guest's block address every millisecond while waiting, so the
- * report is a profile of what the guest spent its time in, not one snapshot. */
-#define SAMPLES 8192
-static uint32_t g_samples[SAMPLES];
+/* ---- naming a block address ---------------------------------------------
+ *
+ * A sample is the address of a basic block, not of a function: cpu.h says so,
+ * and the recompiler stores it at every label. config/functions.tsv is the
+ * inventory tools/ builds -- sorted by address, with each function's size --
+ * so a block resolves to the function containing it by binary search on
+ * containment. Equality would miss every block but the first of each
+ * function, which is what made the old profile a list of addresses.
+ *
+ * Read once, at the report, on the reporting thread: 320 KB and a sort of
+ * 7,144 rows at exit, and nothing in any hot path touches it. It is the first
+ * file the binary opens out of config/, so a run started from anywhere but
+ * the repository root will not find it -- the header below says which file it
+ * used and how many rows it got, so a table of bare hex reads as "no
+ * inventory here" rather than as "these functions have no names". Most rows
+ * in that file are still fn_XXXXXXXX, which the header also says, for the
+ * same reason.
+ */
+typedef struct {
+    uint32_t addr, size;
+    const char* name;
+} Sym;
+static Sym* g_syms;
+static unsigned g_nsyms;
+static char* g_symtext;
+static char g_sympath[512];
+static int g_sym_tried;
 
-static int cmp_desc(const void* a, const void* b)
+static int sym_cmp(const void* a, const void* b)
 {
-    const uint32_t* x = (const uint32_t*)a;
-    const uint32_t* y = (const uint32_t*)b;
-    return x[1] < y[1] ? 1 : x[1] > y[1] ? -1 : 0;
+    uint32_t x = ((const Sym*)a)->addr, y = ((const Sym*)b)->addr;
+    return x < y ? -1 : x > y ? 1 : 0;
 }
 
-static void profile_report(unsigned n)
+static void sym_load(void)
 {
-    static uint32_t hist[SAMPLES][2]; /* addr, count */
-    unsigned i, j, k = 0, shown;
-    for (i = 0; i < n; i++) {
-        for (j = 0; j < k; j++)
-            if (hist[j][0] == g_samples[i]) { hist[j][1]++; break; }
-        if (j == k) { hist[k][0] = g_samples[i]; hist[k][1] = 1; k++; }
+    const char* env = getenv("SOA_SYMBOLS");
+    FILE* f;
+    long len;
+    size_t got, lines = 0, i;
+    char* line;
+    int first = 1;
+    if (g_sym_tried) return;
+    g_sym_tried = 1;
+    snprintf(g_sympath, sizeof g_sympath, "%s", env && *env ? env : "config/functions.tsv");
+    f = fopen(g_sympath, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (len <= 0) { fclose(f); return; }
+    g_symtext = (char*)malloc((size_t)len + 1);
+    if (!g_symtext) { fclose(f); return; }
+    got = fread(g_symtext, 1, (size_t)len, f);
+    fclose(f);
+    g_symtext[got] = 0;
+    for (i = 0; i < got; i++)
+        if (g_symtext[i] == '\n') lines++;
+    g_syms = (Sym*)malloc(sizeof(Sym) * (lines + 1));
+    if (!g_syms) { free(g_symtext); g_symtext = NULL; return; }
+    /* address, size, name, then six columns this does not need. The file is
+     * written with CRLF; the name ends at the tab after it either way. */
+    for (line = g_symtext; line && *line;) {
+        char* eol = strchr(line, '\n');
+        if (eol) *eol = 0;
+        if (first) first = 0; /* the header row */
+        else {
+            char* t1 = strchr(line, '\t');
+            char* t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+            char* t3 = t2 ? strchr(t2 + 1, '\t') : NULL;
+            if (t3) {
+                Sym* e = &g_syms[g_nsyms];
+                *t1 = *t2 = *t3 = 0;
+                e->addr = (uint32_t)strtoul(line, NULL, 0);
+                e->size = (uint32_t)strtoul(t1 + 1, NULL, 10);
+                e->name = t2 + 1;
+                if (e->addr && e->size) g_nsyms++;
+            }
+        }
+        line = eol ? eol + 1 : NULL;
     }
-    qsort(hist, k, sizeof hist[0], cmp_desc);
-    fprintf(stderr, "[profile] %u samples over %u blocks; top (H = inside an interrupt handler):\n",
-            n, k);
-    shown = k < 16 ? k : 16;
-    for (i = 0; i < shown; i++)
-        fprintf(stderr, "  %5.1f%%  %08X %s\n", 100.0 * hist[i][1] / n, hist[i][0] & ~1u,
-                (hist[i][0] & 1u) ? "H" : "");
+    qsort(g_syms, g_nsyms, sizeof g_syms[0], sym_cmp);
+}
+
+/* The function containing pc, and where it starts. NULL when no row contains
+ * it -- the inventory has ten small gaps, and a run without config/ has none
+ * of it at all. */
+static const char* sym_name(uint32_t pc, uint32_t* start)
+{
+    unsigned lo = 0, hi;
+    /* Loaded before the bound is read, not after: reading g_nsyms first made
+     * the first lookup of every run search an empty table and answer NULL,
+     * which showed up as exactly one function in the report going unnamed. */
+    sym_load();
+    hi = g_nsyms;
+    if (!hi) return NULL;
+    while (lo < hi) {
+        unsigned mid = lo + (hi - lo) / 2;
+        if (g_syms[mid].addr <= pc) lo = mid + 1;
+        else hi = mid;
+    }
+    if (!lo) return NULL;
+    lo--;
+    if (pc - g_syms[lo].addr >= g_syms[lo].size) return NULL;
+    if (start) *start = g_syms[lo].addr;
+    return g_syms[lo].name;
+}
+
+/* " (name+0xNN)" for the bare addresses this file prints, or "" when there is
+ * no inventory to name them from. One static buffer: every caller is on a
+ * stop path, one at a time. */
+static const char* block_name(uint32_t pc)
+{
+    static char buf[128];
+    uint32_t start = 0;
+    const char* n = sym_name(pc, &start);
+    if (!n) return "";
+    if (pc == start) snprintf(buf, sizeof buf, " (%s)", n);
+    else snprintf(buf, sizeof buf, " (%s+0x%X)", n, pc - start);
+    return buf;
+}
+
+/* ---- the sampler ---------------------------------------------------------
+ *
+ * Its own thread, started before the guest and never stopped until the
+ * report. The old one was the watchdog's second job, zeroed its samples on
+ * every presented frame and only ever printed from the stall path, so a
+ * healthy run produced no profile at all and every saved one covered a stall.
+ * Splitting the two jobs is the whole fix: the watchdog still watches for a
+ * stall, this samples the run.
+ *
+ * Each tick reads three words the guest thread is writing -- its block
+ * address, the renderer phase, and the parse marker -- and charges the wall
+ * interval since the previous tick to whichever of them applies, phase first,
+ * then the parse, then the block. That ordering is what makes the buckets
+ * disjoint: a sample belongs to a renderer phase or to a guest function,
+ * never to both. The reads are plain aligned loads with no coherence between
+ * them; at a millisecond and a half apart the window in which they can
+ * disagree is nanoseconds, which is worth one sentence rather than a lock
+ * that would change what is being measured.
+ *
+ * Weighted by that interval rather than counted, because the pacer is jittery
+ * by design: counting would over-represent whatever happens to be running
+ * when the timer fires early. The weights are seconds, which is also what
+ * makes this table comparable with the renderer's timers.
+ *
+ * What it cannot tell you: anything shorter than its period. It answers "what
+ * share of the thread went where" over a run, never "how long did one frame's
+ * prepare take" -- the timers in gxr.c answer that. And it samples the guest
+ * thread only, so the workers are absent from it by construction and measured
+ * by the busy/idle pair in gxr.c instead.
+ */
+#define PROF_SLOTS 65536          /* a count per distinct block; a run of any length fits */
+#define PROF_PERIOD_100NS 14000   /* 1.4 ms, which is what a high-resolution timer delivers */
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+static uint32_t g_prof_key[PROF_SLOTS]; /* block address, bit 0 set inside a handler */
+static uint64_t g_prof_tk[PROF_SLOTS];  /* performance-counter ticks charged to it */
+static uint64_t g_prof_phase[T_COUNT];
+static uint64_t g_prof_parse;   /* inside gx.c's command-stream parse */
+static uint64_t g_prof_noblock; /* before the guest ran a block at all */
+static uint64_t g_prof_lost;    /* the table filled: more distinct blocks than slots */
+static uint64_t g_prof_samples, g_prof_span;
+static int g_prof_on;
+/* Enough rows for the plan's top ten and a little context. The report is
+ * printed at the end of every run and is already long, so the rest go into
+ * one line that says how much they came to; SOA_PROFILE=N asks for N. */
+static int g_prof_rows = 12;
+static volatile long g_prof_stop, g_prof_stopped;
+
+static void prof_add(uint32_t key, uint64_t dt)
+{
+    unsigned h = (unsigned)((key * 2654435761u) >> 16) & (PROF_SLOTS - 1), i;
+    /* The probe is bounded rather than allowed to walk the whole table: a run
+     * with more distinct blocks than this has room for would otherwise turn
+     * every sample into a scan of 65,536 slots, on a thread that wakes 700
+     * times a second, and the profiler would start showing up in the program
+     * it is measuring. Sixty-four is far past what a half-full table needs,
+     * and what falls off the end is counted and named in the report rather
+     * than dropped. */
+    for (i = 0; i < 64; i++) {
+        unsigned k = (h + i) & (PROF_SLOTS - 1);
+        if (g_prof_key[k] == key) { g_prof_tk[k] += dt; return; }
+        if (!g_prof_key[k]) { g_prof_key[k] = key; g_prof_tk[k] = dt; return; }
+    }
+    g_prof_lost += dt;
+}
+
+static unsigned __stdcall sampler(void* arg)
+{
+    HANDLE timer = (HANDLE)arg;
+    LARGE_INTEGER prev, now;
+    uint32_t rnd = 0x9E3779B9u;
+    QueryPerformanceCounter(&prev);
+    while (!g_prof_stop) {
+        LARGE_INTEGER due;
+        uint64_t dt;
+        uint32_t pc;
+        int ph;
+        /* Twenty per cent of jitter on purpose. A fixed period against a
+         * 60 Hz retrace and a 30 Hz present can lock onto one phase of the
+         * frame and systematically over-count whatever runs there -- and two
+         * runs would then agree with each other and with nothing else, which
+         * is the one failure the "same top ten twice" check cannot see. */
+        rnd ^= rnd << 13;
+        rnd ^= rnd >> 17;
+        rnd ^= rnd << 5;
+        if (timer) {
+            due.QuadPart = -(LONGLONG)(PROF_PERIOD_100NS * 4 / 5 + rnd % (PROF_PERIOD_100NS * 2 / 5 + 1));
+            if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) WaitForSingleObject(timer, 1000);
+            else Sleep(1);
+        } else Sleep(1); /* ~15.6 ms, so about a twelfth of the samples */
+        QueryPerformanceCounter(&now);
+        dt = (uint64_t)(now.QuadPart - prev.QuadPart);
+        prev = now;
+        g_prof_samples++;
+        g_prof_span += dt;
+        ph = g_gxr_phase;
+        if (ph > T_HOST && ph < T_COUNT) { g_prof_phase[ph] += dt; continue; }
+        if (g_gx_parsing) { g_prof_parse += dt; continue; }
+        pc = g_state ? g_state->pc : 0u;
+        if (!pc) { g_prof_noblock += dt; continue; }
+        /* Block addresses are 4-aligned; bit 0 tags samples taken in a handler. */
+        prof_add((pc & ~1u) | (irq_in_handler() ? 1u : 0u), dt);
+    }
+    g_prof_stopped = 1;
+    return 0;
+}
+
+static void profile_start(CpuState* s)
+{
+    const char* env = getenv("SOA_PROFILE");
+    HANDLE timer;
+    uintptr_t h;
+    g_state = s;
+    if (env) {
+        int n = atoi(env);
+        if (!n) return; /* SOA_PROFILE=0: one fewer thread on the machine */
+        if (n > 1) g_prof_rows = n;
+    }
+    /* A high-resolution waitable timer delivers about 1.4 ms here where
+     * Sleep(1) delivers 15.9, which is eleven times the samples -- and unlike
+     * timeBeginPeriod it does not raise the timer resolution for the whole
+     * process. That would change the scheduling quantum the renderer's
+     * Sleep(0) backoff rides on, and that backoff is one of the things being
+     * measured. Older Windows refuses the flag; then a plain timer, and
+     * failing that Sleep(1) and a twelfth of the resolution. */
+    timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (!timer) timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+    h = _beginthreadex(NULL, 0, sampler, timer, 0, NULL);
+    if (!h) {
+        fprintf(stderr, "[profile] cannot start the sampler thread; this run has no profile\n");
+        if (timer) CloseHandle(timer);
+        return;
+    }
+    CloseHandle((HANDLE)h);
+    g_prof_on = 1;
+}
+
+typedef struct {
+    uint32_t key; /* function start, bit 0 set inside a handler; 0 for a named bucket */
+    const char* name;
+    uint64_t tk;
+} Row;
+
+static int row_key_cmp(const void* a, const void* b)
+{
+    uint32_t x = ((const Row*)a)->key, y = ((const Row*)b)->key;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/* Heaviest first, and a total order rather than only a ranking: qsort is not
+ * stable, so two rows the sort called equal could come out either way round,
+ * and "the same top ten twice" would then fail on a tie that was never a
+ * difference. */
+static int row_tk_cmp(const void* a, const void* b)
+{
+    const Row *p = (const Row*)a, *q = (const Row*)b;
+    if (p->tk != q->tk) return p->tk < q->tk ? 1 : -1;
+    if (p->key != q->key) return p->key < q->key ? -1 : 1;
+    if (!p->name || !q->name) return (p->name ? 0 : 1) - (q->name ? 0 : 1);
+    return strcmp(p->name, q->name);
+}
+
+/* Every phase gets a row whether or not it fired, so the vocabulary the
+ * report uses for the renderer is the same in the table and in the [gxr]
+ * lines above it. */
+static const char* const PHASE_NAME[T_COUNT] = {
+    "[host]", "[gxr] vertex setup", "[gxr] TEV setup", "[gxr] texture decode",
+    "[gxr] EFB copy", "[gxr] PNG write", "[gxr] waiting for the workers", "[gxr] rasterizing inline",
+};
+
+
+void profile_report(void)
+{
+    static Row rows[PROF_SLOTS + T_COUNT + 4];
+    unsigned n = 0, i, j, shown;
+    uint64_t total = 0, named = 0, printed = 0;
+    double hz, span;
+    LARGE_INTEGER f;
+    if (!g_prof_on) return;
+    /* Stop the one writer before reading its table, and bound the wait: a
+     * sampler that has wedged must not hold up an exit path. */
+    g_prof_stop = 1;
+    for (i = 0; i < 200 && !g_prof_stopped; i++) Sleep(1);
+    QueryPerformanceFrequency(&f);
+    hz = (double)f.QuadPart;
+    span = hz > 0.0 ? (double)g_prof_span / hz : 0.0;
+    if (!g_prof_samples || span <= 0.0) {
+        fprintf(stderr, "[profile] no samples\n");
+        return;
+    }
+    /* Fold each block onto the function containing it. Two blocks of one
+     * function ranked separately is what made the old table jitter between
+     * runs, and folding is also what lets a row carry a name at all. */
+    for (i = 0; i < PROF_SLOTS; i++) {
+        uint32_t pc, start;
+        const char* name;
+        if (!g_prof_key[i] || !g_prof_tk[i]) continue;
+        pc = g_prof_key[i] & ~1u;
+        start = pc;
+        name = sym_name(pc, &start);
+        rows[n].key = start | (g_prof_key[i] & 1u);
+        rows[n].name = name;
+        rows[n].tk = g_prof_tk[i];
+        if (name) named += g_prof_tk[i];
+        n++;
+    }
+    qsort(rows, n, sizeof rows[0], row_key_cmp);
+    for (i = 0, j = 0; i < n; i++) {
+        if (j && rows[j - 1].key == rows[i].key) rows[j - 1].tk += rows[i].tk;
+        else rows[j++] = rows[i];
+    }
+    n = j;
+    for (i = T_HOST + 1; i < T_COUNT; i++) {
+        if (!g_prof_phase[i]) continue;
+        rows[n].key = 0;
+        rows[n].name = PHASE_NAME[i];
+        rows[n].tk = g_prof_phase[i];
+        n++;
+    }
+    if (g_prof_parse) {
+        rows[n].key = 0;
+        rows[n].name = "[gx] command-stream parse";
+        rows[n++].tk = g_prof_parse;
+    }
+    if (g_prof_noblock) {
+        rows[n].key = 0;
+        rows[n].name = "[boot] before the guest's first block";
+        rows[n++].tk = g_prof_noblock;
+    }
+    if (g_prof_lost) {
+        rows[n].key = 0;
+        rows[n].name = "[profile] past the sample table's reach";
+        rows[n++].tk = g_prof_lost;
+    }
+    for (i = 0; i < n; i++) total += rows[i].tk;
+    qsort(rows, n, sizeof rows[0], row_tk_cmp);
+    fprintf(stderr,
+            "[profile] %llu samples at %.0f Hz over %.1fs of wall clock, each weighted by the "
+            "interval it covers; %u entries, %.0f%% of the time named from %s (%u rows, most of "
+            "them still fn_XXXXXXXX). H = in an interrupt handler.\n",
+            (unsigned long long)g_prof_samples, (double)g_prof_samples / span, span, n,
+            total ? 100.0 * named / total : 0.0, g_nsyms ? g_sympath : "no symbol file (run from the repository root, or set SOA_SYMBOLS)",
+            g_nsyms);
+    shown = n < (unsigned)g_prof_rows ? n : (unsigned)g_prof_rows;
+    for (i = 0; i < shown; i++) {
+        double pct = total ? 100.0 * rows[i].tk / total : 0.0;
+        printed += rows[i].tk;
+        if (!rows[i].key) fprintf(stderr, "  %5.1f%%           %s\n", pct, rows[i].name);
+        else if (rows[i].name)
+            fprintf(stderr, "  %5.1f%%  %08X %s%s\n", pct, rows[i].key & ~1u, rows[i].name,
+                    (rows[i].key & 1u) ? " H" : "");
+        else
+            fprintf(stderr, "  %5.1f%%  %08X (no row in the inventory covers it)%s\n", pct,
+                    rows[i].key & ~1u, (rows[i].key & 1u) ? " H" : "");
+    }
+    if (n > shown)
+        fprintf(stderr, "  %5.1f%%           the other %u entries\n",
+                total ? 100.0 * (total - printed) / total : 0.0, n - shown);
+    /* Two independent measurements of the same seconds, printed side by side
+     * rather than reconciled in private. They disagree by sampling error and
+     * by anything this does not know about -- a phase entered on a path with
+     * no boundary, a clock miscalibrated -- so a gap much wider than the
+     * sampling error is a defect in one of them, and the only way to see it
+     * is to print it. */
+    gxr_timing_finish();
+    if (gxr_producer_span() > 0.0) {
+        int worst = 0;
+        double gap = -1.0;
+        for (i = T_HOST + 1; i < T_COUNT; i++) {
+            double d = gxr_seconds(g_gxr_ticks[i]) - (double)g_prof_phase[i] / hz;
+            if (d < 0.0) d = -d;
+            if (d > gap) { gap = d; worst = (int)i; }
+        }
+        fprintf(stderr, "[profile] sampler against timers, widest of the %d renderer phases: %s "
+                        "%.2fs timed, %.2fs sampled, %.1f%% of the run apart\n",
+                T_COUNT - 1, PHASE_NAME[worst], gxr_seconds(g_gxr_ticks[worst]),
+                (double)g_prof_phase[worst] / hz, 100.0 * gap / span);
+    }
 }
 
 void guest_backtrace(CpuState* s, uint32_t sp);
 static unsigned __stdcall watchdog(void* arg)
 {
     unsigned secs = (unsigned)(uintptr_t)arg;
-    unsigned n = 0, frames = gx_frame_count();
+    unsigned frames = gx_frame_count();
     ULONGLONG t0 = GetTickCount64();
-    /* Sleep(1) is really ~15 ms at the default timer resolution, so pace the
+    /* Watching for a stall is the whole of this thread's job now. It used to
+     * sample as well, and zero its samples on every presented frame, which is
+     * why the only profile it could ever print was of a stall. The sampler
+     * above runs the whole time instead.
+     *
+     * Sleep(1) is really ~15 ms at the default timer resolution, so pace the
      * wait by the clock rather than by counting sleeps. */
     for (;;) {
         unsigned now;
         Sleep(1);
-        /* Block addresses are 4-aligned; bit 0 tags samples taken in a handler. */
-        if (n < SAMPLES) g_samples[n++] = g_state->pc | (irq_in_handler() ? 1u : 0u);
         /* Every frame presented restarts the clock, so the timeout means what
-         * the message says -- nothing happened for this long -- and the
-         * profile below covers the stall rather than the whole run. A boot
-         * that never reaches its first frame still reports, on time. */
+         * the message says -- nothing happened for this long. A boot that
+         * never reaches its first frame still reports, on time. */
         now = gx_frame_count();
-        if (now != frames) { frames = now; n = 0; t0 = GetTickCount64(); continue; }
+        if (now != frames) { frames = now; t0 = GetTickCount64(); continue; }
         if (GetTickCount64() - t0 >= (ULONGLONG)secs * 1000u) break;
     }
     fprintf(stderr, "[watchdog] no video frame for %us (SOA_WATCHDOG=0 disables it, SOA_WATCHDOG=s "
-                    "changes the timeout); %u frames so far, last block %08X\n", secs, frames, g_state->pc);
+                    "changes the timeout); %u frames so far, last block %08X%s\n", secs, frames,
+            g_state->pc, block_name(g_state->pc));
     hle_dump(g_state, g_state->pc);
     fprintf(stderr, "  backtrace from r1:");
     guest_backtrace(g_state, g_state->gpr[1]);
-    profile_report(n);
-    hle_report();
+    hle_report(); /* which prints the profile, on this path and on every other */
     _exit(5);
     return 0;
 }
@@ -146,6 +527,10 @@ void watchdog_fallback(void)
 #else
 static unsigned start_watchdog(CpuState* s, int windowed) { (void)s; (void)windowed; return 0; }
 void watchdog_fallback(void) {}
+/* No sampler off Windows: there is no worker pool there either, and the
+ * report says nothing rather than print an empty table. */
+static void profile_start(CpuState* s) { (void)s; }
+void profile_report(void) {}
 #endif
 
 /* ---- the MEM1 image, and the 8 MB of it that is not RAM ------------------
@@ -208,8 +593,9 @@ static LONG CALLBACK mem_guard(EXCEPTION_POINTERS* ep)
                 != NULL;
     if (!InterlockedExchange(&reported, 1)) {
         CpuState* s = g_mem_state;
-        char who[64];
-        if (guest) snprintf(who, sizeof who, "from block %08X", s ? s->pc : 0u);
+        char who[192];
+        if (guest) snprintf(who, sizeof who, "from block %08X%s", s ? s->pc : 0u,
+                            block_name(s ? s->pc : 0u));
         else snprintf(who, sizeof who, "on a runtime thread, not the guest's");
         /* Reported in the cached window, because the mask has already thrown
          * away which of the three windows the guest used, and as the address
@@ -441,6 +827,7 @@ static void usage(void)
             "  SOA_WATCHDOG=s   report and stop after s seconds with no frame (default 20 headless,\n"
             "                   off when a window is open; 0 disables it)\n"
             "  SOA_MMIO=1       log the first few accesses of every hardware register\n"
+            "  SOA_PROFILE=n    0 turns off the end-of-run sampling profile; n>1 shows n rows\n"
             "  SOA_PAD=f:btns   scripted controller, e.g. 1700:start (implies no window)\n"
             "  SOA_MEMPOKE=a,b  store a word at each guest address before boot; an address past the\n"
             "                   console's 24 MB, e.g. 0x81800000, fires the MEM1 tripwire\n"
@@ -472,6 +859,9 @@ int main(int argc, char** argv)
         }
     }
 
+    /* Before anything else this process does, so that "wall seconds" in the
+     * report means the run and not the part of it that asked first. */
+    hle_clock_start();
     s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
     mem_poke(&s);
@@ -558,6 +948,7 @@ int main(int argc, char** argv)
         /* The watchdog has to know about the window, so decide the window
          * first; window_open() cannot answer yet, the UI thread has not run. */
         secs = start_watchdog(&s, want);
+        profile_start(&s);
         print_mode(want, rendering, scripted, frames, snap, secs);
         if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
     }

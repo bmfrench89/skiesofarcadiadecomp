@@ -21,19 +21,88 @@
 #include <sys/stat.h>
 #endif
 
-double g_gxr_time[T_COUNT];
-double gxr_clock(void)
+uint64_t g_gxr_ticks[T_COUNT];
+uint64_t g_gxr_phase_last;
+int g_gxr_phase = T_HOST;
+int g_gxr_tsc = -1;
+
+static double qpc_hz(void)
 {
 #ifdef _WIN32
     static double freq;
-    LARGE_INTEGER c;
     if (freq == 0.0) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = (double)f.QuadPart; }
-    QueryPerformanceCounter(&c);
-    return (double)c.QuadPart / freq;
+    return freq;
 #else
     return 0.0;
 #endif
 }
+
+uint64_t gxr_qpc(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return (uint64_t)c.QuadPart;
+#else
+    return 0;
+#endif
+}
+
+double gxr_clock(void)
+{
+    double hz = qpc_hz();
+    return hz > 0.0 ? (double)gxr_qpc() / hz : 0.0;
+}
+
+/* Both clocks are read together at the first phase boundary and again at the
+ * report, and the tick rate is the ratio of the two spans -- this run's own
+ * rate over this run's own duration, rather than a nominal frequency that a
+ * power state can make a lie. Four extra clock reads in a whole run. */
+static uint64_t g_cal_tick0, g_cal_qpc0, g_cal_span;
+static double g_ticks_hz, g_cal_seconds;
+
+void gxr_timing_init(void)
+{
+    if (g_gxr_tsc >= 0) return;
+#ifdef _WIN32
+    {
+        const char* env = getenv("SOA_TSC");
+        int r[4], ok = 0;
+        __cpuid(r, 0x80000000);
+        if ((unsigned)r[0] >= 0x80000007u) {
+            __cpuid(r, 0x80000007);
+            ok = (r[3] >> 8) & 1; /* invariant TSC */
+        }
+        if (env && !atoi(env)) ok = 0; /* SOA_TSC=0: measure with QueryPerformanceCounter */
+        g_gxr_tsc = ok;
+    }
+#else
+    g_gxr_tsc = 0;
+#endif
+    g_cal_qpc0 = gxr_qpc();
+    g_cal_tick0 = gxr_ticks();
+    g_gxr_phase_last = g_cal_tick0;
+}
+
+void gxr_timing_finish(void)
+{
+    uint64_t qpc1, tick1;
+    double hz = qpc_hz();
+    if (g_ticks_hz > 0.0 || g_gxr_tsc < 0) return; /* already fixed, or nothing was ever timed */
+    qpc1 = gxr_qpc();
+    tick1 = gxr_ticks();
+    g_cal_span = tick1 - g_cal_tick0;
+    g_cal_seconds = hz > 0.0 ? (double)(qpc1 - g_cal_qpc0) / hz : 0.0;
+    if (!g_gxr_tsc) g_ticks_hz = hz;
+    else if (g_cal_seconds > 0.001 && g_cal_span) g_ticks_hz = (double)g_cal_span / g_cal_seconds;
+}
+
+double gxr_seconds(uint64_t ticks) { return g_ticks_hz > 0.0 ? (double)ticks / g_ticks_hz : 0.0; }
+
+/* The span the buckets partition: the producer's wall time from the first
+ * phase boundary to the report, which is not the process's -- nothing is
+ * timed until the first draw. */
+double gxr_producer_span(void) { return g_cal_seconds; }
 
 uint8_t g_efb[EFB_H][EFB_W][4];
 uint32_t g_efb_z[EFB_H][EFB_W];
@@ -52,12 +121,42 @@ static uint64_t g_copies_tex, g_copies_xfb, g_rej_bary;
 static int g_nthreads = 1;
 static __declspec(thread) int t_tid;
 /* Indexed by t_tid, which is 1..MAX_THREADS for a worker and 0 for the thread
- * that produces, so there are MAX_THREADS + 1 of each: at SOA_THREADS=16 the
- * last worker used to write one element past these. */
-static uint64_t g_pixels_t[MAX_THREADS + 1], g_rej_depth_t[MAX_THREADS + 1], g_rej_alpha_t[MAX_THREADS + 1];
-#define g_pixels g_pixels_t[t_tid]
-#define g_rej_depth g_rej_depth_t[t_tid]
-#define g_rej_alpha g_rej_alpha_t[t_tid]
+ * that produces, so there are MAX_THREADS + 1 of them: at SOA_THREADS=16 the
+ * last worker used to write one element past these.
+ *
+ * A cache line each. The three counters are touched once per shaded pixel and
+ * the two timers twice per queued command, so packed -- which is how the
+ * counters used to sit, three arrays of eight-byte elements, all eight
+ * workers inside two lines -- every increment is a line handed between cores.
+ * Measured on this machine with eight threads: 4.8 ns an increment packed
+ * against 0.8 ns a line apart, in a path that runs billions of times a run.
+ * The padding is not tidiness, and the timers had to be padded anyway. */
+typedef struct {
+    uint64_t pixels, rej_depth, rej_alpha;
+    uint64_t busy; /* ticks inside draw_command */
+    uint64_t idle; /* ticks spinning for the next command */
+    uint64_t last; /* when this thread's current stretch began */
+    uint64_t pad[2];
+} ThreadState;
+static __declspec(align(64)) ThreadState g_ts[MAX_THREADS + 1];
+/* The alignment above only puts the array on a line; what puts each element
+ * on its own is the size, and a field added without shrinking the padding
+ * would quietly undo the whole point of it. */
+_Static_assert(sizeof(ThreadState) == 64, "one worker's counters must be one cache line");
+static uint64_t g_pool_t0; /* when the worker pool came up: what busy + idle is measured against */
+#define g_pixels g_ts[t_tid].pixels
+#define g_rej_depth g_ts[t_tid].rej_depth
+#define g_rej_alpha g_ts[t_tid].rej_alpha
+
+/* Close this thread's open stretch and charge it. The clamp is the same one
+ * gxr_phase makes: a thread that moved to a core whose counter is behind
+ * reads backwards, and charging nothing beats charging a wrap. */
+static void charge(ThreadState* W, uint64_t* acc)
+{
+    uint64_t n = gxr_ticks();
+    if (n > W->last) *acc += n - W->last;
+    W->last = n;
+}
 static int g_cull_flip, g_debug;
 static int g_dbg_x = -1, g_dbg_y = -1; /* SOA_GXR_PIXEL=x,y: narrate every fragment landing on one pixel */
 static int g_debug_lights;
@@ -1241,11 +1340,24 @@ static DWORD WINAPI worker(LPVOID arg)
      * the spin below has one shared word in it. Zero because the pool is
      * created before the first command is published. */
     long long mine = 0;
+    ThreadState* W = &g_ts[id];
     t_tid = id;
+    /* Every worker's clock starts when the pool did, so busy + idle can be
+     * compared against one span for the whole pool. */
+    W->last = g_pool_t0;
     for (;;) {
         const DrawCmd* D;
         unsigned spins = 0;
-        while (mine >= g_published) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (mine >= g_published) {
+            /* Charging the wait as it goes rather than only when it ends is
+             * what lets a pool parked for twenty seconds under the watchdog
+             * still add up to the span the report divides by: the backoff
+             * bounds how much of an idle worker's time is unaccounted when
+             * the report reads these. One clock read per 4000 spins. */
+            if (++spins > 4000) { charge(W, &W->idle); Sleep(0); spins = 0; }
+            else YieldProcessor();
+        }
+        charge(W, &W->idle);
         /* The producer fills a slot before it publishes the count, and this
          * machine does not reorder two loads, so the command is there. The
          * barrier is against the compiler alone, stopping it from reading the
@@ -1257,6 +1369,11 @@ static DWORD WINAPI worker(LPVOID arg)
                       mine & QMASK, D->seq, mine, QUEUE_CAP);
         else
             draw_command(D);
+        /* The two readings bracketing the command are inside what they
+         * measure, so a command this worker owns no rows of is charged their
+         * cost -- about 14 ns against a command that does nothing. The report
+         * says so rather than hide it. */
+        charge(W, &W->busy);
         mine++;
         InterlockedExchange64(&g_ran[id], mine);
     }
@@ -1267,6 +1384,10 @@ static void workers_start(void)
 {
     const char* env = getenv("SOA_THREADS");
     int n = env ? atoi(env) : 0, i;
+    /* Before the threads, so every one of them starts its busy/idle clock at
+     * the same reading the report measures the pool's span from. */
+    if (g_gxr_tsc < 0) gxr_timing_init();
+    g_pool_t0 = gxr_ticks();
     g_queue = (DrawCmd*)malloc(sizeof(DrawCmd) * QUEUE_CAP);
     g_arena = (uint8_t*)malloc(ARENA_BYTES);
 #ifdef _WIN32
@@ -1303,10 +1424,16 @@ void gxr_flush(void)
 {
     long long target;
     unsigned spins = 0;
-    int i;
+    int i, prev;
     if (!g_queue) return;
     /* Read once: this thread is the only writer, so the target cannot move. */
     target = g_published;
+    /* The wait is the producer's idle, and it used to be charged to whichever
+     * of draw, prepare and copies happened to enclose the call -- and to
+     * nothing at all from GXDrawDone. It is its own bucket now, and it is the
+     * number that says whether the guest thread or the rasterizer is the one
+     * holding the run up. */
+    prev = gxr_phase(T_WAIT);
     /* Backing off matters here for the reason it does in the worker's own
      * spin, which this copies: at SOA_THREADS near the core count the producer
      * and the workers compete for the same cores, and a bare YieldProcessor()
@@ -1316,6 +1443,7 @@ void gxr_flush(void)
      * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
         while (g_ran[i] < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+    gxr_phase(prev);
     g_drained = target;
     g_flushes++;
     g_arena_used = 0;
@@ -1327,7 +1455,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
 
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize)
 {
-    TIMED(T_DRAW, gxr_draw_inner(s, op, count, verts, vsize));
+    TIMED(T_SETUP, gxr_draw_inner(s, op, count, verts, vsize));
 }
 
 static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize)
@@ -1406,7 +1534,9 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         InterlockedIncrement64(&g_published); /* publish: the workers pick it up */
     } else {
         t_tid = 1;
-        draw_command(D);
+        /* Without workers the rasterizer runs on the producer, so it needs a
+         * bucket of its own here or its time would be booked as vertex setup. */
+        TIMED(T_RASTER, draw_command(D));
         /* Run here and drained here, so the numbering still advances and the
          * arena is free again. */
         InterlockedIncrement64(&g_published);
@@ -1684,7 +1814,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         InterlockedIncrement64(&g_published);
     } else {
         t_tid = 1;
-        draw_command(D);
+        TIMED(T_RASTER, draw_command(D));
         InterlockedIncrement64(&g_published);
         g_drained = g_published;
         g_arena_used = 0;
@@ -1738,14 +1868,54 @@ int tex_graveyard_peak(void);
 
 void gxr_report(void)
 {
-    /* No flush: the watchdog thread reports while the main thread produces. */
+    /* No flush: the watchdog thread reports while the main thread produces,
+     * so every number below is read while its writer may still be moving it.
+     * Each one has a single writer and 64-bit alignment, so a read is a value
+     * and not a tear; what it is not is a consistent instant, and the
+     * workers' unaccounted share below is where that shows. */
     if (!gxr_enabled()) return;
-    fprintf(stderr, "[gxr] time: draw %.2fs (prepare %.2fs, decode %.2fs), copies %.2fs, png %.2fs\n",
-            g_gxr_time[T_DRAW], g_gxr_time[T_PREPARE], g_gxr_time[T_DECODE], g_gxr_time[T_COPY], g_gxr_time[T_PNG]);
+    gxr_timing_finish();
+    {
+        double span = gxr_producer_span(), rest;
+        uint64_t sum = 0;
+        int i;
+        for (i = 1; i < T_COUNT; i++) sum += g_gxr_ticks[i];
+        rest = span - gxr_seconds(sum);
+        if (rest < 0.0) rest = 0.0;
+        if (span <= 0.0)
+            fprintf(stderr, "[gxr] time: %s\n",
+                    g_gxr_tsc < 0 ? "nothing was drawn this run, so nothing was timed"
+                                  : "this build has no clock, so every phase timer reads zero");
+        else
+            fprintf(stderr,
+                    "[gxr] producer over %.2fs by the %s: setup %.2fs, prepare %.2fs, decode %.2fs, copy %.2fs, png %.2fs, wait %.2fs, raster %.2fs; the other %.2fs is guest code and the command-stream parse, which no clock can afford to separate and the profile below separates by sampling. These are disjoint, so they add up.\n",
+                    span, g_gxr_tsc ? "time-stamp counter" : "performance counter",
+                    gxr_seconds(g_gxr_ticks[T_SETUP]), gxr_seconds(g_gxr_ticks[T_PREPARE]),
+                    gxr_seconds(g_gxr_ticks[T_DECODE]), gxr_seconds(g_gxr_ticks[T_COPY]),
+                    gxr_seconds(g_gxr_ticks[T_PNG]), gxr_seconds(g_gxr_ticks[T_WAIT]),
+                    gxr_seconds(g_gxr_ticks[T_RASTER]), rest);
+    }
+    /* The identity the plan asks for: a worker is either running a command or
+     * spinning for one, so the two add up to the pool's span times the number
+     * of threads. What is left over is each thread's open stretch when this
+     * was printed, bounded by one command or one backoff -- so a run that
+     * reports more than a few percent has a worker stuck inside a command. */
+    if (g_workers > 0 && g_pool_t0 && gxr_producer_span() > 0.0) {
+        double pool = gxr_seconds(gxr_ticks() - g_pool_t0), busy = 0.0, idle = 0.0, thread_time;
+        int i;
+        for (i = 1; i <= g_workers; i++) {
+            busy += gxr_seconds(g_ts[i].busy);
+            idle += gxr_seconds(g_ts[i].idle);
+        }
+        thread_time = pool * g_workers;
+        fprintf(stderr, "[gxr] workers: %d threads, pool up %.2fs each = %.2fs of thread time; busy %.2fs + idle %.2fs = %.2fs, %.1f%% unaccounted\n",
+                g_workers, pool, thread_time, busy, idle, busy + idle,
+                thread_time > 0.0 ? 100.0 * (thread_time - busy - idle) / thread_time : 0.0);
+    }
     {
         uint64_t px = 0, rd = 0, ra = 0;
         int i;
-        for (i = 0; i <= MAX_THREADS; i++) { px += g_pixels_t[i]; rd += g_rej_depth_t[i]; ra += g_rej_alpha_t[i]; }
+        for (i = 0; i <= MAX_THREADS; i++) { px += g_ts[i].pixels; rd += g_ts[i].rej_depth; ra += g_ts[i].rej_alpha; }
     fprintf(stderr, "[gxr] %llu triangles, %llu lines, %llu points; %llu pixels shaded (%llu outside, %llu failed alpha, %llu failed depth); %llu clipped away; %llu bad vertex refs; %llu texture copies, %llu screen copies\n",
             (unsigned long long)g_tris, (unsigned long long)g_lines, (unsigned long long)g_points,
             (unsigned long long)px, (unsigned long long)g_rej_bary, (unsigned long long)ra, (unsigned long long)rd, (unsigned long long)g_clipped, (unsigned long long)g_verts_bad,

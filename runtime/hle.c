@@ -145,6 +145,17 @@ MMIO_WRITE(uint64_t, 64)
 
 void irq_report(void);
 void threads_report(void);
+unsigned gx_frame_count(void);
+uint64_t irq_retrace_count(void);
+/* Defined at the bottom of this file, with the clocks they read. */
+double hle_guest_seconds(void);
+double hle_wall_seconds(void);
+unsigned hle_speed(void);
+/* Defined in main.c, where the sampler lives. Called from here rather than
+ * from the watchdog so that every stop path prints a profile: the old one was
+ * reachable only from a stall, which is why no healthy run ever produced
+ * one. */
+void profile_report(void);
 
 void hle_report(void)
 {
@@ -171,6 +182,14 @@ void hle_report(void)
     if (reported) return;
     reported = 1;
 #endif
+    {
+        unsigned frames = gx_frame_count();
+        unsigned long long retraces = irq_retrace_count();
+        double guest = hle_guest_seconds(), wall = hle_wall_seconds();
+        fprintf(stderr, "[run] %u game frames, %llu VI retraces", frames, retraces);
+        if (frames) fprintf(stderr, " (%.2f per frame; the game's 30 fps cap wants 2.00)", (double)retraces / frames);
+        fprintf(stderr, "; %.1f guest seconds at SOA_SPEED=%u, %.1f wall seconds\n", guest, hle_speed(), wall);
+    }
     irq_report();
     threads_report();
     for (i = 0; i < MMIO_SLOTS; i++) {
@@ -192,6 +211,7 @@ void hle_report(void)
             g_hits[best_i] = 0;
         }
     }
+    profile_report();
     fflush(stderr);
     done = 1; /* release any other stop path waiting above */
 }
@@ -234,21 +254,103 @@ void guest_syscall(CpuState* s, uint32_t pc)
 /* The Gekko timebase ticks at a quarter of the 162 MHz bus clock. */
 #define TB_HZ 40500000ull
 
+/* SOA_SPEED=n: guest time runs n times faster than the wall clock. Read here
+ * rather than kept, so the report can print it whether or not the guest ever
+ * got as far as reading the timebase. */
+unsigned hle_speed(void)
+{
+    const char* env = getenv("SOA_SPEED");
+    return env && atoi(env) > 0 ? (unsigned)atoi(env) : 1u;
+}
+
+static uint64_t g_tb_origin;
+static int g_tb_started; /* the guest has read the timebase, so the origin is fixed */
+
 static uint64_t timebase(void)
 {
     struct timespec ts;
-    static uint64_t origin;
-    static unsigned speed; /* SOA_SPEED=n: guest time runs n times faster than the wall clock */
+    static unsigned speed = 1;
     uint64_t ns;
     timespec_get(&ts, TIME_UTC);
     ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-    if (!origin) {
-        const char* env = getenv("SOA_SPEED");
-        origin = ns;
-        speed = env && atoi(env) > 0 ? (unsigned)atoi(env) : 1u;
+    if (!g_tb_started) {
+        g_tb_started = 1;
+        g_tb_origin = ns;
+        speed = hle_speed();
     }
-    ns = (ns - origin) * speed;
+    ns = (ns - g_tb_origin) * speed;
     return ns / 1000000000ull * TB_HZ + ns % 1000000000ull * TB_HZ / 1000000000ull;
+}
+
+/* ---- the three clocks the report keeps apart ---------------------------
+ *
+ * Game frames are the guest's own output: the copies that present a picture.
+ * Guest seconds are the clock the game reads, and they are wall seconds times
+ * SOA_SPEED by construction, since the timebase above multiplies a real clock
+ * -- so the two are not independent evidence and the report does not offer
+ * them as though they were. The pair that is independent is frames against VI
+ * retraces, which is why they share the line: at the game's 30 fps cap that
+ * ratio wants to be 2.00, and how far above it a run sits is how many of its
+ * own deadlines the run missed.
+ *
+ * Wall seconds come from QueryPerformanceCounter and not from the timebase's
+ * own timespec_get(TIME_UTC), which is not monotonic: a system clock step
+ * would move it, and the whole point of the number is to be the one thing in
+ * the report that is not the guest's opinion.
+ */
+static uint64_t g_wall_origin;
+static int g_wall_started;
+
+static uint64_t wall_now(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return (uint64_t)c.QuadPart;
+#else
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
+}
+
+static double wall_hz(void)
+{
+#ifdef _WIN32
+    static double hz;
+    if (hz == 0.0) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        hz = (double)f.QuadPart;
+    }
+    return hz;
+#else
+    return 1e9;
+#endif
+}
+
+/* main() calls this once, before the guest starts, so that wall seconds mean
+ * the run and not whatever part of it happened to ask first. */
+void hle_clock_start(void)
+{
+    if (g_wall_started) return;
+    g_wall_started = 1;
+    g_wall_origin = wall_now();
+}
+
+double hle_wall_seconds(void)
+{
+    if (!g_wall_started) return 0.0;
+    return (double)(wall_now() - g_wall_origin) / wall_hz();
+}
+
+/* Zero until the guest has read the timebase at all, which OSInit does within
+ * the first milliseconds. A run that stopped before that has no guest clock,
+ * which is a different thing from a guest clock reading zero, and the report
+ * says which. */
+double hle_guest_seconds(void)
+{
+    return g_tb_started ? (double)timebase() / (double)TB_HZ : 0.0;
 }
 
 uint32_t guest_timebase_lo(CpuState* s) { (void)s; return (uint32_t)timebase(); }

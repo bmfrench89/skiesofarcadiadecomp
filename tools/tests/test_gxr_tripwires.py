@@ -260,7 +260,9 @@ def test_what_the_game_really_programs_stays_silent(output):
         for ln in output.splitlines()
         if ln.startswith("[gxr]")
         and not any(line in ln for _, line in CONDITIONS)
-        and not re.match(r"\[gxr\] (time|rasterizing|\d+ triangles|\d+ copies asked)", ln)
+        and not re.match(
+            r"\[gxr\] (time|producer|workers|rasterizing|\d+ triangles|\d+ copies asked)", ln
+        )
     ]
     assert not strays, "\n".join(strays)
 

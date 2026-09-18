@@ -189,21 +189,34 @@ the guest. The guard is Windows-only.
 all 23 captures warn not at all, and a store to 0x81800000 warns instead of
 corrupting the heap.
 
-**A4. Make the profile tell the truth** — *a day.*
-Every saved profile measures a different program: all 22 sit under
-`[watchdog] still running after Ns`, a message no longer in `runtime/`, and
-today's watchdog zeroes its samples on every presented frame
-(`main.c:98-99`) then `_exit(5)`s, so a healthy run produces no profile and
-the saved ones cover a stall. Nothing has ever sampled a worker: the sampler
-reads `g_state->pc`, the main guest thread. No item here cites those
-percentages any more. Rebuild it with per-worker busy and idle timers, one
-on `parse()`, disjoint buckets (`draw / prepare / decode` print as siblings
-though decode is inside prepare is inside draw), samples named through
-`config/functions.tsv`, an `s->pc` store in each `decomp_swap.c` adapter so
-a native swap stops being invisible, and wall time in the report.
-*Done:* busy plus idle within 5% of wall times threads, a named function
-table summing to 100%, the same top ten twice, and game frames, guest
-seconds and wall seconds reported separately.
+**A4. Make the profile tell the truth** — *done, and it changed what we think this port is.*
+The old profile could only ever describe a stall, sampled the guest thread
+alone at a rate that silently depended on whether sound was open, and
+accounted for under 4% of a windowed run. It is rebuilt: per-worker busy and
+idle timers, seven disjoint producer phases that telescope to the span by
+shape rather than arithmetic, a sampler weighted by the interval each sample
+covers, names resolved through `config/functions.tsv`, a program counter
+stored in each `decomp_swap.c` adapter so natively-swapped functions stop
+being charged to their callers, and game frames, guest seconds and wall
+seconds printed separately. It also cross-checks itself: the report prints
+the widest disagreement between the sampler and the independent timers, which
+on a 3,000-frame run is 0.0% of the run.
+
+*Measured, 3,000 frames rendered:* 103.8 wall seconds for 3,000 game frames,
+6,193 VI retraces, 2.06 retraces per frame against the 2.00 the game's 30 fps
+cap wants. **47.4% of the run is `SelectThread`, the OS idle loop**, and the
+eight rasterizer workers are busy 8.8 seconds out of 830 seconds of thread
+time. Two runs agree on the top ten.
+
+*What that means, and it is not what Track C assumed.* This port is not
+rasterizer-bound and not obviously compute-bound at all: it is running at the
+game's own frame cap and idling roughly half the time. Any item below that
+justifies itself by rasterizer cost needs re-reading against these numbers
+first, and the honest headline rate is 28.9 game frames per second of wall
+clock against a 30 fps cap.
+*Done:* busy plus idle within 5% of wall times threads (0.0% unaccounted), a
+named table (98% named), the same top ten twice, and frames, guest seconds
+and wall seconds reported separately. **Met.**
 
 ---
 
