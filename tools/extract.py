@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from soa.disc import Disc  # noqa: E402
+from soa.dump import ProjectError, verify  # noqa: E402
 from soa.rvz import RVZ  # noqa: E402
 
 EXPECTED_GAME_ID = "GEAE8P"
@@ -32,6 +33,31 @@ class RawImage:
         return self.f.read(length)
 
 
+def check_build(out: Path, force: bool = False) -> int:
+    """Is what we just unpacked the build `config/` describes?
+
+    Asked here because this is the moment the answer first exists and this is
+    the one command everybody runs; `tools/checkdump.py` asks the same
+    question later, when an `extracted/` has been sitting around and nobody
+    remembers which dump made it. A mismatch is fatal without --force: every
+    address in `config/` belongs to one build, and nothing downstream of here
+    -- the recompiler, dtk, the decompilation match, the port itself -- looks
+    at the executable's identity again.
+    """
+    try:
+        verdict = verify(dol=out / "sys" / "main.dol")
+    except ProjectError as exc:
+        # A config.yml this cannot read is not the user's fault and must not
+        # throw away an extraction that otherwise went fine.
+        print(f"warning: cannot check the build: {exc}", file=sys.stderr)
+        return 0
+    print(verdict.report(), file=sys.stdout if verdict.ok else sys.stderr)
+    if verdict.ok or force:
+        return 0
+    print("(--force accepts it anyway.)", file=sys.stderr)
+    return 1
+
+
 def open_image(path: Path):
     if path.suffix.lower() == ".rvz":
         return RVZ(str(path))
@@ -42,7 +68,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("image", type=Path, help="disc image (.rvz, .iso, .gcm)")
     ap.add_argument("--out", type=Path, default=Path("extracted"))
-    ap.add_argument("--force", action="store_true", help="allow a non-GEAE8P disc")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="allow a non-GEAE8P disc, and report rather than refuse an unexpected executable",
+    )
     ap.add_argument(
         "--iso",
         action="store_true",
@@ -108,7 +138,7 @@ def main() -> int:
                 done += n
         print(f"disc.iso: {done:,} bytes in {time.time() - started:.1f}s")
     print(f"system files in {args.out / 'sys'}/ (boot.bin, bi2.bin, main.dol, fst.bin)")
-    return 0
+    return check_build(args.out, force=args.force)
 
 
 if __name__ == "__main__":

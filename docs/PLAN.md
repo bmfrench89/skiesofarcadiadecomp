@@ -785,7 +785,10 @@ There is no LICENSE, COPYING or NOTICE anywhere in the tree, so nobody can
 legally fork or contribute. Then `README.md:48` says `set SOA_RENDER=1`,
 which in PowerShell silently creates a variable named `SOA_RENDER=1` and
 leaves the environment untouched, so the documented command gives a headless
-run the watchdog stops after 20 seconds — `main.c:277` prints the right form
+run that **nothing stops at all** — the watchdog fires only when no frame is
+presented, and frames keep being counted whether or not anything is drawn, so
+it sits there invisible and undriveable until Ctrl-C (measured: still running
+after 90 seconds) — `main.c:277` prints the right form
 but only under `--help`. And nothing checks the dump is the build `config/`
 describes, though `config.yml:6` already records the DOL sha1 for dtk.
 *Done:* LICENSE exists and README links it, the run command works in a fresh

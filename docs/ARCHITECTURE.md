@@ -1,0 +1,507 @@
+# Architecture
+
+How this port is put together, and where to put a breakpoint.
+
+[SPEC.md](SPEC.md) says what was decided and why; [ROADMAP.md](ROADMAP.md)
+and [PLAN.md](PLAN.md) say what is done and what is next. This page says
+what the code actually does today, so that reading one frame's path here
+saves reading twenty thousand lines. Everything below was checked against
+the tree; where the built thing differs from the plan, the last section
+says so.
+
+---
+
+## The three kinds of code in one process
+
+**Translated guest code** — `gen/`, a build artifact, never committed.
+`tools/recompile.py` turns every one of the 7,144 functions in the game's
+executable into a C function taking one argument: `void fn_800A1234(CpuState*
+s)`. Guest registers live in that `CpuState` (`runtime/cpu.h`); guest memory
+is one byte image kept in the console's big-endian order, and every load and
+store swaps as it goes (`mem_r32`, `mem_w32`). A call the recompiler can
+resolve is a direct C call; anything else goes through the generated
+`dispatch(s, addr)` switch (`tools/soa/recomp/emit.py`, `dispatch_c`).
+
+**The runtime** — `runtime/`, 22 C files compiled with MSVC at `/std:c17
+/fp:strict`. This is the console: the memory window, the device models the
+guest programs through memory-mapped registers, the software graphics
+pipeline, the AX mixer, the window, and the diagnostics that make a wrong
+run legible.
+
+**Hand-decompiled C** — `src/`, compiled twice. Once with the original
+Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
+with the executable; once with MSVC, renamed `dc_*`, so it can actually run
+in the port. `config/hle.txt` decides which functions the running port uses
+(19 entries today, 12 of them decompiled routines).
+
+**Threads in the process.** One guest CPU thread, which owns every device
+model and parses the graphics command stream; that thread's guest threads
+live on host fibers underneath it. Then the rasterizer's worker pool
+(`SOA_THREADS`, default half the CPUs, capped at 16), the UI thread when a
+window is open, the watchdog, and the profiler's sampler.
+
+---
+
+## One video frame, end to end
+
+### 1. The guest writes to the graphics pipe
+
+Translated code has no idea graphics exist. A `stw` becomes
+`mem_w32(s, ea, v)`, a `stfs` becomes `mem_wf32` (which is `mem_w32` with a
+`memcpy` in front of it), and a quantized `psq_st` goes through
+`psq_store` into the same `mem_w8`/`mem_w16`/`mem_wf32`. There is no special
+case anywhere in the emitter for the gather pipe — grep
+`tools/soa/recomp/emit.py` for `0xCC008000` and nothing comes back.
+
+`runtime/cpu.h` · `mem_w32` tests `is_mmio(ea)` (top byte `0xCC` or `0xE0`)
+and, nested inside that, `is_gather_pipe(ea)`
+(`(ea & 0xFFFFFF00) == 0xCC008000`). A pipe store calls `gx_pipe_write`; any
+other hardware store goes to `mmio_write32`; everything else — nearly every
+store the guest makes — pays one compare and writes to the image.
+
+### 2. Bytes become a command stream
+
+`runtime/gx.c` · `gx_pipe_write` appends the bytes big-endian to `g_pipe`,
+offers them to the frame capture (`cap_append`), and calls `pipe_flush`,
+which calls `parse`.
+
+`runtime/gx.c` · `parse` consumes whole commands and leaves a partial one
+for the next store:
+
+| Opcode | Meaning | What `parse` does |
+|---|---|---|
+| `0x08` | CP register | shadows it in `g_cp` |
+| `0x10` | XF registers | shadows a run into `g_xf` |
+| `0x20`/`0x28`/`0x30`/`0x38` | indexed XF load | reads the matrix out of guest memory through the CP array registers |
+| `0x40` | display list | recurses into guest memory with `in_display_list = 1` |
+| `0x61` | BP register | `load_bp` |
+| `0x80`–`0xBF` | draw | sizes the vertices and calls the renderer |
+
+Unknown bytes are reported once and resynchronised one byte at a time — the
+`unknown FIFO bytes` counter `tools/scenario.py check` fails a run on.
+
+### 3. Registers reach the renderer
+
+`runtime/gx.c` · `load_bp` shadows the BP register and forwards every write
+to `runtime/gxr.c` · `gxr_bp_written`, which routes the handful that need
+more than shadowing: `0xE0`–`0xE7` are TEV colour registers
+(`runtime/gxr_tev.c` · `tev_register_written`), `0x65` is a palette load
+(`tmem_load_tlut`), `0x52` is an EFB copy (step 9 below), and `0x45` with bit 1
+is `GXDrawDone`, which flushes the queue because the CPU is about to read
+what was drawn.
+
+### 4. A draw becomes vertices
+
+`runtime/gx.c` · `vertex_size` works out how many bytes one vertex occupies
+from the current vertex descriptor and format, and `gxr_draw` →
+`gxr_draw_inner` (`runtime/gxr.c`) takes it from there.
+
+`runtime/gxr.c` · `decode_vertex` reads each attribute according to the VCD
+(CP `0x50`/`0x60`) and the VAT (CP `0x70`/`0x80`/`0x90` + format index),
+following data inlined in the stream or indexing the arrays at CP
+`0xA0`/`0xB0` through guest memory (`attr_data`). An index that would leave
+MEM1 is counted as a bad vertex reference and dropped — the other counter
+the scenario checker fails on.
+
+### 5. Transform, lighting, texture coordinates
+
+`runtime/gxr.c` · `transform` is the XF block:
+
+- position through the matrix at `4 * posidx` (`mat_mul_3x4`);
+- normals through the matrices at XF `0x400`, renormalised;
+- projection from XF `0x1020`–`0x1026`, perspective or orthographic;
+- two colour channels through `light_channel` (XF `0x100E`+: ambient,
+  material, per-light diffuse and attenuation);
+- texture coordinate generation from XF `0x103F`/`0x1040`+, including the
+  dual-transform post matrices at XF `0x500` when XF `0x1012` asks for them.
+
+Out comes a `Vertex` (`runtime/gxr.h`) in clip space, with its screen
+position still unset.
+
+### 6. The draw is queued
+
+Still on the guest thread, `gxr_draw_inner`:
+
+- `runtime/gxr_tev.c` · `tev_prepare` resolves the combiner — stages,
+  input selectors, konst, swap tables, alpha compare — and decodes and
+  caches every texture the stages sample (`texture`, `decode_texture`);
+- `pixel_prepare` and `raster_prepare` snapshot blend, logic op, depth,
+  fog, the viewport and the scissor, so a later register write cannot
+  change a queued draw;
+- the vertices go into a shared arena and the `DrawCmd` into slot
+  `g_published & QMASK` of a 4,096-entry ring;
+- `InterlockedIncrement64(&g_published)` publishes it.
+
+Commands are *numbered*, never re-indexed. `g_published` has one writer (the
+producer) and `g_ran[i]` one writer (worker `i`), and none of them is ever
+reset, so a stale read is always too small and can only make a thread wait.
+With no workers the producer runs the command itself on the spot.
+
+### 7. Workers rasterize it
+
+`runtime/gxr.c` · `worker` spins on one shared word (`mine >= g_published`),
+backing off to `Sleep(0)` every 4,000 spins, then runs `draw_command`.
+
+`draw_command` expands quads, triangles, strips and fans into
+`emit_triangle`, which clips against the near, `w` and far planes
+(`clip_polygon` → `clip_against` → `clip_dist`), projects the survivors
+(`to_screen`) and calls `raster_triangle` on the resulting fan. Lines and
+points are drawn on one worker only.
+
+`runtime/gxr.c` · `raster_triangle` computes the signed area and culls,
+clamps the bounding box to the scissor, builds edge functions
+(`plane_of`), builds perspective-correct planes for depth, `1/w`, the two
+colours and the eight texture coordinates, then walks rows. **Row ownership
+is the parallelism**: worker *i* takes the rows where
+`y % nthreads == i - 1`, so per-pixel ordering within a row is preserved and
+no two workers touch the same pixel. Per texcoord, the level of detail is
+evaluated at both ends of the span (`span_lod`) and interpolated across it.
+
+### 8. Texturing, the combiner, depth and blend
+
+`runtime/gxr.c` · `shade` is one fragment:
+
+1. if PE_CONTROL `ztop` is set, the depth test runs *first*
+   (`depth_test`);
+2. `runtime/gxr_tev.c` · `tev_pixel` runs the stages. Each enabled stage
+   divides its texture coordinate by `q`, samples
+   (`sample` → `sample_level`: wrap or clamp or mirror, bilinear, mip level
+   from the interpolated LOD), applies the swap tables, and evaluates the
+   colour and alpha ops into a bank of four registers. Then the two alpha
+   comparisons and their logic op decide `alpha_pass`;
+3. a failed alpha test returns here, counted per worker. It is not a rare
+   path: `build/boot_window.log` reports 792,513,505 fragments shaded
+   against 69,749,462 that failed alpha and 269,041 that failed depth;
+4. if `ztop` was not set, the depth test runs now;
+5. `fog_apply` blends toward the fog colour by eye distance recovered from
+   the screen z;
+6. `blend_pixel` does the blend or the logic op or neither, and `col_upd` /
+   `alpha_upd` decide what actually lands in `g_efb`.
+
+The EFB is a plain `uint8_t g_efb[528][640][4]` with a separate 24-bit depth
+buffer, both in `runtime/gxr.c`.
+
+### 9. The copy out
+
+BP `0x52` reaches `runtime/gxr.c` · `enqueue_copy`, which does **not** copy
+on the spot: it queues a `DrawCmd` with `kind = 1` so that the copy runs in
+order behind the draws it is copying. `run_copy` then calls:
+
+- `copy_to_screen` when bit `0x4000` says the destination is the display
+  buffer — fills `g_screen` and bumps `g_frames_presented`;
+- `copy_to_texture` otherwise — writes the EFB rectangle back into guest
+  memory tiled in the format the sampler decodes, which is how the game's
+  own render-to-texture effects work;
+
+and then `efb_clear` if the copy asked for a clear.
+
+A texture decoded from an address a queued copy has not written yet is a
+hazard, caught by `gxr_texture_hazard` from the texture cache: it flushes
+rather than sample stale bytes.
+
+### 10. Out to the window
+
+`runtime/window.c` · `ui_thread` polls `gxr_presented()` and, when it moves,
+calls `present`, which converts RGBA to BGRA into `g_bgra` and invalidates
+the client area. `wndproc`'s `WM_PAINT` puts it on screen with
+`StretchDIBits` at `SOA_SCALE` (default 2).
+
+### 11. End of frame
+
+Back in `runtime/gx.c` · `load_bp`, a copy to the display buffer also calls
+`frame_end`, which is the frame counter everything else is keyed to:
+`SOA_FRAMES`, `SOA_SNAP`, `SOA_PAD` scripts, and the frame numbers in a
+`SOA_PAD_RECORD` recording. `frame_end` is also where a requested FIFO
+capture is written (`.fifo`, `.regs` and a full `.ram` image), and where
+`SOA_FRAMES` stops the run after flushing the queue.
+
+`SOA_HASH=1` prints one FNV-1a hash per presented frame from `enqueue_copy`,
+after a `gxr_flush` so the hash describes the finished frame. That is the
+value `config/fifo_manifest.tsv` pins for all 23 captures, and that
+`python tools/scenario.py replay` re-checks at `SOA_THREADS` 1, 2, 3 and 8.
+
+---
+
+## One sound frame, more briefly
+
+A frame of audio is 5 ms: 160 samples at 32 kHz, three channels
+(`FRAME_SAMPLES` in `runtime/ax.c`).
+
+1. **The driver hands over a command list.** It writes the mailbox at
+   `0xCC005002`: `mem_w16` → `runtime/hle.c` · `mmio_write16` →
+   `runtime/irq.c` · `device_write` → `runtime/dsp.c` · `dsp_write`.
+   A `0xBABExxxx` mail arms the next mail to be a command-list address.
+2. **The microcode's frame of work.** `runtime/dsp.c` · `handle_mail` calls
+   `runtime/ax.c` · `ax_command_list` with that address, then mails
+   `DSP_YIELD` back with the DSP interrupt. There is no DSP interpreter and
+   there does not need to be one: the game runs Nintendo's stock AX
+   microcode, so the mixer is reimplemented rather than emulated.
+3. **The mixer.** `ax_command_list` walks the opcodes. `0x02` sets the
+   parameter-block list address, `0x03` processes it
+   (`process_pb_list` → `process_voice` per voice): each voice reads its
+   samples out of ARAM (`runtime/aram.c` · `aram_memory`), decodes
+   DSP-ADPCM or PCM in `fetch_sample`, resamples, applies its volume ramp,
+   and `mix_add`s into the main and auxiliary buses. `0x04`/`0x05`/`0x10`
+   exchange an auxiliary bus with the CPU's own effects pass; `0x0E`
+   (`output_samples`) writes the finished frame back into guest memory as
+   interleaved 16-bit, right channel first, as the audio interface wants it.
+4. **The DMA engine plays it.** The guest arms AI DMA at `0xCC005036`
+   (`dsp_write`), which sets a period from the block count on the guest
+   timebase. `runtime/dsp.c` · `dsp_poll`, called from `deliver_pending`,
+   notices the period elapse, hands the block to `runtime/audio_out.c` ·
+   `audio_push_block`, and raises AIDINT.
+5. **Out to the speakers.** `audio_push_block` meters the peak, appends to
+   the `SOA_WAV` file if one was asked for, and queues the block on
+   `waveOut` — **dropping it outright if no header is free**, which is the
+   one place an audible defect can appear that no correlation test would
+   catch.
+6. AIDINT is delivered as interrupt 5 on the next pass, and that is what
+   makes the driver build the next frame.
+
+---
+
+## One interrupt, more briefly
+
+Nothing in a recompiled program is asynchronous, so interrupts are delivered
+synchronously, at exactly two kinds of place.
+
+1. **The delivery points.** The scheduler's idle spin, hooked at
+   `0x80237BA8` (`config/hooks.txt` → `runtime/irq.c` · `hook_80237BA8`);
+   and every backward branch in translated code, where
+   `tools/soa/recomp/emit.py` · `_jump` emits `irq_poll(s)` — so a thread
+   spinning on a flag with interrupts enabled still gets them.
+2. **The gate.** `runtime/irq.c` · `irq_poll` returns at once if MSR[EE] is
+   clear or a handler is already running, and otherwise runs
+   `deliver_pending` on every 16th call, because the devices are clocked by
+   a timebase that is not worth reading more often.
+3. **The order.** `deliver_pending` reads the guest timebase
+   (`runtime/hle.c` · `guest_timebase_hi`/`_lo` — the host clock, multiplied
+   by `SOA_SPEED`) and works down a fixed list: decrementer, pixel-engine
+   finish and token, DVD and ARAM polls, DSP and AI, ARAM, DI, VI, EXI (up
+   to four rounds, because each EXI handler can leave the other pending),
+   SI.
+4. **The VI retrace**, at 60 Hz of guest time, is the game's heartbeat.
+   Before the handler runs, `runtime/si.c` · `si_poll` reads the
+   controllers once per field — which is where `runtime/window.c` ·
+   `window_pad`, the `SOA_PAD` script and a `SOA_PAD_FILE` replay all enter
+   the guest.
+5. **Calling the handler.** `runtime/irq.c` · `call_guest_handler` saves the
+   whole register file, puts the interrupt number in r3 and the current
+   `OSContext` in r4, clears MSR[EE], `setjmp`s, and `dispatch`es into the
+   guest's own handler — which is ordinary translated code.
+6. **Returning from it.** A handler may simply return, or it may "rfi" by
+   calling `OSLoadContext` on the context it interrupted.
+   `runtime/threads.c` · `fn_802335C4` recognises that case and calls
+   `irq_return_from_handler`, which `longjmp`s back to that `setjmp`
+   however many translated frames deep it had gone.
+7. **Afterwards.** If anything was delivered, `irq_poll` runs the guest
+   scheduler at `0x80237C84` with the registers saved around it, because a
+   handler may have woken a thread and the real hardware path would have
+   rescheduled too.
+
+---
+
+## Every file under `runtime/`
+
+**Device model** means the guest reaches it by storing to a memory-mapped
+register and it behaves like the chip. **Renderer** is the software graphics
+pipeline. **Host plumbing** is what the host provides that the console did
+not. **Diagnostic** is there to explain a run, not to run it.
+
+| File | Kind | What it is | If it is wrong |
+|---|---|---|---|
+| `aram.c` | device model | 16 MB of ARAM, its DMA engine, the DSP status register, and a census that names ARAM uploads against files on disc | Every sample the mixer reads is wrong or silent; `aram_irq_pending` not firing stalls the SDK's ARQ queue, and asset streaming into ARAM stops dead |
+| `dsp.c` | device model | The DSP mailboxes and the stock AX mail protocol, plus the AI DMA clock that paces playback | Boot hangs: the SDK's DSP task system waits for a reply that never comes. A wrong DMA period makes the driver's frame callback fire at the wrong rate, so audio runs fast, slow or not at all |
+| `dvd.c` | device model | The seven DI registers; reads are served straight out of `extracted/disc.iso` into guest memory, completing at once with a transfer-complete interrupt | Assets read as zeros (which looks like a content bug, not an I/O bug), or the game waits forever for a completion that never arrives |
+| `exi.c` | device model | Three EXI channels: the memory card in slot A as a file, the RTC and SRAM. Two interrupts per card, since the CARD library waits on the device's own line for every write | The card does not mount, or every save sits out a 100 ms timeout and fails. A wrong SRAM checksum makes a card formatted elsewhere unverifiable |
+| `si.c` | device model | The four controller ports, direct transfers and per-field polling; plus `SOA_PAD` scripting, `SOA_PAD_RECORD` and `SOA_PAD_FILE` replay | The game reads garbage input, or a recording and its replay disagree — which is the one failure that silently invalidates every scripted scenario |
+| `gx.c` | device model | The graphics front end: the write-gather pipe buffer, the GX command parser, the CP/XF/BP shadow registers, pixel-engine interrupt state, the frame counter, FIFO capture and `--replay` | The command stream desynchronises and *everything* downstream is garbage. It also owns the frame number `SOA_FRAMES`, `SOA_SNAP`, `SOA_PAD` and every recording are keyed to |
+| `irq.c` | device model | Interrupt delivery, plus the VI, PI and AI registers and the decrementer. The one place a handler is ever entered | No interrupts means no frames, no input, no audio and no DVD completions — the run simply stops making progress. A wrong delivery *order* shows up as rare, timing-dependent hangs |
+| `gxr.c` | renderer | Transform, lighting, texgen, clipping, the rasterizer, depth, fog and blend, the EFB, the command queue and its worker threads, EFB copies and clears, frame hashing | Wrong pixels. The 23 pinned captures in `config/fifo_manifest.tsv` are the check: a change that moves a frame moves a hash |
+| `gxr_tev.c` | renderer | Texture decode and cache, palettes, sampling, the TEV combiner and the alpha compare | Wrong colours. A cache bug is worse than a decode bug, because it shows up as *stale* textures in some frames and not others |
+| `gxr.h` | renderer | Shared types (`Vertex`, `TevSetup`, `TexCfg`), the EFB dimensions, and the producer's phase-accounting clock | A phase mistake makes the profile lie about where the time goes; the pipeline itself is unaffected |
+| `png.c` | diagnostic | A minimal PNG writer (stored deflate) for `SOA_SNAP` and `--replay` output | Snapshots are unreadable. Nothing the game sees changes |
+| `cpu.h` | host plumbing | `CpuState`, the memory window and its mask, byte-swapping loads and stores, MMIO routing, the gather-pipe test, the fiber savepoint declarations | Everything, at the level of a single instruction — so it shows up as arbitrary corruption anywhere. This file is also where the cost of the hot path is decided |
+| `main.c` | host plumbing | Boot: allocate and guard the memory image, load the DOL, park the FST, fill low memory, pick the run mode, start the window, the watchdog and the sampling profiler, then jump to `__start` | The image is not what the apploader would have left, and the game misbehaves before any of its own code is suspect. The guarded tail is what turns an out-of-range guest store into one `[mem]` line instead of silent host-heap corruption |
+| `threads.c` | host plumbing | Guest threads on host fibers; the `OSSaveContext` / `OSLoadContext` replacements and the guest backtrace walker | A thread resumes with the wrong registers or on the wrong stack — which presents as the game corrupting itself minutes later, nowhere near the switch |
+| `hle.c` | host plumbing | MMIO routing to the device models, per-register access counting for unmodelled hardware, the guest timebase and `SOA_SPEED`, guest traps, and the end-of-run report | A register that should be modelled reads zero and the guest quietly takes a wrong branch; `SOA_STRICT=1` is what turns that into a stop with a backtrace |
+| `hle_os.c` | host plumbing | Native replacements for `__OSInitAudioSystem` and `__OSStopAudioSystem`, which exist only to leave the right register state behind | The DSP never announces itself and audio initialisation hangs |
+| `hle_stdio.c` | host plumbing | The guest's own `printf`, formatted from the EABI argument layout, so the game's messages reach the log | You lose the game's own diagnostics — which is how "memory reallocate error" was ever seen |
+| `decomp_swap.c` | host plumbing | The EABI adapters that let a natively compiled decompiled function stand in for its translation, and the program counter each one stores for the profiler | `memcpy`, `memset` and `strcpy` corrupt guest memory. The selftest's twin comparison is what catches it |
+| `decomp_shims.c` | host plumbing | Native stand-ins for functions a decompiled unit calls but nobody has decompiled yet. Empty today | A swapped-in function computes the wrong thing while byte-matching perfectly, because the error is in its callee |
+| `audio_out.c` | host plumbing | `waveOut` playback and the `SOA_WAV` writer | Nothing is audible, or blocks are dropped. The mix itself is unaffected: `ax.c` writes into guest memory whether or not a device exists |
+| `ax.c` | device model | The AX mixer: the command list, parameter blocks, voices, resampling, the buses, and the census the report prints. Reached through `dsp.c`'s mailbox rather than through registers of its own, because that is how the console reaches it too | Wrong or missing sound, and the game never notices — it writes a command list and reads buses back, so an error here is silent outside the report |
+| `window.c` | host plumbing | The Win32 window on its own thread, and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
+| `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
+| `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, and all 12 decompiled functions against their recompiled twins over 200 random rounds | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
+
+---
+
+## Four things that will otherwise puzzle you
+
+### Guest threads are host fibers, because a context switch cannot be translated
+
+The SDK switches threads with `OSSaveContext` (setjmp-like: returns 0 when
+saving, 1 when resumed) and `OSLoadContext`, which restores a saved context
+and `rfi`s into the middle of whatever function saved it. **That resume is
+the one thing static recompilation cannot express** — there is no C
+construct for "continue in the middle of a function whose frame is gone."
+
+So the two primitives are replaced (`config/hle.txt` →
+`runtime/threads.c`). Every guest thread gets its own host fiber.
+`OSSaveContext` has exactly one caller, `SelectThread`, and the recompiler
+wraps that call site as
+
+```c
+if (setjmp(*guest_savepoint(s)) == 0) fn_OSSaveContext(s); else guest_resumed(s);
+```
+
+so a parked thread always has a live C frame to return into.
+`OSLoadContext` switches to the target's fiber if it is not the current one
+and `longjmp`s to that savepoint, where `guest_resumed` restores the
+register snapshot and hands back r3 = 1, exactly as the hardware path would.
+
+Everything else about scheduling — run queues, priorities, the idle loop,
+sleep and wakeup — stays recompiled and authentic. The runtime's only other
+intervention in the scheduler is delivering interrupts at the idle loop.
+
+### The write-gather pipe is modelled at the hardware level, not by intercepting GX
+
+The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
+and reconstruct draws from the API. This port does not do that.
+`config/hle.txt` has 19 entries and **none of them is a GX function**: every
+graphics call in the game runs as translated PowerPC, right down to the
+individual `stfs` of a vertex component into `0xCC008000`.
+
+What makes that workable is that the pipe is a *byte stream with a
+self-describing format*. `gx_pipe_write` appends bytes; `parse` reads
+opcodes; the vertex format comes out of the CP registers the stream itself
+loaded, not out of any state the runtime tracked at an API boundary. There
+is no address check at the store sites and no per-call bookkeeping — just
+one compare in `mem_w32` that nearly every store pays anyway, and a
+byte-append.
+
+The cost of that decision is visible: `pipe_flush` runs once per guest store
+to the pipe, and one saved run pushed 3,018,001,651 bytes through it. The
+benefit is that the graphics path is *the console's*, not an approximation
+of the SDK's — which is why a captured FIFO stream replays byte-identically
+outside the game (`gen/soa.exe --replay`) and why 23 pinned frames are a
+meaningful regression test.
+
+Two consequences worth knowing. Display lists are handled inside the parse
+(opcode `0x40`), not by tracking whether the CPU FIFO targets RAM: `HID2`
+and `WPAR` are carried in `CpuState` but nothing reads them, and the
+`PI_FIFO_*` registers are stored and read back but never used to route. And
+because the renderer sees registers rather than API calls, a capture that
+merely *inherits* an unmodelled state — rather than writing it inside the
+captured window — renders wrong and says nothing.
+
+### A decompiled function can be swapped into the running port and checked against its twin
+
+Every function has one identity: its address. That is what lets the three
+implementations coexist.
+
+When `config/hle.txt` names an address, the recompiler emits that function's
+translation as `recomp_fn_XXXXXXXX` instead of `fn_XXXXXXXX`, and the
+runtime's own `fn_XXXXXXXX` wins the link. For a decompiled routine that
+`fn_` is a five-line adapter in `runtime/decomp_swap.c` that marshals the
+EABI call — arguments in r3..r5, result in r3 — onto the natively compiled
+`dc_*` body from `src/`.
+
+**Both implementations are still in the binary**, so they can be run against
+each other. `runtime/selftest.c` · `decomp_selftest` does exactly that: 200
+rounds of random strings, each of the 12 swapped-in routines called both
+ways on the same guest memory, pointer results and written buffers compared
+byte for byte.
+
+That catches a class of bug the mwcc match structurally cannot. `strcmp` is
+the standing example: its word-at-a-time path is correct in the mwcc build
+and byte-matches the executable, and is *inverted* when the same source is
+compiled for a little-endian host. The unit carries a host-order guard for
+exactly that, and the twin comparison is written to compare the sign rather
+than the value, since the guest only ever tests the sign.
+
+What may be swapped in is restricted, and `config/GEAE8P/units.txt` marks it
+`native`: the unit must compile under MSVC, read nothing whose meaning
+depends on byte order, touch no hardware register, and call nothing
+undecompiled. A routine that reads a field of one of the game's structures
+does not qualify and waits for byte-order-aware accessors.
+
+### The renderer is software, and it runs on worker threads
+
+There is no GPU backend, no SDL, no Vulkan and no shader compiler. The
+GameCube's pipeline is implemented in C in `gxr.c` and `gxr_tev.c`, and the
+final image reaches the screen as a `StretchDIBits` of a BGRA buffer.
+
+The parallelism is one rule: **worker *i* owns rows where
+`y % nthreads == i - 1`**, in `raster_triangle`'s row test and in `my_row`
+for clears and copies. Because a row belongs to exactly one worker,
+per-pixel ordering within a row is preserved without any locking, and the
+output does not depend on the thread count — which is checkable, and is
+checked, by replaying all 23 captures at 1, 2, 3 and 8 threads and comparing
+hashes.
+
+The producer (the guest thread) and the workers meet at one word.
+`gxr_flush` waits for every `g_ran[i]` to reach `g_published`, and only then
+recycles producer-private state — the vertex arena, the copy hazard list,
+the texture graveyard — so what a flush writes and what a running worker
+reads are disjoint sets. Flushes are forced by the queue filling, by a
+`GXDrawDone`, by a half-scale copy (it reads rows other workers own), by a
+texture that a queued copy has not written yet, and before a frame is hashed
+or written to PNG.
+
+One measured surprise, which changes what "the renderer is slow" would even
+mean: over a 3,000-frame profiled run (PLAN A4), the eight rasterizer
+workers were busy 8.8 seconds out of 830 seconds of thread time, and 47.4%
+of the run was `SelectThread`, the guest's own OS idle loop. This port is
+not rasterizer-bound: it runs at the game's own 30 fps cap and idles about
+half the time. Read any performance argument against those numbers first.
+
+---
+
+## Where this differs from SPEC.md
+
+`SPEC.md` is the design record, and §10 in particular describes a build that
+was planned and not taken. For a reader navigating the tree, the differences
+that matter:
+
+- There is no `gfx/` or `audio/` directory. The graphics pipe, the GX
+  parser, the TEV and the AX mixer are all in `runtime/`.
+- The runtime is C, not C++20, and there is no CMake, Ninja, SDL3 or Vulkan
+  anywhere in the tree. `tools/recompile.py` drives MSVC directly with the
+  flags in `tools/soa/toolchain.py`.
+- The binding table is `config/hle.txt`, not `config/symbols.toml`.
+- §7 proposed a hybrid: HLE the 104 out-of-line GX entry points and decode
+  vertices from HLE-tracked format state. What was built is the
+  command-stream parser alone — see *The write-gather pipe is modelled at
+  the hardware level* above.
+- §8's reference interpreter and lockstep differ do not exist. The
+  correctness oracles that do exist are the byte-for-byte mwcc match
+  (`tools/matchcheck.py`), the twin comparison in the selftest, the pinned
+  frame hashes, and the scenario checker.
+
+Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
+
+---
+
+## Where to look next
+
+- `tools/tests/` — 455 tests, none of which needs a disc (anything that
+  would synthesises its fixtures or skips), and `runtime/selftest.c` under
+  `SOA_SELFTEST=1`, which does. A companion `docs/TESTING.md` is PLAN item
+  G2.
+- `config/scenarios/` — 13 scripted runs, each with its pad script, frame
+  budget, environment and the evidence it was recovered from;
+  `python tools/scenario.py list` prints them.
+- `config/fifo_manifest.tsv` — the 23 pinned frame hashes, and
+  `python tools/scenario.py replay` to check them.
+- `README.md` — the environment switches, which are the fastest way to make
+  the port explain itself.
+
+---
+
+## Placeholder: licensing
+
+**There is no `LICENSE`, `COPYING` or `NOTICE` file in this tree.** Choosing
+one is the repository owner's decision (PLAN item G1), so this page does not
+name a licence. When one lands, link it from here and from `README.md`.

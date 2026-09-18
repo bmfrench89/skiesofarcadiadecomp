@@ -15,7 +15,7 @@ into the tree and CI scans the whole history for them.
 2. Clone the repository and install the Python package with its development
    extras:
 
-       pip install -e .[dev]
+       pip install -e ".[dev]"
 
 3. Unpack your own disc dump. Every format the extractor understands ends up
    in `extracted/`, which is gitignored:
@@ -30,12 +30,19 @@ into the tree and CI scans the whole history for them.
    `--optimize` for a build that runs the game at full speed (a minute or two
    longer). After changing anything under `runtime/`, `--link` on its own is
    enough.
-5. Run it:
+5. Run it. In PowerShell:
 
-       set SOA_RENDER=1
+       $env:SOA_RENDER = '1'
        gen\soa.exe extracted
 
-   `SOA_SELFTEST=1 gen\soa.exe extracted` exercises the translated C library,
+   In cmd.exe it is `set SOA_RENDER=1` instead. The two are not
+   interchangeable: PowerShell reads `set SOA_RENDER=1` as creating a
+   variable whose name contains the equals sign, leaves the environment
+   untouched, and gives you a headless run that nothing stops, because the
+   watchdog only fires when no frame is presented and frames keep being
+   counted whether or not anything is drawn.
+
+   `$env:SOA_SELFTEST = '1'; gen\soa.exe extracted` exercises the translated C library,
    the device models and the software renderer (a synthetic frame through the
    real GX pipe) without the game, and is a quick check that a build is sane.
 
