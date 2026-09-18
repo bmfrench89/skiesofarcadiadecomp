@@ -1,0 +1,44 @@
+# What the licence covers, and what it cannot
+
+This repository holds two different kinds of thing, and one licence cannot
+honestly cover both. This file says which is which.
+
+## Covered by the MIT licence in LICENSE
+
+The original work: `tools/`, `runtime/`, `include/`, `.github/`, the build
+configuration, and the prose in `docs/`, `README.md` and `CONTRIBUTING.md`.
+
+That is the recompiler, the software implementation of the console's graphics
+pipeline, the device models, the audio mixer, the analysis and disc tooling,
+and the test machinery. It is original work, it is reusable — someone porting
+a different GameCube title could build on it — and MIT is meant to let them.
+
+## Not covered, and not ours to licence
+
+`src/` contains C written to reproduce the original program's compiled output
+byte for byte. Its purpose is to be *the same code*, and `tools/matchcheck.py`
+exists to prove that it is. We cannot grant rights in it, because what it
+encodes is not ours: the game is copyright Sega and its authors. It is
+published here for interoperability and preservation research, and for the
+same reason a decompilation is published anywhere — so that the program can be
+understood and run on hardware that still exists.
+
+`config/` holds analysis metadata derived from the game: function addresses,
+sizes, recovered names, and evidence for each. The same reasoning applies.
+
+## No game data, ever
+
+No disc image, executable, asset, sound, texture or script from the game is in
+this repository or its history. `tools/guard.py` enforces that on every commit
+and continuous integration scans the whole history for it.
+
+To build or run anything here you supply your own dump of a disc you own.
+`tools/extract.py` unpacks it and `tools/checkdump.py` confirms it is the build
+the configuration describes. Nothing in this project distributes the game, and
+nothing here is useful without a copy you already have.
+
+## If you are unsure
+
+Take this file as a statement of intent rather than legal advice. If you plan
+to redistribute anything from `src/` or `config/`, or to build on this in a
+commercial context, get your own advice first.

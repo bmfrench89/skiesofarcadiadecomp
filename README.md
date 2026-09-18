@@ -28,10 +28,12 @@ favorable target:
 - **[docs/PROGRESS.md](docs/PROGRESS.md)** — what got built, in order
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — clean machine to running game, and the rules
 
-Licence: **not yet chosen.** There is no LICENSE file in this tree, so the
-default applies and nobody has been granted rights to fork, redistribute or
-contribute. That is the repository owner's call to make, not an oversight to
-route around.
+Licence: **[MIT](LICENSE)** over the original work here — the recompiler, the
+runtime, the tooling and the prose. It does not and cannot cover `src/`, which
+is written to reproduce the original program's compiled output, or `config/`,
+which is analysis metadata derived from the game. [NOTICE](NOTICE) says which
+is which and why. No game data is in this repository or its history; you
+supply your own dump of a disc you own.
 
 ## Status
 
