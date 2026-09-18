@@ -569,17 +569,41 @@ are now compared in floating point before conversion. `SOA_GXR_PIXEL=x,y`
 narrates every fragment that lands on one pixel, which is how the missing
 fragments were found.
 
-**Open: the battleship's searchlights.** In the opening the Valuan
-battleship's searchlight beams render as near-black slabs with lit rims.
-Per-pixel narration shows why: the beams are translucent quads drawn
-additively from a 16x16 four-bit gradient sprite the game builds at run
-time; their vertex colour is the night ambient plus a dim grey light, the
-combiner doubles texel times that colour, and the quads write depth, so
-the sky drawn afterwards fails behind them. Every step matches what the
-hardware would do with the same command stream, which leaves either a
-subtle hardware rule not modelled (a Z-write or alpha-test detail for
-blended pixels) or a mistake upstream in the vertex data the game
-generates. Needs a reference capture from real hardware or Dolphin.
+**The battleship's searchlights: half of this is now solved, and the
+other half is a different defect.** This entry used to say the beams
+render as near-black slabs with lit rims and needed a reference capture
+to settle. **They are not dark any more.** Inside the beams' footprint
+the current render averages (84,96,202) against (19,25,90) outside, and
+the wedges read as pale blue-white. The darkness went with the texture
+use-after-free fixed on 2026-09-17, which was washing whole scenes
+green and blue; no lighting change was needed and no console capture was
+spent.
+
+Dumping the vertex data settled the lighting question that was supposed
+to need hardware. The beam normals are not one population but three: 144
+side-wall vertices split exactly evenly at N.L = +/-0.4, +/-0.6 and
++/-0.9915, so half sit at pure ambient and half are lit; 60 end-cap
+vertices whose normals have no x component at all, which puts them
+within 0.095 of perpendicular to a light that is 99.55% along view-space
+x; and 48 with no normal at all. The data is internally consistent, unit
+length to within 3e-5, through identity matrices, so nothing supports the
+"our vertex data differs" theory. The sprite's alpha ramp is real and the
+quads sample it: alpha 255,218,182,145,72,0 across the texels they use.
+
+**What is still wrong is the flatness.** The sky's cloud detail stops at
+the beam edges, because the beams are blended draws that write depth and
+the sky behind them fails the test afterwards. That is a draw-ordering or
+depth-write question, and additive blending cannot darken anything, so no
+amount of lighting work can affect it. One measurement would settle the
+remainder: whether the hardware renormalises a vertex normal in the
+transform unit, since capture 3900 submits these beam normals at twenty
+times unit length.
+
+A caution for whoever reads this next: the entry above was describing a
+render that no longer existed, and the plan item built on it counted 90
+draws that turn out to be a different object entirely, octagonal prisms
+on the bridge cabins. The beams are 54 draws. Re-look at the frame before
+trusting a written description of it.
 
 **Speed.** With every frame rasterised (640x480, eight worker threads) the
 port holds 59 retraces a second through the opening with the game thread

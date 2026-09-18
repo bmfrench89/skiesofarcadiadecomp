@@ -38,7 +38,7 @@ typedef struct {
     const uint8_t* level[MAX_MIPS];
     int lw[MAX_MIPS], lh[MAX_MIPS], nlevels;
     uint64_t stamp;
-    uint32_t hash;
+    uint64_t hash;
 } TexEntry;
 
 #define TEX_CACHE 256
@@ -136,29 +136,92 @@ static uint32_t texture_bytes(uint32_t fmt, uint32_t w, uint32_t h)
     return ((w + tw - 1) / tw) * ((h + th - 1) / th) * bpt;
 }
 
-/* A cheap fingerprint of the source bytes (and the palette): 64 words
- * spread over the data. Catches textures the game rewrites in place. */
-static uint32_t source_hash(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off)
+#define HASH_P1 0x9E3779B185EBCA87ull
+#define HASH_P2 0xC2B2AE3D27D4EB4Full
+
+static uint64_t rotl64(uint64_t v, unsigned r) { return (v << r) | (v >> (64 - r)); }
+
+/* Fold n bytes into h, reading every one of them.
+ *
+ * Four independent lanes, because the cost that matters here is throughput,
+ * not the strength of the mixing: one 64-bit multiply has three cycles of
+ * latency and four of them in flight keep the loop at memory speed rather
+ * than at multiplier speed. Measured with the port's own flags it sustains
+ * 35-40 GB/s, so every caller below is bounded by how many bytes it reads.
+ * The rotates in the fold are rotates and not shifts so that no lane loses
+ * the bits that a shift would push out of the word. */
+static uint64_t hash_range(uint64_t h, const uint8_t* p, uint32_t n)
 {
-    uint32_t bytes = texture_bytes(fmt, w, h), hsh = 2166136261u, i;
-    const uint8_t* base;
-    if (!g_s || (addr & MEM_MASK) + bytes > MEM1_SIZE) return 0;
-    base = mem_ptr(g_s, addr);
-    for (i = 0; i < 64; i++) {
-        uint32_t off = (uint32_t)(((uint64_t)bytes * i) / 64) & ~3u;
-        uint32_t wv;
-        if (off + 4 > bytes) break;
-        memcpy(&wv, base + off, 4);
-        hsh = (hsh ^ wv) * 16777619u;
+    uint64_t h0 = h ^ HASH_P1, h1 = h ^ HASH_P2, h2 = h + n, h3 = h ^ 0x165667B19E3779F9ull;
+    uint32_t left = n;
+    while (left >= 32) {
+        uint64_t a, b, c, d;
+        memcpy(&a, p, 8); memcpy(&b, p + 8, 8); memcpy(&c, p + 16, 8); memcpy(&d, p + 24, 8);
+        h0 = (h0 ^ a) * HASH_P1;
+        h1 = (h1 ^ b) * HASH_P1;
+        h2 = (h2 ^ c) * HASH_P1;
+        h3 = (h3 ^ d) * HASH_P1;
+        p += 32;
+        left -= 32;
     }
+    /* Every tiled texture size and every palette size is a multiple of 32, so
+     * the two tails below are for a caller that is not one of those. */
+    while (left >= 8) {
+        uint64_t a;
+        memcpy(&a, p, 8);
+        h0 = (h0 ^ a) * HASH_P1;
+        p += 8;
+        left -= 8;
+    }
+    if (left) {
+        uint64_t a = 0;
+        memcpy(&a, p, left);
+        h1 = (h1 ^ a) * HASH_P1;
+    }
+    h = rotl64(h0, 1) + rotl64(h1, 7) + rotl64(h2, 12) + rotl64(h3, 18) + n;
+    h ^= h >> 33;
+    h *= HASH_P2;
+    h ^= h >> 29;
+    h *= HASH_P1;
+    h ^= h >> 32;
+    return h;
+}
+
+/* A fingerprint of a texture's source bytes and its palette, over all of
+ * them. It decides whether a cached decode is still the picture the guest
+ * has in memory, so a byte it does not read is a byte the game can rewrite
+ * in place while the renderer keeps drawing the old texture. The 64 spread
+ * words this replaced read the same 256 bytes whether the image was 32 bytes
+ * or a megabyte, so the larger the texture the smaller the fraction of it
+ * that was ever looked at -- one in four thousand for a 1 MB sky.
+ *
+ * This runs on every texture lookup, once per map per draw on the guest
+ * thread, so what it costs was measured rather than assumed. Against the old
+ * sample, per lookup: a 24x24 I4 glyph (288 bytes) 13 ns instead of 47,
+ * because 288 contiguous bytes are five cache lines where 64 spread words
+ * were up to 64 of them; a 64x64 CMPR texture (8 KB, seven of every eight
+ * lookups in the captured corpus) 220 ns instead of 58; a 1 MB RGBA8 sky
+ * 27 us instead of 250 ns. Over a whole frame, across the twenty-three
+ * captures, that is between +0.02 and +0.84 ms on the guest thread, the
+ * worst of them 2.5% of a 33 ms frame -- against the 47% of a run that A4
+ * measured inside the OS idle loop. */
+static uint64_t source_hash(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off)
+{
+    uint32_t bytes = texture_bytes(fmt, w, h);
+    uint64_t hsh;
+    if (!g_s || (addr & MEM_MASK) + bytes > MEM1_SIZE) return 0;
+    hsh = hash_range(0x243F6A8885A308D3ull, mem_ptr(g_s, addr), bytes);
     if (fmt == 8 || fmt == 9 || fmt == 10) {
+        /* The palette decides the pixels as much as the indices do. A TLUT
+         * reloaded in place is already caught by tmem_load_tlut, which throws
+         * out every entry whose palette a load overlaps, so this is the
+         * second of two mechanisms -- but it is 32 bytes for the C4 textures
+         * this game actually uses, and it is the one that does not depend on
+         * the invalidation staying complete. */
         uint32_t n = fmt == 8 ? 32 : (fmt == 9 ? 512 : 32768);
-        for (i = 0; i < 64; i++) {
-            uint32_t off = (tlut_off + ((n * i) / 64 & ~3u)) & ((1u << 20) - 1);
-            uint32_t wv;
-            memcpy(&wv, g_tmem + off, 4);
-            hsh = (hsh ^ wv) * 16777619u;
-        }
+        uint32_t off = tlut_off & ((1u << 20) - 1);
+        if (off + n > sizeof g_tmem) n = (uint32_t)(sizeof g_tmem - off);
+        hsh = hash_range(hsh, g_tmem + off, n);
     }
     return hsh;
 }
@@ -410,7 +473,7 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
 {
     int i, victim = 0;
     uint64_t oldest = ~0ull;
-    uint32_t hsh;
+    uint64_t hsh;
     gxr_texture_hazard(addr, texture_bytes(fmt, w, h));
     hsh = source_hash(addr, fmt, w, h, tlut_off);
     for (i = 0; i < TEX_CACHE; i++) {

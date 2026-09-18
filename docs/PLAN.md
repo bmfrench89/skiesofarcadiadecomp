@@ -382,31 +382,36 @@ code from a listing taken before the change and confirmed the old spin was
 safe only by an accident of this compiler version, across three different
 spellings of the same test.
 
-**C1. Dump vertex attributes, then settle the searchlights** — *a day.*
-The one known open rendering defect, and the measurement needs no console.
-`fifo.py:216-223` steps over the vertex payload without reading a byte, so
-add `--verts <range>` printing normals after the XF normal matrix. The 90
-beam draws are additive, one TEV stage computing `clamp(2 * texel * ras)`
-lit by light 0 alone with ambient (24,24,63), directional from view-space
-~(+0.995,+0.094,+0.015) — so the colour collapses to that ambient exactly
-when the normal is perpendicular to it, which is the near-black we see. A
-near-zero dot product means the quads are meant to be ambient-lit and some
-other term is wrong; a normal facing the light means our vertex data
-differs. If it comes to that, capture this one frame in Dolphin; `.dff`
-container support waits until a second question needs it.
-*Done:* an answer naming the normals and the dot product, or the sprite's
-alpha ramp (which decides slab versus beam), or a Dolphin screenshot of the
-same draw — and, if the cause is ours, bright beams in `4000.png`.
+**C1. Dump vertex attributes, then settle the searchlights** — *instrument built; the defect was not what this said.*
+`tools/fifo.py --verts <range>` now prints positions, normals and texture
+coordinates for a range of draws, resolving indexed attributes through the
+command processor's array registers against the capture's memory image, and
+printing normals both raw and after the transform matrix the lighting sees.
+Eleven tests, all fixtures synthesised.
 
-**C2. Two small defects in the clip and texture paths** — *hours.*
-`clip_polygon` (`gxr.c:902-930`) clips the near plane and `w` only, so far
-geometry is rasterised with depth clamped to 0xFFFFFF, where LEQUAL passes
-against a cleared buffer. And `source_hash` (`gxr_tev.c:86-109`) samples 64
-words whatever the texture's size, so a large texture rewritten in place
-renders stale. (The third defect that used to sit here, `float tex[8][4]`,
-moved into A2, which trips over it.)
-*Done:* a quad past the far plane shades nothing, and one rewritten word in
-a 128 KB image shows up.
+It answered the question and the answer is neither of the two this item
+predicted. See docs/FINDINGS.md: **the beams are no longer dark** — that went
+with the texture use-after-free fix — and their normals are three populations,
+not one, with the end caps near-perpendicular by arithmetic rather than by
+intent. This item also miscounted: the 90 additive draws are octagonal prisms
+on the bridge cabins, and the beams are 54 draws with a different texture.
+*Left:* the beams render flat, because they write depth and the sky behind
+them fails afterwards. That is C3's neighbourhood, not a lighting question.
+The one measurement still worth a reference is whether the transform unit
+renormalises a vertex normal, since capture 3900 submits these at twenty
+times unit length.
+
+**C2. Two small defects in the clip and texture paths** — *done.*
+The clipper ran two passes, near and w, and its comment claimed the scissor
+handled the far side, which is false: a scissor is a screen rectangle and says
+nothing about depth, so far geometry reached the rasteriser with depth clamped
+to the maximum and passed LEQUAL against a cleared buffer. It now clips three
+planes through one shared routine, with the near and w expressions unchanged
+character for character so that a polygon which does not cross the far plane
+comes out bit-identical. The texture cache's source hash sampled a fixed 64
+words whatever the image's size, so a large texture rewritten in place kept
+rendering stale; it now depends on the whole image.
+All 23 pinned frames are unchanged at four thread counts.
 
 **C3. The EFB copy vertical filter and destination stride** — *a day.*
 The game programs a real 7-tap deflicker filter — BP 0x53 = `30A208` and

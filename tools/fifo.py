@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Decode a captured GX frame (build/fifo/NNNN.{regs,fifo}) into readable text.
+"""Decode a captured GX frame (build/fifo/NNNN.{regs,fifo,ram}) into readable text.
 
-    python tools/fifo.py build/fifo/0500            # the command stream
-    python tools/fifo.py build/fifo/0500 --regs     # the register state at frame start
+    python tools/fifo.py build/fifo/0500                    # the command stream
+    python tools/fifo.py build/fifo/0500 --regs             # the registers at frame start
+    python tools/fifo.py build/fifo/4200 --verts 1276-1365  # the vertices of those draws
+
+Draws are numbered from 1 in stream order and the listing prints that number,
+which is what --verts takes (N, N-M, N-, -M or "all"). With --verts only the
+selected draws are printed, one line per vertex: positions, normals, colours
+and texture coordinates as the stream carries them, indexed attributes
+resolved through the command processor's array base and stride against the
+capture's .ram image, and the normal both raw and through the XF normal
+matrix -- the latter being what the lighting stage actually dots against the
+light direction.
 
 Register names follow the hardware manuals / Dolphin. Analysis only.
 """
@@ -11,6 +21,8 @@ import argparse
 import struct
 import sys
 from pathlib import Path
+
+MEM_MASK = 0x01FFFFFF  # what the console's address decode narrows a guest address to
 
 BP_NAMES = {
     0x00: "GEN_MODE",
@@ -116,9 +128,19 @@ PRIMS = {
     0xB8: "POINTS",
 }
 
+ATTR_MODE = ("none", "direct", "idx8", "idx16")
+COMP_FMT = ("u8", "s8", "u16", "s16", "f32", "?5", "?6", "?7")
+COLOR_FMT = ("rgb565", "rgb8", "rgbx8", "rgba4", "rgba6", "rgba8", "rgba8", "rgba8")
+COLOR_BYTES = (2, 3, 4, 2, 3, 4, 4, 4)
+
 
 def f32(v: int) -> float:
     return struct.unpack(">f", struct.pack(">I", v))[0]
+
+
+def xff(xf, i: int) -> float:
+    """One XF register read as the float the transform unit sees."""
+    return f32(xf[i]) if 0 <= i < len(xf) else 0.0
 
 
 def xf_words(addr: int, vals: list[int]) -> str:
@@ -132,44 +154,293 @@ def xf_words(addr: int, vals: list[int]) -> str:
     return " ".join(f"{v:08X}" for v in vals)
 
 
-def vertex_size(cp: dict, vat: int) -> int:
+def comp_bytes(fmt: int) -> int:
+    return 4 if fmt == 4 else (2 if fmt >= 2 else 1)
+
+
+class Attr:
+    """One vertex attribute: where its bytes live and how to read them.
+
+    `elem` is the size of one element wherever it sits -- inline in the stream
+    for a direct attribute, in the array for an indexed one -- while
+    `stream_bytes` is what the vertex itself spends on it, which for an
+    indexed attribute is just the index.
+    """
+
+    __slots__ = ("array", "comps", "elem", "fmt", "frac", "kind", "mode", "name", "triple")
+
+    def __init__(self, name, mode, array, comps, fmt, frac, elem, kind="num", triple=False):
+        self.name = name
+        self.mode = mode
+        self.array = array
+        self.comps = comps
+        self.fmt = fmt
+        self.frac = frac
+        self.elem = elem
+        self.kind = kind
+        self.triple = triple
+
+    @property
+    def stream_bytes(self) -> int:
+        if self.mode == 0:
+            return 0
+        if self.mode == 1:
+            return self.elem
+        width = 1 if self.mode == 2 else 2
+        return 3 * width if self.triple else width
+
+
+def vertex_layout(cp: dict, vat: int) -> list[Attr]:
+    """The attributes of one vertex, in the order the stream carries them."""
     lo, hi = cp.get(0x50, 0), cp.get(0x60, 0)
     a, b, c = cp.get(0x70 + vat, 0), cp.get(0x80 + vat, 0), cp.get(0x90 + vat, 0)
+    attrs: list[Attr] = []
 
-    def comp(fmt):
-        return 4 if fmt == 4 else (2 if fmt >= 2 else 1)
+    if lo & 1:
+        attrs.append(Attr("pmtx", 1, -1, 1, 0, 0, 1, "mtxidx"))
+    for i in range(8):
+        if (lo >> (1 + i)) & 1:
+            attrs.append(Attr(f"tmtx{i}", 1, -1, 1, 0, 0, 1, "mtxidx"))
 
-    def attr(vcd, direct):
-        return (0, direct, 1, 2)[vcd & 3]
+    cnt, fmt, frac = (3 if a & 1 else 2), (a >> 1) & 7, (a >> 4) & 31
+    attrs.append(
+        Attr("pos", (lo >> 9) & 3, 0, cnt, fmt, 0 if fmt == 4 else frac, cnt * comp_bytes(fmt))
+    )
 
-    size = (lo & 1) + sum((lo >> (1 + i)) & 1 for i in range(8))
-    size += attr((lo >> 9) & 3, (3 if a & 1 else 2) * comp((a >> 1) & 7))
-    vcd, elems, fmt = (lo >> 11) & 3, (a >> 9) & 1, (a >> 10) & 7
-    if vcd >= 2 and elems and (a >> 31) & 1:
-        size += 3 * (1 if vcd == 2 else 2)
-    else:
-        size += attr(vcd, (9 if elems else 3) * comp(fmt))
-    csz = [2, 3, 4, 2, 3, 4, 4, 4]
-    size += attr((lo >> 13) & 3, csz[(a >> 14) & 7])
-    size += attr((lo >> 15) & 3, csz[(a >> 18) & 7])
+    mode, elems, fmt = (lo >> 11) & 3, (a >> 9) & 1, (a >> 10) & 7
+    # Normals are quantised by format, not by a VAT shift field (GXSetVtxAttrFmt).
+    frac = 6 if fmt == 1 else (14 if fmt == 3 else 0)
+    triple = bool(mode >= 2 and elems and (a >> 31) & 1)
+    elem = 3 * comp_bytes(fmt) if triple else (9 if elems else 3) * comp_bytes(fmt)
+    attrs.append(Attr("nrm", mode, 1, 3, fmt, frac, elem, triple=triple))
+
+    for i in range(2):
+        mode = (lo >> (13 + 2 * i)) & 3
+        fmt = ((a >> 14) if i == 0 else (a >> 18)) & 7
+        attrs.append(Attr(f"clr{i}", mode, 2 + i, 4, fmt, 0, COLOR_BYTES[fmt], "color"))
+
     tc = [
-        ((a >> 21) & 1, (a >> 22) & 7),
-        (b & 1, (b >> 1) & 7),
-        ((b >> 9) & 1, (b >> 10) & 7),
-        ((b >> 18) & 1, (b >> 19) & 7),
-        ((b >> 27) & 1, (b >> 28) & 7),
-        ((c >> 5) & 1, (c >> 6) & 7),
-        ((c >> 14) & 1, (c >> 15) & 7),
-        ((c >> 23) & 1, (c >> 24) & 7),
+        ((a >> 21) & 1, (a >> 22) & 7, (a >> 25) & 31),
+        (b & 1, (b >> 1) & 7, (b >> 4) & 31),
+        ((b >> 9) & 1, (b >> 10) & 7, (b >> 13) & 31),
+        ((b >> 18) & 1, (b >> 19) & 7, (b >> 22) & 31),
+        ((b >> 27) & 1, (b >> 28) & 7, c & 31),
+        ((c >> 5) & 1, (c >> 6) & 7, (c >> 9) & 31),
+        ((c >> 14) & 1, (c >> 15) & 7, (c >> 18) & 31),
+        ((c >> 23) & 1, (c >> 24) & 7, (c >> 27) & 31),
     ]
     for i in range(8):
-        size += attr((hi >> (2 * i)) & 3, (2 if tc[i][0] else 1) * comp(tc[i][1]))
-    return size
+        cnt, fmt, frac = 2 if tc[i][0] else 1, tc[i][1], tc[i][2]
+        attrs.append(
+            Attr(
+                f"tex{i}",
+                (hi >> (2 * i)) & 3,
+                4 + i,
+                cnt,
+                fmt,
+                0 if fmt == 4 else frac,
+                cnt * comp_bytes(fmt),
+            )
+        )
+    return attrs
 
 
-def decode(fifo: bytes, cp: dict, out):
+def vertex_size(cp: dict, vat: int) -> int:
+    return sum(at.stream_bytes for at in vertex_layout(cp, vat))
+
+
+def read_comp(buf, off: int, fmt: int, frac: int) -> float:
+    if fmt == 4:
+        return struct.unpack_from(">f", buf, off)[0]
+    if fmt == 0:
+        v = buf[off]
+    elif fmt == 1:
+        v = struct.unpack_from(">b", buf, off)[0]
+    elif fmt == 2:
+        v = struct.unpack_from(">H", buf, off)[0]
+    else:
+        v = struct.unpack_from(">h", buf, off)[0]
+    return v / float(1 << frac)
+
+
+def read_color(buf, off: int, fmt: int) -> tuple[float, float, float, float]:
+    if fmt == 0:  # RGB565
+        v = struct.unpack_from(">H", buf, off)[0]
+        return ((v >> 11) & 31) / 31.0, ((v >> 5) & 63) / 63.0, (v & 31) / 31.0, 1.0
+    if fmt in (1, 2):  # RGB8, RGBX8
+        return buf[off] / 255.0, buf[off + 1] / 255.0, buf[off + 2] / 255.0, 1.0
+    if fmt == 3:  # RGBA4
+        v = struct.unpack_from(">H", buf, off)[0]
+        return (
+            ((v >> 12) & 15) / 15.0,
+            ((v >> 8) & 15) / 15.0,
+            ((v >> 4) & 15) / 15.0,
+            (v & 15) / 15.0,
+        )
+    if fmt == 4:  # RGBA6
+        v = (buf[off] << 16) | (buf[off + 1] << 8) | buf[off + 2]
+        return (
+            ((v >> 18) & 63) / 63.0,
+            ((v >> 12) & 63) / 63.0,
+            ((v >> 6) & 63) / 63.0,
+            (v & 63) / 63.0,
+        )
+    return buf[off] / 255.0, buf[off + 1] / 255.0, buf[off + 2] / 255.0, buf[off + 3] / 255.0
+
+
+def array_elem(cp: dict, ram, array: int, idx: int, size: int):
+    """Resolve an indexed attribute: CP ARRAY_BASE/ARRAY_STRIDE into the RAM image.
+
+    Returns (buffer, offset, address); buffer is None when there is no image or
+    the element falls outside it, which is the same condition the runtime
+    counts as a bad vertex reference.
+    """
+    base = cp.get(0xA0 + array, 0) & 0x1FFFFFFF
+    stride = cp.get(0xB0 + array, 0) & 0xFF
+    addr = base + idx * stride
+    off = addr & MEM_MASK
+    if ram is None or off + size > len(ram):
+        return None, 0, addr
+    return ram, off, addr
+
+
+def read_vertex(layout: list[Attr], buf, off: int, cp: dict, ram):
+    """One vertex from the stream at `off`; returns (values, next offset)."""
+    vals: dict[str, object] = {}
+    for at in layout:
+        if at.mode == 0:
+            continue
+        if at.kind == "mtxidx":
+            vals[at.name] = buf[off]
+            off += 1
+            continue
+        if at.mode == 1:
+            src, soff, addr = buf, off, None
+        else:
+            width = 1 if at.mode == 2 else 2
+            idx = int.from_bytes(bytes(buf[off : off + width]), "big")
+            # An NBT triple spends three indices and the lighting uses the first.
+            src, soff, addr = array_elem(cp, ram, at.array, idx, at.elem)
+            vals[at.name + ".at"] = (idx, addr)
+        off += at.stream_bytes
+        if src is None:
+            vals[at.name] = None
+        elif at.kind == "color":
+            vals[at.name] = read_color(src, soff, at.fmt)
+        else:
+            nb = comp_bytes(at.fmt)
+            vals[at.name] = [
+                read_comp(src, soff + k * nb, at.fmt, at.frac) for k in range(at.comps)
+            ]
+    return vals, off
+
+
+def transform_normal(xf, posidx: int, nrm) -> list[float]:
+    """The normal the lighting sees: XF normal matrix for this position index,
+    then normalised, exactly as the transform unit does it."""
+    nb = 0x400 + 3 * (posidx & 0x3F)
+    out = [
+        xff(xf, nb + 3 * r) * nrm[0]
+        + xff(xf, nb + 3 * r + 1) * nrm[1]
+        + xff(xf, nb + 3 * r + 2) * nrm[2]
+        for r in range(3)
+    ]
+    length = (out[0] ** 2 + out[1] ** 2 + out[2] ** 2) ** 0.5
+    return [c / length for c in out] if length > 1e-12 else out
+
+
+def transform_position(xf, posidx: int, pos) -> list[float]:
+    """View-space position: the XF position matrix applied as a 3x4."""
+    row0 = 4 * (posidx & 0x3F)
+    p = list(pos) + [0.0] * (3 - len(pos)) + [1.0]
+    return [
+        xff(xf, row0 + 4 * r) * p[0]
+        + xff(xf, row0 + 4 * r + 1) * p[1]
+        + xff(xf, row0 + 4 * r + 2) * p[2]
+        + xff(xf, row0 + 4 * r + 3)
+        for r in range(3)
+    ]
+
+
+def layout_summary(layout: list[Attr], cp: dict) -> str:
+    parts = []
+    for at in layout:
+        if at.mode == 0:
+            continue
+        if at.kind == "mtxidx":
+            parts.append(f"{at.name}=direct/u8")
+            continue
+        fmt = COLOR_FMT[at.fmt] if at.kind == "color" else f"{COMP_FMT[at.fmt]}x{at.comps}"
+        s = f"{at.name}={ATTR_MODE[at.mode]}/{fmt}"
+        if at.frac:
+            s += f">>{at.frac}"
+        if at.triple:
+            s += "/nbt3"
+        if at.mode >= 2:
+            base = cp.get(0xA0 + at.array, 0) & 0x1FFFFFFF
+            stride = cp.get(0xB0 + at.array, 0) & 0xFF
+            s += f"@arr{at.array}[{base:08X}+{stride}]"
+        parts.append(s)
+    return " ".join(parts)
+
+
+def fmt_vec(v, digits: int) -> str:
+    return "(" + ", ".join(f"{c:.{digits}f}" for c in v) + ")"
+
+
+def dump_vertices(fifo: bytes, off: int, count: int, layout, cp, xf, ram, out):
+    """Print one line per vertex of a draw whose payload starts at `off`."""
+    out.append(f"    {layout_summary(layout, cp)}")
+    default_posidx = xf[0x1018] & 0x3F
+    for i in range(count):
+        vals, off = read_vertex(layout, fifo, off, cp, ram)
+        posidx = vals.get("pmtx", default_posidx) & 0x3F
+        cells = [f"v{i:<3d} pmtx {posidx:2d}"]
+        pos = vals.get("pos")
+        if pos is None and "pos" in vals:
+            cells.append("pos <unresolved>")
+        elif pos is not None:
+            cells.append(f"pos {fmt_vec(pos, 3)}")
+            cells.append(f"view {fmt_vec(transform_position(xf, posidx, pos), 3)}")
+        nrm = vals.get("nrm")
+        if nrm is None and "nrm" in vals:
+            cells.append("nrm <unresolved>")
+        elif nrm is not None:
+            cells.append(
+                f"nrm {fmt_vec(nrm, 4)} -> {fmt_vec(transform_normal(xf, posidx, nrm), 4)}"
+            )
+        for k in range(2):
+            col = vals.get(f"clr{k}")
+            if col is not None:
+                cells.append(f"clr{k} ({', '.join(f'{round(c * 255)}' for c in col)})")
+            elif f"clr{k}" in vals:
+                cells.append(f"clr{k} <unresolved>")
+        for k in range(8):
+            tex = vals.get(f"tex{k}")
+            at = vals.get(f"tex{k}.at")
+            where = f"@{at[1]:08X}" if at else ""
+            if tex is not None:
+                cells.append(f"tex{k}{where} {fmt_vec(tex, 4)}")
+            elif f"tex{k}" in vals:
+                cells.append(f"tex{k}{where} <unresolved>")
+        out.append("      " + " ".join(cells))
+    return off
+
+
+def decode(fifo: bytes, cp: dict, out, xf=None, ram=None, verts=None):
+    """Walk the command stream. `verts` is an inclusive (first, last) range of
+    draw numbers whose vertices to print; when it is set nothing else is."""
+    if xf is None:
+        xf = [0] * 4352
+    quiet = verts is not None
     off = 0
     nops = 0
+    draw = 0
+
+    def emit(line):
+        if not quiet:
+            out.append(line)
+
     while off < len(fifo):
         op = fifo[off]
         if op == 0x00:
@@ -177,15 +448,15 @@ def decode(fifo: bytes, cp: dict, out):
             off += 1
             continue
         if nops:
-            out.append(f"  ({nops} nops)")
+            emit(f"  ({nops} nops)")
             nops = 0
         if op == 0x48:
-            out.append("  INVALIDATE_VTX_CACHE")
+            emit("  INVALIDATE_VTX_CACHE")
             off += 1
         elif op == 0x08:
             reg, val = fifo[off + 1], int.from_bytes(fifo[off + 2 : off + 6], "big")
             cp[reg] = val
-            out.append(f"  CP {reg:02X} {CP_NAMES.get(reg, ''):<14} = {val:08X}")
+            emit(f"  CP {reg:02X} {CP_NAMES.get(reg, ''):<14} = {val:08X}")
             off += 6
         elif op == 0x10:
             n = int.from_bytes(fifo[off + 1 : off + 3], "big") + 1
@@ -193,45 +464,79 @@ def decode(fifo: bytes, cp: dict, out):
             vals = [
                 int.from_bytes(fifo[off + 5 + 4 * i : off + 9 + 4 * i], "big") for i in range(n)
             ]
+            for i, v in enumerate(vals):
+                if addr + i < len(xf):
+                    xf[addr + i] = v
             name = XF_NAMES.get(addr, "MTX" if addr < 0x1000 else "")
-            out.append(f"  XF {addr:04X} {name:<14} x{n}: {xf_words(addr, vals)}")
+            emit(f"  XF {addr:04X} {name:<14} x{n}: {xf_words(addr, vals)}")
             off += 5 + 4 * n
         elif op in (0x20, 0x28, 0x30, 0x38):
             idx = int.from_bytes(fifo[off + 1 : off + 3], "big")
             v = int.from_bytes(fifo[off + 3 : off + 5], "big")
-            out.append(
-                f"  XF_INDEXED array {12 + (op - 0x20) // 8} index {idx} -> {v & 0xFFF:04X} x{(v >> 12) + 1}"
-            )
+            array = 12 + (op - 0x20) // 8
+            dst, n = v & 0xFFF, (v >> 12) + 1
+            src, soff, addr = array_elem(cp, ram, array, idx, 4 * n)
+            if src is not None:
+                for i in range(n):
+                    if dst + i < len(xf):
+                        xf[dst + i] = int.from_bytes(
+                            bytes(src[soff + 4 * i : soff + 4 * i + 4]), "big"
+                        )
+            emit(f"  XF_INDEXED array {array} index {idx} -> {dst:04X} x{n} (from {addr:08X})")
             off += 5
         elif op == 0x40:
             addr = int.from_bytes(fifo[off + 1 : off + 5], "big")
             size = int.from_bytes(fifo[off + 5 : off + 9], "big")
-            out.append(f"  DISPLAY_LIST {addr:08X} size {size}")
+            emit(f"  DISPLAY_LIST {addr:08X} size {size}")
             off += 9
         elif op == 0x61:
             v = int.from_bytes(fifo[off + 1 : off + 5], "big")
             reg = v >> 24
-            out.append(f"  BP {reg:02X} {BP_NAMES.get(reg, ''):<16} = {v & 0xFFFFFF:06X}")
+            emit(f"  BP {reg:02X} {BP_NAMES.get(reg, ''):<16} = {v & 0xFFFFFF:06X}")
             off += 5
         elif 0x80 <= op < 0xC0:
             n = int.from_bytes(fifo[off + 1 : off + 3], "big")
             vat = op & 7
-            vs = vertex_size(cp, vat)
-            out.append(
-                f"  DRAW {PRIMS.get(op & 0xF8, hex(op))} vat {vat} count {n} ({vs} bytes/vertex)"
+            layout = vertex_layout(cp, vat)
+            vs = sum(at.stream_bytes for at in layout)
+            draw += 1
+            line = (
+                f"  DRAW #{draw} {PRIMS.get(op & 0xF8, hex(op))} vat {vat} "
+                f"count {n} ({vs} bytes/vertex)"
             )
+            if verts is not None and verts[0] <= draw <= verts[1]:
+                out.append(line)
+                dump_vertices(fifo, off + 3, n, layout, cp, xf, ram, out)
+            else:
+                emit(line)
             off += 3 + n * vs
         else:
-            out.append(f"  ?? {op:02X}")
+            emit(f"  ?? {op:02X}")
             off += 1
     if nops:
-        out.append(f"  ({nops} nops)")
+        emit(f"  ({nops} nops)")
+
+
+def parse_range(spec: str) -> tuple[int, int]:
+    """An inclusive draw-number range from 12, 12-30, 12-, -30 or all."""
+    spec = spec.strip()
+    if spec == "all":
+        return 1, 1 << 30
+    if "-" not in spec:
+        n = int(spec)
+        return n, n
+    first, last = spec.split("-", 1)
+    return int(first) if first else 1, int(last) if last else 1 << 30
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("base")
     ap.add_argument("--regs", action="store_true")
+    ap.add_argument("--verts", metavar="RANGE", help="print the vertices of draws N, N-M or all")
+    ap.add_argument(
+        "--ram", metavar="PATH", help="RAM image for indexed attributes (default BASE.ram)"
+    )
     args = ap.parse_args()
     regs = Path(args.base + ".regs").read_bytes()
     cp_regs = struct.unpack("<256I", regs[:1024])
@@ -249,8 +554,21 @@ def main() -> int:
             if v:
                 print(f"BP {i:02X} {BP_NAMES.get(i, ''):<16} = {v:06X}")
         return 0
+    ram_path = Path(args.ram) if args.ram else Path(args.base + ".ram")
+    ram = ram_path.read_bytes() if ram_path.exists() else None
+    if ram is None and args.verts:
+        print(
+            f"note: {ram_path} is missing; indexed attributes cannot be resolved", file=sys.stderr
+        )
     out: list[str] = []
-    decode(Path(args.base + ".fifo").read_bytes(), cp, out)
+    decode(
+        Path(args.base + ".fifo").read_bytes(),
+        cp,
+        out,
+        xf=list(xf_regs),
+        ram=ram,
+        verts=parse_range(args.verts) if args.verts else None,
+    )
     print("\n".join(out))
     return 0
 

@@ -1158,29 +1158,54 @@ static void lerp_vertex(const Vertex* a, const Vertex* b, float t, Vertex* o)
     for (i = 0; i < 8; i++) for (k = 0; k < 3; k++) o->tex[i][k] = a->tex[i][k] + (b->tex[i][k] - a->tex[i][k]) * t;
 }
 
-/* Clip space on this hardware: -w <= z <= 0 is visible. Clip a polygon
- * against the near plane (z + w >= 0) and w > 0; the far side and the
- * guard band are handled by the scissor. */
-static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
+/* Clip space on this hardware: -w <= z <= 0 is visible, the volume Dolphin's
+ * software clipper uses. A polygon is clipped against the near plane
+ * (z + w >= 0), against w > 0, and against the far plane (z <= 0); the guard
+ * band in x and y is still left to the scissor.
+ *
+ * The far plane used to be left to the scissor as well, which does not cover
+ * it: a vertex past the far plane comes out of to_screen with a depth above
+ * 1.0, depth_test clamps that to 0xFFFFFF, and LEQUAL against a buffer
+ * cleared to 0xFFFFFF passes -- so geometry behind the far plane painted
+ * over geometry in front of it.
+ *
+ * The slack below is load-bearing, and it is why the far test is not a bare
+ * z <= 0. The game draws its whole 2D layer -- HUD, dialogue, menus, the
+ * title -- as orthographic quads sitting exactly on the far plane: its ortho
+ * projection leaves XF 0x1024 = -0.00999999978 and 0x1025 = -1.0 (near 0,
+ * far 100) and the quads are at view z = -100, so z is fl(-0.00999999978 *
+ * -100) - 1.0 and that product rounds to exactly 1.0f. Ten of the
+ * twenty-three captured frames hold between 18 and 2652 such vertices, all of
+ * them landing on z == 0.0f, which an inclusive test keeps. But the two terms
+ * are a reciprocal and that reciprocal times a distance, computed separately
+ * by the guest, so a scene whose numbers round the other way puts the 2D
+ * layer one ulp past the plane -- and a bare z <= 0 would erase it. One ulp
+ * at that scale is two units of the 24-bit depth buffer, so everything the
+ * slack admits already has the deepest depth the buffer can hold and cannot
+ * draw over anything the clip exists to protect. */
+#define Z_FAR_SLACK (1.0f / 8388608.0f) /* 2^-23: one float32 ulp where the two projection terms cancel */
+
+typedef enum { CLIP_NEAR, CLIP_W, CLIP_FAR } ClipPlane;
+
+/* Signed distance to a clip plane, positive inside. Each one is linear in the
+ * homogeneous coordinates, which is what makes the edge parameter below an
+ * exact split of the edge rather than an approximation of one. */
+static float clip_dist(const Vertex* v, ClipPlane plane)
 {
-    Vertex tmp[16];
+    switch (plane) {
+    case CLIP_NEAR: return v->z + v->w;
+    case CLIP_W: return v->w - 1e-5f;
+    default: return v->w * Z_FAR_SLACK - v->z;
+    }
+}
+
+static unsigned clip_against(const Vertex* in, unsigned n, Vertex* out, ClipPlane plane)
+{
     unsigned m = 0, i;
     for (i = 0; i < n; i++) {
         const Vertex* a = &in[i];
         const Vertex* b = &in[(i + 1) % n];
-        float da = a->z + a->w, db = b->z + b->w;
-        if (da >= 0.0f) tmp[m++] = *a;
-        if ((da >= 0.0f) != (db >= 0.0f)) {
-            float t = da / (da - db);
-            lerp_vertex(a, b, t, &tmp[m++]);
-        }
-        if (m >= 14) break;
-    }
-    n = m; m = 0;
-    for (i = 0; i < n; i++) {
-        const Vertex* a = &tmp[i];
-        const Vertex* b = &tmp[(i + 1) % n];
-        float da = a->w - 1e-5f, db = b->w - 1e-5f;
+        float da = clip_dist(a, plane), db = clip_dist(b, plane);
         if (da >= 0.0f) out[m++] = *a;
         if ((da >= 0.0f) != (db >= 0.0f)) {
             float t = da / (da - db);
@@ -1191,11 +1216,30 @@ static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
     return m;
 }
 
+/* Whether the fast path may rasterize a vertex without running the clipper.
+ * The w test is deliberately looser than the clipper's: this one asks only
+ * that the vertex is in front of the eye, while the clipper's 1e-5 is there
+ * to keep to_screen's reciprocal finite. Tightening it here would start
+ * clipping triangles the renderer draws today, which is a separate question
+ * from the far plane. */
+static int vertex_unclipped(const Vertex* v)
+{
+    return clip_dist(v, CLIP_NEAR) >= 0.0f && v->w > 0.0f && clip_dist(v, CLIP_FAR) >= 0.0f;
+}
+
+static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
+{
+    Vertex tmp[16];
+    n = clip_against(in, n, out, CLIP_NEAR);
+    n = clip_against(out, n, tmp, CLIP_W);
+    return clip_against(tmp, n, out, CLIP_FAR);
+}
+
 static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
     Vertex in[3], out[16];
     unsigned n, i;
-    int inside = (a->z + a->w >= 0.0f && a->w > 0.0f) && (b->z + b->w >= 0.0f && b->w > 0.0f) && (c->z + c->w >= 0.0f && c->w > 0.0f);
+    int inside = vertex_unclipped(a) && vertex_unclipped(b) && vertex_unclipped(c);
     if (g_debug > 1 && t_tid <= 1 && g_draw_no >= (unsigned)g_debug)
         fprintf(stderr, "[gxr] draw %u clip-space (%.3f,%.3f,%.3f,%.3f) (%.3f,%.3f,%.3f,%.3f) (%.3f,%.3f,%.3f,%.3f) tex0 (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f)\n",
                 g_draw_no, a->x, a->y, a->z, a->w, b->x, b->y, b->z, b->w, c->x, c->y, c->z, c->w,
