@@ -701,6 +701,7 @@ void recomp_fn_8025F0DC(CpuState* s); void recomp_fn_80005520(CpuState* s); void
 void recomp_fn_8025EF88(CpuState* s); void recomp_fn_8025ED74(CpuState* s); void recomp_fn_8025F120(CpuState* s);
 int dc_fn_8025EF88(const char* a, const char* b);
 char* dc_strstr(const char* hay, const char* needle);
+char* dc_strcpy(char* dst, const char* src);
 
 static void run_twin(CpuState* s, void (*fn)(CpuState*))
 {
