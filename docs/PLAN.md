@@ -395,11 +395,14 @@ with the texture use-after-free fix — and their normals are three populations,
 not one, with the end caps near-perpendicular by arithmetic rather than by
 intent. This item also miscounted: the 90 additive draws are octagonal prisms
 on the bridge cabins, and the beams are 54 draws with a different texture.
-*Left:* the beams render flat, because they write depth and the sky behind
-them fails afterwards. That is C3's neighbourhood, not a lighting question.
-The one measurement still worth a reference is whether the transform unit
-renormalises a vertex normal, since capture 3900 submits these at twenty
-times unit length.
+*Left, and narrowed twice more.* The depth theory was wrong too: the game
+clears the depth-write bit across these draws and we honour it, the cloud
+layer is not occluded, and a census of 43,249 draws across all 23 captures
+found no draw that combines early depth with a rejecting alpha test. What
+remains is coverage: no beam fragment samples a texel alpha below 176, so
+the sprite's fade never appears and each beam ends at a hard quad edge.
+Look at the texture-coordinate post-transform, not at shading. See
+docs/FINDINGS.md.
 
 **C2. Two small defects in the clip and texture paths** — *done.*
 The clipper ran two passes, near and w, and its comment claimed the scissor

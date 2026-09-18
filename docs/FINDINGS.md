@@ -590,14 +590,36 @@ length to within 3e-5, through identity matrices, so nothing supports the
 "our vertex data differs" theory. The sprite's alpha ramp is real and the
 quads sample it: alpha 255,218,182,145,72,0 across the texels they use.
 
-**What is still wrong is the flatness.** The sky's cloud detail stops at
-the beam edges, because the beams are blended draws that write depth and
-the sky behind them fails the test afterwards. That is a draw-ordering or
-depth-write question, and additive blending cannot darken anything, so no
-amount of lighting work can affect it. One measurement would settle the
-remainder: whether the hardware renormalises a vertex normal in the
-transform unit, since capture 3900 submits these beam normals at twenty
-times unit length.
+**The depth theory is also wrong, and was checked to destruction.** The
+paragraph here used to say the beams write depth and occlude the sky.
+They do not. The game brackets the 54 beam draws with a depth mode that
+has the write bit clear, restoring it in the very next command, and our
+renderer honours that: narrating a beam pixel shows the depth buffer
+unchanged at the sky's value across both beam fragments. The cloud layer
+is not occluded either. It is drawn later and it lands: measured over the
+sky, it changes 24.9% of the pixels a beam covers against 30.2% of those
+it does not, and the cloud fragments that do fail depth fail against the
+hull, which is correct.
+
+Two further things were ruled out rather than assumed. Our fragment path
+applies the alpha test before the only depth write in the ordinary
+late-depth mode, so an alpha-killed fragment cannot touch the depth
+buffer. The early-depth mode does write first, which is what the hardware
+does and why the API exposes the switch, and a census of all 23 captures
+found not one draw among 43,249 that combines early depth with an alpha
+test that can reject. The game turns early depth off whenever it turns
+the alpha test on.
+
+**What is actually left is a coverage question, not a shading one.**
+Inside the beam quads no fragment ever samples a texel alpha below 176,
+so the fade end of the sprite's ramp, 145 then 72 then 0, is never
+reached: each beam stops at a hard quad boundary with alpha still at 205
+one pixel before nothing. The beams' texture coordinates pass through a
+post-transform matrix, and the fragments land in a narrow band of the
+sprite. That is where to look next, and it is a texture-coordinate
+generation question. Whether the transform unit renormalises a vertex
+normal is still worth knowing, since capture 3900 submits these normals
+at twenty times unit length, but it cannot explain the edges.
 
 A caution for whoever reads this next: the entry above was describing a
 render that no longer existed, and the plan item built on it counted 90
