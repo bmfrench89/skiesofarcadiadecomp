@@ -102,11 +102,22 @@ how it went.
   old renders were washed green and blue over whole scenes, with the
   gold, maroon and skin tones missing. The manifest had pinned that.
 
+- The memory card, written. A blank card makes the mount answer BROKEN,
+  which is the one card status that opens the title screen's "Proceed with
+  formatting?" prompt, and confirming it runs the only call to
+  CARDFormatAsync in the whole executable: five sector erases, 960 page
+  programs, 40,960 bytes, and 325 completion interrupts. The image the
+  game left behind verifies as one its own mount would accept and carries
+  the game's serial, not ours. Two earlier attempts failed for reasons
+  worth keeping: the title screen spends the first START snapping its logo
+  flyover, which is what puts the title on screen in the first place, and
+  the value that kept routing the run away was not a menu choice but the
+  attract-mode timeout, 92 seconds of host wall clock.
+
 ## Open
 
-- Saves: the card mounts and is read, but the game has still never
-  written to it. That needs a save point, and no scripted playthrough
-  has reached one.
+- Saves: the game formats a card, but has not yet saved or loaded one.
+  That needs a save point, which needs recorded input to reach.
 - The battleship's searchlight beams render dark; every step matches the
   hardware rules as modelled, so a reference capture is needed.
 - Beyond the hold: the ship and overworld sections, and the long tail of

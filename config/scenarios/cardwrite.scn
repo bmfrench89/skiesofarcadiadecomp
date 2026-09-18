@@ -4,9 +4,9 @@
 name: cardwrite
 summary: Blank card in slot A, New Game, then Yes to "Proceed with formatting?" -- the only CARDFormatAsync in the executable.
 frames: 6000
-pad: 1600:start,1640:a,1700:start,1740:a
-pad: 1800:left@30#5
-pad: 2920:left@150#5,2925:a@150
+pad: 1600:start,1640:a,1700:start
+pad: 1730:start@30#5
+pad: 1745:a+left@30#5
 env: SOA_CARD=build/cards/blank.raw
 env: SOA_CARD_VERBOSE=1
 env: SOA_TRACE=1
@@ -26,39 +26,65 @@ shows:   blocks reprogrammed 128 bytes at a time (command 0xF2), so a completed
 shows:   format should leave "card ... 40960 written" in the [exi] line and
 shows:   build/cards/blank.raw on disk where nothing was before.
 shows: with SOA_CARD pointed at a --damage'd image instead, the same script
-shows:   shows the other write: card_scan's CARDCheckExAsync repairs the one bad
+shows:   shows the other write: card_scan CARDCheckExAsync repairs the one bad
 shows:   system block, rewrites the status to 0 at 0x801A2A8C, and the screen
 shows:   never draws. That is 8192 written and no prompt -- a different code
 shows:   path, not a weaker version of this one.
 
-evidence: the two presses that reach the screen are the standard preamble every
-evidence:   saved run in build/ begins with, and config/scenarios/title.scn
-evidence:   records why: "START at frame 1600 is taken by the title, A at 1640
-evidence:   chooses New Game". build/scenario-title.log prints frame 1600
-evidence:   buttons 1000 and frame 1640 buttons 0100.
-evidence: that those two presses already reach the card screen is in the run
-evidence:   counters, not in a guess. build/scenario-title.log stops at frame
-evidence:   2000 and reports "card 40960 bytes read" -- one five-block mount,
-evidence:   the title's card_poll. Every longer scenario reports 81920, i.e. a
-evidence:   second mount, and that second one is card_scan inside the card
-evidence:   screen. docs/PLAN.md:246 dates them at 3418 and 4292, which are the
-evidence:   [card] line's f field = irq_retrace_count(); scenario-newgame.log
-evidence:   pins frame 2040 to retrace 4258 and 2200 to 4579, so retrace 4292 is
-evidence:   game frame ~2057. The prompt is therefore up and waiting for input
-evidence:   from about frame 2070, which is 855 frames before the first A here.
-evidence: the six runs whose log says "new blank card" (newgame, opening,
-evidence:   monkey, capture, audio, speed) all read 81920 bytes and wrote 0.
-evidence:   They reached this prompt and dismissed it: state 0 preselects No
-evidence:   (obj[20] = 1 at 0x8022B898) and their next scripted A took it
-evidence:   (0x8022B494). This script differs from them in exactly one way -- a
-evidence:   LEFT before every A.
-evidence: the card verdicts are the repo's own model, not inference: "python
+evidence: THE ROUTE, from the jump table at 0x802F91AC, every arm read in the
+evidence:   DOL and again in the generated C that actually runs: scene 11
+evidence:   fn_80229124 tests the START bit of the pad EDGE word at
+evidence:   [[0x80311A60]+8] (0x802292D8), and 0x802292EC is the ONLY store of
+evidence:   12 to the scene word at 0x80311AE0; scene 12 fn_80228E00 stores
+evidence:   fn_801D8EE8 id into byte 24 of the title object (0x80229074) and
+evidence:   writes 13; scene 13 fn_80228C50 routes that byte -- 1 to scene 16
+evidence:   (Continue), 119 to scene 2, anything else to 14 (0x80228DC0, the
+evidence:   only store of 14); scene 14 fn_80228BE4 inits the screen object and
+evidence:   writes 15 (0x80228C3C, the only store of 15); scene 15 fn_80228B74
+evidence:   runs fn_8022AE94, the card screen.
+evidence: WHY THE RUN OF 2026-09-18 NEVER GOT THERE, out of its own log. Scene
+evidence:   10 reads START too: fn_802293E0 calls fn_802295D0, which at
+evidence:   0x80229638 tests the same edge bit and ORs 0x80 into the five logo
+evidence:   elements to SNAP the flyover, and scene 10 advances to 11 the moment
+evidence:   that flyover reports finished (0x802294F4). So the first START
+evidence:   offered to the logos is always spent skipping them.
+evidence:   build/scenario-cardwrite.log lines 639-641 are exactly that:
+evidence:   "[si] frame 1700 (retrace 3576): buttons 1000", then
+evidence:   TitleSceneChange r4 0000000B, then "[si] frame 1710". Scene 11 was
+evidence:   first dispatched one or two frames AFTER the press that caused it,
+evidence:   with the edge already spent, and the script had no START left. Two
+evidence:   STARTs on different frames are needed; one is never enough.
+evidence: THE BUDGET. Scene 11 owned frames ~1702 to ~4505 (TitleSceneChange
+evidence:   r4 0000000D sits between "[si] frame 4505" and the scene-2 line, log
+evidence:   lines 858-860) and then bailed on its own attract timeout at
+evidence:   0x80229230: 0x1686B = 92267 ms since the title stream started, which
+evidence:   is HOST WALL CLOCK -- runtime/hle.c timebase() is timespec_get,
+evidence:   scaled only by SOA_SPEED. It stored 119 into byte 24 at 0x802292C0
+evidence:   and scene 13 sent 119 to scene 2, which is the ATTRACT DEMO, not the
+evidence:   game: the log then runs 2,3,4,5,6,8, back to 0,1,9,10,11 and ends at
+evidence:   frame 6000 still on the title. 2804 frames fitted in those 92.3 s,
+evidence:   so this machine gives about 33 title frames per second -- a budget
+evidence:   that shrinks on a slower machine and under SOA_SPEED, which is why
+evidence:   every press here is packed into the first 250 frames of scene 11.
+evidence: WHAT THE 81920 IN THE OTHER LOGS IS NOT. The note that used to stand
+evidence:   here said a second mount proved those runs reached the card screen.
+evidence:   In build/scenario-cardwrite.log both CardMountAsync lines carry
+evidence:   lr 801A36B0 -- fn_801A3510, the title per-slot poll that fn_80228A20
+evidence:   runs for scenes 9..13 -- and that run entered the title twice and
+evidence:   never reached scene 15. Two mounts of 40960 is 81920 for that reason
+evidence:   alone. The byte count proves nothing about the screen;
+evidence:   CardScreenStatus (0x8022B828) firing is the only proof it ran, and
+evidence:   it has never fired in this repository.
+evidence: the card verdicts are the repo own model, not inference: "python
 evidence:   tools/cardformat.py verify" on 512 KB of 0xFF prints "CARDDoMount
 evidence:   would return -6 (BROKEN), first failure: CARDVerifyID device ID at
 evidence:   +32". runtime/exi.c card_load() fills the buffer with 0xFF when
 evidence:   SOA_CARD names a file that is not there, so "blank" costs nothing to
 evidence:   make and sram_init() still presents its built-in CARD_FLASH_ID, so
-evidence:   the mount is not diverted to -5 IOERROR.
+evidence:   the mount is not diverted to -5 IOERROR. card_scan maps -6 and -13
+evidence:   to status 2 at 0x801A2A2C, and on a blank image CARDVerifyID fails
+evidence:   inside CARDCheckExAsync before any repair arm can run, so the status
+evidence:   stays 2 and the prompt is what draws.
 
 note: DELETE build/cards/blank.raw BEFORE EVERY RUN. A blank card is the
 note:   absence of the file, and a successful format creates it (card_flush() in
@@ -67,26 +93,66 @@ note:   second run would then find a valid card, card_scan would answer 0, the
 note:   screen would never draw and nothing would be written. The file left
 note:   behind is the proof, not the input: read it with "python
 note:   tools/cardformat.py show build/cards/blank.raw".
-note: why LEFT is safe to press forever and A is not. Both are read from the
-note:   edge word at [[0x80311A60]+8], so a held button fires once. LEFT at
-note:   0x8022B41C only ever moves the cursor 1 -> 0, so it is idempotent and
-note:   costs nothing anywhere else in this run; A at 0x8022B460 with the cursor
-note:   still on No exits the screen for good (0x8022B494) and there is no
-note:   second chance that boot. So every A here is preceded by a LEFT.
-note: the frame arithmetic behind the three pad lines. 1800:left@30#5 puts a
-note:   LEFT edge every 30 frames from 1800 -- down for offsets 0..4 of each
-note:   30-frame cycle, up for 5..29, so each one is a fresh edge rather than
-note:   one long hold. 2920:left@150#5 lands on offsets 10..14 and 2925:a@150 on
-note:   15..24, so LEFT and A never share a frame (buttons_now() in runtime/si.c
-note:   ORs every live event into one word, and a LEFT that toggles the cursor
-note:   returns at 0x8022B45C without looking at A, which would swallow it), and
-note:   every A has a LEFT edge exactly five frames in front of it that is not a
-note:   continuation of the previous one. 150 is a multiple of 30, so those
-note:   offsets hold for every repeat.
-note: the second START/A pair at 1700/1740 is insurance, not evidence. If the
-note:   1600 START were ever early, 1700 opens the menu and 1740 takes New Game;
-note:   if it was not, scenes 13 and 14 read no input at all and both are inert.
-note:   Neither can reach the prompt, which is ~300 frames later.
+note: AND DO NOT OVERRIDE SOA_CARD. The 2026-09-18 run was started with
+note:   --env SOA_CARD=build/cards/damaged.raw ("[exi] memory card
+note:   build/cards/damaged.raw (524288 bytes)" is line 6 of its log). A damaged
+note:   image takes CARDCheckExAsync repair arm inside card_scan, which
+note:   rewrites the status to 0 at 0x801A2A8C; the prompt then never appears
+note:   and the write is an 8192-byte repair, not the format. That run is worth
+note:   making once, deliberately, as its own line in the log -- it is not this
+note:   one.
+note: THE THREE PAD LINES, and what each press is for.
+note:   1600:start,1640:a,1700:start reproduces the preamble of the run that was
+note:   measured, so the scene timing in the evidence above still applies: 1600
+note:   and 1640 land in the pre-title chain, and the START at 1700 is the one
+note:   that snaps the logo flyover and puts scene 11 on screen at about frame
+note:   1702.
+note:   1730:start@30#5 is the press the old script never had: a fresh START
+note:   edge every 30 frames from 1730, each held 5 frames. The first one that
+note:   lands while scene 11 is the dispatched scene takes 0x802292EC and writes
+note:   scene 12. If the flyover ran long and 1730 is spent snapping it instead,
+note:   1760 or 1790 does the job -- the repeat is the whole point, because the
+note:   snap always eats one press and the frame it is eaten on is not
+note:   predictable to better than a few frames. Extra STARTs cost nothing:
+note:   0x802292D8 and 0x80229638 are the only two tests of bit 0x1000 anywhere
+note:   between 0x80228000 and 0x8022C000, so once scene 12 is up, START is dead
+note:   input for the rest of the title and for the whole card screen.
+note:   1745:a+left@30#5 is one press doing two different jobs, and it is
+note:   pressed as A AND LEFT TOGETHER on purpose. See the next note.
+note: WHY A AND LEFT MUST SHARE A FRAME, AND WHY THAT MAKES "No" UNREACHABLE.
+note:   The prompt input is fn_8022B318 and it tests, in this order: LEFT
+note:   (0x8022B41C, edge bit 0x1) -- and if the cursor is on No (obj[5] == 1)
+note:   it toggles to Yes and RETURNS at 0x8022B45C without ever looking at A;
+note:   then RIGHT; then A (0x8022B460), which reads Yes as confirm (0x8022B47C)
+note:   and No as dismiss (0x8022B494, the arm that ends the boot). So a frame
+note:   carrying BOTH bits is idempotent: on the cursor first frame it is a
+note:   LEFT and the A is swallowed, and on the second it is an A on Yes,
+note:   because the LEFT test falls through once the cursor is already Yes.
+note:   Two of these presses, 30 frames apart, always format and can never
+note:   dismiss -- whatever frame the fade gate at 0x8022B3E8 opens on. This is
+note:   why the old "LEFT five frames before A" pattern was a gamble: if the
+note:   gate opened inside that gap, the A was the first input the screen ever
+note:   saw and it landed on No, with no second chance that boot.
+note:   The same press is also the New Game confirm: fn_801D91F4 tests A first
+note:   (0x801D92C8) and never reads LEFT at all (its cursor is UP/DOWN, bits
+note:   0x8 and 0x4), so A+LEFT in the scene-12 menu is simply A.
+note:   COROLLARY, and it matters: NO OTHER PAD LINE MAY PRESS LEFT. If a second
+note:   line holds LEFT across the A frame, LEFT stops being a fresh edge there
+note:   (the game reads [[0x80311A60]+8], which is cur & (cur ^ prev)) and the A
+note:   reaches the cursor unprotected. The old 1800:left@30#5 and
+note:   2920:left@150#5 lines are gone for that reason, not because they were
+note:   redundant.
+note: WHY NEW GAME IS ENTRY 0 AND CANNOT SILENTLY BECOME CONTINUE. fn_801D8D54
+note:   memsets the 584-byte menu block, so the cursor byte starts at 0 = New
+note:   Game, and scene 13 proves the mapping: id 1 goes to scene 16, which is
+note:   fn_801D8B2C, the Continue/load flow. The one thing that moves the cursor
+note:   by itself is fn_801D91F4 at 0x801D9254, which forces it to 1 on the
+note:   first frame fn_801A3510 reports a save in slot A. It cannot fire here:
+note:   fn_801A3510 returns 1 only with its flag bits 0x1 AND 0x2 both set, and
+note:   0x2 is set only when fn_801A37D8 finds a save after a SUCCESSFUL mount.
+note:   A blank card mounts -6, which takes 0x801A3634 instead -- flags
+note:   0x10 | 0x1, a latched failure -- so the poll answers 0 all run. This
+note:   script never presses UP or DOWN, so nothing else can move it.
 note: the A repeat keeps working after the write. 0x8022B1E4 ("Formatting
 note:   completed. Press A Button to continue.") takes an A and starts the game;
 note:   0x8022B128 ("Formatting failed.") takes an A, re-scans and returns to
@@ -104,5 +170,18 @@ note:   named @r31 so the dump is the 32-byte screen object at 0x803167F0 --
 note:   word 0 the state, 2 what the screen returns to title scene 15, 3 the
 note:   card status, 4 the slot, 5 the Yes/No cursor, 7 the fade sub-state that
 note:   gates input. CardScanRepaired is named @r1 so word 4 of the dump is
-note:   CARDCheckExAsync's xferBytes out-param, which lives at r1+16 and is
+note:   CARDCheckExAsync xferBytes out-param, which lives at r1+16 and is
 note:   otherwise in r0, which trace.c does not print.
+note: READING THE RESULT, with only the tracepoints already in config/trace.txt.
+note:   TitleSceneChange (0x80228A60) r4 must show 0000000B, then 0000000C --
+note:   the value this port has never printed -- then 0000000D, 0000000E,
+note:   0000000F. No 0000000C means the STARTs still missed. 00000010 in place
+note:   of 0000000E means the A took Continue, so the card was not blank.
+note:   CardScreenStatus (0x8022B828) r3 = 00000002 is the prompt; 00000000 is a
+note:   healthy or repaired card and the screen leaving without drawing.
+note:   CardPromptCursor (0x8022B444) prints the edge word, so with this script
+note:   it reads 00000101 (A+LEFT), not 00000001. CardPromptYes (0x8022B47C)
+note:   fires once; CardPromptNo (0x8022B494) must never fire, and if it does
+note:   the reading of fn_8022B318 above is wrong. Then CardFormatAsyncCall,
+note:   CardFormatAsyncRet r3 0 or -1, five CardEraseSector, 320 CardWritePage,
+note:   CardFormatResult r3 00000000, and "card ... 40960 written".

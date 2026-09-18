@@ -18,7 +18,7 @@ are independent; inside a track, order matters.
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
 | `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
-| Memory card bytes read, ever | 81,920 — the card mounts (2026-09-17). Written: still 0 |
+| Memory card bytes the game has written | 40,960 — it formats a card (2026-09-18) |
 | Saved runs that played a sample | 0 of 27: every `[audio]` line says "(no output device)" |
 
 The port boots, plays the opening, wins the first battle and walks the
@@ -314,44 +314,36 @@ run on the owner's machine or nowhere. What CI does hold is
 checksum; reverting any part of B2 fails it; a kill right after a save keeps the
 bytes. **First two met. The third needs a save, so it waits on B4.**
 
-**B4. Mount from the title, then round-trip a save** — *mount done; the write is blocked on one unknown.*
-The mount is done and traced (see B2). The write is not, and the search for
-it narrowed a great deal on 2026-09-18 without reaching it.
+**B4. Mount from the title, then round-trip a save** — *the write is done; loading a save remains.*
+**The game has written to a memory card.** On 2026-09-18 a blank card in slot
+A produced the title screen's "Proceed with formatting?" prompt, Yes was
+confirmed, and `CARDFormatAsync` ran to completion: five sector erases, 960
+page programs, **40,960 bytes written** where every log this repository has
+ever kept said 0, and 325 completion interrupts, which are the ones B2 had to
+start raising. `config/scenarios/cardwrite.scn` reproduces it from a cold
+boot. The image the game left behind verifies as one the mount would accept,
+and carries the game's own serial and format timestamp rather than ours.
 
-What is now known, from the disassembly. `CARDFormatAsync` is called from
-exactly one instruction in the executable, `0x801A2758` inside
-`card_format_step` (0x801A2670), and that has two callers, both entries in
-state jump tables rather than `bl` targets: `0x8022B258`, state 4 of the
-title's memory-card dialog (object at `0x803167F0`, dispatched by
-`fn_8022AE94` over the table at `0x802F929C`), and `0x8019E650`, the same
-job inside the save/load menu. The dialog's state 0 calls `card_scan`
-(0x801A28F4); only status 2 opens "Proceed with formatting?", with **No
-preselected**, which is why the six existing blank-card runs all dismissed
-it with their scripted A. Status 2 has exactly one source: `__CARDVerify`
-answering -6 BROKEN or -13 ENCODING with `CARDCheckExAsync` unable to
-repair. A repairable card instead takes the repair arm, which is itself a
-write of one sector.
+It took three attempts, and the two failures were worth more than the
+success. The format is reachable four presses from boot rather than at a save
+point, because `CARDFormatAsync` is called from exactly one instruction in
+the executable and its caller is the title's card dialog. But the title
+consumed every scripted START: scene 10 reads the same edge to snap the logo
+flyover, and snapping it is what puts the title on screen, so the press that
+arrives always arrives one scene early. And the value 119 that routed the run
+away from the card screen is not a menu id at all, it is the attract-mode
+sentinel written when the title times out after 92.267 seconds of *host wall
+clock*. Scene 12 had never once been entered in this port's history.
 
-Where it stops. A blank card does mount as -6, confirmed by the
-`VerifyIdVerdict` tracepoint reading `FFFFFFFA`. But no write happens by
-either route, because **the card screen is never entered**:
-`CardScreenStatus` never fires, and watching the title scene word at
-`0x80311AE0` shows the run going scene 11 (title) to 13 to 2 and straight
-into the game. Both write paths hang off `card_scan`, and `card_scan` runs
-only inside that screen, so neither the prompt nor the repair is reachable
-on this route. The derivation says scene 13 routes to 16 when the menu id
-is 1, to 2 when it is 119, and to 14 (which leads to the screen) otherwise;
-the observed route is 2, so the menu returned 119.
-
-*Next, and it is one question:* what is menu id 119, which title-menu entry
-produces the "otherwise" case, and what input selects it. `fn_80228C50` is
-scene 13 and `fn_801D8EE8` is what returns the id. Answering that should
-make the format four presses from boot as derived. `config/scenarios/cardwrite.scn`
-is written and correct apart from that one step, and the tracepoints for the
-whole path are already compiled in, so the next attempt costs a run and not
-a rebuild.
+*Next:* the other half of the round trip. Reaching a save point still needs
+D3's recorded input, and a save written by the game should then load from the
+title (scene 16, the Continue arm, which has also never been entered). The
+repair path is a second, cheaper write worth exercising once on purpose: a
+card damaged with `tools/cardformat.py --damage dir` takes
+`CARDCheckExAsync`'s repair arm inside `card_scan`, writing one sector without
+any prompt at all.
 *Done:* `[exi]` reports a non-zero written count, and
-`python tools/cardformat.py show` reads back what the game wrote.
+`python tools/cardformat.py show` reads back what the game wrote. **Met.**
 
 ---
 
