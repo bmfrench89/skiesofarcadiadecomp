@@ -181,3 +181,6 @@
 0x802640C0	EXIDetach	clears state bit 0x08 with interrupts disabled; CARDDoUnmount and CARDUnmount call it
 0x80264A54	EXIGetState	returns the channel's state word (+12), the one EXIAttach and EXIDetach set bit 0x08 in; CARDProbeEx and CARDMountAsync test that bit
 0x80264A94	EXIGetID	EXILock and EXISelect, then a 2-byte immediate write of zero and a 4-byte immediate read, cached at 0x800030C0 + chan * 4; CARDProbeEx and the mount take the card's geometry from that ID
+0x802319F8	PPCMthid0	mtspr HID0; the write half of the pair with PPCMfhid0 eight bytes earlier, and PPCDisableSpeculation calls both around an OR of HID0[SPD]
+0x80231A18	PPCSync	the SDK's PPCSync; the body is sc, a trap to the exception handler, not the sync instruction, so the name rests on the library's source order rather than the mnemonic
+0x80231A8C	PPCMfwpar	sync then mfspr WPAR, sitting directly before PPCMtwpar; the leading sync drains the write-gather pipe before the read, which is why it is 12 bytes to PPCMtwpar's 8

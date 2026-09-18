@@ -679,21 +679,28 @@ a compiler missing; `vendor/TOOLCHAIN.sha256` records what produced the 41;
 and a test asserts every `src/**/*.c` is in `units.txt` with unique object
 stems (`decomp.py:49` names them `build/src/<stem>.o`).
 
-**F2. PPCArch, then MTX** — *hours, then a day.*
-`sdk/ppc` is 17 functions and 240 bytes of short stubs the real SDK writes
-as `asm`, so matching is transcription and a whole library goes 0% to 100%
-in a sitting. Then MTX — but the split needs cutting, not deleting:
-`splits.txt:23-24` gives `sdk/db/db.c` 0x80238A14-0x80239638, and the first
-four functions really are the debugger (`DBInit`,
-`__DBExceptionDestination`, `__DBIsExceptionMarked`, `DBPrintf`). The 25
-that follow, 2,872 bytes from 0x80238B00, are the matrix library:
-0x80238B60 is PSMTXConcat (`psq_l` interleaved with `ps_muls0`, `ps_madds1`,
-`ps_madds0` over 4x3 matrices), 0x80238C7C is PSMTXInverse, 22 of the 25 are
-leaves. With PPCArch that is 3,112 bytes against the 4,972 that match today,
-a 63% increase. That scheduling is why the estimate is a day: these read as
-the SDK's `asm` leaves, which transcribe rather than fight the allocator.
-*Done:* all 17 PPCArch symbols and all 25 MTX symbols MATCH, and
-`splits.txt` cuts `sdk/db/db.c` at 0x80238B00 with an MTX split after it.
+**F2. PPCArch, then MTX** — *PPCArch done, MTX mostly done.*
+**PPCArch is complete**: all 17 functions, the whole 240-byte library, byte
+for byte, and the first library in this port to go from nothing to 100% in a
+sitting. Sixteen of the seventeen are Metrowerks function-level `asm` blocks,
+because there is no C for `mfmsr`, `mtspr`, `sc`, `mffs` or `mtfsb1` and 1.2.5n
+offers no intrinsics; only `PPCDisableSpeculation` is ordinary C and it matched
+unaided. Two instructions are worth remembering: `PPCSync` is `sc`, a trap to
+the exception handler and not the `sync` instruction, so its name cannot be read
+off the mnemonic; and `PPCMfwpar` prefixes its `mfspr` with a `sync` to drain
+the write-gather pipe, which is why it is 12 bytes to `PPCMtwpar`'s 8.
+
+**MTX: 18 of the 25.** The paired-single routines went better than feared —
+sixteen match, including the hand-scheduled ones — plus `C_MTXFrustum` and
+`C_MTXOrtho` from the plain set. Nine words across seven of them are reported
+as needing a link and are not counted as matches.
+
+35 new functions in total, all verified independently, and the first sprint run
+against the strict oracle from F1, so a match here means calls resolve to the
+right target and address arithmetic uses the right registers.
+*Left:* the rest of the plain MTX set, and cutting `splits.txt`'s
+`sdk/db/db.c` at 0x80238B00 with an MTX split after it, which no agent owned
+this round.
 
 **F3. The native path: three defects, then two free units** — *hours.*
 `units.txt` sets the bar for `native` at "units free of the game's globals",
