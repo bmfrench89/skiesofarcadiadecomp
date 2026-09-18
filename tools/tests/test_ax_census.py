@@ -75,7 +75,16 @@ class Census:
             line,
         )
         if m:
-            keys = ("a_frames", "a_peak", "b_frames", "b_peak", "ret_a", "ret_b", "ret_nw", "ret_lr")
+            keys = (
+                "a_frames",
+                "a_peak",
+                "b_frames",
+                "b_peak",
+                "ret_a",
+                "ret_b",
+                "ret_nw",
+                "ret_lr",
+            )
             self.aux = dict(zip(keys, (int(g) for g in m.groups()), strict=True))
         m = re.search(
             r"census starts: (\d+) \(\+(\d+) re-points\).*?on ([\d/]+) off ([\d/]+)", line
@@ -84,7 +93,9 @@ class Census:
             self.starts, self.repoints = int(m[1]), int(m[2])
             self.start_ms = [int(x) for x in m[3].split("/")]
             self.stop_ms = [int(x) for x in m[4].split("/")]
-        m = re.search(r"census starts by source \((\d+) distinct runs, (\d+) unslotted\): (.*)$", line)
+        m = re.search(
+            r"census starts by source \((\d+) distinct runs, (\d+) unslotted\): (.*)$", line
+        )
         if m:
             self.distinct_sources, self.unslotted = int(m[1]), int(m[2])
             if m[3] != "none":
