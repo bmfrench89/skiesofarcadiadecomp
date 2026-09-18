@@ -21,6 +21,7 @@
 #define MS_SAMPLES 32
 
 uint8_t* aram_memory(void);
+const char* aram_source_name(uint32_t byte_addr, uint32_t* a0, uint32_t* a1);
 
 /* ---- parameter block: word offsets (AXPB, 96 words) ----------------------- */
 
@@ -83,6 +84,263 @@ static int32_t g_auxa[3][FRAME_SAMPLES];
 static int32_t g_auxb[3][FRAME_SAMPLES];
 static uint64_t g_frames, g_voices, g_samples_out;
 static int g_verbose = -1;
+
+/* ---- census (PLAN E1) -----------------------------------------------------
+ *
+ * Six opcodes here are parsed for their length only, two are ignored, and ten
+ * of the parameter block's named fields are never read, so every argument
+ * about what to implement next rests on a guess about what the driver sends.
+ * This counts it instead: opcodes, the fields a block is ever given a value
+ * in, whether anything reaches the auxiliary buses or comes back from the
+ * CPU's effects pass, and what a starting voice's samples were uploaded from.
+ *
+ * Cost, since the mixer runs every 5 ms: the opcode count is one increment per
+ * command, the field census about thirty compares on a block already in a
+ * local, and the start test one hash probe -- all of it lost in the noise of
+ * decoding 160 samples a voice. The two that are not free are paid for only
+ * when they can say something: an auxiliary bus is scanned for its peak only
+ * if a voice mixed into it this frame (the peak of a bus nothing touched is
+ * zero, and this game touches neither), and a source name is resolved only at
+ * a start, then cached on the block for the frames that follow.
+ */
+#define CENSUS_OPS 20
+
+/* Four distinct values is enough to answer "is this field ever anything but
+ * its default", and keeps the report to one line per field. */
+typedef struct {
+    uint16_t v[4];
+    uint64_t n[4];
+    uint64_t other;
+} Field;
+
+static uint64_t g_cmd_n[CENSUS_OPS + 1], g_cmd_bad, g_lists_full;
+static uint16_t g_cmd_bad_op;
+static unsigned g_cmds_hi, g_chain_hi;
+static uint16_t g_dl_aux_a, g_dl_aux_b; /* the two send levels command 0x01 carries and we drop */
+static uint64_t g_dl_aux_n;
+
+static Field g_f_src_type, g_f_coef_sel, g_f_is_stream, g_f_ctrl, g_f_format, g_f_gain, g_f_upd;
+static uint64_t g_f_itd, g_f_itd_sh, g_f_dpop, g_f_unk3, g_f_this, g_f_noloop, g_f_noupd;
+static uint16_t g_ctrl_or;
+static uint64_t g_ctrl_aux, g_ctrl_b10;
+
+static int g_auxa_live, g_auxb_live;
+static int32_t g_auxa_peak, g_auxb_peak, g_ret_a, g_ret_b, g_ret_nw, g_ret_lr;
+static uint64_t g_auxa_frames, g_auxb_frames;
+
+static uint64_t g_starts, g_repoints, g_start_ms[5], g_stop_ms[5];
+
+#define VSLOTS 1024
+static struct {
+    uint32_t addr, tag;
+    int16_t srci;
+    uint8_t used, running;
+} g_vs[VSLOTS];
+
+#define SRCSLOTS 64
+static struct {
+    const char* name;
+    uint32_t a0, a1;
+    uint64_t starts, frames;
+} g_srcs[SRCSLOTS];
+static int g_nsrcs;
+static uint64_t g_srcs_lost;
+
+static void field_note(Field* f, uint16_t v)
+{
+    int i;
+    for (i = 0; i < 4; i++) {
+        if (!f->n[i]) {
+            f->v[i] = v;
+            f->n[i] = 1;
+            return;
+        }
+        if (f->v[i] == v) {
+            f->n[i]++;
+            return;
+        }
+    }
+    f->other++;
+}
+
+/* Which of the driver's per-millisecond writes land where, and when a note-on
+ * arrives after millisecond 0 -- which this mixer's loop cannot act on. */
+static void census_update(uint16_t off, uint16_t val, uint16_t was, int ms)
+{
+    field_note(&g_f_upd, off);
+    if (off != PB_RUNNING) return;
+    if (val && !was) g_start_ms[ms]++;
+    else if (!val && was) g_stop_ms[ms]++;
+}
+
+static uint32_t voice_byte_addr(const PB* pb)
+{
+    uint32_t cur = ((uint32_t)pb->w[PB_AUDIO_ADDR + 6] << 16) | pb->w[PB_AUDIO_ADDR + 7];
+    uint16_t fmt = pb->w[PB_AUDIO_ADDR + 1];
+    return fmt == 0x00 ? cur >> 1 : (fmt == 0x0A ? cur * 2 : cur);
+}
+
+static int census_source(const PB* pb)
+{
+    uint32_t a0 = 0, a1 = 0;
+    const char* name = aram_source_name(voice_byte_addr(pb), &a0, &a1);
+    int i;
+    for (i = 0; i < g_nsrcs; i++)
+        if (g_srcs[i].name == name && g_srcs[i].a0 == a0) return i;
+    if (g_nsrcs == SRCSLOTS) {
+        g_srcs_lost++;
+        return -1;
+    }
+    g_srcs[g_nsrcs].name = name;
+    g_srcs[g_nsrcs].a0 = a0;
+    g_srcs[g_nsrcs].a1 = a1;
+    return g_nsrcs++;
+}
+
+/* A start is a block that was not running and now is, or one that stayed
+ * running but was pointed at different samples: the driver sets RUNNING
+ * directly as well as through the update list, so the update list alone
+ * cannot see every note-on. */
+static void census_voice(uint32_t addr, const PB* pb)
+{
+    unsigned h = (addr >> 5) % VSLOTS, n;
+    uint32_t loop = ((uint32_t)pb->w[PB_AUDIO_ADDR + 2] << 16) | pb->w[PB_AUDIO_ADDR + 3];
+    uint32_t end = ((uint32_t)pb->w[PB_AUDIO_ADDR + 4] << 16) | pb->w[PB_AUDIO_ADDR + 5];
+    uint32_t tag = loop * 2654435761u + end * 40503u + pb->w[PB_AUDIO_ADDR + 1] + 1u;
+    int i;
+
+    for (n = 0; n < VSLOTS; n++) {
+        if (!g_vs[h].used || g_vs[h].addr == addr) break;
+        h = (h + 1) % VSLOTS;
+    }
+    if (n == VSLOTS) return; /* more live blocks than slots: count nothing rather than count wrong */
+    if (!g_vs[h].used) {
+        g_vs[h].used = 1;
+        g_vs[h].addr = addr;
+        g_vs[h].srci = -1;
+    }
+    if (!pb->w[PB_RUNNING]) {
+        g_vs[h].running = 0;
+        g_vs[h].tag = tag;
+        return;
+    }
+    if (!g_vs[h].running || g_vs[h].tag != tag) {
+        if (g_vs[h].running) g_repoints++;
+        else g_starts++;
+        g_vs[h].srci = (int16_t)census_source(pb);
+        if (g_vs[h].srci >= 0) g_srcs[g_vs[h].srci].starts++;
+    }
+    g_vs[h].running = 1;
+    g_vs[h].tag = tag;
+    if (g_vs[h].srci >= 0) g_srcs[g_vs[h].srci].frames++;
+
+    field_note(&g_f_src_type, pb->w[PB_SRC_TYPE]);
+    field_note(&g_f_coef_sel, pb->w[PB_COEF_SELECT]);
+    field_note(&g_f_is_stream, pb->w[PB_IS_STREAM]);
+    field_note(&g_f_ctrl, pb->w[PB_MIXER_CTRL]);
+    field_note(&g_f_format, pb->w[PB_AUDIO_ADDR + 1]);
+    field_note(&g_f_gain, pb->w[PB_ADPCM + 16]);
+    g_ctrl_or |= pb->w[PB_MIXER_CTRL];
+    if (pb->w[PB_MIXER_CTRL] & 3) g_ctrl_aux++;
+    if (pb->w[PB_MIXER_CTRL] & 0x10) g_ctrl_b10++;
+    if (pb->w[PB_ITD]) g_f_itd++; /* the enable; the two words after it are the allocator's buffer */
+    for (i = 3; i < 7; i++)
+        if (pb->w[PB_ITD + i]) { g_f_itd_sh++; break; }
+    for (i = 0; i < 9; i++)
+        if (pb->w[PB_DPOP + i]) { g_f_dpop++; break; }
+    for (i = 0; i < 3; i++)
+        if (pb->w[PB_UNK3 + i]) { g_f_unk3++; break; }
+    if (((((uint32_t)pb->w[PB_THIS_HI] << 16) | pb->w[PB_THIS_LO]) & 0x7FFFFFFFu) !=
+        (addr & 0x7FFFFFFFu))
+        g_f_this++;
+    if (!pb->w[PB_AUDIO_ADDR]) g_f_noloop++;
+    if (!(((uint32_t)pb->w[PB_UPDATES + 5] << 16) | pb->w[PB_UPDATES + 6])) g_f_noupd++;
+}
+
+static void census_field(char* out, size_t cap, const char* name, const Field* f, int dec)
+{
+    size_t at = (size_t)snprintf(out, cap, "%s", name);
+    int i;
+    for (i = 0; i < 4 && f->n[i] && at + 40 < cap; i++)
+        at += (size_t)snprintf(out + at, cap - at, dec ? " %u:%llu" : " %X:%llu", f->v[i],
+                               (unsigned long long)f->n[i]);
+    if (f->other && at + 40 < cap)
+        snprintf(out + at, cap - at, " +%llu more", (unsigned long long)f->other);
+}
+
+static void census_report(void)
+{
+    char sent[320] = "", never[96] = "", a[96], b[96], c[96], d[96], e[96], g[96], line[1024];
+    size_t at = 0, nt = 0;
+    int i, shown;
+
+    for (i = 0; i < CENSUS_OPS; i++) {
+        if (g_cmd_n[i] && at + 32 < sizeof sent)
+            at += (size_t)snprintf(sent + at, sizeof sent - at, "%s%02X:%llu", at ? " " : "", i,
+                                   (unsigned long long)g_cmd_n[i]);
+        else if (!g_cmd_n[i] && nt + 8 < sizeof never)
+            nt += (size_t)snprintf(never + nt, sizeof never - nt, "%s%02X", nt ? " " : "", i);
+    }
+    if (g_cmd_n[CENSUS_OPS] && at + 32 < sizeof sent)
+        snprintf(sent + at, sizeof sent - at, " >13:%llu", (unsigned long long)g_cmd_n[CENSUS_OPS]);
+    fprintf(stderr,
+            "[ax] census opcodes sent %s; never sent %s; %llu lists abandoned (first bad op %u), "
+            "%llu hit the 64-command cap; longest list %u commands, longest voice chain %u\n",
+            sent, never, (unsigned long long)g_cmd_bad, g_cmd_bad_op,
+            (unsigned long long)g_lists_full, g_cmds_hi, g_chain_hi);
+
+    census_field(a, sizeof a, "src_type", &g_f_src_type, 1);
+    census_field(b, sizeof b, "coef_select", &g_f_coef_sel, 1);
+    census_field(c, sizeof c, "is_stream", &g_f_is_stream, 1);
+    census_field(d, sizeof d, "mixer_ctrl", &g_f_ctrl, 0);
+    census_field(e, sizeof e, "format", &g_f_format, 0);
+    census_field(g, sizeof g, "adpcm_gain", &g_f_gain, 0);
+    fprintf(stderr, "[ax] census PB values over %llu voice-frames: %s | %s | %s | %s | %s | %s\n",
+            (unsigned long long)g_voices, a, b, c, d, e, g);
+    fprintf(stderr,
+            "[ax] census PB set: itd on %llu (shifts %llu), dpop %llu, unk3 %llu, this!=own %llu, "
+            "one-shot %llu, no update list %llu; mixer_ctrl bits seen %04X (aux send %llu, bit "
+            "0x10 %llu); cmd 01 dropped sends max %u/%u in %llu\n",
+            (unsigned long long)g_f_itd, (unsigned long long)g_f_itd_sh,
+            (unsigned long long)g_f_dpop, (unsigned long long)g_f_unk3,
+            (unsigned long long)g_f_this, (unsigned long long)g_f_noloop,
+            (unsigned long long)g_f_noupd, g_ctrl_or, (unsigned long long)g_ctrl_aux,
+            (unsigned long long)g_ctrl_b10, g_dl_aux_a, g_dl_aux_b,
+            (unsigned long long)g_dl_aux_n);
+    fprintf(stderr,
+            "[ax] census aux: A reached by a voice in %llu frames (peak %d), B in %llu (peak %d); "
+            "back from the CPU: auxA %d auxB %d nowrite %d set-LR %d\n",
+            (unsigned long long)g_auxa_frames, g_auxa_peak, (unsigned long long)g_auxb_frames,
+            g_auxb_peak, g_ret_a, g_ret_b, g_ret_nw, g_ret_lr);
+    census_field(a, sizeof a, "", &g_f_upd, 1);
+    fprintf(stderr,
+            "[ax] census starts: %llu (+%llu re-points); RUNNING through the update list by ms "
+            "on %llu/%llu/%llu/%llu/%llu off %llu/%llu/%llu/%llu/%llu; update writes by PB word%s\n",
+            (unsigned long long)g_starts, (unsigned long long)g_repoints,
+            (unsigned long long)g_start_ms[0], (unsigned long long)g_start_ms[1],
+            (unsigned long long)g_start_ms[2], (unsigned long long)g_start_ms[3],
+            (unsigned long long)g_start_ms[4], (unsigned long long)g_stop_ms[0],
+            (unsigned long long)g_stop_ms[1], (unsigned long long)g_stop_ms[2],
+            (unsigned long long)g_stop_ms[3], (unsigned long long)g_stop_ms[4], a);
+
+    at = 0;
+    for (shown = 0; shown < 10; shown++) {
+        int best = -1;
+        for (i = 0; i < g_nsrcs; i++)
+            if (g_srcs[i].starts && (best < 0 || g_srcs[i].starts > g_srcs[best].starts)) best = i;
+        if (best < 0) break;
+        if (at + 72 < sizeof line)
+            at += (size_t)snprintf(line + at, sizeof line - at, "%s%s %llu starts %llu frames %06X-%06X",
+                                   at ? " | " : "", g_srcs[best].name,
+                                   (unsigned long long)g_srcs[best].starts,
+                                   (unsigned long long)g_srcs[best].frames, g_srcs[best].a0,
+                                   g_srcs[best].a1);
+        g_srcs[best].starts = 0; /* printing the table is the last thing it is for */
+    }
+    if (!at) snprintf(line, sizeof line, "none");
+    fprintf(stderr, "[ax] census starts by source (%d distinct runs, %llu unslotted): %s\n", g_nsrcs,
+            (unsigned long long)g_srcs_lost, line);
+}
 
 /* ---- sample fetch ------------------------------------------------------- */
 
@@ -180,7 +438,10 @@ static void apply_updates(CpuState* s, PB* pb, int ms)
     data &= 0x7FFFFFFFu;
     for (i = start; i < start + n && i < 4096; i++) {
         uint16_t off = rd16(s, data + i * 4u), val = rd16(s, data + i * 4u + 2u);
-        if (off < PB_WORDS) pb->w[off] = val;
+        if (off < PB_WORDS) {
+            census_update(off, val, pb->w[off], ms);
+            pb->w[off] = val;
+        }
     }
 }
 
@@ -195,6 +456,7 @@ static void process_voice(CpuState* s, uint32_t addr, uint8_t* aram)
 
     pb_read(s, addr, &pb);
     apply_updates(s, &pb, 0);
+    census_voice(addr, &pb);
     if (!pb.w[PB_RUNNING]) { pb_write(s, addr, &pb); return; }
     g_voices++;
     if (g_verbose && g_voices <= 6)
@@ -274,6 +536,8 @@ static void process_voice(CpuState* s, uint32_t addr, uint8_t* aram)
             if (ctrl & MIX_BL) mix_add(g_auxb[0] + o, samples, MS_SAMPLES, &mx[MX_BL], rb, (int16_t)mx[MX_DBL]);
             if (ctrl & MIX_BR) mix_add(g_auxb[1] + o, samples, MS_SAMPLES, &mx[MX_BR], rb, (int16_t)mx[MX_DBR]);
             if (ctrl & MIX_BS) mix_add(g_auxb[2] + o, samples, MS_SAMPLES, &mx[MX_BS], rb, (int16_t)mx[MX_DBS]);
+            if (ctrl & (MIX_AL | MIX_AR | MIX_AS)) g_auxa_live = 1;
+            if (ctrl & (MIX_BL | MIX_BR | MIX_BS)) g_auxb_live = 1;
         }
 
         /* state back into the block */
@@ -300,6 +564,7 @@ static void process_pb_list(CpuState* s, uint32_t addr)
         if (next == addr) break;
         addr = next;
     }
+    if ((unsigned)guard > g_chain_hi) g_chain_hi = (unsigned)guard;
 }
 
 /* ---- aux buses and output ----------------------------------------------- */
@@ -316,13 +581,21 @@ static void upload_bus(CpuState* s, uint32_t addr, int32_t bus[3][FRAME_SAMPLES]
             wr32(s, addr + (uint32_t)(c * FRAME_SAMPLES + i) * 4u, (uint32_t)bus[c][i]);
 }
 
-static void download_into_main(CpuState* s, uint32_t addr)
+/* Returns the peak of what came back, which is the only direct evidence that
+ * the driver's CPU-side effects pass produced anything at all. */
+static int32_t download_into_main(CpuState* s, uint32_t addr)
 {
     int c, i;
-    if (!addr) return;
+    int32_t peak = 0;
+    if (!addr) return 0;
     for (c = 0; c < 3; c++)
-        for (i = 0; i < FRAME_SAMPLES; i++)
-            g_main[c][i] += (int32_t)rd32(s, addr + (uint32_t)(c * FRAME_SAMPLES + i) * 4u);
+        for (i = 0; i < FRAME_SAMPLES; i++) {
+            int32_t v = (int32_t)rd32(s, addr + (uint32_t)(c * FRAME_SAMPLES + i) * 4u);
+            int32_t m = v < 0 ? -v : v;
+            if (m > peak) peak = m;
+            g_main[c][i] += v;
+        }
+    return peak;
 }
 
 static void output_samples(CpuState* s, uint32_t lr_addr, uint32_t s_addr)
@@ -360,11 +633,13 @@ void ax_command_list(CpuState* s, uint32_t addr)
     memset(g_main, 0, sizeof g_main);
     memset(g_auxa, 0, sizeof g_auxa);
     memset(g_auxb, 0, sizeof g_auxb);
+    g_auxa_live = g_auxb_live = 0;
     g_frames++;
 
     while (!end && guard++ < 64) {
         uint16_t cmd = rd16(s, p);
         p += 2;
+        g_cmd_n[cmd < CENSUS_OPS ? cmd : CENSUS_OPS]++;
         if (g_verbose && (g_frames <= 4 || (g_voices > voices_before && traced < 40))) {
             fprintf(stderr, "[ax] frame %llu cmd %u main peak %d auxa %d auxb %d\n", (unsigned long long)g_frames, cmd, bus_peak(g_main), bus_peak(g_auxa), bus_peak(g_auxb));
             if (g_voices > voices_before) traced++;
@@ -376,8 +651,12 @@ void ax_command_list(CpuState* s, uint32_t addr)
         case 0x01: { /* DL_AND_VOL_MIX: samples from memory into main with volume */
             uint32_t a = (((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2)) & 0x7FFFFFFFu;
             uint16_t vol_main = rd16(s, p + 4);
+            uint16_t vol_a = rd16(s, p + 6), vol_b = rd16(s, p + 8);
             int c, i;
             p += 10;
+            if (vol_a > g_dl_aux_a) g_dl_aux_a = vol_a;
+            if (vol_b > g_dl_aux_b) g_dl_aux_b = vol_b;
+            if (vol_a || vol_b) g_dl_aux_n++;
             for (c = 0; c < 3; c++)
                 for (i = 0; i < FRAME_SAMPLES; i++)
                     g_main[c][i] += (int32_t)(((int64_t)(int32_t)rd32(s, a + (uint32_t)(c * FRAME_SAMPLES + i) * 4u) * vol_main) >> 15);
@@ -393,9 +672,27 @@ void ax_command_list(CpuState* s, uint32_t addr)
         case 0x04: case 0x05: { /* MIX_AUXA / MIX_AUXB: upload the bus, read back the processed one */
             uint32_t up = ((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2);
             uint32_t down = ((uint32_t)rd16(s, p + 4) << 16) | rd16(s, p + 6);
+            int32_t back;
             p += 8;
+            /* the bus as the CPU is about to see it; a bus no voice reached is
+             * zero everywhere, so only a live one is worth the scan */
+            if (cmd == 0x04 ? g_auxa_live : g_auxb_live) {
+                int32_t pk = bus_peak(cmd == 0x04 ? g_auxa : g_auxb);
+                if (cmd == 0x04) {
+                    g_auxa_frames++;
+                    if (pk > g_auxa_peak) g_auxa_peak = pk;
+                } else {
+                    g_auxb_frames++;
+                    if (pk > g_auxb_peak) g_auxb_peak = pk;
+                }
+            }
             upload_bus(s, up & 0x7FFFFFFFu, cmd == 0x04 ? g_auxa : g_auxb);
-            download_into_main(s, down & 0x7FFFFFFFu);
+            back = download_into_main(s, down & 0x7FFFFFFFu);
+            if (cmd == 0x04) {
+                if (back > g_ret_a) g_ret_a = back;
+            } else if (back > g_ret_b) {
+                g_ret_b = back;
+            }
             break;
         }
         case 0x06: /* UPLOAD_LRS: main bus to memory */
@@ -411,10 +708,13 @@ void ax_command_list(CpuState* s, uint32_t addr)
             break;
         }
         case 0x08: p += 20; break;
-        case 0x09: /* MIX_AUXB_NOWRITE */
-            download_into_main(s, (((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2)) & 0x7FFFFFFFu);
+        case 0x09: { /* MIX_AUXB_NOWRITE */
+            int32_t back =
+                download_into_main(s, (((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2)) & 0x7FFFFFFFu);
+            if (back > g_ret_nw) g_ret_nw = back;
             p += 4;
             break;
+        }
         case 0x0A: p += 4; break; /* compressor table */
         case 0x0B: case 0x0C: break;
         case 0x0D: /* MORE: continue with another list */
@@ -435,6 +735,8 @@ void ax_command_list(CpuState* s, uint32_t addr)
             p += 4;
             for (i = 0; i < FRAME_SAMPLES; i++) {
                 int32_t x = (int32_t)rd32(s, a + (uint32_t)i * 4u);
+                int32_t m = x < 0 ? -x : x;
+                if (m > g_ret_lr) g_ret_lr = m;
                 g_main[0][i] = -x;
                 g_main[1][i] = x;
                 g_main[2][i] = 0;
@@ -445,14 +747,19 @@ void ax_command_list(CpuState* s, uint32_t addr)
         case 0x13: p += 16; break; /* SEND_AUX_AND_MIX */
         default:
             if (g_verbose) fprintf(stderr, "[ax] unknown command %u\n", cmd);
+            g_cmd_bad++;
+            if (!g_cmd_bad_op) g_cmd_bad_op = cmd;
             end = 1;
             break;
         }
     }
+    if ((unsigned)guard > g_cmds_hi) g_cmds_hi = (unsigned)guard;
+    if (!end) g_lists_full++;
 }
 
 void ax_report(void)
 {
     fprintf(stderr, "[ax] %llu frames mixed, %llu voice-frames, %llu samples output\n",
             (unsigned long long)g_frames, (unsigned long long)g_voices, (unsigned long long)g_samples_out);
+    census_report();
 }
