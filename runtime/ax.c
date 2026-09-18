@@ -57,6 +57,20 @@ enum { MX_L = 0, MX_DL, MX_R, MX_DR, MX_AL, MX_DAL, MX_AR, MX_DAR, MX_BL, MX_DBL
 #define MIX_BS 0x0400
 #define MIX_B_RAMP 0x0800
 
+/* The bits the driver actually writes into mixer_control, which are not the
+ * MIX_* above: those are this mixer's own decoded sends. A per-studio mode
+ * word (studio+84) chooses, for every voice and for the whole frame at once,
+ * which of two encodings auxiliary B arrives under -- bit 1 alongside command
+ * 0x05, or bit 4 alongside command 0x10 (fn_8027CDF4 tests that word at
+ * 0x8027D92C for the bit and at 0x8027E848 for the command). No voice can
+ * carry both, so the order the two are decoded in cannot matter. */
+#define RAW_AUXA 0x0001
+#define RAW_AUXB 0x0002
+#define RAW_SURROUND 0x0004
+#define RAW_RAMP 0x0008
+#define RAW_AUXB_LR 0x0010
+#define RAW_AUXB_ANY (RAW_AUXB | RAW_AUXB_LR)
+
 typedef struct {
     uint16_t w[PB_WORDS];
 } PB;
@@ -241,8 +255,8 @@ static void census_voice(uint32_t addr, const PB* pb)
     field_note(&g_f_format, pb->w[PB_AUDIO_ADDR + 1]);
     field_note(&g_f_gain, pb->w[PB_ADPCM + 16]);
     g_ctrl_or |= pb->w[PB_MIXER_CTRL];
-    if (pb->w[PB_MIXER_CTRL] & 3) g_ctrl_aux++;
-    if (pb->w[PB_MIXER_CTRL] & 0x10) g_ctrl_b10++;
+    if (pb->w[PB_MIXER_CTRL] & (RAW_AUXA | RAW_AUXB_ANY)) g_ctrl_aux++;
+    if (pb->w[PB_MIXER_CTRL] & RAW_AUXB_LR) g_ctrl_b10++;
     if (pb->w[PB_ITD]) g_f_itd++; /* the enable; the two words after it are the allocator's buffer */
     for (i = 3; i < 7; i++)
         if (pb->w[PB_ITD + i]) { g_f_itd_sh++; break; }
@@ -519,14 +533,28 @@ static void process_voice(CpuState* s, uint32_t addr, uint8_t* aram)
         pb.w[PB_VOL_ENV] = vol;
 
         /* mixer: this microcode build (0x4E8A8B21) always mixes L/R; bit 0
-         * adds aux A, bit 1 aux B, bit 2 surround, bit 3 the ramps */
+         * adds aux A, bit 1 or bit 4 aux B, bit 2 surround, bit 3 the ramps.
+         *
+         * The two auxiliary-B bits differ in exactly one thing, the surround
+         * send. Under bit 1 the driver keeps three aux-B gains and ramps all
+         * three (0x8027DCCC, three calls to fn_8027C758); under bit 4 it keeps
+         * and ramps two (0x8027DD60, two calls) and never writes the third, so
+         * that channel has no gain to be mixed by and stays silent however the
+         * surround bit is set. Everything else -- which gains, which bus, the
+         * ramp bit -- is shared, so it is decoded once here. */
         {
             uint16_t raw = pb.w[PB_MIXER_CTRL];
             ctrl = MIX_L | MIX_R;
-            if (raw & 1) ctrl |= MIX_AL | MIX_AR;
-            if (raw & 2) ctrl |= MIX_BL | MIX_BR;
-            if (raw & 4) { ctrl |= MIX_S; if (raw & 1) ctrl |= MIX_AS; if (raw & 2) ctrl |= MIX_BS; }
-            if (raw & 8) ctrl |= MIX_RAMP | ((raw & 1) ? MIX_A_RAMP : 0) | ((raw & 2) ? MIX_B_RAMP : 0);
+            if (raw & RAW_AUXA) ctrl |= MIX_AL | MIX_AR;
+            if (raw & RAW_AUXB_ANY) ctrl |= MIX_BL | MIX_BR;
+            if (raw & RAW_SURROUND) {
+                ctrl |= MIX_S;
+                if (raw & RAW_AUXA) ctrl |= MIX_AS;
+                if (raw & RAW_AUXB) ctrl |= MIX_BS;
+            }
+            if (raw & RAW_RAMP)
+                ctrl |= MIX_RAMP | ((raw & RAW_AUXA) ? MIX_A_RAMP : 0) |
+                        ((raw & RAW_AUXB_ANY) ? MIX_B_RAMP : 0);
         }
         mx = &pb.w[PB_MIXER];
         {
@@ -674,7 +702,18 @@ void ax_command_list(CpuState* s, uint32_t addr)
         case 0x03: /* PROCESS_PB */
             process_pb_list(s, pb_addr & 0x7FFFFFFFu);
             break;
-        case 0x04: case 0x05: { /* MIX_AUXA / MIX_AUXB: upload the bus, read back the processed one */
+        /* MIX_AUXA / MIX_AUXB / MIX_AUXB_LR: upload the bus, read back the
+         * processed one. 0x10 is the auxiliary-B command the driver emits
+         * instead of 0x05 in the studio's other mode, and its payload is the
+         * same five halfwords in the same order, over buffers of the same
+         * 3 x 160 x int32 shape out of the same per-studio array (emitters at
+         * 0x8027E900 and 0x8027EA14). What differs is entirely the driver's
+         * side of it: 0x05 rotates through three buffers and 0x10 through two,
+         * and the CPU's effects pass runs on 0x05's buffer but is skipped for
+         * 0x10 (0x8027F2C4), so what 0x10 mixes back is the raw bus one frame
+         * late. Both addresses arrive in the payload either way, which is why
+         * none of that reaches this mixer and the three share one arm. */
+        case 0x04: case 0x05: case 0x10: {
             uint32_t up = ((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2);
             uint32_t down = ((uint32_t)rd16(s, p + 4) << 16) | rd16(s, p + 6);
             int32_t back;
@@ -733,7 +772,6 @@ void ax_command_list(CpuState* s, uint32_t addr)
             break;
         }
         case 0x0F: end = 1; break;
-        case 0x10: p += 8; break;  /* MIX_AUXB_LR */
         case 0x11: { /* SET_OPPOSITE_LR: main L/R from 32-bit samples, right positive, left negated */
             uint32_t a = (((uint32_t)rd16(s, p) << 16) | rd16(s, p + 2)) & 0x7FFFFFFFu;
             int i;

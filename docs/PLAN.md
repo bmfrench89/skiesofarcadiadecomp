@@ -619,9 +619,24 @@ voice bank is opened, 262,464 bytes, contiguous, matching the file's own size
 and first bytes exactly. The bank is loaded and simply never played in this
 scene, so the zero start count says nothing about the driver.
 
-*Left:* implement opcode 0x10 and its mixer-control bit, which is the one
-audible gap this census found, and dump the setup block once to settle opcode
-0x00. The third question is answered: this game speaks, the opening does not,
+*Correction, the third on this item, and it retires the "one audible gap".*
+Opcode 0x10 is implemented now, folded into the arm opcode 0x05 already had,
+because the payload is the same five halfwords over the same buffers and only
+the surround send differs. But **this game never selects it**: the mode word
+that chooses it is written from one constructor argument, and every reachable
+producer passes zero — the initialiser and all six re-create sites. It is dead
+code in this title and no run can exercise it, so its only cover is a
+synthetic case in the selftest.
+**The auxiliary-B silence has a different cause**, also visible in the census
+and missed twice: the control word only ever takes the values 0, 1, 8 and 9
+across 351,290 voice-frames, so the aux-B send bit is never set by any voice.
+Bus B is wired up and its command is emitted every frame; nothing is ever fed
+into it. **The reverb is on bus A and it already works** — reached in 41,275
+frames, bus peak 8,566, returning 8,857 from the effects pass. There was no
+audible defect here.
+*And the setup block is settled by measurement:* the pointer is the same
+address every frame and the block is all zeros, so the mixer zeroing the buses
+instead of reading it is exactly right. That question is closed. The third question is answered: this game speaks, the opening does not,
 and `config/scenarios/voice.scn` reaches a line.
 **And the census cannot name a voice bank**, which is why its zero meant
 nothing: it identifies an upload by a 32-byte prefix or by size, and the 72

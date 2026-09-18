@@ -1238,6 +1238,99 @@ static int ax_selftest(CpuState* s, char* got, size_t cap)
         failures += check("ax surround needs bit 2", got, "0 16384");
     }
 
+    /* ---- auxiliary B under the other studio mode ------------------------
+     * The driver chooses its auxiliary-B encoding once per studio and uses
+     * it for every voice and every frame: bit 1 of the control word with
+     * command 0x05, or bit 4 with command 0x10 (fn_8027CDF4 branches on the
+     * studio's mode word at 0x8027D92C for the bit and 0x8027E848 for the
+     * command). The port implemented neither half of the second mode, so
+     * every send under it was dropped and nothing came back -- and no
+     * scenario can catch that, because this title's mode word is 0 on every
+     * reachable path, which is what makes these cases the only cover the
+     * path has.
+     *
+     * Command 0x10's payload is the same five halfwords in the same order as
+     * 0x05's, over buffers of the same shape (emitters 0x8027E900 and
+     * 0x8027EA14), so these drive it exactly as the bit-1 cases above drive
+     * 0x05. The one place the two encodings disagree is asserted rather than
+     * assumed: bit 1 maintains and ramps three auxiliary-B gains, bit 4 two
+     * (three calls to fn_8027C758 at 0x8027DCCC against two at 0x8027DD60),
+     * so under bit 4 the bus's third channel has no gain and must stay
+     * silent however the surround bit is set. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER_CTRL, 0x10 | 4);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BL, 0x8000); /* 16384 at unity */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BR, 0x4000); /* and half of it */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_AL, 0x8000); /* auxiliary A is bit 0 and is clear */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_AR, 0x8000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_S, 0x8000);  /* whichever of the three surround */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_AS, 0x8000); /* gains is auxiliary B's, bit 4 */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BS, 0x8000); /* must not reach the bus with it */
+    ax_fill_bus(s, 0);
+    ax_run_aux(s, AX_PB, 0x10, AX_BUF, 0);
+    bad = ax_bad_bus(s, 0, 16384);
+    if (bad < 0) bad = ax_bad_bus(s, 1, 8192);
+    if (bad < 0) bad = ax_bad_bus(s, 2, 0);
+    snprintf(got, cap, "%02X %02X %02X %02X %d %d %d %s", mem_r8(s, AX_BUF), mem_r8(s, AX_BUF + 1u),
+             mem_r8(s, AX_BUF + 2u), mem_r8(s, AX_BUF + 3u), ax_bus(s, 0, 0), ax_bus(s, 1, 0),
+             ax_bus(s, 2, 0), bad < 0 ? "ok" : "varies");
+    failures += check("ax bit 4 aux B send", got, "00 00 40 00 16384 8192 0 ok");
+
+    /* and the same voice reaches no other bus: command 0x04 uploads aux A,
+     * which nothing has mixed into */
+    ax_fill_bus(s, 0);
+    ax_run_aux(s, AX_PB, 0x04, AX_BUF, 0);
+    bad = ax_bad_bus(s, 0, 0);
+    if (bad < 0) bad = ax_bad_bus(s, 1, 0);
+    if (bad < 0) bad = ax_bad_bus(s, 2, 0);
+    snprintf(got, cap, "%s", bad < 0 ? "silent" : "leaked");
+    failures += check("ax bit 4 leaves aux A", got, "silent");
+
+    /* Bit 3 is the ramp bit for both encodings, so it arms this one's two
+     * gains too: from zero, stepping 0x0100 a sample, 16384 through a gain
+     * of 256*i is (16384 * 256 * i) >> 15 = 128*i, and the gain the block
+     * keeps after 160 samples is 160 * 256 = 0xA000. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER_CTRL, 0x10 | 8);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BL, 0);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_DBL, 0x0100);
+    ax_fill_bus(s, 0);
+    ax_run_aux(s, AX_PB, 0x10, AX_BUF, 0);
+    bad = -1;
+    for (i = 0; i < 160; i++)
+        if (ax_bus(s, 0, i) != 128 * i) { bad = i; break; }
+    if (bad < 0)
+        snprintf(got, cap, "0..20352 by 128, gain %04X", ax_r(s, AX_PB, AXPB_MIXER + AXMX_BL));
+    else snprintf(got, cap, "%d at %d", ax_bus(s, 0, bad), bad);
+    failures += check("ax bit 4 aux B ramp", got, "0..20352 by 128, gain A000");
+
+    /* The whole path in one command, which is what the defect cost: the send
+     * reaches the bus, the bus is handed out, and what comes back is mixed
+     * into main. One buffer serves as both addresses, so the effects stage is
+     * the identity and every output below is the two gains added --
+     * 16384 * 0x4000 >> 15 = 8192 of main L plus 16384 * 0x8000 >> 15 = 16384
+     * of auxiliary B on the left, nothing on main R plus
+     * 16384 * 0x2000 >> 15 = 4096 on the right, and silence on surround with
+     * bit 2 clear. Reaching OUTPUT at all also pins the command's length:
+     * a 0x10 that consumed the wrong number of halfwords would leave the
+     * 0xAA fill behind instead. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER_CTRL, 0x10);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BL, 0x8000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_BR, 0x2000);
+    ax_fill_bus(s, 0);
+    ax_run_aux(s, AX_PB, 0x10, AX_BUF, AX_BUF);
+    bad = ax_bad_l(s, 0, 160, 24576);
+    if (bad < 0) bad = ax_bad_r(s, 0, 160, 4096);
+    if (bad < 0)
+        for (i = 0; i < 160; i++)
+            if (ax_out_s(s, i) != 0) { bad = i; break; }
+    snprintf(got, cap, "%d %d %d %s", ax_out_l(s, 0), ax_out_r(s, 0), ax_out_s(s, 0),
+             bad < 0 ? "mixed back" : "wrong");
+    failures += check("ax bit 4 round trip", got, "24576 4096 0 mixed back");
+
     /* ---- what the CPU's effects pass hands back -------------------------
      * The download adds to the main bus rather than replacing it, and covers
      * all three channels -- the surround one is the half a two-channel loop
