@@ -593,30 +593,36 @@ music (590 `.samp`/`.info` pairs), effects and battle voice are unverified,
 `runtime/ax.c` has no automated test, and all 27 saved reports say "(no
 output device)": no sample has ever left this port through a speaker.
 
-**E1. An AX census: commands, PB fields, voice starts** — *done, and most of the gaps do not matter.*
-The end-of-run report now counts every command opcode, every parameter-block
-field that is ever set away from its default, the auxiliary bus peaks and
-voice starts attributed to the file the samples came from.
+**E1. An AX census: commands, PB fields, voice starts** — *done, and it took two corrections to get right.*
+The end-of-run report counts every command opcode, every parameter-block field
+ever set away from its default, the auxiliary bus peaks, and voice starts
+attributed to the memory region the samples came from. Over the audio
+scenario: 77,228 mixed frames, 351,290 voice-frames, 1,899 voice starts across
+eleven regions, the tone bank 1,360 of them.
 
-Measured over the audio scenario, 77,228 mixed frames and 351,290
-voice-frames:
-- **Ten opcodes are never sent at all**, and they are exactly the ones this
-  plan worried about: the six parsed for length only and the two ignored
-  outright are all in that list. Implementing them would be work for nothing.
-  The ten that are sent account for every list, no list was abandoned on a bad
-  opcode, and nothing hit the 64-command cap.
-- **The unread parameter fields are also never varied.** Source type, filter
-  selection, sample format and ADPCM gain hold one value across all 351,290
-  voice-frames; inter-aural delay is off everywhere; dpop never set.
-- **Auxiliary bus B is never reached** by any voice and its peak is zero. Bus
-  A is reached in 41,275 frames, so the effects pass is alive on one bus only.
-- **Voice starts: 1,899**, attributed across eleven memory runs. The tone bank
-  starts 1,360, music banks several hundred between them, the streamed music
-  2. So two of E1's three acceptance sources are non-zero.
-*Left:* the voice bank shows no starts in this scenario, which E1 says would
-locate a defect in the driver — but the scenario is the opening, and whether
-it contains any spoken line at all has not been established. That is the run
-to make before concluding anything.
+**Correction 1, and it is a real defect.** A first reading of the counts said
+ten opcodes are never sent, so the ones the mixer skips are not worth
+implementing. That is true only of this scenario. Disassembling the driver's
+own command-list builder shows it chooses between opcode 0x05 and **opcode
+0x10** on a flag, and the same flag chooses between two bits of the mixer
+control word — and the mixer implements neither side of 0x10. So whenever the
+game selects that mode, **every auxiliary-B send is silently discarded and the
+processed result is never mixed back**: the reverb disappears, with the
+command length still parsed correctly so nothing reports an error. That is
+what the census's auxiliary-B peak of zero was showing. Opcode 0x00, the
+setup command, is sent every frame and is also only measured for its length;
+whether that matters depends on a block nobody has dumped yet.
+
+**Correction 2.** A first reading also said the voice bank never reaches audio
+memory. It does. Tracing the transfers shows 86 of them immediately after the
+voice bank is opened, 262,464 bytes, contiguous, matching the file's own size
+and first bytes exactly. The bank is loaded and simply never played in this
+scene, so the zero start count says nothing about the driver.
+
+*Left:* implement opcode 0x10 and its mixer-control bit, which is the one
+audible gap this census found; dump the setup block once to settle opcode
+0x00; and establish whether any scene in this game speaks, which is E2's
+scenario work.
 
 **E2. Testable audio: a selftest case, then a frame capture** — *a day each.*
 458 lines of the most intricate hand-written code in the port have zero
