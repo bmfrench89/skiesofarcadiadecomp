@@ -599,6 +599,7 @@ static void transform(CpuState* s, const VertexIn* in, Vertex* out)
  * EFB copies and clears wait for the queue to drain (gxr_flush). */
 
 #define QUEUE_CAP 4096
+#define QMASK (QUEUE_CAP - 1) /* commands are numbered, not indexed, so the capacity is a power of two */
 #define ARENA_BYTES (48u << 20)
 
 typedef struct { int x0, y0, x1, y1; } Rect;
@@ -633,6 +634,12 @@ typedef struct {
 } RasterCfg;
 
 typedef struct {
+    /* The number this command was published as. A worker asking for command n
+     * finds it in slot n & QMASK and checks this before running it, so the day
+     * a change lets the producer get QUEUE_CAP commands ahead of a worker, the
+     * run says so instead of rasterizing a command built over the one it
+     * wanted. See the queue's declarations for why it cannot happen today. */
+    long long seq;
     int kind; /* 0 draw, 1 EFB copy (with optional clear) */
     TevSetup tev;
     PixelCfg px;
@@ -1174,9 +1181,45 @@ static void draw_command(const DrawCmd* D)
 
 /* ---- the queue and its workers ----------------------------------------- */
 
+/* Commands are numbered rather than indexed, and the numbering is never reset.
+ * Command n lives in slot n & QMASK. Three rules follow, and they are one rule
+ * seen three ways:
+ *
+ *  - every count here has exactly one writer and only ever goes up.
+ *    g_published is the producer's; g_ran[id] is worker id's. Nothing resets
+ *    either, so a stale read is always too small, and too small can only make
+ *    a thread wait longer than it had to.
+ *  - a worker's decision to run a command reads exactly one word another
+ *    thread writes -- g_published -- against a count it keeps to itself. There
+ *    is no second shared load for a compiler to order against the first, which
+ *    is the pair gxr_flush used to be racing when it rewound both of them.
+ *  - gxr_flush leaves the numbering alone. It waits for every g_ran[] to reach
+ *    g_published, which puts every worker back in its spin with nothing left
+ *    to run, and only then recycles the vertex arena, the copy hazard list and
+ *    the texture graveyard -- none of which any worker can still reach. So
+ *    what the flush writes and what a running worker reads are disjoint sets,
+ *    and that is checkable by finding the writes rather than by reasoning
+ *    about where each thread is at the time.
+ *
+ * Two live commands would share a slot only if they were QUEUE_CAP apart, and
+ * queued() >= QUEUE_CAP forces a full drain before the producer can get that
+ * far ahead. DrawCmd::seq is the check on that arithmetic rather than a
+ * comment about it.
+ *
+ * Counted in 64 bits because nothing resets them and a single run is long:
+ * build/boot_field.log records 138,619,966 draws in one process, and
+ * build/boot_perf.log 3,176,974 over 4,210 presented frames -- 755 a frame,
+ * which reaches the end of a signed 32-bit count in about a day of play.
+ *
+ * Every gxr_flush caller is on the thread that produces (the one parsing the
+ * guest's command stream); the watchdog thread only calls gxr_report, which
+ * does not flush. That is what lets the flush read g_published once and treat
+ * it as fixed: it is the only writer. */
 static DrawCmd* g_queue;
-static volatile LONG g_q_tail;                 /* commands published */
-static volatile LONG g_cursor[MAX_THREADS + 1]; /* per worker: next command to run */
+static volatile LONGLONG g_published;            /* commands published, ever */
+static volatile LONGLONG g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
+static long long g_drained;                      /* producer only: g_published as of the last drain */
+static uint64_t g_flushes;                       /* producer only: drains, so a nested one can be seen */
 static uint8_t* g_arena;
 static size_t g_arena_used;
 static int g_workers; /* worker threads; the main thread (tid 0) only produces */
@@ -1185,16 +1228,37 @@ static int g_workers; /* worker threads; the main thread (tid 0) only produces *
 static TevSetup g_prep;
 static uint64_t g_prepare_flushes; /* draws whose setup had to wait for a queued copy */
 
+/* Commands published since the last drain, which is what the ring's capacity
+ * is measured against. Producer only: a worker has no use for it, and
+ * g_drained is not published. */
+static long long queued(void) { return g_published - g_drained; }
+
 #ifdef _WIN32
 static DWORD WINAPI worker(LPVOID arg)
 {
     int id = (int)(intptr_t)arg; /* 1..workers */
+    /* This worker's own count, kept here rather than read back out of g_ran so
+     * the spin below has one shared word in it. Zero because the pool is
+     * created before the first command is published. */
+    long long mine = 0;
     t_tid = id;
     for (;;) {
+        const DrawCmd* D;
         unsigned spins = 0;
-        while (g_cursor[id] >= g_q_tail) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
-        draw_command(&g_queue[g_cursor[id]]);
-        InterlockedIncrement(&g_cursor[id]);
+        while (mine >= g_published) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        /* The producer fills a slot before it publishes the count, and this
+         * machine does not reorder two loads, so the command is there. The
+         * barrier is against the compiler alone, stopping it from reading the
+         * command's fields before the spin ends; it emits nothing. */
+        _ReadWriteBarrier();
+        D = &g_queue[mine & QMASK];
+        if (D->seq != mine)
+            WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
+                      mine & QMASK, D->seq, mine, QUEUE_CAP);
+        else
+            draw_command(D);
+        mine++;
+        InterlockedExchange64(&g_ran[id], mine);
     }
 }
 #endif
@@ -1229,15 +1293,31 @@ static void workers_start(void)
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
 static int g_started;   /* worker pool created */
 
-/* Wait for every queued draw to finish, then recycle the queue. */
+/* Wait for every queued draw to finish, then recycle the queue.
+ *
+ * Nothing below the wait is written that a worker reads: the numbering is left
+ * where it is and only producer-private storage is handed out again. A worker
+ * that has reached g_published cannot run anything else, because the thread
+ * inside this function is the only one that publishes. */
 void gxr_flush(void)
 {
+    long long target;
+    unsigned spins = 0;
     int i;
     if (!g_queue) return;
+    /* Read once: this thread is the only writer, so the target cannot move. */
+    target = g_published;
+    /* Backing off matters here for the reason it does in the worker's own
+     * spin, which this copies: at SOA_THREADS near the core count the producer
+     * and the workers compete for the same cores, and a bare YieldProcessor()
+     * takes one away from the very threads being waited on. With four of these
+     * processes sharing sixteen cores, 400 flushes of a full-screen draw at
+     * SOA_THREADS=16 cost 3.1-3.5s and 12-15s of CPU each without it, and
+     * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
-        while (g_cursor[i] < g_q_tail) YieldProcessor();
-    g_q_tail = 0;
-    for (i = 1; i <= g_workers; i++) g_cursor[i] = 0;
+        while (g_ran[i] < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+    g_drained = target;
+    g_flushes++;
     g_arena_used = 0;
     g_pending_n = 0;
     tex_graveyard_empty();
@@ -1270,24 +1350,34 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
 
-    if (g_q_tail >= QUEUE_CAP || g_arena_used + sizeof(Vertex) * count > ARENA_BYTES || tex_graveyard_full()) gxr_flush();
+    if (queued() >= QUEUE_CAP || g_arena_used + sizeof(Vertex) * count > ARENA_BYTES || tex_graveyard_full()) gxr_flush();
     draw_tripwire(bp, prim);
     /* Nothing of the queue's is claimed until tev_prepare has returned.
      * Resolving a texture read from a destination a queued copy has not
-     * written yet makes it flush, and a flush takes the queue and the vertex
-     * arena back to the start: a slot or a vertex pointer taken before the
-     * call would name storage that is about to be handed out again, and the
-     * draw would be published at an index already holding a command the
-     * workers have run. The check above has left room for this draw, and a
-     * flush inside the call only ever leaves more. */
+     * written yet makes it flush, and a flush takes the vertex arena back to
+     * the start: a vertex pointer taken before the call would name storage
+     * that is about to be handed out again. That is now the whole of the
+     * reason. The other half of it was the slot, and the numbering has
+     * retired that half -- a flush no longer moves the command number, so the
+     * slot this draw goes in is the same either side of one -- but the arena
+     * reset is untouched, so the order still has to hold. The check above has
+     * left room for this draw, and a flush inside the call only ever leaves
+     * more.
+     *
+     * Counting flushes rather than watching the number move is not a
+     * translation: the numbering deliberately does not move across a flush, so
+     * the old test would now always say no, and the counter whose whole job is
+     * to report whether a run took this path would read zero on a run that
+     * took it. */
     {
-        LONG tail = g_q_tail;
+        uint64_t flushes = g_flushes;
         TIMED(T_PREPARE, tev_prepare(bp, &g_prep));
-        if (g_q_tail != tail) g_prepare_flushes++;
+        if (g_flushes != flushes) g_prepare_flushes++;
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    D = &g_queue[g_q_tail];
+    D = &g_queue[g_published & QMASK];
+    D->seq = g_published;
     D->kind = 0;
     D->tev = g_prep;
     pixel_prepare(bp, &D->px);
@@ -1313,11 +1403,14 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
     if (g_workers > 0) {
-        InterlockedIncrement(&g_q_tail); /* publish: the workers pick it up */
+        InterlockedIncrement64(&g_published); /* publish: the workers pick it up */
     } else {
         t_tid = 1;
         draw_command(D);
-        g_q_tail = 0;
+        /* Run here and drained here, so the numbering still advances and the
+         * arena is free again. */
+        InterlockedIncrement64(&g_published);
+        g_drained = g_published;
         g_arena_used = 0;
     }
 }
@@ -1572,8 +1665,9 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
     if (half) gxr_flush(); /* a half-scale copy reads rows other workers own */
-    if (g_q_tail >= QUEUE_CAP) gxr_flush();
-    D = &g_queue[g_q_tail];
+    if (queued() >= QUEUE_CAP) gxr_flush();
+    D = &g_queue[g_published & QMASK];
+    D->seq = g_published;
     D->kind = 1; D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
@@ -1586,8 +1680,15 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         }
         g_copies_tex++;
     }
-    if (g_workers > 0) InterlockedIncrement(&g_q_tail);
-    else { t_tid = 1; draw_command(D); g_q_tail = 0; g_arena_used = 0; }
+    if (g_workers > 0) {
+        InterlockedIncrement64(&g_published);
+    } else {
+        t_tid = 1;
+        draw_command(D);
+        InterlockedIncrement64(&g_published);
+        g_drained = g_published;
+        g_arena_used = 0;
+    }
 
     if (to_screen) {
         char path[512];

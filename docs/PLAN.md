@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 41 across 15 units — 0.18% of `.text` |
 | Of those, running in the port | 9 (`config/hle.txt`) |
-| Python tests | 328 in 16 files |
+| Python tests | 362 in 19 files |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
@@ -40,10 +40,11 @@ person's shell history. What is still unchecked is the game itself: no saved
 run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
-**Start here:** A1, A2 and D1 are done and run; B1, B2, B3 and the first two
-stages of B4 are done, so the card mounts and only the write is left. Next is
-**A3**, then **A4**, which every timing claim below depends on. B4's last
-stage needs D3. After that, any track, cold.
+**Start here:** A1, A2, A3, D1, D3 and C0 are done and run; B1, B2, B3 and the
+first two stages of B4 are done, so the card mounts and only the write is left.
+Next is **A4**, which every timing claim above depends on, then **B4**'s last
+stage — now unblocked, since D3 can record a played session and replay it
+headlessly. After that, any track, cold.
 
 ---
 
@@ -91,10 +92,11 @@ capture's name, sha256 over its own `.fifo`/`.regs`/`.ram`, and the frame
 hash. The input column is what lets a row mean anything on a machine that
 cannot have the capture. Without `--bless` the same sweep checks against the
 manifest.
-*Left:* nobody has run it. It needs a built `gen/soa.exe`, `extracted/sys/`
-(`main.c` wants the disc even for `--replay`) and the captures, so it is the
-owner's to run — and until it has been, the manifest does not exist and the
-hashes are an emitter with a reader and no data. The sweep pins the row
+*Run, and it earned itself.* The manifest exists and all 23 captures match at
+1, 2, 3 and 8 threads. It has already caught two real things: the suite
+overwriting its own corpus, and the texture use-after-free of 2026-09-17,
+whose fix moved 8 of the 23 frames — the old ones washed green and blue, so
+the manifest had been pinning broken output until those were re-blessed. The sweep pins the row
 ownership rule for triangles only: `raster_line` and `raster_point` draw on
 every worker with no `my_row` test, and the corpus contains no line or point
 draw to catch it with. `hold.scn` now captures three field frames to widen a
@@ -374,24 +376,21 @@ The feature set matches what this game uses closely: zero indirect stages in
 all 10,479 GEN_MODE writes, RGB8/Z24 in all 7,351 PE_CONTROL writes,
 trilinear never requested, zero line and point draws.
 
-**C0. Hand the workers off properly across a flush** — *hours, and do it before
-anything else here.*
-`gxr_flush` proves the workers *reached* the end of the queue and then rewrites
-`g_q_tail` and `g_cursor[]` underneath them while they are still spinning on
-both (`gxr.c:1233-1244` against `gxr.c:1193-1198`). The spin reads two
-unsynchronised `volatile LONG`s and C does not order the two loads, so a worker
-that reads the tail, is preempted while the producer resets both and empties the
-texture graveyard, then reads its cursor, leaves the spin and rasterizes
-`g_queue[0]` — a command from the batch just drained, whose texture pointers
-were handed back to the allocator moments earlier. That is a wild read on a
-rasterizer thread, layout-sensitive, with no guest overrun: the exact fault
-measured on 2026-09-17. It does not fire in today's binary only because of how
-MSVC happened to order the two loads, which is not a property anyone should rely
-on. Give the flush a real handshake: a generation counter the workers observe,
-or park them before the reset rather than merely waiting for them to catch up.
-*Done:* the workers cannot observe a reset tail with a stale cursor, argued from
-the code rather than from a run that happened not to crash; the 23 pinned frame
-hashes are unchanged at 1, 2, 3 and 8 threads.
+**C0. Hand the workers off properly across a flush** — *done.*
+Fixed by removing the reset rather than ordering it. Commands are numbered
+and never re-indexed: `g_published` counts what the producer has handed over,
+`g_ran[i]` what worker *i* has finished, each with exactly one writer, each
+only ever increasing, and command *n* lives in slot `n & QMASK`. The worker's
+spin now reads one shared word where it read two unsynchronised ones, so the
+pair of loads whose order C does not fix is gone as a category. Every stale
+read is a value that is too small, which can only make a thread wait. The
+flush waits for every worker to reach the published count and then recycles
+only producer-private state, so it writes nothing a worker reads.
+Verified: all 23 pinned frames identical at 1, 2, 3 and 8 threads over two
+passes, the scenarios hold, and a reviewer reconstructed the previous machine
+code from a listing taken before the change and confirmed the old spin was
+safe only by an accident of this compiler version, across three different
+spellings of the same test.
 
 **C1. Dump vertex attributes, then settle the searchlights** — *a day.*
 The one known open rendering defect, and the measurement needs no console.
