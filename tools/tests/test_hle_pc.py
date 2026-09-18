@@ -71,8 +71,9 @@ def test_the_caller_s_pc_is_not_saved_and_restored():
 
 
 def test_the_five_adapters_outside_this_file_are_still_a_known_hole():
-    """config/hle.txt binds sixteen functions; the nine here are the ones PLAN
-    A4 names. The other seven are two no-ops in hle_os.c, the two printf paths
+    """config/hle.txt binds every function the runtime provides natively; the
+    ones in this file are PLAN A4's and F3's. The other seven are two no-ops
+    in hle_os.c, the two printf paths
     in hle_stdio.c and the three context-switch adapters in threads.c -- of
     which OSSaveContext memcpys a five-kilobyte CpuState about fifteen
     thousand times a run, all of it charged to SelectThread. Those files are

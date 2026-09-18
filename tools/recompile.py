@@ -31,15 +31,37 @@ from soa.recomp import Emitter  # noqa: E402
 RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
 
 
-_FUNC_DEF = re.compile(r"^[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*(?:\n\{|;)", re.M)
+# A definition or declaration starting in column 1; the name is the last
+# identifier before the parameter list. ``typedef`` is excluded because a
+# function-pointer typedef ends in a parameter list of its own, and the
+# identifier in front of that list is the return type -- so
+# ``typedef void (*ARCallback)(void);`` reads as a function called "void".
+_FUNC_DEF = re.compile(
+    r"^(?!typedef\b)[A-Za-z_][^\n;{}=]*?\b(\w+)\s*\([^;{}]*\)\s*(?:\n\{|;)", re.M
+)
+
+# Every C89/C99 keyword, so that a declaration shaped like one of those
+# typedefs is caught rather than turned into a /D that redefines the language.
+_KEYWORD_TEXT = """
+auto break case char const continue default do double else enum extern float for goto if
+inline int long register restrict return short signed sizeof static struct switch typedef
+union unsigned void volatile while _Bool _Complex _Imaginary
+"""
+_C_KEYWORDS = frozenset(_KEYWORD_TEXT.split())
+
+
+class RenameError(Exception):
+    """A unit's scan produced a rename that must never reach the compiler."""
 
 
 def native_decomp_sources(units: Path) -> tuple[list[str], list[str]]:
     """The units marked ``native`` in config/GEAE8P/units.txt, and the /D renames
     that prefix every function they define or declare with dc_ (a declared
     callee that is not decompiled yet comes from runtime/decomp_shims.c).
-    Units that touch the game's globals stay out until the native build can
-    map those onto guest memory."""
+    A unit earns ``native`` by compiling under MSVC, reading nothing whose
+    meaning depends on byte order, touching no memory-mapped register, and
+    calling nothing undecompiled; units that read the game's globals fail the
+    second of those until the native build maps them onto guest memory."""
     files = []
     if units.exists():
         for line in units.read_text(encoding="utf-8").splitlines():
@@ -50,7 +72,18 @@ def native_decomp_sources(units: Path) -> tuple[list[str], list[str]]:
                 files.append(Path(cols[0]))
     names = set()
     for f in files:
-        names.update(_FUNC_DEF.findall(f.read_text(encoding="utf-8")))
+        for name in _FUNC_DEF.findall(f.read_text(encoding="utf-8")):
+            # A keyword here means the scan misread a declaration. Emitting the
+            # /D anyway would define the keyword away over every unit in the
+            # build, and the damage would surface as an unrelated syntax error
+            # in whichever file used it next.
+            if name in _C_KEYWORDS:
+                raise RenameError(
+                    f"{f}: read the C keyword '{name}' as a function name. "
+                    f"A rename of '{name}' would break every unit in the native build; "
+                    f"fix _FUNC_DEF in {Path(__file__).name} rather than the unit."
+                )
+            names.add(name)
     return [str(f) for f in files], [f"/D{n}=dc_{n}" for n in sorted(names)]
 
 
@@ -173,7 +206,11 @@ def main() -> int:
         # The hand-decompiled units (src/) are built natively too, every function
         # renamed dc_<name> so they sit beside the C runtime's own strlen and
         # friends; the selftest runs them against their recompiled twins.
-        dc_files, dc_defines = native_decomp_sources(Path("config/GEAE8P/units.txt"))
+        try:
+            dc_files, dc_defines = native_decomp_sources(Path("config/GEAE8P/units.txt"))
+        except RenameError as exc:
+            print(exc, file=sys.stderr)
+            return 1
         if dc_files:
             ndir = args.out / "decomp"
             ndir.mkdir(parents=True, exist_ok=True)

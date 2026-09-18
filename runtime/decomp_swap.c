@@ -6,8 +6,16 @@
  * recomp_fn_XXXXXXXX and the selftest keeps comparing the two. The adapters
  * marshal the EABI call (arguments in r3..r5, the result in r3) onto the
  * natively compiled decompiled C, which works on the same guest memory
- * through host pointers. Only byte-oriented routines belong here until the
- * decompiled code reads wider fields through byte-order-aware accessors.
+ * through host pointers.
+ *
+ * What may be swapped in is what config/GEAE8P/units.txt calls native: the
+ * unit compiles under MSVC, reads nothing whose meaning depends on byte order,
+ * touches no memory-mapped register, and calls nothing undecompiled. A routine
+ * that loads whole words out of a string is fine -- strcpy stores each word
+ * back at the same alignment, so the bytes land unchanged either way round,
+ * and strcmp's one ordering comparison is guarded in the unit itself. A
+ * routine that reads a field of one of the game's structures is not, and waits
+ * for byte-order-aware accessors over guest memory.
  */
 #include "cpu.h"
 #include <stddef.h>
@@ -21,8 +29,17 @@ char* dc_strcat(char* dst, const char* src);
 char* dc_strncpy(char* dst, const char* src, size_t n);
 void* dc_memcpy(void* dst, const void* src, size_t n);
 void* dc_memset(void* dst, int val, size_t n);
+char* dc_strcpy(char* dst, const char* src);
+char* dc_strstr(const char* str, const char* pat);
+int dc_fn_8025EF88(const char* a, const char* b); /* strcmp; the dump has no name for it */
 
 static uint32_t guest(CpuState* s, const void* p) { return p ? 0x80000000u + (uint32_t)((const uint8_t*)p - s->mem) : 0u; }
+
+/* guest() the other way round, for an argument the callee is allowed to be
+ * handed as NULL. mem_ptr maps guest address 0 to the first byte of MEM1,
+ * which is a real byte, so a callee that tests its argument against NULL --
+ * strstr does -- would never see the case it defends against. */
+static const void* host(CpuState* s, uint32_t ea) { return ea ? mem_ptr(s, ea) : NULL; }
 
 /* Each adapter stores its own entry address into s->pc before it does any
  * work, so that a sample taken inside the native routine names the routine
@@ -51,3 +68,8 @@ void fn_8025F0B0(CpuState* s) { s->pc = 0x8025F0B0u; s->gpr[3] = guest(s, dc_str
 void fn_8025F0DC(CpuState* s) { s->pc = 0x8025F0DCu; s->gpr[3] = guest(s, dc_strncpy((char*)mem_ptr(s, s->gpr[3]), (const char*)mem_ptr(s, s->gpr[4]), s->gpr[5])); } /* strncpy */
 void fn_80005520(CpuState* s) { s->pc = 0x80005520u; s->gpr[3] = guest(s, dc_memcpy(mem_ptr(s, s->gpr[3]), mem_ptr(s, s->gpr[4]), s->gpr[5])); } /* memcpy */
 void fn_80005434(CpuState* s) { s->pc = 0x80005434u; s->gpr[3] = guest(s, dc_memset(mem_ptr(s, s->gpr[3]), (int)s->gpr[4], s->gpr[5])); }        /* memset */
+void fn_8025F120(CpuState* s) { s->pc = 0x8025F120u; s->gpr[3] = guest(s, dc_strcpy((char*)mem_ptr(s, s->gpr[3]), (const char*)mem_ptr(s, s->gpr[4]))); } /* strcpy */
+void fn_8025EF88(CpuState* s) { s->pc = 0x8025EF88u; s->gpr[3] = (uint32_t)dc_fn_8025EF88((const char*)mem_ptr(s, s->gpr[3]), (const char*)mem_ptr(s, s->gpr[4])); } /* strcmp */
+/* Only the pattern goes through host(): the original returns str unread when
+ * pat is NULL, and dereferences str without ever testing it. */
+void fn_8025ED74(CpuState* s) { s->pc = 0x8025ED74u; s->gpr[3] = guest(s, dc_strstr((const char*)mem_ptr(s, s->gpr[3]), (const char*)host(s, s->gpr[4]))); } /* strstr */

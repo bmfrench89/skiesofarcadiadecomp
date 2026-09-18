@@ -698,6 +698,9 @@ void* dc_memset(void* dst, int val, size_t n);
 void recomp_fn_8025F1D8(CpuState* s); void recomp_fn_8025EF18(CpuState* s); void recomp_fn_8025C73C(CpuState* s);
 void recomp_fn_8025C710(CpuState* s); void recomp_fn_8025EF48(CpuState* s); void recomp_fn_8025F0B0(CpuState* s);
 void recomp_fn_8025F0DC(CpuState* s); void recomp_fn_80005520(CpuState* s); void recomp_fn_80005434(CpuState* s);
+void recomp_fn_8025EF88(CpuState* s); void recomp_fn_8025ED74(CpuState* s); void recomp_fn_8025F120(CpuState* s);
+int dc_fn_8025EF88(const char* a, const char* b);
+char* dc_strstr(const char* hay, const char* needle);
 
 static void run_twin(CpuState* s, void (*fn)(CpuState*))
 {
@@ -752,6 +755,21 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
         r1 = (int)s->gpr[3]; r2 = dc_strncmp((const char*)mem_ptr(s, A), (const char*)mem_ptr(s, B), n);
         if (r1 != r2) { bad = 1; snprintf(got, cap, "strncmp round %d: twin %d, C %d", round, r1, r2); }
 
+        /* strcmp returns the sign of a comparison, and the twin's word path is
+         * big-endian, so this is the one twin whose C needs a host-order guard.
+         * Compare the sign rather than the value: the two are allowed to differ
+         * in magnitude and the guest only ever tests the sign. */
+        s->gpr[3] = A; s->gpr[4] = B; run_twin(s, recomp_fn_8025EF88); /* strcmp */
+        r1 = (int)s->gpr[3]; r2 = dc_fn_8025EF88((const char*)mem_ptr(s, A), (const char*)mem_ptr(s, B));
+        if ((r1 > 0) - (r1 < 0) != (r2 > 0) - (r2 < 0))
+            { bad = 1; snprintf(got, cap, "strcmp round %d: twin %d, C %d", round, r1, r2); }
+
+        s->gpr[3] = A; s->gpr[4] = B; run_twin(s, recomp_fn_8025ED74); /* strstr */
+        p1 = s->gpr[3];
+        { char* r = (char*)dc_strstr((const char*)mem_ptr(s, A), (const char*)mem_ptr(s, B));
+          p2 = r ? (uint32_t)(A + (r - (char*)mem_ptr(s, A))) : 0; }
+        if (p1 != p2) { bad = 1; snprintf(got, cap, "strstr round %d: twin %08X, C %08X", round, p1, p2); }
+
         /* strcat and strncpy write: run the twin, snapshot, run the C on a fresh copy, compare */
         {
             uint8_t twin[128], native[128];
@@ -768,6 +786,16 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
             memcpy(twin, mem_ptr(s, DST), 128);
             dc_strncpy((char*)native, (const char*)mem_ptr(s, B), n);
             if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strncpy round %d", round); }
+
+            /* strcpy's word path reads up to three bytes past the terminator
+             * inside an aligned word, so compare the whole buffer: a twin that
+             * wrote one byte too many would pass a strcmp of the result. */
+            memset(mem_ptr(s, DST), 'z', 96); mem_w8(s, DST + 96, 0);
+            memcpy(native, mem_ptr(s, DST), 128);
+            s->gpr[3] = DST; s->gpr[4] = A; run_twin(s, recomp_fn_8025F120); /* strcpy */
+            memcpy(twin, mem_ptr(s, DST), 128);
+            dc_strcpy((char*)native, (const char*)mem_ptr(s, A));
+            if (memcmp(twin, native, 128) != 0) { bad = 1; snprintf(got, cap, "strcpy round %d", round); }
 
             /* memcpy in both directions over an overlapping region, and memset */
             {
@@ -786,7 +814,7 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
             }
         }
     }
-    if (!bad) snprintf(got, cap, "9 functions agree over %d rounds", round);
+    if (!bad) snprintf(got, cap, "12 functions agree over %d rounds", round);
     failures += check("decompiled vs recompiled", got, bad ? "agreement" : got);
     return failures;
 }

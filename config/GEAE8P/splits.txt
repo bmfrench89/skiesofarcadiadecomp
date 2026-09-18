@@ -21,7 +21,10 @@ sdk/os/os.c:
 	.text       start:0x80231AD0 end:0x80238A14
 
 sdk/db/db.c:
-	.text       start:0x80238A14 end:0x80239638
+	.text       start:0x80238A14 end:0x80238B00
+
+sdk/mtx/mtx.c:
+	.text       start:0x80238B00 end:0x80239638
 
 sdk/dvd/dvd.c:
 	.text       start:0x80239638 end:0x8023DA58

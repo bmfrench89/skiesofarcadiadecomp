@@ -679,58 +679,44 @@ a compiler missing; `vendor/TOOLCHAIN.sha256` records what produced the 41;
 and a test asserts every `src/**/*.c` is in `units.txt` with unique object
 stems (`decomp.py:49` names them `build/src/<stem>.o`).
 
-**F2. PPCArch, then MTX** — *PPCArch done, MTX mostly done.*
-**PPCArch is complete**: all 17 functions, the whole 240-byte library, byte
-for byte, and the first library in this port to go from nothing to 100% in a
-sitting. Sixteen of the seventeen are Metrowerks function-level `asm` blocks,
-because there is no C for `mfmsr`, `mtspr`, `sc`, `mffs` or `mtfsb1` and 1.2.5n
-offers no intrinsics; only `PPCDisableSpeculation` is ordinary C and it matched
-unaided. Two instructions are worth remembering: `PPCSync` is `sc`, a trap to
-the exception handler and not the `sync` instruction, so its name cannot be read
-off the mnemonic; and `PPCMfwpar` prefixes its `mfspr` with a `sync` to drain
-the write-gather pipe, which is why it is 12 bytes to `PPCMtwpar`'s 8.
+**F2. PPCArch, then MTX** — *done.*
+Both libraries complete: all 17 PPCArch functions and all 25 MTX functions
+match. PPCArch is sixteen Metrowerks `asm` blocks (there is no C for `mfmsr`,
+`mtspr`, `sc`, `mffs` or `mtfsb1`, and 1.2.5n has no intrinsics) plus one
+ordinary C function that matched unaided. Two of its names cannot be read off
+their mnemonics: `PPCSync` is `sc`, a trap, and `PPCMfwpar` prefixes its
+`mfspr` with a `sync` to drain the write-gather pipe, which is why it is 12
+bytes to `PPCMtwpar`'s 8.
+MTX took four units, not one, and the reason is worth keeping: `ps_matrix.c`
+was built **without the peephole pass**. The rotation builders compile four
+bytes short at plain `-O4,p` because the peephole folds a redundant `fmr` and
+rewrites two register copies; `-opt nopeep` makes them exact. Two more
+findings: mwcc orders `.sdata2` by first *use* rather than declaration, and
+`C_QUATSlerp`'s constant pool order is set by an entry point the game does not
+link, so the pool has a hole an unused static has to stand in for.
+Seven names recovered, each argued from the library's interface and source
+order rather than from one instruction.
 
-**MTX: 18 of the 25.** The paired-single routines went better than feared —
-sixteen match, including the hand-scheduled ones — plus `C_MTXFrustum` and
-`C_MTXOrtho` from the plain set. Nine words across seven of them are reported
-as needing a link and are not counted as matches.
+**F3. The native path: three defects, then two free units** — *done, and the plan was wrong about one of them.*
+`strcpy`, `strcmp` and `strstr` now run natively in the shipping path, taking
+it from nine functions to twelve, and the selftest compares all twelve against
+their recompiled twins rather than the nine it used to.
 
-35 new functions in total, all verified independently, and the first sprint run
-against the strict oracle from F1, so a match here means calls resolve to the
-right target and address arithmetic uses the right registers.
-*Left:* the rest of the plain MTX set, and cutting `splits.txt`'s
-`sdk/db/db.c` at 0x80238B00 with an MTX split after it, which no agent owned
-this round.
-
-**F3. The native path: three defects, then two free units** — *hours.*
-`units.txt` sets the bar for `native` at "units free of the game's globals",
-which is not the real bar: a twin must also compile under MSVC, be
-endian-agnostic, touch no MMIO, and call nothing undecompiled. Three things
-fail it today. `recompile.py:34`'s `_FUNC_DEF` regex captures the C keyword
-`void` out of `typedef void (*ARCallback)(void);` — verified on `ar.c` and
-`arq.c`, harmless only because neither is native — so the first unit with a
-function-pointer typedef emits `/Dvoid=dc_void`; reject keywords and fail
-loudly. `fillmem.c:9` assigns to a cast, a Metrowerks extension MSVC
-rejects, so `__fill_mem` stays in `decomp_shims.c`. And `strcmp.c:59`
-returns `(w1 > w2) ? 1 : -1` over words loaded from the strings: right on
-PPC, inverted on x86 — guard that one comparison so the mwcc path stays
-byte-identical. Free once that guard exists: `strcpy`, `strstr`, `strcmp`.
-Same evening, bind the
-`DCInvalidateRange` family to native no-ops — its hot loop has an empty body
-because `dcbi` emits nothing (`emit.py:74`).
-*Done:* `SOA_SELFTEST=1` agrees over 12 pairs instead of 9, `units.txt`
-states the four-part bar, and no sampled block falls in that family.
-
-**F4. The next real matching puzzle** — *hours to a day each, after F1.*
-`__strtoul` at 0x8025F3A4 is the last hole in the MSL numeric block:
-`strtol` and `atoi` both match and both call a function with no body, so
-neither unit can go native, and its 222 instructions with twelve
-callee-saved registers are purely a register-allocation search.
-`aramCacheStage` at 0x8022A854 is the last function of the only game file
-taken apart, already named, with six matching siblings (`aramCacheRestore`,
-`Save`, `Callback`, `Fetch`, `Find`, `Valid`).
-*Done:* whichever you take reports MATCH. Choose `__strtoul` for a puzzle,
-`aramCacheStage` for engine knowledge.
+The three defects, as they actually were. The `_FUNC_DEF` regex really does
+capture `void` out of a function-pointer typedef, and worse than stated: a
+function-pointer *variable* trips it too, so it now rejects C keywords loudly
+instead of renaming one. The string comparison really was inverted on x86,
+confirmed by running it — "abcde" against "azzz" returned positive where the
+answer is negative — and is guarded so the native side is right while mwcc
+still emits the same bytes. But the fill routine was **not** blocked by
+assigning to a cast: MSVC accepts that as a documented extension under this
+project's own flags, and the unit was simply never marked native. It is
+standard C now anyway, since `/Za` and C++ both reject the extension.
+*Noted for whoever binds `__fill_mem`:* it passes the bar, but retiring its
+shim means `memset` runs the game's word-at-a-time loop instead of the C
+library's vectorised one, measured at about 4x slower for fills of 256 bytes
+and up. That is a fidelity-versus-speed choice someone should make on
+purpose.
 
 ---
 

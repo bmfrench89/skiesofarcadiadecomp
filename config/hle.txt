@@ -24,3 +24,6 @@
 0x8025F0DC  strncpy               # src/sdk/msl/string.c
 0x80005520  memcpy                # src/sdk/msl/mem.c
 0x80005434  memset                # src/sdk/msl/mem.c
+0x8025F120  strcpy                # src/sdk/msl/strcpy.c
+0x8025EF88  strcmp                # src/sdk/msl/strcmp.c
+0x8025ED74  strstr                # src/sdk/msl/strstr.c
