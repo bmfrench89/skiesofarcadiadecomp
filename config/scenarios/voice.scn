@@ -1,0 +1,199 @@
+# The first spoken line. Every other audio scenario here stops before this game
+# says a word, and PLAN E1 read a bank with zero voice starts as a possible
+# driver defect without anyone having established that the opening contains
+# speech at all. It does not. This scenario runs 1,100 frames further than
+# audio, to the end of the first battle, which is the earliest moment a
+# scripted run reaches a line of dialogue, and writes it to a WAV.
+name: voice
+summary: The opening through the end of the first battle, headless: the first recording this port has made that contains speech.
+frames: 12600
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
+pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
+pad: 3200:start,3240:a
+pad: 3600:a@150
+env: SOA_WAV=build/voice.wav
+env: SOA_NOSOUND=1
+env: SOA_TRACE=1
+env: SOA_ARAM_VERBOSE=1
+
+shows: that this game speaks, and by which path. At the end of the first battle
+shows:   the port opens a three-digit voice pair -- /SOUND/253_L.dsp and
+shows:   /SOUND/253_R.dsp in the run this file was written from, /SOUND/153 in
+shows:   another on the same script. Which line it is varies with who lands the
+shows:   killing blow; that it is one of them does not. Both are DSP-ADPCM at
+shows:   22,050 Hz, 1.0-1.7 s, with byte-identical L and R halves: one mono
+shows:   recording duplicated. It is a STREAM, played through the same
+shows:   fn_80215F14 path as the music, not a bank sample -- speech and BGM
+shows:   share a transport in this game.
+shows: the WAV, which is the point of running it. The port has played voice
+shows:   lines before -- boot_battle2, boot_explore, boot_field and boot_monkey
+shows:   all open one -- but none of those four runs recorded anything, and the
+shows:   only two runs that ever wrote a WAV (boot_wav and scenario-audio) stop
+shows:   before the first line. build/voice.wav is therefore the first recording
+shows:   from this port that contains speech, and the line has a reference on
+shows:   the disc, so
+shows:   python tools/audio_check.py build/voice.wav extracted/sound/253_L.dsp
+shows:     --start 0.15 --seconds 0.8
+shows:   correlates it the way m01_L.dsp is correlated for the opening theme
+shows:   (FINDINGS "Streamed music, checked"). Name whichever line the log says
+shows:   was opened; the default --start of 5 s is past the end of any of them.
+shows: that the BANKED voice path is a separate question, and answers it. The
+shows:   battle voice bank /SOUND/STV00.SAMP is opened at battle setup, around
+shows:   frame 9,760, and uploaded to ARAM 5A7060-5E71A0 (262,464 bytes), and
+shows:   over the whole battle not one voice is ever pointed into it. The census
+shows:   never names that upload -- it cannot, see the note -- so
+shows:   SOA_ARAM_VERBOSE is on to give the address its start table is read
+shows:   against.
+
+evidence: WHERE THE SPEECH IS, from the disc and from the DOL. sound/ holds 620
+evidence:   .dsp files, i.e. 310 stereo stream pairs. Every pair except m01-m04
+evidence:   and the 44 f7100### is named by one builder, fn_8003ECF4, called
+evidence:   from one place, fn_8003F890, the voice-line player: 139 b702####
+evidence:   (format "B702%04dS%s" at 0x802AD348), 66 ko#### ("KO%04dS%s" at
+evidence:   0x802AD33C) and 57 three-digit ("%3dS%s" at 0x80348628). The
+evidence:   three-digit family is speaker x 100 + line: fn_8003F3F0 maps an
+evidence:   actor index 0..5 to 152/252/352/452/552/652 and fn_8003F484 to
+evidence:   153/253/353/453/553/653, and on disc those files are an exact 6 x 10
+evidence:   grid -- columns 1..6, rows 41/50-57/61 -- with 54 of the 57 pairs
+evidence:   byte-identical L and R. Six speakers, ten lines each.
+evidence: WHY NOT THE OPENING. Decompressing all 258 field/*.sct with
+evidence:   tools/soa/aklz.py, 66 name a stream and all 66 name an f7100 number;
+evidence:   no script anywhere names a b702, ko or three-digit line, so the
+evidence:   voice system is driven entirely from code. The opening's own script
+evidence:   is me504a.sct (the census sees it staged to ARAM at 82D1E0-832700)
+evidence:   and it names exactly one stream, F7100100, which carries 91% of its
+evidence:   energy below 300 Hz (measured over the decoded stream) -- an engine
+evidence:   bed, not a voice; 153_L.dsp by contrast has 8.9% below 300 Hz and a
+evidence:   spectral centroid of 1,056 Hz. Across every saved log in build/ the
+evidence:   only streams this port has ever opened are m01, m02 and the eight
+evidence:   three-digit lines 141, 152, 153, 157, 241, 253, 254 and 256, in four
+evidence:   logs (boot_battle2, boot_explore, boot_field, boot_monkey), and the
+evidence:   earliest sighting of any of them is frame 11,710. Nothing before
+evidence:   that frame, in any run this repository has kept, is speech.
+evidence: THE FRAME BUDGET, and why 12,600. audio stops at 11,500, which is 210
+evidence:   frames short. Two runs on this preamble opened the line at frame
+evidence:   11,710 (a 12,600-frame run) and 11,860 (a 16,000-frame run), and
+evidence:   build/boot_battle2.log, battle's own log, opened /SOUND/253_L.dsp at
+evidence:   11,850. So the event moves by about 150 frames between runs -- the
+evidence:   title's own timeout at 0x80229230 is host wall clock, per
+evidence:   cardwrite.scn -- and 12,600 leaves roughly 740 frames of margin past
+evidence:   the latest sighting plus the 30 to 50 frames a 1.0-1.7 s line takes
+evidence:   to play. If a future run shows no 15x/25x open, raise frames: before
+evidence:   suspecting anything else.
+evidence: THE RUN THIS FILE WAS WRITTEN FROM is build/scenario-voice.log: 12,600
+evidence:   frames in 424.7 s of wall clock, "3 of 4 invariants hold" with the
+evidence:   vertex check skipped because nothing renders. /SOUND/253_L.dsp and
+evidence:   /SOUND/253_R.dsp open immediately after the pad event at frame
+evidence:   11,860, and
+evidence:   python tools/audio_check.py build/voice.wav extracted/sound/253_L.dsp
+evidence:     --start 0.15 --seconds 0.8
+evidence:   finds the line at 400.93 s into the recording with correlation 0.983,
+evidence:   and 0.985 for 253_R. For scale, the opening theme correlates at 0.85
+evidence:   and the battle music at 0.52 (FINDINGS "Streamed music, checked"),
+evidence:   both under everything the game mixes over them: a voice line at the
+evidence:   end of a battle plays nearly alone, which makes it the cleanest
+evidence:   reference signal this port has.
+evidence: THE NINETEEN PRESSES, each one read off the TitleSceneChange trace
+evidence:   (0x80228A60, r4 = the scene being entered) of a 12,600-frame run on
+evidence:   exactly this script. The preamble is shared with audio and battle,
+evidence:   and it is an ALTERNATING pattern rather than a minimal one on
+evidence:   purpose: the title chain spends presses unpredictably, so every
+evidence:   START is followed 40 frames later by an A and the pair is repeated
+evidence:   every 200 frames until the game is running.
+evidence:   1600:start -- the game is in the attract chain (scenes 0..7 have
+evidence:     already gone by). The press restarts it at 0 and 1 and lands on
+evidence:     scene 9. Scene 10 follows on its own before frame 1800.
+evidence:   1640:a -- no scene change in the measured run. It is the second half
+evidence:     of the pair, and it is also the press that dismisses the memory
+evidence:     card format prompt if one is ever offered here (cardwrite.scn:
+evidence:     fn_8022B318 starts its cursor on No and A on No dismisses).
+evidence:   1800:start -- scene 11, the title's START gate. One START is always
+evidence:     spent snapping the logo flyover (0x80229638), which is why the
+evidence:     first one at 1600 did not get here.
+evidence:   2000:start -- scene 12, the New Game / Continue menu.
+evidence:   2040:a -- takes New Game, which is cursor entry 0 out of the memset
+evidence:     in fn_801D8D54, and the trace then shows scene 13, 14 and 15 in
+evidence:     three consecutive lines. Scene 15 is the memory-card screen.
+evidence:   CardScreenStatus (0x8022B828) prints r3 = 0 just after frame 2050
+evidence:     with the repository's build/cards/slotA.raw in the slot: a healthy
+evidence:     card, so the screen returns without drawing and the boot continues
+evidence:     into the opening. 0x0F is the last TitleSceneChange in the run.
+evidence:   2200:start through 3240:a -- eight further pairs walking the
+evidence:     opening's dialogue boxes. None of them changes a title scene; they
+evidence:     are message advances.
+evidence:   3600:a@150 -- one A every 150 frames for the rest of the run. This is
+evidence:     the repeat battle.scn was written for: its predecessor script used
+evidence:     64 explicit presses and the sixty-fourth landed on the battle
+evidence:     command menu, after which the game waited for input that never
+evidence:     came (build/boot_battle.log). The battle needs an unbounded supply
+evidence:     of A presses to fight through, and the voice line is at the END of
+evidence:     that battle, so a finite list cannot reach it.
+
+note: THE CENSUS CANNOT NAME A VOICE BANK, and this is the finding that matters
+note:   most for PLAN E1. aram.c indexes a transfer by the first 32 bytes of its
+note:   source buffer (src_hash_put refuses a prefix two files share) and falls
+note:   back at report time to the transfer's size (src_by_span, aram.c:362,
+note:   refuses a size two files share). The 72 stv banks are 35 distinct
+note:   contents each duplicated as an even/odd pair -- stv00.samp and
+note:   stv01.samp are byte-identical for all 262,448 bytes -- so no prefix
+note:   length can separate them and their sizes collide by construction. The
+note:   three-digit voice streams fail the same way: L and R are identical and
+note:   equal-sized. So a voice start can never appear in this census under its
+note:   own name: a banked one shows as "(unidentified)", and a streamed one
+note:   shows under the name of whatever file filled its ring first. That is why
+note:   SOA_ARAM_VERBOSE is on here -- the upload addresses in the log are what
+note:   the table's rows have to be read against.
+note: THE BANK WITH ZERO STARTS IN E1's CENSUS IS NOT A VOICE BANK. It is
+note:   b7000000.samp, one half of the boot SE id space: its waveform ids
+note:   (4..0x6D) are disjoint from s1000000.samp's (0..0xAD), none of its 44
+note:   waveforms loops, 7.7% of its frames are periodic and it has no
+note:   detectable pitch -- impacts and noise, spectral centroid 1.2-3.6 kHz.
+note:   stv00.samp by contrast is 46 unlooped waveforms with a centroid of
+note:   790-910 Hz, near-zero energy below 80 Hz, uniform across the bank: the
+note:   speech band. The only code that requests b7000000 is fn_8003E084, called
+note:   from fn_80073164, and the opening has no ship combat, so a zero there is
+note:   the correct answer and not a defect.
+note: THE START TABLE PRINTS ONLY ITS TEN LARGEST REGIONS (ax.c census_report).
+note:   A region with a handful of starts is counted in the totals and dropped
+note:   from the line, so "not printed" on its own bounds a region's starts by
+note:   (starts + re-points) minus the sum of the ten printed, not by zero. Do
+note:   the subtraction before calling anything zero.
+note: WHAT THE CENSUS SAID IN THAT RUN, and why the answer for the banked voice
+note:   bank is exactly zero and not merely "not printed". 2,081 starts + 403
+note:   re-points = 2,484 attributed across 12 distinct regions, of which the
+note:   table prints 10; those ten sum to 2,478, so 6 starts sit in 2 unprinted
+note:   regions. None of the ten covers 5A7060-5E71A0, which is where
+note:   SOA_ARAM_VERBOSE shows STV00.SAMP landed -- 262,464 bytes, contiguous,
+note:   from frame 9,760. The two unprinted regions are the two stream rings,
+note:   and that is measured rather than assumed: build/scenario-audio.log is
+note:   the same script stopped at 11,500 frames, before any line is spoken, and
+note:   it has 11 regions with a residual of 2 in 1 region while printing
+note:   m01_l.dsp 7FDD80-800EC0 with exactly 2 starts -- one for m01, one for
+note:   m02, which share the ring. This run plays a third stream through the
+note:   same two rings, so each ring holds 3 starts, the pair holds 6, and 6 is
+note:   the entire residual. Twelve regions are therefore fully accounted for
+note:   with none left over, and the banked voice bank starts no voice at all in
+note:   the first battle.
+note: WHICH LEAVES ONE QUESTION, now well posed rather than open-ended: the bank
+note:   is loaded at every battle setup and never played. Whether the first
+note:   battle simply triggers no banked line or the banked path is broken needs
+note:   three tracepoints in config/trace.txt -- 0x8003F890 (voice-line player
+note:   entry, r3/r4 ids, r5 kind), 0x8003F5B8 (the 17-case event dispatcher,
+note:   r4 = event code 14..30) and 0x8003DEE0 (the STV bank load) -- and one
+note:   run of this scenario. Note also that the streamed line this scenario
+note:   does reach is itself unnameable by the census: it is attributed to the
+note:   ring it streams through, which is named after whichever file filled that
+note:   ring first, so it appears as m01_l.dsp / m01_r.dsp.
+note: SOA_NOSOUND=1 keeps the run off the machine's sound device, which it would
+note:   otherwise wait on; the WAV is written either way. SOA_TRACE=1 is here for
+note:   one line in config/trace.txt, DVDOpen at 0x8023A818, which prints the
+note:   path of every file opened and is what names the voice stream; the memory
+note:   card sites in the same file are noise in this run and can be ignored.
+note: this scenario is headless on purpose -- no SOA_RENDER, so
+note:   "scenario.py run voice --check" reports the bad-vertex-reference
+note:   invariant as skipped, the way audio and capture do. Nothing here needs a
+note:   pixel. Add SOA_RENDER=1 SOA_SNAP=100 with --env to watch the battle it
+note:   fights through.
+note: it writes build/voice.wav, not build/opening.wav: audio's WAV is the
+note:   reference artifact for the streamed-music correlation and a run of this
+note:   scenario must not overwrite it with a recording 1,100 frames longer.

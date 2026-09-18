@@ -501,7 +501,12 @@ static void process_voice(CpuState* s, uint32_t addr, uint8_t* aram)
                 last[0] = last[1]; last[1] = last[2]; last[2] = last[3];
                 last[3] = fetch_sample(&v);
             }
-            samples[i] = last[2] + (((last[3] - last[2]) * (int32_t)frac) >> 16);
+            /* In int, a difference near full scale times a fraction near one
+             * overflows: 32769 * 65535 is 32,768 past the maximum and wraps
+             * to full-scale negative, turning a silent sample into a click.
+             * Command 0x01's mix already does its multiply wide; this is the
+             * same arithmetic and needs the same width. */
+            samples[i] = last[2] + (int32_t)(((int64_t)(last[3] - last[2]) * (int64_t)frac) >> 16);
         }
 
         /* volume envelope */

@@ -678,6 +678,709 @@ static int card_selftest(CpuState* s, char* got, size_t cap)
     return failures;
 }
 
+/* ---- the AX mixer, driven directly (PLAN E2) ----------------------------
+ *
+ * runtime/ax.c decodes, rate-converts, shapes and mixes 160 samples a frame
+ * for every voice the game's audio driver hands it, and until this nothing
+ * had ever checked one of those samples. These build the parameter blocks
+ * and the command list by hand, put known bytes in ARAM, call
+ * ax_command_list() outside the game, and read the result back out of guest
+ * memory. No disc, no driver, no clock.
+ *
+ * Every expected value here is arithmetic, never a recording of what the
+ * mixer produces today: the DSP-ADPCM predictor's own formula, the Q15
+ * shift, and the address units each sample format counts in. In particular
+ * nothing may depend on the *shape* of the rate converter, because nothing
+ * establishes which shape is right -- the census says the driver asks for
+ * src_type 0 in all 351,290 voice-frames, Dolphin's AX enum calls that
+ * polyphase, and ax.c interpolates two taps linearly. So every value check
+ * drives a constant, which any interpolator with unity DC gain passes
+ * through unchanged, or reads the decoder's state back out of the block,
+ * and rate conversion is checked by how many input samples it consumes,
+ * which is the address accumulator's arithmetic and true of any resampler.
+ *
+ * Where a check needs a source it can predict sample by sample it uses
+ * PCM16, which the game itself never asks for -- the census reports format 0
+ * in every one of those voice-frames. That is deliberate: PCM16 is the way
+ * to put a known constant on the bus with no decoder in between, and the
+ * format the game does use has its own cases above. The same goes for the
+ * auxiliary-B and surround sends, which this game never sets a bit for.
+ *
+ * The block below reaches nothing in the port but ax_command_list(),
+ * aram_memory() and guest memory, so it can be lifted into a driver of its
+ * own the way tools/citest/render_driver.c lifts the render checks.
+ */
+void ax_command_list(CpuState* s, uint32_t addr);
+
+/* AXPB word offsets -- the layout runtime/ax.c enumerates, named again here
+ * because that enum is private to it. */
+enum {
+    AXPB_NEXT = 0,        /* 2 words: the chain pointer */
+    AXPB_SRC_TYPE = 4,
+    AXPB_MIXER_CTRL = 6,
+    AXPB_RUNNING = 7,
+    AXPB_MIXER = 9,       /* 18 words, see AXMX_* */
+    AXPB_UPDATES = 34,    /* per-millisecond counts[5], then data hi, lo */
+    AXPB_VOL_ENV = 50,    /* current volume, delta */
+    AXPB_AUDIO = 55,      /* looping, format, loop hi/lo, end hi/lo, cur hi/lo */
+    AXPB_ADPCM = 63,      /* coefs[16], gain, pred_scale, yn1, yn2 */
+    AXPB_SRC = 83,        /* ratio hi/lo, address fraction, last_samples[4] */
+    AXPB_ADPCM_LOOP = 90, /* pred_scale, yn1, yn2 */
+    AXPB_WORDS = 96
+};
+enum { AXMX_L = 0, AXMX_DL, AXMX_R, AXMX_DR, AXMX_AL, AXMX_DAL, AXMX_AR, AXMX_DAR,
+       AXMX_BL, AXMX_DBL, AXMX_BR, AXMX_DBR, AXMX_S, AXMX_DS, AXMX_AS, AXMX_DAS, AXMX_BS };
+
+/* Guest scratch, clear of everything else the selftest uses. */
+#define AX_PB   (SCRATCH + 0x20000u) /* up to 300 blocks, 0xC0 apart */
+#define AX_CMD  (SCRATCH + 0x50000u)
+#define AX_OUT  (SCRATCH + 0x50400u) /* 160 stereo 16-bit samples */
+#define AX_SUR  (SCRATCH + 0x50800u) /* 160 surround samples */
+#define AX_BUF  (SCRATCH + 0x51000u) /* a CPU-side bus: 3 x 160 32-bit samples */
+#define AX_UPD  (SCRATCH + 0x52000u) /* one update-list entry */
+
+/* ARAM, in bytes. The addresses a block carries are in its format's own
+ * units: nibbles for DSP-ADPCM, samples for PCM16. */
+#define AX_AR_ADPCM 0x24000u /* one frame, then a loud one after it */
+#define AX_AR_C4000 0x28000u /* 4096 PCM16 samples of 0x4000 */
+#define AX_AR_C5000 0x2A000u /* 1024 of +0x5000 */
+#define AX_AR_M5000 0x2C000u /* 1024 of -0x5000 */
+#define AX_AR_LOOP  0x2E000u /* 100 of 0x4000, then 0x7000 past the end */
+#define AX_NIB(b) ((b) * 2u)
+#define AX_SMP(b) ((b) / 2u)
+
+static void ax_w(CpuState* s, uint32_t pb, unsigned word, uint16_t v) { mem_w16(s, pb + word * 2u, v); }
+static uint16_t ax_r(CpuState* s, uint32_t pb, unsigned word) { return mem_r16(s, pb + word * 2u); }
+static void ax_w32(CpuState* s, uint32_t pb, unsigned word, uint32_t v)
+{
+    ax_w(s, pb, word, (uint16_t)(v >> 16));
+    ax_w(s, pb, word + 1, (uint16_t)v);
+}
+static uint32_t ax_r32(CpuState* s, uint32_t pb, unsigned word)
+{
+    return ((uint32_t)ax_r(s, pb, word) << 16) | ax_r(s, pb, word + 1);
+}
+static void ax_pb_clear(CpuState* s, uint32_t pb)
+{
+    unsigned i;
+    for (i = 0; i < AXPB_WORDS; i++) ax_w(s, pb, i, 0);
+}
+
+static void ax_aram_pcm16(uint32_t byte_addr, uint32_t samples, int16_t value)
+{
+    uint8_t* ar = aram_memory();
+    uint32_t i;
+    for (i = 0; i < samples; i++) {
+        ar[byte_addr + i * 2u] = (uint8_t)((uint16_t)value >> 8);
+        ar[byte_addr + i * 2u + 1u] = (uint8_t)value;
+    }
+}
+
+/* One DSP-ADPCM frame: the header byte the format calls pred_scale (low
+ * nibble the scale exponent, next three the coefficient pair), then seven
+ * bytes holding fourteen sample nibbles. */
+static void ax_aram_adpcm(uint32_t byte_addr, uint8_t header, const uint8_t* seven)
+{
+    uint8_t* ar = aram_memory();
+    int i;
+    ar[byte_addr] = header;
+    for (i = 0; i < 7; i++) ar[byte_addr + 1u + (uint32_t)i] = seven[i];
+}
+
+/* A voice reading PCM16 at unity rate through a unit envelope. The four
+ * history samples are preloaded with the constant the samples hold, so the
+ * output is that constant from the first sample on, whatever kernel the
+ * rate converter turns out to want. */
+static void ax_pcm16_voice(CpuState* s, uint32_t pb, uint32_t byte_addr, uint32_t samples, int16_t value)
+{
+    unsigned i;
+    ax_pb_clear(s, pb);
+    ax_w(s, pb, AXPB_RUNNING, 1);
+    ax_w(s, pb, AXPB_AUDIO + 1, 0x0A); /* PCM16 */
+    ax_w32(s, pb, AXPB_AUDIO + 4, AX_SMP(byte_addr) + samples);
+    ax_w32(s, pb, AXPB_AUDIO + 6, AX_SMP(byte_addr));
+    ax_w32(s, pb, AXPB_SRC, 0x10000u); /* one input sample per output sample */
+    ax_w(s, pb, AXPB_VOL_ENV, 0x8000); /* Q15 unity: (x * 0x8000) >> 15 == x */
+    for (i = 0; i < 4; i++) ax_w(s, pb, AXPB_SRC + 3 + i, (uint16_t)value);
+}
+
+static void ax_adpcm_voice(CpuState* s, uint32_t pb, uint32_t nib_start, uint32_t nib_end, int16_t c0, int16_t c1)
+{
+    ax_pb_clear(s, pb);
+    ax_w(s, pb, AXPB_RUNNING, 1);
+    ax_w(s, pb, AXPB_AUDIO + 1, 0x00); /* DSP-ADPCM */
+    ax_w32(s, pb, AXPB_AUDIO + 4, nib_end);
+    ax_w32(s, pb, AXPB_AUDIO + 6, nib_start);
+    ax_w(s, pb, AXPB_ADPCM, (uint16_t)c0); /* coefficient pair 0 */
+    ax_w(s, pb, AXPB_ADPCM + 1, (uint16_t)c1);
+    ax_w32(s, pb, AXPB_SRC, 0x10000u);
+    ax_w(s, pb, AXPB_VOL_ENV, 0x8000);
+    ax_w(s, pb, AXPB_MIXER + AXMX_L, 0x8000);
+}
+
+static uint32_t ax_put16(CpuState* s, uint32_t p, uint16_t v) { mem_w16(s, p, v); return p + 2u; }
+static uint32_t ax_put32(CpuState* s, uint32_t p, uint32_t v)
+{
+    mem_w16(s, p, (uint16_t)(v >> 16));
+    mem_w16(s, p + 2u, (uint16_t)v);
+    return p + 4u;
+}
+
+/* The command list the driver sends every 5 ms, cut down to what a check
+ * needs: point at the voice chain and run it, optionally hand a bus to the
+ * CPU and take one back, write the frame's output, end. */
+static void ax_fill_out(CpuState* s, uint8_t byte)
+{
+    int i;
+    for (i = 0; i < 640; i++) mem_w8(s, AX_OUT + (uint32_t)i, byte);
+}
+
+static void ax_run_aux(CpuState* s, uint32_t pb, uint16_t aux, uint32_t up, uint32_t down)
+{
+    uint32_t p = AX_CMD;
+    ax_fill_out(s, 0xAA); /* a list that never reaches OUTPUT must not pass on the last frame's */
+    if (pb) {
+        p = ax_put16(s, p, 0x02); /* PB_ADDR */
+        p = ax_put32(s, p, pb);
+        p = ax_put16(s, p, 0x03); /* PROCESS_PB */
+    }
+    if (aux == 0x09) { /* MIX_AUXB_NOWRITE takes the download address alone */
+        p = ax_put16(s, p, aux);
+        p = ax_put32(s, p, down);
+    } else if (aux) {
+        p = ax_put16(s, p, aux);
+        p = ax_put32(s, p, up);
+        p = ax_put32(s, p, down);
+    }
+    p = ax_put16(s, p, 0x0E); /* OUTPUT: the surround address, then L/R */
+    p = ax_put32(s, p, AX_SUR);
+    p = ax_put32(s, p, AX_OUT);
+    ax_put16(s, p, 0x0F); /* END */
+    ax_command_list(s, AX_CMD);
+}
+
+static void ax_run(CpuState* s, uint32_t pb) { ax_run_aux(s, pb, 0, 0, 0); }
+
+/* The output as the AI DMA buffer holds it: 160 stereo pairs, the right
+ * sample first, each a big-endian 16-bit word. Read a byte at a time, so
+ * that neither a swapped byte order nor a swapped channel can cancel out
+ * against a matching mistake in the check itself. */
+static int ax_out_r(CpuState* s, int i)
+{
+    uint32_t a = AX_OUT + (uint32_t)i * 4u;
+    return (int16_t)(((uint16_t)mem_r8(s, a) << 8) | mem_r8(s, a + 1u));
+}
+static int ax_out_l(CpuState* s, int i)
+{
+    uint32_t a = AX_OUT + (uint32_t)i * 4u + 2u;
+    return (int16_t)(((uint16_t)mem_r8(s, a) << 8) | mem_r8(s, a + 1u));
+}
+static int ax_out_s(CpuState* s, int i) { return (int16_t)mem_r16(s, AX_SUR + (uint32_t)i * 2u); }
+
+/* The first sample in [from, to) that is not `want`, or -1. */
+static int ax_bad_l(CpuState* s, int from, int to, int want)
+{
+    int i;
+    for (i = from; i < to; i++)
+        if (ax_out_l(s, i) != want) return i;
+    return -1;
+}
+static int ax_bad_r(CpuState* s, int from, int to, int want)
+{
+    int i;
+    for (i = from; i < to; i++)
+        if (ax_out_r(s, i) != want) return i;
+    return -1;
+}
+
+/* The buses exchanged with the CPU are 32-bit samples, three channels of
+ * 160, channel-major (FINDINGS section 10). */
+static int32_t ax_bus(CpuState* s, int c, int i)
+{
+    return (int32_t)mem_r32(s, AX_BUF + (uint32_t)(c * 160 + i) * 4u);
+}
+static int ax_bad_bus(CpuState* s, int c, int32_t want)
+{
+    int i;
+    for (i = 0; i < 160; i++)
+        if (ax_bus(s, c, i) != want) return i;
+    return -1;
+}
+/* Pre-fill the buffer the CPU shares with the mixer: `ramp` makes it
+ * 0, 1, 2, ... for the download checks; otherwise every word gets a marker
+ * the mixer has to overwrite, so a channel it never writes at all is caught
+ * as surely as one it writes wrongly. */
+static void ax_fill_bus(CpuState* s, int ramp)
+{
+    int i;
+    for (i = 0; i < 480; i++) mem_w32(s, AX_BUF + (uint32_t)i * 4u, ramp ? (uint32_t)i : 0x0BADF00Du);
+}
+
+/* yn2 and yn1 -- the decoder's own history, where the block keeps it. */
+static void ax_history(CpuState* s, uint32_t pb, char* out, size_t cap)
+{
+    snprintf(out, cap, "%d %d", (int16_t)ax_r(s, pb, AXPB_ADPCM + 19), (int16_t)ax_r(s, pb, AXPB_ADPCM + 18));
+}
+
+static int ax_selftest(CpuState* s, char* got, size_t cap)
+{
+    /* nibbles 1,7,-1,-8, eight zeros, then 3,-5. The first four are the
+     * vectors tools/tests/test_dspadpcm.py hand-computed for the Python
+     * decoder, so the mixer and the analysis tool now agree with a third,
+     * derived source rather than with each other. */
+    static const uint8_t frame_a[7] = {0x17, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x3B};
+    static const uint8_t frame_pred[7] = {0x11, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00};  /* 1,1,1,1,0.. */
+    static const uint8_t frame_clip[7] = {0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};  /* 7,-8,0.. */
+    static const uint8_t frame_loud[7] = {0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
+    static const uint8_t frame_zero[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t frame_three[7] = {0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    const uint32_t nib = AX_NIB(AX_AR_ADPCM);
+    char want[128];
+    int failures = 0, bad, i;
+
+    /* ---- the DSP-ADPCM decoder ------------------------------------------
+     * s[n] = clamp16((nibble * 2^scale * 2048 + c0*s[n-1] + c1*s[n-2] + 1024) >> 11),
+     * the nibble sign-extended from four bits and the coefficients in 4.11
+     * fixed point. The rate converter must not stand between the check and
+     * that formula, so each case reads the predictor's history back out of
+     * the block instead of listening to the bus: a one-shot voice whose end
+     * address is start + 2 + N nibbles decodes exactly N samples and stops,
+     * leaving yn2 = s[N-2] and yn1 = s[N-1]. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x04, frame_a);         /* scale 4, coefficient pair 0 */
+    ax_aram_adpcm(AX_AR_ADPCM + 8u, 0x0C, frame_loud); /* the next frame along, loud */
+
+    /* 1 and 7 at scale 4 are 16 and 112, from (n * 2^4 * 2048 + 1024) >> 11 */
+    ax_adpcm_voice(s, AX_PB, nib, nib + 4u, 0, 0);
+    ax_run(s, AX_PB);
+    ax_history(s, AX_PB, got, cap);
+    failures += check("ax adpcm scale", got, "16 112");
+
+    /* -1 and -8 give -16 and -128, not -15 and -127: that >> 11 is an
+     * arithmetic shift, so it floors rather than truncating toward zero. */
+    ax_adpcm_voice(s, AX_PB, nib, nib + 6u, 0, 0);
+    ax_run(s, AX_PB);
+    ax_history(s, AX_PB, got, cap);
+    failures += check("ax adpcm shift floors", got, "-16 -128");
+
+    /* c0 = 2048 is 1.0, so at scale 0 the decoder integrates: 1, 2, 3, 4. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x00, frame_pred);
+    ax_adpcm_voice(s, AX_PB, nib, nib + 6u, 2048, 0);
+    ax_run(s, AX_PB);
+    ax_history(s, AX_PB, got, cap);
+    failures += check("ax adpcm predictor", got, "3 4");
+
+    /* The +1024 rounds to nearest, and the header's upper nibbles pick which
+     * of the eight coefficient pairs to predict with. Here pair 1 holds 0.5
+     * and pair 0 is zero, and the nibbles are the four above, so
+     *   1, then 7 + 0.5*1, then -1 + 0.5*8, then -8 + 0.5*3
+     * is 1, 8, 3, -6 -- a sequence a decoder that ignores the pair, or that
+     * truncates instead of rounding, cannot produce. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x10, frame_a); /* scale 0, coefficient pair 1 */
+    ax_adpcm_voice(s, AX_PB, nib, nib + 6u, 0, 0);
+    ax_w(s, AX_PB, AXPB_ADPCM + 2, 1024); /* pair 1: 0.5 in 4.11 fixed point */
+    ax_run(s, AX_PB);
+    ax_history(s, AX_PB, got, cap);
+    failures += check("ax adpcm coefficient pair", got, "3 -6");
+
+    /* scale 15: 7 * 32768 * 2048 >> 11 is 229376 and -8 * 32768 * 2048 >> 11
+     * is -262144, so one frame exercises both ends of the 16-bit clamp. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x0F, frame_clip);
+    ax_adpcm_voice(s, AX_PB, nib, nib + 4u, 0, 0);
+    ax_run(s, AX_PB);
+    ax_history(s, AX_PB, got, cap);
+    failures += check("ax adpcm clamps", got, "32767 -32768");
+
+    /* ---- a one-shot voice ends on its own last sample -------------------
+     * A frame holds fourteen samples, so a block whose end address is
+     * start + 16 nibbles decodes s[0..13] and stops: the sample *at* the end
+     * address is not played. The frame after this one decodes to 28672, and
+     * the history would hold that instead of s[13] = -80 if the end test let
+     * one more sample through. Nothing is mixed once the voice stops and the
+     * bus starts every frame silent, so the rest of the frame is exactly
+     * zero however the converter is shaped. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x04, frame_a);
+    ax_adpcm_voice(s, AX_PB, nib, nib + 16u, 0, 0);
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "running %u cur %X yn %d %d %s", ax_r(s, AX_PB, AXPB_RUNNING),
+             ax_r32(s, AX_PB, AXPB_AUDIO + 6), (int16_t)ax_r(s, AX_PB, AXPB_ADPCM + 19),
+             (int16_t)ax_r(s, AX_PB, AXPB_ADPCM + 18),
+             ax_bad_l(s, 32, 160, 0) < 0 ? "then silent" : "then noise");
+    snprintf(want, sizeof want, "running 0 cur %X yn 48 -80 then silent", nib + 16u);
+    failures += check("ax one-shot stops at end", got, want);
+
+    /* ---- the loop, and the decoder state it restores --------------------
+     * A block carries a second copy of pred_scale, yn1 and yn2 for its loop
+     * point, because a loop address that is not frame-aligned lands where
+     * there is no header byte to re-read -- and the disc's own streams are
+     * like that: m01_L.dsp and 141_L.dsp both loop at nibble 2. These make
+     * the loop one nibble long at nibble 2 of the frame, so every fetch
+     * after the first wraps and restores, and the whole rest of the frame is
+     * one constant that any rate converter passes through.
+     *
+     * The frame's own header selects coefficient pair 1, whose coefficients
+     * are zero; the restored pred_scale selects pair 0. So a mixer that
+     * keeps the header's pred_scale, or that fails to restore either history
+     * word, emits 0 here instead of the constant. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x13, frame_zero); /* scale 3, coefficient pair 1 */
+    ax_adpcm_voice(s, AX_PB, nib, nib + 3u, 2048, 0);
+    ax_w(s, AX_PB, AXPB_AUDIO, 1); /* looping */
+    ax_w32(s, AX_PB, AXPB_AUDIO + 2, nib + 2u);
+    ax_w(s, AX_PB, AXPB_ADPCM_LOOP, 0x00); /* scale 0, coefficient pair 0 */
+    ax_w(s, AX_PB, AXPB_ADPCM_LOOP + 1, 1000);
+    ax_run(s, AX_PB);
+    bad = ax_bad_l(s, 8, 160, 1000); /* from 8: clear of the wrap by any short kernel */
+    if (bad < 0) snprintf(got, cap, "1000 constant");
+    else snprintf(got, cap, "%d at %d", ax_out_l(s, bad), bad);
+    failures += check("ax loop restores yn1", got, "1000 constant");
+
+    ax_adpcm_voice(s, AX_PB, nib, nib + 3u, 0, 2048);
+    ax_w(s, AX_PB, AXPB_AUDIO, 1);
+    ax_w32(s, AX_PB, AXPB_AUDIO + 2, nib + 2u);
+    ax_w(s, AX_PB, AXPB_ADPCM_LOOP, 0x00);
+    ax_w(s, AX_PB, AXPB_ADPCM_LOOP + 2, 2000);
+    ax_run(s, AX_PB);
+    bad = ax_bad_l(s, 8, 160, 2000);
+    if (bad < 0) snprintf(got, cap, "2000 constant");
+    else snprintf(got, cap, "%d at %d", ax_out_l(s, bad), bad);
+    failures += check("ax loop restores yn2", got, "2000 constant");
+
+    /* Same shape with the coefficients zero and the nibble 3, so the sample
+     * is 3 * 2^scale: the header's scale 3 would give 24, the loop's 5
+     * gives 96. */
+    ax_aram_adpcm(AX_AR_ADPCM, 0x13, frame_three);
+    ax_adpcm_voice(s, AX_PB, nib, nib + 3u, 0, 0);
+    ax_w(s, AX_PB, AXPB_AUDIO, 1);
+    ax_w32(s, AX_PB, AXPB_AUDIO + 2, nib + 2u);
+    ax_w(s, AX_PB, AXPB_ADPCM_LOOP, 0x05); /* scale 5, coefficient pair 0 */
+    ax_run(s, AX_PB);
+    bad = ax_bad_l(s, 8, 160, 96);
+    if (bad < 0) snprintf(got, cap, "96 constant, ps %04X", ax_r(s, AX_PB, AXPB_ADPCM + 17));
+    else snprintf(got, cap, "%d at %d", ax_out_l(s, bad), bad);
+    failures += check("ax loop restores scale", got, "96 constant, ps 0005");
+
+    /* ---- PCM16, the pan, and the order the samples are written ---------- */
+    ax_aram_pcm16(AX_AR_C4000, 4096, 0x4000);
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0);
+    ax_run(s, AX_PB);
+    bad = ax_bad_l(s, 0, 160, 16384);
+    if (bad < 0) bad = ax_bad_r(s, 0, 160, 0);
+    snprintf(got, cap, "%02X %02X %02X %02X %s", mem_r8(s, AX_OUT), mem_r8(s, AX_OUT + 1u),
+             mem_r8(s, AX_OUT + 2u), mem_r8(s, AX_OUT + 3u), bad < 0 ? "hard left" : "wrong");
+    failures += check("ax pan and word order", got, "00 00 40 00 hard left");
+
+    /* Q15 all the way through: the envelope and the mixer gain each multiply
+     * and shift right 15, so 0x8000 is transparent and 0x4000 halves. A
+     * shift of 16 anywhere would give 4096, 4096, 1024 instead. */
+    {
+        int v[3];
+        static const uint16_t ve[3] = {0x4000, 0x8000, 0x4000};
+        static const uint16_t lg[3] = {0x8000, 0x4000, 0x4000};
+        for (i = 0; i < 3; i++) {
+            ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+            ax_w(s, AX_PB, AXPB_VOL_ENV, ve[i]);
+            ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, lg[i]);
+            ax_run(s, AX_PB);
+            v[i] = ax_out_l(s, 0);
+        }
+        snprintf(got, cap, "%d %d %d", v[0], v[1], v[2]);
+        failures += check("ax Q15 envelope and gain", got, "8192 8192 4096");
+    }
+
+    /* ---- two voices sum on a 32-bit bus, and the output clamps ----------
+     * 20480 + 20480 is 40960, which a 16-bit accumulator would have wrapped
+     * to -24576 long before the output clamp ever saw it. */
+    ax_aram_pcm16(AX_AR_C5000, 1024, 0x5000);
+    ax_aram_pcm16(AX_AR_M5000, 1024, -0x5000);
+    {
+        int peak[2];
+        static const uint32_t src[2] = {AX_AR_C5000, AX_AR_M5000};
+        static const int16_t val[2] = {0x5000, -0x5000};
+        for (i = 0; i < 2; i++) {
+            int expect = val[i] > 0 ? 32767 : -32768;
+            ax_pcm16_voice(s, AX_PB, src[i], 1024, val[i]);
+            ax_pcm16_voice(s, AX_PB + 0xC0u, src[i], 1024, val[i]);
+            ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+            ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0x8000);
+            ax_w(s, AX_PB + 0xC0u, AXPB_MIXER + AXMX_L, 0x8000);
+            ax_w(s, AX_PB + 0xC0u, AXPB_MIXER + AXMX_R, 0x8000);
+            ax_w32(s, AX_PB, AXPB_NEXT, AX_PB + 0xC0u);
+            ax_run(s, AX_PB);
+            bad = ax_bad_l(s, 0, 160, expect);
+            if (bad < 0) bad = ax_bad_r(s, 0, 160, expect);
+            peak[i] = bad < 0 ? expect : ax_out_l(s, bad);
+        }
+        snprintf(got, cap, "%d %d", peak[0], peak[1]);
+        failures += check("ax bus width and clamp", got, "32767 -32768");
+    }
+
+    /* ---- the gain ramp --------------------------------------------------
+     * mixer_ctrl bit 3 turns the per-sample ramps on. Sample i is mixed at
+     * the gain in force *before* its own step, so with the left gain
+     * starting at 0 and stepping by 0x100 the left sample is
+     * (16384 * 256i) >> 15 = 128i, and 160 steps leave the block's own gain
+     * word at 0xA000. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER_CTRL, 8);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_DL, 0x0100);
+    ax_run(s, AX_PB);
+    for (bad = -1, i = 0; i < 160; i++)
+        if (ax_out_l(s, i) != 128 * i) { bad = i; break; }
+    if (bad < 0) snprintf(got, cap, "0..20352 by 128, gain %04X", ax_r(s, AX_PB, AXPB_MIXER + AXMX_L));
+    else snprintf(got, cap, "%d at %d", ax_out_l(s, bad), bad);
+    failures += check("ax gain ramp", got, "0..20352 by 128, gain A000");
+
+    /* ---- rate conversion, counted rather than heard ---------------------
+     * The address accumulator is 16.16, and 160 output samples advance it by
+     * 160 * ratio whatever kernel reads the samples out. 160 * 0x18000 is
+     * 240 whole samples exactly; 160 * 0x5555 is 3,495,200, which is 53
+     * samples and 21,792/65536 left over. */
+    {
+        uint32_t adv[2], fr[2];
+        static const uint32_t ratio[2] = {0x18000u, 0x5555u};
+        for (i = 0; i < 2; i++) {
+            ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+            ax_w32(s, AX_PB, AXPB_SRC, ratio[i]);
+            ax_run(s, AX_PB);
+            adv[i] = ax_r32(s, AX_PB, AXPB_AUDIO + 6) - AX_SMP(AX_AR_C4000);
+            fr[i] = ax_r(s, AX_PB, AXPB_SRC + 2);
+        }
+        snprintf(got, cap, "%u %04X %u %04X", adv[0], fr[0], adv[1], fr[1]);
+        failures += check("ax rate consumption", got, "240 0000 53 5520");
+    }
+
+    /* ---- the loop, in sample addresses ----------------------------------
+     * 100 samples with the loop 20 in: 160 outputs at unity rate read all
+     * 100 and then 60 more from the loop point, leaving the address 80 in.
+     * The samples past the end hold a different value, so a mixer that runs
+     * past `end` instead of wrapping is heard as well as counted. */
+    ax_aram_pcm16(AX_AR_LOOP, 100, 0x4000);
+    ax_aram_pcm16(AX_AR_LOOP + 200u, 200, 0x7000);
+    ax_pcm16_voice(s, AX_PB, AX_AR_LOOP, 100, 0x4000);
+    ax_w(s, AX_PB, AXPB_AUDIO, 1);
+    ax_w32(s, AX_PB, AXPB_AUDIO + 2, AX_SMP(AX_AR_LOOP) + 20u);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "+%u running %u %s", ax_r32(s, AX_PB, AXPB_AUDIO + 6) - AX_SMP(AX_AR_LOOP),
+             ax_r(s, AX_PB, AXPB_RUNNING),
+             ax_bad_l(s, 0, 160, 16384) < 0 ? "in the loop" : "past the end");
+    failures += check("ax pcm16 loop", got, "+80 running 1 in the loop");
+
+    /* A block whose RUNNING word is clear is not a voice: nothing it carries
+     * reaches the bus, and its address does not move. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0x8000);
+    ax_w(s, AX_PB, AXPB_RUNNING, 0);
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "%s +%u", ax_bad_l(s, 0, 160, 0) < 0 && ax_bad_r(s, 0, 160, 0) < 0 ? "silent" : "audible",
+             ax_r32(s, AX_PB, AXPB_AUDIO + 6) - AX_SMP(AX_AR_C4000));
+    failures += check("ax stopped block is silent", got, "silent +0");
+
+    /* ---- the auxiliary sends --------------------------------------------
+     * This microcode build (hash 0x4E8A8B21) reads the mixer control word
+     * differently from the later SDK headers: bit 0 adds auxiliary A, bit 1
+     * auxiliary B, bit 2 surround, bit 3 the ramps. That is measurement, not
+     * a published encoding -- under the later one every voice mixed into
+     * nothing and the game was silent while reporting thousands of running
+     * voices (FINDINGS section 10) -- so what these pin is that a send lands
+     * on the bus its bit names and on no other, and that the buffer handed
+     * to the CPU is channel-major 32-bit. Every send gain is set in both
+     * runs and only the control word changes, so a bit that reaches one bus
+     * too many shows up as a bus that should have been silent. */
+    for (i = 0; i < 2; i++) {
+        static const uint16_t ctrl[2] = {1, 2};
+        static const uint16_t cmd[2] = {0x04, 0x05};
+        int wrong;
+        ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+        ax_w(s, AX_PB, AXPB_MIXER_CTRL, ctrl[i]);
+        ax_w(s, AX_PB, AXPB_MIXER + (i ? AXMX_BL : AXMX_AL), 0x8000);
+        ax_w(s, AX_PB, AXPB_MIXER + (i ? AXMX_BR : AXMX_AR), 0x4000);
+        ax_w(s, AX_PB, AXPB_MIXER + (i ? AXMX_AL : AXMX_BL), 0x8000);
+        ax_w(s, AX_PB, AXPB_MIXER + (i ? AXMX_AR : AXMX_BR), 0x4000);
+        ax_w(s, AX_PB, AXPB_MIXER + AXMX_AS, 0x8000); /* neither surround send may */
+        ax_w(s, AX_PB, AXPB_MIXER + AXMX_BS, 0x8000); /* fire without bit 2 */
+        ax_fill_bus(s, 0);
+        ax_run_aux(s, AX_PB, cmd[i], AX_BUF, 0);
+        wrong = ax_bad_bus(s, 0, 16384);
+        if (wrong < 0) wrong = ax_bad_bus(s, 1, 8192);
+        if (wrong < 0) wrong = ax_bad_bus(s, 2, 0);
+        snprintf(got, cap, "%02X %02X %02X %02X %d %d %d %s", mem_r8(s, AX_BUF), mem_r8(s, AX_BUF + 1u),
+                 mem_r8(s, AX_BUF + 2u), mem_r8(s, AX_BUF + 3u), ax_bus(s, 0, 0), ax_bus(s, 1, 0),
+                 ax_bus(s, 2, 0), wrong < 0 ? "ok" : "varies");
+        failures += check(i ? "ax aux B send" : "ax aux A send", got, "00 00 40 00 16384 8192 0 ok");
+
+        /* and that same voice leaves the other bus alone */
+        ax_fill_bus(s, 0);
+        ax_run_aux(s, AX_PB, cmd[i ^ 1], AX_BUF, 0);
+        wrong = ax_bad_bus(s, 0, 0);
+        if (wrong < 0) wrong = ax_bad_bus(s, 1, 0);
+        if (wrong < 0) wrong = ax_bad_bus(s, 2, 0);
+        snprintf(got, cap, "%s", wrong < 0 ? "silent" : "leaked");
+        failures += check(i ? "ax aux A not reached" : "ax aux B not reached", got, "silent");
+    }
+
+    /* Surround is bit 2 and nothing else: the same block with the same
+     * surround gain is silent on the third channel without it. */
+    {
+        int sur[2];
+        for (i = 0; i < 2; i++) {
+            ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+            ax_w(s, AX_PB, AXPB_MIXER_CTRL, i ? 4 : 0);
+            ax_w(s, AX_PB, AXPB_MIXER + AXMX_S, 0x8000);
+            ax_run(s, AX_PB);
+            sur[i] = ax_out_s(s, 0);
+            if (ax_out_s(s, 159) != sur[i]) sur[i] = -1; /* -1: not constant across the frame */
+        }
+        snprintf(got, cap, "%d %d", sur[0], sur[1]);
+        failures += check("ax surround needs bit 2", got, "0 16384");
+    }
+
+    /* ---- what the CPU's effects pass hands back -------------------------
+     * The download adds to the main bus rather than replacing it, and covers
+     * all three channels -- the surround one is the half a two-channel loop
+     * would drop in silence. The pattern is small enough that nothing
+     * clamps, so every output below is derived addition. */
+    for (i = 0; i < 2; i++) {
+        static const uint16_t cmd[2] = {0x04, 0x09};
+        int k, wrong = -1;
+        ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+        ax_w(s, AX_PB, AXPB_MIXER_CTRL, 4); /* surround as well as L and R */
+        ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+        ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0x8000);
+        ax_w(s, AX_PB, AXPB_MIXER + AXMX_S, 0x8000);
+        ax_fill_bus(s, 1);
+        ax_run_aux(s, AX_PB, cmd[i], 0, AX_BUF);
+        for (k = 0; k < 160 && wrong < 0; k++)
+            if (ax_out_l(s, k) != 16384 + k || ax_out_r(s, k) != 16544 + k ||
+                ax_out_s(s, k) != 16704 + k)
+                wrong = k;
+        snprintf(got, cap, "%d %d %d %s", ax_out_l(s, 0), ax_out_r(s, 0), ax_out_s(s, 0),
+                 wrong < 0 ? "added" : "wrong");
+        failures += check(i ? "ax aux B nowrite adds" : "ax download adds", got, "16384 16544 16704 added");
+    }
+
+    /* ---- SET_OPPOSITE_LR replaces the main bus --------------------------
+     * The command is named SET_, not MIX_, so what it writes must land
+     * instead of what the voices put there rather than on top of it. Which
+     * channel gets the negated copy is this port's reading of the driver and
+     * not something a selftest can settle, so this checks the magnitude and
+     * that the two channels are opposite, and leaves the sign to the
+     * capture. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_R, 0x8000);
+    for (i = 0; i < 480; i++) mem_w32(s, AX_BUF + (uint32_t)i * 4u, 1000u);
+    ax_fill_out(s, 0xAA);
+    {
+        uint32_t p = AX_CMD;
+        p = ax_put16(s, p, 0x02);
+        p = ax_put32(s, p, AX_PB);
+        p = ax_put16(s, p, 0x03);
+        p = ax_put16(s, p, 0x11);
+        p = ax_put32(s, p, AX_BUF);
+        p = ax_put16(s, p, 0x0E);
+        p = ax_put32(s, p, AX_SUR);
+        p = ax_put32(s, p, AX_OUT);
+        ax_put16(s, p, 0x0F);
+        ax_command_list(s, AX_CMD);
+    }
+    snprintf(got, cap, "%d %d %d", ax_out_l(s, 0) < 0 ? -ax_out_l(s, 0) : ax_out_l(s, 0),
+             ax_out_l(s, 0) + ax_out_r(s, 0), ax_out_s(s, 0));
+    failures += check("ax set-opposite replaces", got, "1000 0 0");
+
+    /* ---- the interpolator must not overflow -----------------------------
+     * Nothing is fetched for the first output when the ratio is under one
+     * and the fraction starts at zero, so this is the interpolator alone: at
+     * 65535/65536 of the way from -32768 to +1 the answer is
+     *   -32768 + (32769 * 65535) / 65536 = -32768 + 32768 = 0,
+     * silence. ax.c forms (last[3] - last[2]) * frac in `int`, and
+     * 32769 * 65535 = 2,147,516,415 is 32,768 past INT32_MAX, so the product
+     * wraps and the frame opens at full-scale negative instead: an audible
+     * click, reachable on any loud sample that crosses near full scale
+     * between adjacent source samples. Command 0x01 already does its
+     * multiply in int64_t, so the file disagrees with itself.
+     *
+     * This case therefore FAILS as ax.c stands, and it is meant to: the
+     * expected value is the interpolation's own arithmetic, not what the
+     * mixer emits today. Widening that product makes it pass. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w32(s, AX_PB, AXPB_SRC, 0xFFFFu);
+    ax_w(s, AX_PB, AXPB_SRC + 5, (uint16_t)-32768); /* last[2] */
+    ax_w(s, AX_PB, AXPB_SRC + 6, 1);                /* last[3] */
+    ax_w(s, AX_PB, AXPB_MIXER + AXMX_L, 0x8000);
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "%d", ax_out_l(s, 0));
+    failures += check("ax interpolate full scale", got, "0");
+
+    /* ---- the walkers terminate ------------------------------------------
+     * Each of these is a malformed list or chain a stale guest pointer could
+     * produce. The limits are this port's own rather than the microcode's,
+     * so what they pin is that a bad list cannot run forever and cannot run
+     * on past where the walk stopped. */
+    ax_fill_out(s, 0xAA);
+    {
+        uint32_t p = AX_CMD;
+        p = ax_put16(s, p, 0x0F); /* END, then an OUTPUT that must not run */
+        p = ax_put16(s, p, 0x0E);
+        p = ax_put32(s, p, AX_SUR);
+        p = ax_put32(s, p, AX_OUT);
+        ax_command_list(s, AX_CMD);
+    }
+    snprintf(got, cap, "%02X", mem_r8(s, AX_OUT));
+    failures += check("ax end stops the list", got, "AA");
+
+    /* The walk gives up after 64 commands, so an OUTPUT as the 64th runs and
+     * the same list one command longer does not. */
+    {
+        unsigned first[2];
+        for (i = 0; i < 2; i++) {
+            uint32_t p = AX_CMD;
+            int k;
+            for (k = 0; k < 63 + i; k++) p = ax_put16(s, p, 0x0B); /* no operands */
+            p = ax_put16(s, p, 0x0E);
+            p = ax_put32(s, p, AX_SUR);
+            p = ax_put32(s, p, AX_OUT);
+            ax_put16(s, p, 0x0F);
+            ax_fill_out(s, 0xAA);
+            ax_command_list(s, AX_CMD);
+            first[i] = mem_r8(s, AX_OUT);
+        }
+        snprintf(got, cap, "%02X %02X", first[0], first[1]);
+        failures += check("ax 64-command cap", got, "00 AA");
+    }
+
+    /* A block whose chain pointer is itself is processed once, not forever:
+     * 160 samples consumed, not 320. */
+    ax_pcm16_voice(s, AX_PB, AX_AR_C4000, 4096, 0x4000);
+    ax_w32(s, AX_PB, AXPB_NEXT, AX_PB);
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "+%u", ax_r32(s, AX_PB, AXPB_AUDIO + 6) - AX_SMP(AX_AR_C4000));
+    failures += check("ax self-linked block", got, "+160");
+
+    /* And a 300-deep chain stops at the 256th block. Each one is silent but
+     * carries a single update-list entry, which process_voice applies before
+     * it looks at RUNNING, so the blocks the walk reached are exactly those
+     * that now hold the marker. */
+    mem_w16(s, AX_UPD, AXPB_SRC_TYPE);
+    mem_w16(s, AX_UPD + 2u, 0xBEEF);
+    for (i = 0; i < 300; i++) {
+        uint32_t pb = AX_PB + (uint32_t)i * 0xC0u;
+        ax_pb_clear(s, pb);
+        ax_w32(s, pb, AXPB_NEXT, i == 299 ? 0u : pb + 0xC0u);
+        ax_w(s, pb, AXPB_UPDATES, 1);
+        ax_w32(s, pb, AXPB_UPDATES + 5, AX_UPD);
+    }
+    ax_run(s, AX_PB);
+    snprintf(got, cap, "%04X %04X", ax_r(s, AX_PB + 255u * 0xC0u, AXPB_SRC_TYPE),
+             ax_r(s, AX_PB + 256u * 0xC0u, AXPB_SRC_TYPE));
+    failures += check("ax chain guard", got, "BEEF 0000");
+
+    return failures;
+}
+
 /* ---- decompiled functions against their recompiled twins ----------------
  * src/ is also compiled natively (every function renamed dc_<name>, see
  * tools/recompile.py). Each pair runs on the same bytes in guest memory: the
@@ -934,6 +1637,7 @@ int selftest(CpuState* s)
         failures += check("ARAM DMA from main memory", got, "C0FFEE11");
     }
 
+    failures += ax_selftest(s, got, sizeof got);
     failures += render_selftest(s, got, sizeof got);
     failures += decomp_selftest(s, got, sizeof got);
 

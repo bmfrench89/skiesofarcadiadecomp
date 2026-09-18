@@ -620,20 +620,36 @@ and first bytes exactly. The bank is loaded and simply never played in this
 scene, so the zero start count says nothing about the driver.
 
 *Left:* implement opcode 0x10 and its mixer-control bit, which is the one
-audible gap this census found; dump the setup block once to settle opcode
-0x00; and establish whether any scene in this game speaks, which is E2's
-scenario work.
+audible gap this census found, and dump the setup block once to settle opcode
+0x00. The third question is answered: this game speaks, the opening does not,
+and `config/scenarios/voice.scn` reaches a line.
+**And the census cannot name a voice bank**, which is why its zero meant
+nothing: it identifies an upload by a 32-byte prefix or by size, and the 72
+speaker banks come in identical twins — two of them match across all 262,448
+bytes — while the voice streams have identical left and right halves. 23% of
+the disc's files can be named by neither. One name in the report is a
+size-only guess for a file that run never read, and should be marked as such.
 
-**E2. Testable audio: a selftest case, then a frame capture** — *a day each.*
-458 lines of the most intricate hand-written code in the port have zero
-coverage; the only audio test covers the Python ADPCM decoder, which is not
-the code that runs. Build one AXPB in guest scratch, known ADPCM frames in
-ARAM and a minimal command list, and check the 160 output samples against
-hand-computed values, with a hard pan, a ramp and a loop over the end. Then
-mirror `SOA_FIFO_DUMP` with `--replay-ax` so a mix defect can be bisected.
-*Done:* breaking any Q15 shift, the loop restore at `ax.c:113-117` or the
-right-first output order fails a named check; and a replayed frame is
-byte-identical to the live run's.
+**E2. Testable audio: a selftest case, then a frame capture** — *the selftest half is done, and it found a defect on its first run.*
+29 audio cases in `runtime/selftest.c`, every expectation derived from the
+sample format's own arithmetic rather than blessed from what the mixer
+produces — which matters, because this project has already pinned a bug in
+place by blessing output once. One case failed immediately and the failure was
+real: the resampler formed `(next - prev) * fraction` in `int`, and a
+difference near full scale times a fraction near one overflows by exactly
+32,768, wrapping a silent sample to full-scale negative. That is an audible
+click on any loud sample crossing near full scale between adjacent source
+samples, and the file already disagreed with itself, since the mix command
+does the same multiply wide. Fixed by widening the product.
+
+**And the port speaks.** `config/scenarios/voice.scn` reaches the end of the
+first battle and the run opens a three-digit voice line, so spoken dialogue
+plays. The opening genuinely contains none: of 258 field scripts, 66 name a
+stream and all 66 name only the low-frequency ambience numbers, and the
+opening's own script names exactly one. So E1's zero was never a driver
+defect at all.
+*Left:* the frame capture half — a recorded reference to compare a mix
+against, which is what would catch a wrong voice rather than a missing one.
 
 **E3. Measure the waveOut path under a real device** — *hours.*
 The only path where an audible defect can appear that no correlation test
