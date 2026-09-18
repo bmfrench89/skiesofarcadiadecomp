@@ -25,7 +25,7 @@ from soa import symbols as S  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--dtk", type=Path, default=None, help="dtk symbols.txt to take names from")
@@ -39,7 +39,7 @@ def main() -> int:
         help="decomp-toolkit symbols file to carry the recovered names into (fn_ entries only)",
     )
     ap.add_argument("--out", type=Path, default=Path("config"))
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not args.dol.exists():
         print(f"error: {args.dol} not found; run tools/extract.py first", file=sys.stderr)
@@ -70,6 +70,16 @@ def main() -> int:
     S.write_tsv(rows, args.out / "functions.tsv")
     S.write_dtk(S.symbols_from_inventory(dol, rows, dtk_syms), args.out / "symbols.txt")
     print(f"wrote {args.out / 'functions.tsv'} and {args.out / 'symbols.txt'}")
+
+    # The decomp-toolkit project keeps its own symbol file, and build/dtk/obj/
+    # -- what objdiff matches by name -- is generated from that one, not from
+    # ours. Carrying the recovered names across is the only reason a symbol
+    # spelled one way here is spelled the same way there.
+    if args.dtk_project and args.dtk_project.exists():
+        renamed = S.apply_names_to_dtk(args.dtk_project, names)
+        print(f"named {renamed} of {len(names):,} recovered functions in {args.dtk_project}")
+    elif args.dtk_project:
+        print(f"note: {args.dtk_project} not found; its names were left alone", file=sys.stderr)
     return 0
 
 

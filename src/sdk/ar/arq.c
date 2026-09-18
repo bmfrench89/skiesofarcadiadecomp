@@ -37,7 +37,7 @@ void OSRegisterVersion(const char* id);
 void ARStartDMA(u32 type, u32 mainmem_addr, u32 aram_addr, u32 length); /* fn_80242004 */
 ARCallback ARRegisterDMACallback(ARCallback callback);                     /* fn_80241F84 */
 
-const char* __ARQVersion = "<< Dolphin SDK - ARQ\trelease build: Nov 10 2003 05:40:56 (0x2301) >>";
+const char* __ARQVersion = "<< Dolphin SDK - ARQ\trelease build: Sep  5 2002 05:34:29 (0x2301) >>";
 
 static ARQRequest* __ARQRequestQueueHi;
 static ARQRequest* __ARQRequestTailHi;
@@ -137,8 +137,15 @@ void fn_80243C04(void)
     __ARQChunkSize = ARQ_CHUNK_SIZE_DEFAULT;
     ARRegisterDMACallback(fn_80243B38);
 
-    __ARQRequestPendingHi = __ARQRequestPendingLo = NULL;
-    __ARQCallbackHi = __ARQCallbackLo = NULL;
+    /* Written as two statements each, not chained. A chained assignment
+     * evaluates right to left, so it stores Lo before Hi; the executable
+     * stores them in address order. The four words differ only in the
+     * small-data field the linker fills, which is why this read as a match
+     * until matchcheck learned to solve those fields. */
+    __ARQRequestPendingHi = NULL;
+    __ARQRequestPendingLo = NULL;
+    __ARQCallbackHi = NULL;
+    __ARQCallbackLo = NULL;
     __ARQInitFlag = TRUE;
 }
 

@@ -80,8 +80,19 @@ writes disassembly, relocatable objects and a linker script under `build/`
 (never committed). `splits.txt` names the translation units; refine it as
 functions get identified, and `dtk` keeps `symbols.txt` updated. The
 recompiler reads its own inventory in `config/functions.tsv` and
-`config/symbols.txt`; the two symbol files carry the same addresses and
-names from different tools.
+`config/symbols.txt`.
+
+The two symbol files are not the same file and do not come from the same
+place. `config/symbols.txt` is ours, written by `tools/inventory.py` from the
+control-flow recovery plus every name in `config/names.txt`.
+`config/GEAE8P/symbols.txt` belongs to the `dtk` project and is what
+`build/dtk/obj/` -- the objects objdiff matches *by name* -- is generated
+from, so a name only we knew would leave objdiff calling the function
+`fn_XXXXXXXX` and the two tools disagreeing about the same address.
+`tools/inventory.py` therefore also rewrites the `fn_XXXXXXXX` entries of the
+dtk file with the recovered names, leaving dtk's own SDK signature matches
+alone; `python tools/soa/symbols.py --dry-run` shows what that pass would
+rename without running the whole recovery.
 
 ## Decompiling functions
 

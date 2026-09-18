@@ -35,7 +35,7 @@ OSInterruptMask __OSUnmaskInterrupts(OSInterruptMask global);
 
 static volatile u16 __DSPRegs[32] : 0xCC005000;
 
-const char* __ARVersion = "<< Dolphin SDK - AR\trelease build: Nov 10 2003 05:40:52 (0x2301) >>";
+const char* __ARVersion = "<< Dolphin SDK - AR\trelease build: Sep  5 2002 05:34:27 (0x2301) >>";
 
 static ARCallback __AR_Callback;
 static u32 __AR_Size;

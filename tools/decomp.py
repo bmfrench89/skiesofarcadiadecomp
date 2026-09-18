@@ -1,12 +1,24 @@
 """Build the hand-decompiled units with the vendored Metrowerks compiler and
 check them against the executable.
 
-    python tools/decomp.py [--units config/GEAE8P/units.txt]
+    python tools/decomp.py [--units config/GEAE8P/units.txt] [--strict]
 
 Each unit compiles to build/src/<name>.o; tools/matchcheck.py then compares
-every function in it with the executable's bytes. The exit status is
-non-zero if a unit fails to compile or any function differs, so this doubles
-as the decompilation's test.
+every function and every data object in it with the executable's bytes.
+
+A unit lands in one of three states, because matchcheck has three answers and
+flattening them would be the same unsoundness this tool exists to avoid:
+
+    match       everything was compared and everything was decided;
+    unverified  nothing differs, but some words only a link could settle --
+                a reference to a global this project has no address for;
+    differs     something is wrong, or a compile failed.
+
+The exit status is non-zero if a unit fails to compile, any unit differs, or a
+compiler named in units.txt is missing (2, and every unit that needs it is
+named -- the run was incomplete, not clean). ``--strict`` also fails on
+unverified, which is what a checkout with a complete symbol database should
+reach.
 """
 
 from __future__ import annotations
@@ -15,6 +27,8 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+MATCH, DIFFERS, UNVERIFIED = 0, 1, 3
 
 
 def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
@@ -27,6 +41,20 @@ def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
     return units
 
 
+def missing_compilers(units, vendor: Path) -> dict[str, list[Path]]:
+    """``version -> the units that need it``, for versions not vendored.
+
+    All of them, not the first: a checkout missing 1.2.5n used to stop at the
+    unit that wanted it, so the units after that one were never reported at
+    all and the run looked shorter than it was rather than incomplete.
+    """
+    out: dict[str, list[Path]] = {}
+    for src, version, _ in units:
+        if not (vendor / version / "mwcceppc.exe").exists():
+            out.setdefault(version, []).append(src)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -34,18 +62,31 @@ def main() -> int:
     ap.add_argument("--units", type=Path, default=Path("config/GEAE8P/units.txt"))
     ap.add_argument("--vendor", type=Path, default=Path("vendor/mwcc/GC"))
     ap.add_argument("--out", type=Path, default=Path("build/src"))
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail when a unit has words only a link could decide",
+    )
     args = ap.parse_args()
 
+    units = load_units(args.units)
     args.out.mkdir(parents=True, exist_ok=True)
-    failures = 0
-    for src, version, flags in load_units(args.units):
+
+    absent = missing_compilers(units, args.vendor)
+    for version, sources in sorted(absent.items()):
+        for src in sources:
+            print(f"{src}: compiler GC/{version} missing", file=sys.stderr)
+    if absent:
+        print(
+            f"run: python tools/fetch_toolchain.py --versions {','.join(sorted(absent))}",
+            file=sys.stderr,
+        )
+
+    failures = unverified = matched = 0
+    for src, version, flags in units:
         cc = args.vendor / version / "mwcceppc.exe"
         if not cc.exists():
-            print(
-                f"{src}: compiler GC/{version} missing; run tools/fetch_toolchain.py --versions {version}",
-                file=sys.stderr,
-            )
-            return 2
+            continue
         obj = args.out / (src.stem + ".o")
         # -nosyspath stops the compiler looking beside the source for "quoted" headers
         proc = subprocess.run(
@@ -62,9 +103,29 @@ def main() -> int:
             [sys.executable, "tools/matchcheck.py", str(obj)], capture_output=True, text=True
         )
         print(check.stdout.rstrip())
-        failures += check.returncode != 0
-    print("all units match" if not failures else f"{failures} unit(s) differ")
-    return 1 if failures else 0
+        if check.returncode == MATCH:
+            matched += 1
+        elif check.returncode == UNVERIFIED:
+            unverified += 1
+        else:
+            if check.stderr.strip():
+                print(check.stderr.rstrip(), file=sys.stderr)
+            failures += 1
+
+    parts = [f"{matched} unit(s) fully verified"]
+    if unverified:
+        parts.append(f"{unverified} with words only a link can decide")
+    if failures:
+        parts.append(f"{failures} differ")
+    if absent:
+        parts.append(f"{sum(len(v) for v in absent.values())} not built (compiler missing)")
+    print("; ".join(parts))
+
+    if absent:
+        return 2
+    if failures or (args.strict and unverified):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

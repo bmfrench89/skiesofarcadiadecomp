@@ -268,9 +268,10 @@ def main(argv: list[str] | None = None) -> int:
     """``python tools/soa/symbols.py [--dtk P] [--names P] [--dry-run]``
 
     Applies config/names.txt to the decomp-toolkit project's symbol file, the
-    one build/dtk/obj/ is generated from. tools/inventory.py already writes our
-    own config/symbols.txt with these names; it does not touch dtk's, so until
-    it calls apply_names_to_dtk itself this is how the two are kept in step.
+    one build/dtk/obj/ is generated from. tools/inventory.py does this as part
+    of a regeneration; this is the same pass on its own, for checking what a
+    new name in names.txt would land (``--dry-run``) without rebuilding the
+    inventory.
     """
     import argparse  # noqa: PLC0415 - only the command line needs it
 
