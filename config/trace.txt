@@ -79,3 +79,33 @@
 0x80244A84  CardExiStatusBad        # the card reported status & 0x18, a program or erase error -> -5 IOERROR; exi.c answers a constant 0x41, so firing means the model changed
 0x80244A4C  CardExiFatalLock        # EXILock(chan, 0, 0) found channel 0 held, so the transfer ends -128 FATAL with no EXIUnlock; the RTC and SRAM share this channel
 0x80244F1C  CardTimeout             # the OSAlarm __CARDStart armed beat the card: r3 chan, r4 = -5. 100 ms per page program (0x80245368), longer for an erase
+
+# ---- the format offer, and the first write by the game ----------------------
+# The block above follows the SDK: the mount, the verify, the erase and the page
+# programs. Everything below is the game side of the same story -- the boot
+# memory-card screen that title scene 15 runs, which is the only screen in this
+# executable that can reach CARDFormatAsync without a save point. One run with
+# these on answers: did New Game get there, what did card_scan call the card,
+# was the format confirmed or declined, was the command issued, and what came
+# back. Nothing here repeats what the [card] transaction log or the block above
+# already prints. Diagnostic only; nothing fires without SOA_TRACE=1.
+#
+# On registers: trace_hit() in runtime/trace.c prints r3-r7, r31 and r1 at every
+# site, so a value is "visible" when it is in one of those -- each line below
+# says which, read off the instruction. It never prints r0, which is why two
+# sites here are placed on the arm that can only be reached when r0 already has
+# the value, rather than where r0 holds it. "@rN" does NOT choose what is
+# printed: it chooses the base address SOA_TRACE_DUMP=1 dumps twelve words from,
+# so it is only used below where those twelve words are the answer.
+
+0x80228A60  TitleSceneChange        # reached only when the title scene word at 0x80311AE0 changed (0x80228A58 compares it with the shadow at r13-28360): r4 = the scene now entered. Frame-stamps 9 title setup, 11 PRESS START, 12 menu, 13 the choice, 14 card-screen init, 15 the card screen -- and 16 instead of 14 would mean the A took Continue, not New Game
+0x8022B828  CardScreenStatus@r31    # the boot card screen's entry state, one frame after it calls card_scan: r3 = the status the whole screen branches on -- 0 fine (screen never draws, game starts), 1 no card, 2 NEEDS FORMATTING, 4 IOERROR, 5 wrong device, 6/7 full, 8 other. Firing at all proves New Game reached scene 15. r31 is the 32-byte screen object at 0x803167F0; with SOA_TRACE_DUMP=1 its words are 0 state, 3 status, 4 slot, 5 Yes/No cursor, 7 the fade that gates input
+0x8022B444  CardPromptCursor        # the Yes/No toggle on the format prompt, reached only from (LEFT with the cursor on No) or (RIGHT with the cursor on Yes): r3 is still the pad edge word loaded at 0x8022B418, so 0001 says LEFT landed and 0002 says RIGHT did. Not firing while CardScreenStatus said 2 means the presses were eaten by the fade gate at 0x8022B3E8
+0x8022B47C  CardPromptYes           # A pressed with the cursor on Yes: the next frame sets the screen to state 4 and card_format_step starts. This arm has never executed in this port
+0x8022B494  CardPromptNo            # A pressed with the cursor on No: the screen fades out unformatted and the game starts, with no second chance that boot. This is the arm every previous blank-card run took, and the one a scenario that presses A too early takes
+0x801A2758  CardFormatAsyncCall     # bl CARDFormatAsync, the only reference to it in the executable and the only route to __CARDFormatRegionAsync: r3 = channel (0 = slot A), r4 = 0x801A28A8, the bare blr the game passes as its callback
+0x801A275C  CardFormatAsyncRet      # r3 = what CARDFormatAsync returned immediately. 0 or -1 BUSY and the step machine waits for the card; anything else is an error that never reached it, and 0x801A2778 unmounts and reports it
+0x801A27D4  CardFormatResult        # reached only once CARDGetResultCode stopped answering -1 BUSY: r3 = the format's settled result. 0 is the first successful write this port has ever made; -5 IOERROR would be a page program or erase the model refused, -128 the EXI lock
+0x801A2A8C  CardScanRepaired@r1     # card_scan overwriting its own status with 0 because CARDCheckExAsync reported work done and succeeded. Firing means the card WAS written -- a repair -- and that the format prompt will therefore never appear. This is what a --damage'd image does. r3 = 0, the CheckEx result; with SOA_TRACE_DUMP=1 word 4 of the dump is the xferBytes out-param at r1+16, which should read 8192
+0x80248134  CardCheckExErrors       # CARDCheckExAsync's own count, reached only if CARDVerifyID passed first: r31 = CARDVerifyDir's error count, r3 = CARDVerifyFat's, r5 = the sum it branches on. 0 nothing to repair, 1 the repair arm runs and writes a block, >1 it returns -6 BROKEN having written nothing. Not firing at all means CARDVerifyID answered first, which is what a blank card does
+0x802483AC  CardCheckExFatDirty     # reached only when the allocation table CheckEx rebuilt from the directory's block chains disagrees with the stored one, or the free-block count at fat[3] is wrong: a FAT block is about to be rewritten even though all four system-block checksums were valid. The one way a card the tools call healthy can still be written

@@ -314,59 +314,44 @@ run on the owner's machine or nowhere. What CI does hold is
 checksum; reverting any part of B2 fails it; a kill right after a save keeps the
 bytes. **First two met. The third needs a save, so it waits on B4.**
 
-**B4. Mount from the title, then round-trip a save** — *several days.*
-Three stages, cheapest first, since only the last needs navigation. With
-B3's logging you can see which frame the probe lands on and script thirty
-seconds around it — `SOA_PAD="1600:start,1700:sdown,1750:a"` is the shape —
-exercising probe, mount and read. Then pre-seed a formatted blank so the
-mount succeeds and Continue runs; that no longer needs Dolphin. Only then
-drive to a save point, which needs D3: nobody knows how far in the first
-save point is, and the first real write will probably expose a fourth
-defect, the way the first real ARAM fetch did.
+**B4. Mount from the title, then round-trip a save** — *mount done; the write is blocked on one unknown.*
+The mount is done and traced (see B2). The write is not, and the search for
+it narrowed a great deal on 2026-09-18 without reaching it.
 
-*What you have for the middle stage:* `tools/cardformat.py`, which writes an
-image `__CARDVerify` accepts and judges any image without building the port.
+What is now known, from the disassembly. `CARDFormatAsync` is called from
+exactly one instruction in the executable, `0x801A2758` inside
+`card_format_step` (0x801A2670), and that has two callers, both entries in
+state jump tables rather than `bl` targets: `0x8022B258`, state 4 of the
+title's memory-card dialog (object at `0x803167F0`, dispatched by
+`fn_8022AE94` over the table at `0x802F929C`), and `0x8019E650`, the same
+job inside the save/load menu. The dialog's state 0 calls `card_scan`
+(0x801A28F4); only status 2 opens "Proceed with formatting?", with **No
+preselected**, which is why the six existing blank-card runs all dismissed
+it with their scripted A. Status 2 has exactly one source: `__CARDVerify`
+answering -6 BROKEN or -13 ENCODING with `CARDCheckExAsync` unable to
+repair. A repairable card instead takes the repair arm, which is itself a
+write of one sector.
 
-    python tools/cardformat.py write --damage dir   # build/cards/slotA.raw
-    python tools/cardformat.py verify <image>       # what the mount would return
-    python tools/cardformat.py show <image>         # every field, and any file on it
+Where it stops. A blank card does mount as -6, confirmed by the
+`VerifyIdVerdict` tracepoint reading `FFFFFFFA`. But no write happens by
+either route, because **the card screen is never entered**:
+`CardScreenStatus` never fires, and watching the title scene word at
+`0x80311AE0` shows the run going scene 11 (title) to 13 to 2 and straight
+into the game. Both write paths hang off `card_scan`, and `card_scan` runs
+only inside that screen, so neither the prompt nor the repair is reachable
+on this route. The derivation says scene 13 routes to 16 when the menu id
+is 1, to 2 when it is 119, and to 14 (which leads to the screen) otherwise;
+the observed route is 2, so the menu returned 119.
 
-It lays the five system blocks down the way `__CARDFormatRegionAsync`
-(0x802491F8) lays them down, and `verify` re-runs `__CARDIsCard`,
-`CARDVerifyID`, `CARDVerifyDir` and `CARDVerifyFat` in CARDDoMount's own
-order, naming the check the mount would stop at. `--damage dir` breaks one
-directory copy's checksum on purpose: one error is what `CARDCheckExAsync`
-(0x802480AC) repairs in place rather than refusing, and that repair is the
-cheapest first write there is — one sector erase and then 64 page programs
-(`__CARDWrite` 0x80247078 cuts the length into `len >> 7` of them), with no
-button pressed and no save point reached. `SOA_CARD_VERBOSE=1` names the
-frame of every transaction, and the tracepoints under "the first write" in
-`config/trace.txt` follow the chain from the repair arm through each page
-program and name the three ways it can fail: a status error, a fatal
-`EXILock` on the shared channel 0, and the 100 ms per-page `OSAlarm` beating
-the card.
-
-*Two things that were open here are now answered without a run.* A
-never-formatted card never reaches a directory checksum: `CARDVerifyID`
-loads the device ID at +32 (`802478F0 lhz r0,32(r3)`), reads 0xFFFF where 0
-is required and returns -6 at 0x80247910, and `__CARDVerify` hands that
-straight back at 0x80248044 without calling `CARDVerifyDir`. The 0xF002 an
-erased 8188-byte span checksums to is right, but only reachable behind a
-valid ID block. And the 8188-byte span itself is no longer untested: the
-formatter's checksum is checked over both spans against a second
-implementation, and `runtime/exi.c`'s `card_checksum` is byte-for-byte the
-same function. What is left of that paragraph is that pointing `SOA_CARD` at
-the selftest's image shows a card the game considers broken *beyond repair*
-— it fails four system-block checks, not one, so it drives the format offer;
-`write --damage dir` is the image that drives the repair.
-
-*Done:* the image round-trips both ways — Dolphin shows a Skies of Arcadia
-Legends file with its banner, and a Dolphin-made save loads from the title.
-There is now a cheaper criterion for the mount stage, and it comes first:
-the game mounts a `cardformat write` image, and `cardformat show` reads back
-the block the repair rewrote. Whether a blank image draws a format offer is
-an observation to record, not a criterion: no mount has ever succeeded, so
-nobody has seen one.
+*Next, and it is one question:* what is menu id 119, which title-menu entry
+produces the "otherwise" case, and what input selects it. `fn_80228C50` is
+scene 13 and `fn_801D8EE8` is what returns the id. Answering that should
+make the format four presses from boot as derived. `config/scenarios/cardwrite.scn`
+is written and correct apart from that one step, and the tracepoints for the
+whole path are already compiled in, so the next attempt costs a run and not
+a rebuild.
+*Done:* `[exi]` reports a non-zero written count, and
+`python tools/cardformat.py show` reads back what the game wrote.
 
 ---
 

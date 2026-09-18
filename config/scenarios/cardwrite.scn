@@ -1,0 +1,108 @@
+# The first write. Every other scenario here is judged by what it draws; this
+# one is judged by one number in the [exi] report -- "N written", which has
+# been 0 in every log this repository has ever kept.
+name: cardwrite
+summary: Blank card in slot A, New Game, then Yes to "Proceed with formatting?" -- the only CARDFormatAsync in the executable.
+frames: 6000
+pad: 1600:start,1640:a,1700:start,1740:a
+pad: 1800:left@30#5
+pad: 2920:left@150#5,2925:a@150
+env: SOA_CARD=build/cards/blank.raw
+env: SOA_CARD_VERBOSE=1
+env: SOA_TRACE=1
+env: SOA_TRACE_DUMP=1
+
+shows: that the format offer is four presses from boot, not a save point deep
+shows:   in the game. Choosing New Game runs the boot memory-card screen
+shows:   (title scene 15, fn_8022AE94 over the object at 0x803167F0); its first
+shows:   state calls card_scan, and a card whose mount answers -6 BROKEN gives
+shows:   status 2, which is the one status that opens "The Memory Card in Slot A
+shows:   is corrupt ... Proceed with formatting?" with Yes at x=224 and No at
+shows:   x=344. LEFT moves the cursor to Yes, A confirms, and the next frame
+shows:   card_format_step reaches 0x801A2758 -- the executable's only reference
+shows:   to CARDFormatAsync, and its only caller of __CARDFormatRegionAsync.
+shows: the write itself: five sector erases (command 0xF1) and five 8192-byte
+shows:   blocks reprogrammed 128 bytes at a time (command 0xF2), so a completed
+shows:   format should leave "card ... 40960 written" in the [exi] line and
+shows:   build/cards/blank.raw on disk where nothing was before.
+shows: with SOA_CARD pointed at a --damage'd image instead, the same script
+shows:   shows the other write: card_scan's CARDCheckExAsync repairs the one bad
+shows:   system block, rewrites the status to 0 at 0x801A2A8C, and the screen
+shows:   never draws. That is 8192 written and no prompt -- a different code
+shows:   path, not a weaker version of this one.
+
+evidence: the two presses that reach the screen are the standard preamble every
+evidence:   saved run in build/ begins with, and config/scenarios/title.scn
+evidence:   records why: "START at frame 1600 is taken by the title, A at 1640
+evidence:   chooses New Game". build/scenario-title.log prints frame 1600
+evidence:   buttons 1000 and frame 1640 buttons 0100.
+evidence: that those two presses already reach the card screen is in the run
+evidence:   counters, not in a guess. build/scenario-title.log stops at frame
+evidence:   2000 and reports "card 40960 bytes read" -- one five-block mount,
+evidence:   the title's card_poll. Every longer scenario reports 81920, i.e. a
+evidence:   second mount, and that second one is card_scan inside the card
+evidence:   screen. docs/PLAN.md:246 dates them at 3418 and 4292, which are the
+evidence:   [card] line's f field = irq_retrace_count(); scenario-newgame.log
+evidence:   pins frame 2040 to retrace 4258 and 2200 to 4579, so retrace 4292 is
+evidence:   game frame ~2057. The prompt is therefore up and waiting for input
+evidence:   from about frame 2070, which is 855 frames before the first A here.
+evidence: the six runs whose log says "new blank card" (newgame, opening,
+evidence:   monkey, capture, audio, speed) all read 81920 bytes and wrote 0.
+evidence:   They reached this prompt and dismissed it: state 0 preselects No
+evidence:   (obj[20] = 1 at 0x8022B898) and their next scripted A took it
+evidence:   (0x8022B494). This script differs from them in exactly one way -- a
+evidence:   LEFT before every A.
+evidence: the card verdicts are the repo's own model, not inference: "python
+evidence:   tools/cardformat.py verify" on 512 KB of 0xFF prints "CARDDoMount
+evidence:   would return -6 (BROKEN), first failure: CARDVerifyID device ID at
+evidence:   +32". runtime/exi.c card_load() fills the buffer with 0xFF when
+evidence:   SOA_CARD names a file that is not there, so "blank" costs nothing to
+evidence:   make and sram_init() still presents its built-in CARD_FLASH_ID, so
+evidence:   the mount is not diverted to -5 IOERROR.
+
+note: DELETE build/cards/blank.raw BEFORE EVERY RUN. A blank card is the
+note:   absence of the file, and a successful format creates it (card_flush() in
+note:   runtime/exi.c writes the image out as the pages are programmed). The
+note:   second run would then find a valid card, card_scan would answer 0, the
+note:   screen would never draw and nothing would be written. The file left
+note:   behind is the proof, not the input: read it with "python
+note:   tools/cardformat.py show build/cards/blank.raw".
+note: why LEFT is safe to press forever and A is not. Both are read from the
+note:   edge word at [[0x80311A60]+8], so a held button fires once. LEFT at
+note:   0x8022B41C only ever moves the cursor 1 -> 0, so it is idempotent and
+note:   costs nothing anywhere else in this run; A at 0x8022B460 with the cursor
+note:   still on No exits the screen for good (0x8022B494) and there is no
+note:   second chance that boot. So every A here is preceded by a LEFT.
+note: the frame arithmetic behind the three pad lines. 1800:left@30#5 puts a
+note:   LEFT edge every 30 frames from 1800 -- down for offsets 0..4 of each
+note:   30-frame cycle, up for 5..29, so each one is a fresh edge rather than
+note:   one long hold. 2920:left@150#5 lands on offsets 10..14 and 2925:a@150 on
+note:   15..24, so LEFT and A never share a frame (buttons_now() in runtime/si.c
+note:   ORs every live event into one word, and a LEFT that toggles the cursor
+note:   returns at 0x8022B45C without looking at A, which would swallow it), and
+note:   every A has a LEFT edge exactly five frames in front of it that is not a
+note:   continuation of the previous one. 150 is a multiple of 30, so those
+note:   offsets hold for every repeat.
+note: the second START/A pair at 1700/1740 is insurance, not evidence. If the
+note:   1600 START were ever early, 1700 opens the menu and 1740 takes New Game;
+note:   if it was not, scenes 13 and 14 read no input at all and both are inert.
+note:   Neither can reach the prompt, which is ~300 frames later.
+note: the A repeat keeps working after the write. 0x8022B1E4 ("Formatting
+note:   completed. Press A Button to continue.") takes an A and starts the game;
+note:   0x8022B128 ("Formatting failed.") takes an A, re-scans and returns to
+note:   the prompt WITHOUT resetting obj[20], so the cursor is still on Yes and
+note:   the next A retries the format. Either way the run ends in the opening.
+note: this scenario is headless on purpose -- no SOA_RENDER, so
+note:   "scenario.py run cardwrite --check" reports the bad-vertex-reference
+note:   invariant as skipped, the way capture.scn does. The card screen loads
+note:   /title/ts900028.mld, which is the asset PROGRESS.md blames for the
+note:   renderer crash that mounting the card first produced; nothing here needs
+note:   a pixel, and the tracepoints say where the screen got to. Add
+note:   SOA_RENDER=1 SOA_SNAP=50 with --env if you want to look at it.
+note: SOA_TRACE_DUMP=1 is on for two sites that need it. CardScreenStatus is
+note:   named @r31 so the dump is the 32-byte screen object at 0x803167F0 --
+note:   word 0 the state, 2 what the screen returns to title scene 15, 3 the
+note:   card status, 4 the slot, 5 the Yes/No cursor, 7 the fade sub-state that
+note:   gates input. CardScanRepaired is named @r1 so word 4 of the dump is
+note:   CARDCheckExAsync's xferBytes out-param, which lives at r1+16 and is
+note:   otherwise in r0, which trace.c does not print.
