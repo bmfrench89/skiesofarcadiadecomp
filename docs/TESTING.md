@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-475 passed in 50.77s
+484 passed in 51.44s
 ```
 
-475 tests in 31 files, none of which reads the disc. They cover the Python
+484 tests in 32 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -59,6 +59,7 @@ its own and run it, some of the C as well:
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
 | `test_toolchain_inputs.py` | 11 | what a fresh checkout can check and with which compiler; every `src/**/*.c` is in `units.txt` |
+| `test_gxr_copy_filter.py` | 9 | what the EFB copy's vertical filter does to a pixel, including that the SDK's filter-off weights are the exact identity |
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
@@ -81,9 +82,9 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `475 passed` |
-| no capstone — **what CI installs** | `456 passed, 1 skipped` |
-| no MSVC | `423 passed, 52 skipped` |
+| everything (MSVC + capstone) | `484 passed` |
+| no capstone — **what CI installs** | `465 passed, 1 skipped` |
+| no MSVC | `423 passed, 61 skipped` |
 | neither — **the Ubuntu CI leg** | `404 passed, 53 skipped` |
 
 Two things follow. The 52 MSVC-gated tests are the ones that build a runtime
@@ -927,7 +928,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 52 of the 475 skip without a C compiler; they build one runtime file and run it.
+² 61 of the 484 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -939,7 +940,7 @@ Four job runs on every push and pull request:
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then a 2 MiB blob-size ceiling |
 | **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 404 passed, 53 skipped |
-| **Tests** | windows | the same three — 456 passed, 1 skipped |
+| **Tests** | windows | the same three — 465 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

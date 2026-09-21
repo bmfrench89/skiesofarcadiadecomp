@@ -32,7 +32,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 475 |
+| Python tests | 484 |
 | Self-test cases | 73 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -44,7 +44,7 @@ compared. Seven of the twenty-one units are fully verified; fourteen are not.
 That is the oracle being honest rather than a defect, but do not quote the
 round number without it.
 
-## Six things the history says that are wrong
+## Seven things the history says that are wrong
 
 Commit messages and older doc revisions are a record of what was believed at
 the time. These were each corrected later, and re-deriving any of them would
@@ -82,8 +82,20 @@ cost you a day.
    wrong function passed. The oracle is fixed; like for like the figure is now
    83 functions. The headline 100 adds 17 data symbols, which the old oracle
    never compared at all.
+7. **"The EFB copy filter's seven taps are seven rows, so a white line leaves
+   12/64 in its own row and 10/64 and 8/64 spreading three rows either side."**
+   That was `docs/PLAN.md`'s acceptance criterion for C3 and it is wrong. The
+   taps are vertical sub-samples — two for the row above, three for the row
+   itself, two for the row below — so the game's weights are 16/32/16 across
+   three rows and nothing lands further out. Note where the derivation has to
+   come from: the SDK's filter-off set {0,0,21,22,21,0,0} kills the seven-row
+   reading but is equally an identity under a *five*-row grouping that would
+   give 8/8/32/8/8, and nothing in this tree separates them, because no caller
+   ever reaches that arm. Patent US6999100B1 does. Re-deriving this from the
+   register layout alone lands you back on seven rows, which is how it was
+   written the first time.
 
-The pattern behind all six: a count or a description was read instead of the
+The pattern behind all seven: a count or a description was read instead of the
 thing itself. Every correction came from disassembling, tracing, or rendering
 the frame and looking at it.
 
@@ -121,12 +133,19 @@ needs more judgement about what the port is for.
    everything else is easier once scripted play can reach further. `SOA_PAD_RECORD`
    and `SOA_PAD_FILE` exist for exactly this: play it in the window, replay it
    headlessly. Plan item D5.
-2. **The deflicker filter** (plan C3). The game programs a real 7-tap vertical
-   filter on every EFB copy and the renderer applies none of it, so no
-   pixel-exact comparison with a console can ever converge. It is the largest
-   single fidelity gap that is fully understood.
-3. **The decompilation grind** (Track F). Two SDK libraries are complete. The
+2. **The decompilation grind** (Track F). Two SDK libraries are complete. The
    match oracle is now sound, so a match means what it says.
+3. **Speed** (plan C4), read against the profiler rather than against the
+   renderer track's assumption — see wrong statement 3 above.
+
+The deflicker filter, which this list used to name as the largest understood
+fidelity gap, landed on 2026-09-21 and is no longer one. Do not take that as a
+claim that the port is now pixel-exact with a console: it removes the one
+mismatch that was *fully* understood, and the untested ones are simply
+untested. Its entry in `docs/PLAN.md` is worth reading before any other
+renderer work, because both defects it turned up were in the queue protocol
+rather than in the arithmetic, and the second one appeared only on the fourth
+consecutive sweep.
 
 I would not spend more time on the searchlights. They have had four rounds,
 each overturning the last, and what is left is cosmetic and well documented.

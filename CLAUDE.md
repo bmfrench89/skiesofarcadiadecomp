@@ -125,5 +125,11 @@ the log path; three scenarios died part-way, silently, exit `-1`, with a second 
   `ValueError`; `Native` is silently ignored (`tools/recompile.py:71`), and the unit then
   matches under `decomp.py` while never entering the port.
 - **Counts in prose rot, and it is always the top-of-file status table.** `docs/PLAN.md`'s
-  says 41 matching functions, 9 swapped in and 362 tests; the tree says 83, 12 and 475.
-  Measure before quoting a number; when you change one, fix the table in the same change.
+  said 41 matching functions, 9 swapped in and 362 tests for three days, against a tree
+  holding 83, 12 and 475 — and its C3 entry still said "all 20 captures" when the corpus
+  had been 23 since `hold.scn`. Both are fixed. A single test module landing on
+  2026-09-21 then moved the test count in six files at once, which is the real shape of
+  this problem: one number lives in `docs/PLAN.md`, `docs/TESTING.md` (four places),
+  `HANDOFF.md`, `README.md` and `.claude/skills/check/SKILL.md`.
+  Measure before quoting a number; when you change one, fix every copy in the same change.
+  `grep -rn "<the old number>" --include="*.md" .` is how you find them all.

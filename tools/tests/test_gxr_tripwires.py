@@ -245,10 +245,11 @@ def test_each_condition_warns_exactly_once(output, what, line):
 @needs_msvc
 def test_what_the_game_really_programs_stays_silent(output):
     """The false positives that would put a line in every log of a port that
-    renders the game correctly. Line size 7 is in three captures, the seven-tap
+    renders the game correctly. Line size 7 is in three captures, the copy
     filter and the identity Y-scale in all 23, and the masked GEN_MODE write
     that changes nothing outside the mask is GXSetCoPlanar, which the game
-    calls from its first frame."""
+    calls from its first frame. The copy filter is applied now rather than
+    merely unmentioned, but it is still not news, so it still says nothing."""
     assert "1.17 pixels" not in output, output
     assert "EFB copy filter" not in output, output
     assert "BP 4E 000100" not in output, output
@@ -268,10 +269,11 @@ def test_what_the_game_really_programs_stays_silent(output):
 
 
 @needs_msvc
-def test_the_copy_filter_is_reported_as_a_standing_limitation(output):
-    """It is not a warning: the game programs the filter before the first frame
-    of every run and leaves it there, so a tripwire line for it would be in
-    every log and the channel would stop meaning anything. The end-of-run
-    report is where a fact of every frame belongs."""
-    assert output.count("copies asked for the console's seven-tap vertical filter") == 1, output
-    assert "8,8,10,12,10,8,8 over 64" in output, output
+def test_the_copy_filter_is_no_longer_a_standing_limitation(output):
+    """It used to be reported at the end of every run as something the port was
+    asked for and did not do. PLAN C3 implemented it, so the line is gone
+    rather than merely quiet, and what the filter does to a pixel is pinned in
+    test_gxr_copy_filter.py instead. The tripwire channel stays silent about it
+    either way, which is what the test above checks."""
+    assert "seven-tap vertical filter" not in output, output
+    assert "got the centre row alone" not in output, output

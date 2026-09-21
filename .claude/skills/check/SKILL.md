@@ -253,13 +253,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-475 passed in 48.04s
+484 passed in 51.44s
 ```
 
-475 tests in 31 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `456 passed, 1 skipped` without
+484 tests in 32 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `465 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `423 passed, 52 skipped` without MSVC.
+module-level skip), `423 passed, 61 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather

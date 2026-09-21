@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 19 bindings in `config/hle.txt` |
-| Python tests | 475 in 31 files |
+| Python tests | 484 in 32 files (61 need MSVC and skip without it) |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
@@ -153,11 +153,13 @@ MMIO test and an ordinary store costs one compare instead of three.
 The renderer half warns once per condition from `bp_tripwire`,
 `draw_tripwire`, `decode_level` and the texture cache, each naming the
 register and value it was asked with and what we do instead. Two of them were
-built wrong the first time and are worth recording: the EFB copy filter is
-not a tripwire, because the game programs the seven-tap filter before the
-first frame of every run and leaves it there, so the line would be in every
-log and the channel would stop meaning "something unmodelled was asked for" —
-`gxr_report` states it at the end of the run instead, and C3 removes it. And
+built wrong the first time and are worth recording: the EFB copy filter was
+not a tripwire, because the game programs the filter before the first frame
+of every run and leaves it there, so the line would have been in every log and
+the channel would stop meaning "something unmodelled was asked for" —
+`gxr_report` stated it at the end of the run instead, and C3 has now removed
+both. The reasoning is kept because the next always-on unmodelled feature
+poses the same question. And
 the cache-eviction tripwire counted a session total, which ten evictions a
 frame reaches in under a second of ordinary play; it counts per frame now and
 speaks at a quarter of the cache in one frame, six times the heaviest frame
@@ -429,7 +431,26 @@ words whatever the image's size, so a large texture rewritten in place kept
 rendering stale; it now depends on the whole image.
 All 23 pinned frames are unchanged at four thread counts.
 
-**C3. The EFB copy vertical filter and destination stride** — *a day.*
+**C3. The EFB copy vertical filter and destination stride** — *done (2026-09-21).*
+**Done.** `enqueue_copy` collapses BP 0x53/0x54 onto the three rows they read
+and carries them in the command; `filter_sample` (`gxr.c`) applies 16/32/16,
+clamped to the copy rectangle rather than to the EFB, truncating, to both
+screen and texture copies. All 23 pinned frames moved and were re-blessed
+after looking: the 15 captures that only copy to the screen are reproduced
+*bit for bit* by applying the kernel to the previous render, and the 8 that
+also copy to a texture are softer still, which is what being filtered twice
+looks like. Vertical variation fell 8-43% on every frame and rose on none.
+`tools/tests/test_gxr_copy_filter.py` pins the pixels without a disc.
+*Two defects found on the way, both by a check rather than by reading:* the
+copy drains the queue **after** it as well as before, because workers that
+finished their share would otherwise run ahead into the next draw and
+overwrite rows their neighbours were still sampling — four texture captures
+disagreed with themselves at `SOA_THREADS=8` on one sweep in four, after three
+green sweeps in a row. And seven zero weights mean the register was never
+written, not a kernel that multiplies the frame by nothing; reading it the
+other way copied a black frame and the renderer's own selftest said so.
+
+*Superseded, kept for the reasoning:*
 The game programs a real 7-tap deflicker filter — BP 0x53 = `30A208` and
 0x54 = `00820A` in the frame-start snapshot of all 23 captures, weights
 8,8,10,12,10,8,8 over 64 — and we apply none of it, so our output is sharper

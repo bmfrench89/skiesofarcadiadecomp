@@ -198,12 +198,15 @@ int gxr_enabled(void)
  *
  * Decoding all 23 captures config/fifo_manifest.tsv pins and running these
  * conditions over their streams sets none of them off, and none is expected
- * to fire in normal play; a line here is news. The one thing the
- * game really does ask for and we really do not do -- the seven-tap EFB copy
- * filter -- is programmed before the first frame of every run and left there,
- * so it is not news and is not here: enqueue_copy counts it and gxr_report
- * states it at the end of the run instead. A channel with a line in it every
- * time stops meaning anything.
+ * to fire in normal play; a line here is news. The EFB copy's vertical filter
+ * used to be the one thing the game really asked for that we really did not
+ * do, and it was deliberately kept out of this channel rather than put in it:
+ * the game programs it before the first frame of every run and leaves it
+ * there, so a tripwire for it would have been in every log, and a channel
+ * with a line in it every time stops meaning anything. gxr_report stated it
+ * once at the end instead. PLAN C3 implemented the filter, so both the
+ * counter and that line are gone; the reasoning is kept because the next
+ * unmodelled-but-always-on feature will pose the same question.
  *
  * Two trigger shapes, and the difference matters when reading a replay: the
  * BP tripwires fire on a *write*, the draw and copy ones on the *state* a
@@ -739,7 +742,7 @@ typedef struct {
      * run says so instead of rasterizing a command built over the one it
      * wanted. See the queue's declarations for why it cannot happen today. */
     long long seq;
-    int kind; /* 0 draw, 1 EFB copy (with optional clear) */
+    int kind; /* 0 draw, 1 EFB copy, 2 the EFB clear that followed one */
     TevSetup tev;
     PixelCfg px;
     RasterCfg rc;
@@ -749,6 +752,13 @@ typedef struct {
     const Vertex* v;
     /* copy: the registers as they were, and the command word */
     uint32_t cp_v, cp_tl, cp_wh, cp_dest, cp_stride, cp_ar, cp_gb, cp_z;
+    /* The copy filter, already collapsed onto the three rows it reads, so a
+     * worker never touches BP 0x53/0x54 itself: the producer keeps writing
+     * those while workers run, and a worker reading them would apply whichever
+     * copy's coefficients happened to have arrived last. This game programs one
+     * set for the whole run, so that bug would be invisible in every capture we
+     * have and would wait for the first stream that reprograms the filter. */
+    uint8_t cp_f_up, cp_f_mid, cp_f_dn;
     CpuState* s;
 } DrawCmd;
 
@@ -1264,6 +1274,8 @@ static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, co
 }
 
 static void run_copy(const DrawCmd* D);
+static void run_copy_clear(const DrawCmd* D);
+static void filter_sample(const DrawCmd* D, int sx, int sy, int ytop, int ybot, uint8_t* o);
 static void workers_start(void);
 void gxr_flush(void);
 
@@ -1272,6 +1284,7 @@ static void draw_command(const DrawCmd* D)
     const Vertex* v = D->v;
     unsigned count = D->count, i;
     if (D->kind == 1) { run_copy(D); return; }
+    if (D->kind == 2) { run_copy_clear(D); return; }
     switch (D->prim) {
     case 0x80: /* quads */
         for (i = 0; i + 3 < count; i += 4) {
@@ -1614,13 +1627,22 @@ static void efb_clear(uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, i
 
 /* Write an EFB rectangle into memory as a texture (GXCopyTex). Tiled like
  * the formats the sampler decodes. */
-static void copy_to_texture(CpuState* s, uint32_t dest_reg, uint32_t v, int x0, int y0, int w, int h)
+static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, uint32_t v, int x0, int y0, int w, int h)
 {
     uint32_t dest = (dest_reg & 0x1FFFFFu) << 5;
     unsigned tpf = (v >> 3) & 15;
     unsigned fmt = tpf / 2 + (tpf & 1) * 8; /* EFBCopyFormat */
     int intensity = (v >> 15) & 1, half = (v >> 9) & 1;
     int ow = half ? w / 2 : w, oh = half ? h / 2 : h;
+    /* Texture copies are filtered too. BP 0x53/0x54 are global PE state with
+     * no per-copy enable: GXCopyDisp and GXCopyTex each read-modify-write only
+     * their own shadow of the 0x52 command word and touch neither filter
+     * register, and GXSetCopyClamp writes the filter's edge control into the
+     * texture-copy shadow as well, which it would have no reason to do if a
+     * texture copy were unfiltered. */
+    int filtered = !(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64);
+    int ytop = y0 < 0 ? 0 : y0;
+    int ybot = y0 + h - 1 > EFB_H - 1 ? EFB_H - 1 : y0 + h - 1;
     int x, y;
     unsigned tw, th, bpt;
     uint8_t* base;
@@ -1655,6 +1677,12 @@ static void copy_to_texture(CpuState* s, uint32_t dest_reg, uint32_t v, int x0, 
     case 3: case 4: case 5: tw = 4; th = 4; bpt = 32; break;
     default: tw = 4; th = 4; bpt = 64; texfmt = 6; break;
     }
+    /* A half-scale copy already averages two rows, and no source in this tree
+     * settles whether the console filters before or after that box, so it is
+     * left unfiltered and says so. No capture sets half scale: bit 9 is clear
+     * on all 39 copies in the corpus. */
+    if (half && filtered)
+        WARN_ONCE("[gxr] half-scale EFB copy with the vertical filter programmed; the box filter is applied and the vertical filter is not, because their order is not established\n");
     if ((dest & MEM_MASK) + (size_t)((oh + th - 1) / th) * ((ow + tw - 1) / tw) * bpt > MEM1_SIZE) return;
     base = mem_ptr(s, dest | 0x80000000u);
     for (y = 0; y < oh; y++) {
@@ -1672,7 +1700,15 @@ static void copy_to_texture(CpuState* s, uint32_t dest_reg, uint32_t v, int x0, 
                     int k;
                     for (k = 0; k < 4; k++)
                         px[k] = (uint8_t)((g_efb[sy][sx][k] + g_efb[sy][sx + 1][k] + g_efb[sy + 1][sx][k] + g_efb[sy + 1][sx + 1][k]) / 4);
-                } else memcpy(px, g_efb[sy][sx], 4);
+                } else {
+                    /* Filter before the format conversion below: for RGB565,
+                     * RGB5A3 and R4 , blending the quantised values gives a
+                     * different answer from quantising the blend. Alpha keeps
+                     * the centre row's -- the console has no alpha plane to
+                     * filter here, PE_CONTROL being RGB8_Z24 in every capture. */
+                    memcpy(px, g_efb[sy][sx], 4);
+                    if (filtered) filter_sample(D, sx, sy, ytop, ybot, px);
+                }
             }
             if (intensity) {
                 I = (unsigned)(0.257f * px[0] + 0.504f * px[1] + 0.098f * px[2] + 16.0f);
@@ -1705,29 +1741,87 @@ static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
 static int g_screen_w = EFB_W, g_screen_h = 480;
 static volatile LONG g_frames_presented; /* copies to the screen completed by all rows */
 
-static void copy_to_screen(int x0, int y0, int w, int h)
+/* One filtered EFB sample: the three rows the copy filter reads, weighted and
+ * divided by 64.
+ *
+ * The taps are clamped to the COPY RECTANGLE, not to the EFB. EFB_H is 528 and
+ * every copy this game makes is 480 rows, so clamping to EFB_H-1 would pull
+ * rows from below the rectangle -- whatever the last clear and scissor left
+ * there -- into the bottom row of every frame, and only an edge test would
+ * ever catch it. BP 0x52's bits 0 and 1 are the hardware's own clamp_top and
+ * clamp_bottom and are set on every copy in the corpus; when one is clear we
+ * clamp anyway and say so, because nothing in this tree establishes what the
+ * hardware reads instead and a guess should be visible rather than silent.
+ *
+ * Truncating (>> 6) rather than rounding is a decision, not an accident: it is
+ * what Dolphin does, and whichever rule is compiled is what the frame manifest
+ * pins, so a later tidy-up to round-half-up would move all 23 hashes with no
+ * behavioural reason to. */
+static void filter_sample(const DrawCmd* D, int sx, int sy, int ytop, int ybot, uint8_t* o)
+{
+    int ya = sy - 1 < ytop ? ytop : sy - 1;
+    int yb = sy + 1 > ybot ? ybot : sy + 1;
+    unsigned up = D->cp_f_up, mid = D->cp_f_mid, dn = D->cp_f_dn;
+    int k;
+    for (k = 0; k < 3; k++) {
+        unsigned v = up * g_efb[ya][sx][k] + mid * g_efb[sy][sx][k] + dn * g_efb[yb][sx][k];
+        v >>= 6;
+        o[k] = (uint8_t)(v > 255u ? 255u : v);
+    }
+}
+
+static void copy_to_screen(const DrawCmd* D, int x0, int y0, int w, int h)
 {
     int x, y;
+    int filtered = !(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64);
+    int ytop = y0 < 0 ? 0 : y0;
+    int ybot = y0 + h - 1 > EFB_H - 1 ? EFB_H - 1 : y0 + h - 1;
+    if (filtered && (D->cp_v & 3u) != 3u)
+        WARN_ONCE("[gxr] EFB copy asks for the vertical filter with clamp_top/clamp_bottom (BP 52 %06X) not both set; the taps are clamped to the copy rectangle anyway\n",
+                  D->cp_v & 0xFFFFFFu);
     for (y = 0; y < h && y < EFB_H; y++) {
         int sy = y0 + y;
         if (!my_row(y)) continue;
         for (x = 0; x < w && x < EFB_W; x++) {
             int sx = x0 + x;
             uint8_t* o = g_screen[y][x];
-            if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) { memcpy(o, g_efb[sy][sx], 3); o[3] = 255; }
-            else { o[0] = o[1] = o[2] = 0; o[3] = 255; }
+            if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
+                if (filtered) filter_sample(D, sx, sy, ytop, ybot, o);
+                else memcpy(o, g_efb[sy][sx], 3);
+                o[3] = 255;
+            } else { o[0] = o[1] = o[2] = 0; o[3] = 255; }
         }
     }
+}
+
+/* Whether this copy reads EFB rows the worker running it did not write: a
+ * vertical filter reaches one row either side, and a half-scale copy pairs
+ * rows. Both make the fused clear unsafe, so enqueue_copy publishes the clear
+ * separately and this says so from the command alone. */
+static int copy_reads_foreign_rows(const DrawCmd* D)
+{
+    int half = (D->cp_v >> 9) & 1;
+    int filtered = !(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64);
+    return half || filtered;
 }
 
 static void run_copy(const DrawCmd* D)
 {
     int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
     int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
-    if (D->cp_v & 0x4000u) copy_to_screen(x0, y0, w, h);
-    else copy_to_texture(D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
-    if (D->cp_v & 0x800u) efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+    if (D->cp_v & 0x4000u) copy_to_screen(D, x0, y0, w, h);
+    else copy_to_texture(D, D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
+    if ((D->cp_v & 0x800u) && !copy_reads_foreign_rows(D))
+        efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
     if (D->cp_v & 0x4000u) InterlockedIncrement(&g_frames_presented);
+}
+
+/* The deferred half of the command above, published after a drain. */
+static void run_copy_clear(const DrawCmd* D)
+{
+    int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
+    int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
+    efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
 }
 
 /* Copy destinations still in the queue: a texture decoded from one of
@@ -1799,11 +1893,49 @@ static void write_frame_png(const char* path, int w, int h)
     else fprintf(stderr, "[gxr] wrote %s (%dx%d)\n", path, w, h);
 }
 
-/* The seven-tap EFB copy filter, which the game programs once and we do not
- * run: counted here and stated by gxr_report, not warned about. See the
- * tripwire header for why it is not in that channel. */
-static uint64_t g_copies_filtered;
-static uint32_t g_copy_filter[2];
+/* The EFB copy's vertical filter (BP 0x53/0x54), collapsed onto the rows it
+ * actually reads.
+ *
+ * The seven six-bit weights are NOT seven rows. They are vertical sub-samples:
+ * two belong to the row above, three to the row itself and two to the row
+ * below, which is why seven taps span three pixels. So the game's
+ * 8,8,10,12,10,8,8 is 16/64 above, 32/64 centre, 16/64 below -- a 1:2:1
+ * deflicker blur -- and nothing lands two or three rows away.
+ *
+ * The source for that grouping is patent US6999100B1, the hardware's own
+ * description ("seven samples from three vertically arranged pixels ... Three
+ * samples are taken from the current pixel, two samples ... immediately above
+ * ... two ... immediately below"), corroborated by libogc, whose vfilter
+ * tables are labelled "line n-1 through n+1". It is deliberately not derived
+ * from the SDK's filter-off set {0,0,21,22,21,0,0} -- GXSetCopyFilter is
+ * fn_8024EF50 and its vf == 0 arm at 0x8024F138 loads exactly that. That set
+ * proves taps 2,3,4 land on the current row, since nothing else makes it an
+ * identity, and so kills any reading of seven distinct rows; but it is equally
+ * an identity under a FIVE-row window, which would give 8/8/32/8/8 instead.
+ * The register layout cannot settle this. Reading it and assuming the rest is
+ * how PLAN C3's acceptance criterion came to be wrong for two days. */
+static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uint8_t* dn)
+{
+    unsigned w0 = f0 & 0x3F, w1 = (f0 >> 6) & 0x3F, w2 = (f0 >> 12) & 0x3F, w3 = (f0 >> 18) & 0x3F;
+    unsigned w4 = f1 & 0x3F, w5 = (f1 >> 6) & 0x3F, w6 = (f1 >> 12) & 0x3F;
+    *up = (uint8_t)(w0 + w1);
+    *mid = (uint8_t)(w2 + w3 + w4);
+    *dn = (uint8_t)(w5 + w6);
+    /* All seven zero is not a request for a filter that multiplies every pixel
+     * by nothing: it is the register never having been written, which means a
+     * synthetic stream rather than the game. Copy unfiltered, exactly as the
+     * Y-scale check below reads a zero there. Getting this wrong copies a
+     * black frame, and it is the renderer's own selftest that says so --
+     * "render full-screen quad: 0 of 307200 red". */
+    if ((*up | *mid | *dn) == 0) { *mid = 64; return; }
+    /* A set that does not sum to 64 scales every copied pixel's brightness,
+     * and it would sail past a "the neighbours are zero" test. Nothing the
+     * game programs can trip this; a synthetic stream can, which is the point
+     * -- an oracle that cannot fail is worse than none. */
+    if ((unsigned)*up + *mid + *dn != 64u)
+        WARN_ONCE("[gxr] EFB copy filter weights (BP 53 %06X, BP 54 %06X) sum to %u, not 64, so the copy would rescale every pixel's brightness; applied as given\n",
+                  f0, f1, (unsigned)*up + *mid + *dn);
+}
 
 static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
 {
@@ -1811,20 +1943,17 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     int x0 = (int)(bp[0x49] & 0x3FF), y0 = (int)((bp[0x49] >> 10) & 0x3FF);
     int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
     int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
-    /* The console runs a seven-tap vertical filter over the EFB as it copies
-     * -- six-bit weights for the three rows above, the row itself and the
-     * three below, summed over 64 -- and we take the centre row alone, so
-     * every copied pixel is softer on the console than ours. That is why no
-     * pixel-exact comparison against one converges, and it is PLAN C3's
-     * subject; when C3 lands, this counter and its line in gxr_report go. */
-    {
-        uint32_t f0 = bp[0x53], f1 = bp[0x54];
-        if ((f0 & 0x03FFFFu) | (f1 & 0x03FFFFu)) { /* any weight but the centre row's */
-            g_copies_filtered++;
-            g_copy_filter[0] = f0;
-            g_copy_filter[1] = f1;
-        }
-    }
+    uint8_t f_up, f_mid, f_dn;
+    int filtered;
+    /* Filtered iff the collapsed kernel is not the exact identity. Asking the
+     * weights rather than masking the registers is what makes this right: the
+     * mask here was 0x03FFFF against both words, which takes w3 alone for the
+     * centre row and so calls the SDK's own filter-off set filtered, since
+     * that set is w2 = 21, w3 = 22, w4 = 21. Testing the sum as well means a
+     * set that does not total 64 takes the filtered path and is scaled, rather
+     * than being waved through as "near enough to the identity". */
+    copy_filter(bp[0x53], bp[0x54], &f_up, &f_mid, &f_dn);
+    filtered = !(f_up == 0 && f_dn == 0 && f_mid == 64);
     /* Copy Y-scale (BP 4E) is 1.8 fixed point over the whole 24-bit field,
      * and 000100 is the identity -- all the game has ever programmed, and it
      * cannot move a pixel -- so this warns only when the copy is asked to
@@ -1838,13 +1967,21 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
                   bp[0x4E], (double)(bp[0x4E] & 0xFFFFFFu) / 256.0);
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
-    if (half) gxr_flush(); /* a half-scale copy reads rows other workers own */
+    /* Both of these read EFB rows this worker does not own. my_row is strided
+     * -- y % nthreads == tid-1 -- and the plain copy is safe only because the
+     * row it reads is the row it wrote: the rasterizer partitions by absolute
+     * EFB row and the copy by destination row, which coincide at y0 = 0. A
+     * filtered output row reads y-1 and y+1, which belong to the two
+     * neighbouring workers, and workers advance independently. Without this
+     * the frame depends on SOA_THREADS. */
+    if (half || filtered) gxr_flush();
     if (queued() >= QUEUE_CAP) gxr_flush();
     D = &g_queue[g_published & QMASK];
     D->seq = g_published;
     D->kind = 1; D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
+    D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
     if (to_screen) { g_screen_w = w > EFB_W ? EFB_W : w; g_screen_h = h > EFB_H ? EFB_H : h; g_copies_xfb++; }
     else {
         if (g_pending_n < QUEUE_CAP) {
@@ -1862,6 +1999,50 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         InterlockedIncrement64(&g_published);
         g_drained = g_published;
         g_arena_used = 0;
+    }
+    /* A copy that samples rows it does not own is bracketed by two drains, not
+     * one, and the second is the one that is easy to miss.
+     *
+     * The drain before it orders the producer's earlier draws. The drain after
+     * it stops anything *later* from running ahead into the rows the copy is
+     * still sampling: workers advance through the queue independently, so the
+     * worker that finishes its share of the copy first would otherwise start
+     * on the next draw -- or on the clear -- and write EFB rows its neighbours
+     * are still reading as filter taps.
+     *
+     * This was measured, not reasoned about. With only the clear split out,
+     * four captures disagreed with themselves at SOA_THREADS=8 on one sweep in
+     * four -- 1550, 4500, 6000 and 16300, which are four of the eight captures
+     * that copy to a texture. Screen copies hid it: they set the clear bit, so
+     * the clear's own drain happened to serve as this one. Texture copies do
+     * not, so nothing stopped the next draw. Three green sweeps in a row had
+     * already run before the fourth caught it.
+     *
+     * The clear then goes in its own command rather than riding inside
+     * run_copy, where a worker would have cleared rows its neighbours were
+     * still sampling. A barrier inside a command is the shape PLAN C0 removed
+     * and is not coming back.
+     *
+     * An unfiltered, unscaled copy reads only rows the worker wrote itself, so
+     * it keeps the fused clear and its exact previous behaviour. */
+    if (filtered || half) {
+        gxr_flush();
+        if (v & 0x800u) {
+            D = &g_queue[g_published & QMASK];
+            D->seq = g_published;
+            D->kind = 2; D->s = s;
+            D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
+            D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
+            if (g_workers > 0) {
+                InterlockedIncrement64(&g_published);
+            } else {
+                t_tid = 1;
+                TIMED(T_RASTER, draw_command(D));
+                InterlockedIncrement64(&g_published);
+                g_drained = g_published;
+                g_arena_used = 0;
+            }
+        }
     }
 
     if (to_screen) {
@@ -1977,15 +2158,4 @@ void gxr_report(void)
                 (unsigned long long)g_prepare_flushes);
     if (tex_graveyard_peak())
         fprintf(stderr, "[gxr] %d decoded textures waited to be freed at once, at the most\n", tex_graveyard_peak());
-    /* A standing limitation, stated once at the end rather than warned about
-     * at the first copy: the game programs the filter before the first frame
-     * of every run, so a tripwire line for it would be in every log and the
-     * tripwire channel would stop meaning "something unmodelled was asked
-     * for". PLAN C3 is the fix. */
-    if (g_copies_filtered) {
-        uint32_t f0 = g_copy_filter[0], f1 = g_copy_filter[1];
-        fprintf(stderr, "[gxr] %llu copies asked for the console's seven-tap vertical filter (BP 53 %06X, BP 54 %06X: %u,%u,%u,%u,%u,%u,%u over 64) and got the centre row alone, so this run is sharper and more aliased than the console (PLAN C3)\n",
-                (unsigned long long)g_copies_filtered, f0, f1, f0 & 0x3F, (f0 >> 6) & 0x3F,
-                (f0 >> 12) & 0x3F, (f0 >> 18) & 0x3F, f1 & 0x3F, (f1 >> 6) & 0x3F, (f1 >> 12) & 0x3F);
-    }
 }
