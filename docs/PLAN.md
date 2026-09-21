@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 19 bindings in `config/hle.txt` |
-| Python tests | 484 in 32 files (61 need MSVC and skip without it) |
+| Python tests | 488 in 33 files (61 need MSVC and skip without it) |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
@@ -50,14 +50,14 @@ until someone runs the A2 sweep.
 A2, A3, A4, B2, B3, C0, C2, C3, D1, D3, E1, F1, F2, F3 and G1. Half-done and
 named in place: B1 (one step needs the disc), B4 (the card is written; loading
 a save remains), C1 (the instrument is built and the defect was not what the
-entry said), E2 (the selftest half), G2 (both pages exist; SPEC §10 and the
-duplicated suffix list remain).
+entry said), E2 (the selftest half), G2 (both pages exist and the duplicated
+suffix list is now tied together by a test; SPEC §10 remains).
 
 What is left is larger and needs judgement about what the port is for: **D5**
 is the visible milestone and the one a person would notice, **C4** and **D4**
 are multi-day, and Track F is a grind that is now worth doing because F1 made
-a match mean what it says. Read `HANDOFF.md` before picking any of them — six
-confident statements in the commit history are wrong and it lists them.
+a match mean what it says. Read `HANDOFF.md` before picking any of them — seven
+confident statements in the history are wrong and it lists them.
 
 ---
 
@@ -114,7 +114,7 @@ ownership rule for triangles only: `raster_line` and `raster_point` draw on
 every worker with no `my_row` test, and the corpus contains no line or point
 draw to catch it with. `hold.scn` now captures three field frames to widen a
 corpus that otherwise stops at frame 12100.
-*Done:* 20/20 unchanged twice at every thread count, and the right captures
+*Done:* 23/23 unchanged twice at every thread count, and the right captures
 named after a one-line change to blending.
 
 **A3. Tripwires for what the runtime does not model** — *built.*
@@ -853,16 +853,21 @@ describes, though `config.yml:6` already records the DOL sha1 for dtk.
 *Done:* LICENSE exists and README links it, the run command works in a fresh
 PowerShell window, and a mutated DOL is refused with both hashes named.
 
-**G2. The missing pages, the corrections, the boundary** — *half done; hours left.*
+**G2. The missing pages, the corrections, the boundary** — *nearly done; one page left.*
 **Both pages exist** (`docs/TESTING.md`, `docs/ARCHITECTURE.md`, 2026-09-18).
-*Left, and both are small:* `docs/SPEC.md` §10 still names `config/symbols.toml`,
-`tools/soa/sigs/`, a C++20 runtime, SDL3 + Vulkan and CMake + Ninja
-(`SPEC.md:371-391`), none of which exist and none of which is labelled a plan
-not taken — a reader takes that section for a description of the tree. And the
-forbidden-suffix list still lives twice, in `tools/guard.py:18-47` and as a
-hand-copied regex in `.github/workflows/ci.yml:34`; they are identical at 28
-suffixes today (checked), so this is duplication waiting to drift, not a leak.
-One of them should derive from the other, with a test that fails if they part.
+**The duplicated guard list is tied together** (2026-09-21).
+`tools/tests/test_guard.py` asserts that CI's history-scan regex covers exactly
+`guard.py`'s `FORBIDDEN_SUFFIXES` and that the two 2 MiB limits are the same
+number. They were already identical at 28 suffixes; the point is that they
+cannot part quietly now. Left deliberately as two lists rather than generating
+one from the other: the CI step is bash in YAML, and a test that reads both is
+simpler than a build step that writes one, and fails in the same place.
+*Left, and it is one thing:* `docs/SPEC.md` §10 still names
+`config/symbols.toml`, `tools/soa/sigs/`, a C++20 runtime, SDL3 + Vulkan and
+CMake + Ninja (`SPEC.md:371-391`), none of which exist and none of which is
+labelled a plan not taken — a reader takes that section for a description of
+the tree, and it is the last page that still describes the port that was
+planned rather than the one that was built.
 `docs/TESTING.md`: what the 167 tests cover, which need capstone or MSVC or
 a disc, what MATCH means, and the pre-PR list. `docs/ARCHITECTURE.md`: the
 path a frame takes, and a table mapping each `runtime/*.c` to the kind of

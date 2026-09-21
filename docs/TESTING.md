@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-484 passed in 51.44s
+488 passed in 49.87s
 ```
 
-484 tests in 32 files, none of which reads the disc. They cover the Python
+488 tests in 33 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -71,6 +71,7 @@ its own and run it, some of the C as well:
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
+| `test_guard.py` | 4 | the game-data guard's suffix and size limits, and the copy of them in CI's history scan — two lists that drift silently |
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
@@ -82,12 +83,12 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `484 passed` |
-| no capstone — **what CI installs** | `465 passed, 1 skipped` |
-| no MSVC | `423 passed, 61 skipped` |
-| neither — **the Ubuntu CI leg** | `404 passed, 53 skipped` |
+| everything (MSVC + capstone) | `488 passed` |
+| no capstone — **what CI installs** | `469 passed, 1 skipped` |
+| no MSVC | `427 passed, 61 skipped` |
+| neither — **the Ubuntu CI leg** | `408 passed, 62 skipped` |
 
-Two things follow. The 52 MSVC-gated tests are the ones that build a runtime
+Two things follow. The 61 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -105,7 +106,7 @@ wants the disc.
 All checks passed!
 ```
 ```
-68 files already formatted
+70 files already formatted
 ```
 
 Two separate commands. **Run both.** The format check has broken CI twice, and
@@ -130,7 +131,7 @@ local version can disagree about a line nobody touched.
 ### `python tools/guard.py`
 
 ```
-guard: 149 tracked files, no game data
+guard: 161 tracked files, no game data
 ```
 
 Refuses game data in the tree: 28 forbidden extensions (`.rvz`, `.iso`, `.dol`,
@@ -928,7 +929,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 61 of the 484 skip without a C compiler; they build one runtime file and run it.
+² 61 of the 488 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -939,8 +940,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 404 passed, 53 skipped |
-| **Tests** | windows | the same three — 465 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 408 passed, 62 skipped |
+| **Tests** | windows | the same three — 469 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
