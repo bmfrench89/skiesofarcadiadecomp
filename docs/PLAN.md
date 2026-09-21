@@ -11,15 +11,21 @@ are independent; inside a track, order matters.
 | | |
 |---|---|
 | Functions recompiled | 7,144, at 100% instruction coverage |
-| Hand-decompiled and byte-matching | 41 across 15 units — 0.18% of `.text` |
-| Of those, running in the port | 9 (`config/hle.txt`) |
-| Python tests | 362 in 19 files |
+| Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
+| Of those, running in the port | 12, of the 19 bindings in `config/hle.txt` |
+| Python tests | 475 in 31 files |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
 | `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
 | Memory card bytes the game has written | 40,960 — it formats a card (2026-09-18) |
 | Saved runs that played a sample | 0 of 27: every `[audio]` line says "(no output device)" |
+
+Do not quote that 100 without its caveat: 65 of them are compared in full and
+35 carry words only a link can decide, which `tools/decomp.py` reports
+separately and does not count as matches. Seven of the twenty-one units are
+fully verified. That is the oracle being honest, not a defect — and the figure
+was 41 until F1 fixed an oracle that compared relocated words on six bits.
 
 The port boots, plays the opening, wins the first battle and walks the
 Valuan ship's hold with menus and random encounters. Rates: one saved
@@ -40,11 +46,18 @@ person's shell history. What is still unchecked is the game itself: no saved
 run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
-**Start here:** A1, A2, A3, D1, D3 and C0 are done and run; B1, B2, B3 and the
-first two stages of B4 are done, so the card mounts and only the write is left.
-Next is **A4**, which every timing claim above depends on, then **B4**'s last
-stage — now unblocked, since D3 can record a played session and replay it
-headlessly. After that, any track, cold.
+**Start here:** the cheap, well-specified items are gone. Done and run: A1,
+A2, A3, A4, B2, B3, C0, C2, C3, D1, D3, E1, F1, F2, F3 and G1. Half-done and
+named in place: B1 (one step needs the disc), B4 (the card is written; loading
+a save remains), C1 (the instrument is built and the defect was not what the
+entry said), E2 (the selftest half), G2 (both pages exist; SPEC §10 and the
+duplicated suffix list remain).
+
+What is left is larger and needs judgement about what the port is for: **D5**
+is the visible milestone and the one a person would notice, **C4** and **D4**
+are multi-day, and Track F is a grind that is now worth doing because F1 made
+a match mean what it says. Read `HANDOFF.md` before picking any of them — six
+confident statements in the commit history are wrong and it lists them.
 
 ---
 
@@ -418,18 +431,39 @@ All 23 pinned frames are unchanged at four thread counts.
 
 **C3. The EFB copy vertical filter and destination stride** — *a day.*
 The game programs a real 7-tap deflicker filter — BP 0x53 = `30A208` and
-0x54 = `00820A` in the frame-start snapshot of all 20 captures, weights
+0x54 = `00820A` in the frame-start snapshot of all 23 captures, weights
 8,8,10,12,10,8,8 over 64 — and we apply none of it, so our output is sharper
 and more aliased than the console's and no pixel-exact comparison can
 converge. No captured stream ever *writes* 0x53, 0x54 or 0x4E; the game sets
-them outside the window. BP 0x4D, the destination stride (32 writes against
-32 copies across the corpus), is already read into `D->cp_stride` at
-`gxr.c:1351` and referenced nowhere else — dead, not missing. Skip the copy
-Y-scale: 0x4E is `000100`, the identity, in all 20, so it cannot change a
+them outside the window. BP 0x4D, the destination stride (39 writes against
+39 copies across the corpus), is already read into `D->cp_stride` at
+`gxr.c:1846` and referenced nowhere else — dead, not missing. Skip the copy
+Y-scale: 0x4E is `000100`, the identity, in all 23, so it cannot change a
 committed pixel. After A2 and A4, because it multiplies copy read traffic
-sevenfold on workers that may already be saturated.
+threefold — not sevenfold, since the seven taps read three rows — on workers
+A4 measured busy 8.8s of 830s, so throughput is not what orders this item.
+
+**The seven taps are not seven rows, and that is what this entry got wrong.**
+They are vertical *sub-samples*: two from the row above, three from the row
+itself, two from the row below. So 8,8,10,12,10,8,8 collapses to **16/64 ,
+32/64 , 16/64** over three rows, with nothing at all at distance 2 or 3. The
+source is patent US6999100B1, the Flipper's own description — "seven samples
+from three vertically arranged pixels … Three samples are taken from the
+current pixel, two samples … immediately above … two … immediately below" —
+corroborated by libogc, whose `vfilter` tables are labelled "line n-1 through
+n+1" and whose AA sample pattern puts three vertical sub-samples per pixel at
+y = 2, 6, 10 twelfths. It is **not** settled by the SDK's filter-off set
+{0,0,21,22,21,0,0} (`GXSetCopyFilter` is `fn_8024EF50`; its `vf == 0` arm at
+0x8024F138 loads BP 0x53 ← `0x595000`, 0x54 ← `0x000015`, and no caller in
+this title reaches it — all three pass a literal `li r5,1`). That set kills
+the seven-row reading, since it is an identity only if taps 2,3,4 land on the
+current row, but it leaves a *five*-row grouping standing that would give
+8/8/32/8/8. Anyone re-deriving this from the register layout alone lands back
+on seven rows, which is exactly how the criterion below came to be wrong.
 *Done:* a one-pixel white line copied with the game's coefficients leaves
-12/64, 10/64 and 8/64 in the neighbouring rows.
+32/64 in its own row and 16/64 in each immediate neighbour, and **zero** two
+and three rows away — the zeros are the half that discriminates. And the
+SDK's filter-off set must copy bit-identically to today's unfiltered output.
 
 **C4. Speed, when it is needed** — *hours, then several days.*
 The port is 5-11% short of the 30 fps cap and the items above cover that
@@ -444,7 +478,7 @@ boot_window, 53% in boot_ship, are discarded after every stage has run; the
 trap is that XOR of two always-true comparisons is always false), and
 resolve the perspective divide once per texcoord, not twice per stage. The
 prize is specialising the fragment body per draw.
-*Done:* the cheap pair leaves `failed depth` within 0.1% and all 20 diffs at
+*Done:* the cheap pair leaves `failed depth` within 0.1% and all 23 diffs at
 zero; the specialisation reaches 1.5x on the heaviest captures, or it lands
 on A2 and nowhere else — a wrong body neither crashes nor diffs.
 
@@ -780,7 +814,11 @@ purpose.
 None of this moves the port; all of it decides whether anyone else can run
 it.
 
-**G1. A LICENSE, and the first-hour traps** — *hours.*
+**G1. A LICENSE, and the first-hour traps** — *done (2026-09-18).*
+**Done.** `LICENSE` (MIT) and `NOTICE` exist and `README.md:31-34` links both,
+the PowerShell trap is documented at `README.md:63-87` with the working form,
+and `tools/checkdump.py` hashes `extracted/sys/main.dol` against the sha1 in
+`config/GEAE8P/config.yml` and names both hashes when they differ.
 There is no LICENSE, COPYING or NOTICE anywhere in the tree, so nobody can
 legally fork or contribute. Then `README.md:48` says `set SOA_RENDER=1`,
 which in PowerShell silently creates a variable named `SOA_RENDER=1` and
@@ -794,7 +832,16 @@ describes, though `config.yml:6` already records the DOL sha1 for dtk.
 *Done:* LICENSE exists and README links it, the run command works in a fresh
 PowerShell window, and a mutated DOL is refused with both hashes named.
 
-**G2. The missing pages, the corrections, the boundary** — *a day.*
+**G2. The missing pages, the corrections, the boundary** — *half done; hours left.*
+**Both pages exist** (`docs/TESTING.md`, `docs/ARCHITECTURE.md`, 2026-09-18).
+*Left, and both are small:* `docs/SPEC.md` §10 still names `config/symbols.toml`,
+`tools/soa/sigs/`, a C++20 runtime, SDL3 + Vulkan and CMake + Ninja
+(`SPEC.md:371-391`), none of which exist and none of which is labelled a plan
+not taken — a reader takes that section for a description of the tree. And the
+forbidden-suffix list still lives twice, in `tools/guard.py:18-47` and as a
+hand-copied regex in `.github/workflows/ci.yml:34`; they are identical at 28
+suffixes today (checked), so this is duplication waiting to drift, not a leak.
+One of them should derive from the other, with a test that fails if they part.
 `docs/TESTING.md`: what the 167 tests cover, which need capstone or MSVC or
 a disc, what MATCH means, and the pre-PR list. `docs/ARCHITECTURE.md`: the
 path a frame takes, and a table mapping each `runtime/*.c` to the kind of
