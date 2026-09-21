@@ -126,7 +126,7 @@ one implementation:
 ```
                     +-------------------------+
   0x800A1234  --->  |   binding table         |
-                    |   (config/symbols.toml) |
+                    |   (config/hle.txt)      |
                     +-----------+-------------+
                                 |  exactly one of:
             +-------------------+-------------------+
@@ -361,34 +361,49 @@ boundary we see GX format enums and tiled data, never a GVR header.
 
 ## 10. Components
 
+> **This section is the v1/v2 plan, and the tree went elsewhere.** It is kept
+> because the reasoning is still worth reading, but do not use it as a map:
+> four of its choices were never made and three of its paths do not exist.
+> `docs/ARCHITECTURE.md` describes what was actually built. Each line below is
+> marked — **[built]**, **[built, elsewhere]** or **[not taken]**.
+
 ```
-tools/soa/           Python analysis + recompiler
-  rvz.py             RVZ container decoder                       [done]
-  dol.py             DOL section parsing                         [done]
-  disc.py            FST walk, file extraction                   [done]
-  aklz.py            AKLZ LZSS container                         [done]
-  ppc/               Gekko disassembler, CFG, call graph         [decoder done]
-  sigs/              SDK signature build + match
-  recomp/            PPC -> C code generator
-config/              symbols.toml, hooks.toml, splits  (metadata only)
-runtime/             C++ runtime: memory map, MMIO, OS/DVD/PAD/CARD HLE
-gfx/                 write-gather pipe, GX command decoder, TEV shader gen
-audio/               AI/ARAM/DSPADPCM, Sega mixer
-gen/                 generated C  (build artifact, never committed)
+tools/soa/           Python analysis + recompiler                [built]
+  rvz.py             RVZ container decoder                       [built]
+  dol.py             DOL section parsing                         [built]
+  disc.py            FST walk, file extraction                   [built]
+  aklz.py            AKLZ LZSS container                         [built]
+  ppc/               Gekko disassembler, CFG, call graph         [built]
+  sigs/              SDK signature build + match                 [not taken]
+                     -- naming came from decomp-toolkit against
+                        config/GEAE8P/ instead; see symbols.py
+  recomp/            PPC -> C code generator                     [built]
+config/              symbols.toml, hooks.toml, splits            [built, elsewhere]
+                     -- plain text, not TOML: symbols.txt, hle.txt,
+                        hooks.txt, trace.txt, savepoints.txt,
+                        functions.tsv, scenarios/, GEAE8P/
+runtime/             memory map, MMIO, OS/DVD/PAD/CARD HLE       [built]
+gfx/                 write-gather pipe, GX decoder, TEV          [built, elsewhere]
+                     -- runtime/gx.c, gxr.c, gxr_tev.c
+audio/               AI/ARAM/DSPADPCM, Sega mixer                [built, elsewhere]
+                     -- runtime/ax.c, aram.c, dsp.c, audio_out.c
+gen/                 generated C  (build artifact, never committed)  [built]
 ```
 
-| Layer | Choice | Rationale |
+| Layer | Planned | What was built |
 |---|---|---|
-| Analysis & recompiler | Python 3.14 | installed; `compression.zstd` built in |
-| Generated code | C | compiles fast at this volume |
-| Runtime | C++20 | MSVC 14.44 already present |
-| Graphics | SDL3 + Vulkan | explicit control over TEV translation |
-| Build | CMake + Ninja | both already present under VS BuildTools |
+| Analysis & recompiler | Python 3.14 | **as planned** — `compression.zstd` is why |
+| Generated code | C | **as planned** |
+| Runtime | C++20 | **C, not C++.** One language across `runtime/`, `src/` and `gen/`, and `src/` has to be C because it is compiled by mwcc to match the original |
+| Graphics | SDL3 + Vulkan | **a software rasterizer in `runtime/gxr.c` and a Win32 window.** No third-party dependency, no shader compiler, and the TEV is emulated per fragment rather than translated |
+| Build | CMake + Ninja | **`tools/recompile.py` driving MSVC directly.** It already had to know every unit and flag to translate the binary; a second build system would have restated that |
 
-**Install burden is misallocated, not underestimated.** Phase 3 needs nothing new.
-Phase 5 carries the real burden and it is undeclared: Vulkan SDK, plus a shader compiler
-in the build (`glslang`/`shaderc`) and SDL3 — a vendoring decision no document has made.
-Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unbudgeted.
+**The install burden the plan worried about never arrived**, because the two
+things that carried it were both dropped. There is no Vulkan SDK, no
+`glslang`/`shaderc` and no SDL3: the renderer is C in this repository. Dolphin
+is not needed either — captures come from the port's own `SOA_FIFO_DUMP` and
+replay through `soa.exe --replay`. What a contributor actually needs is in
+`README.md`: Python, the VS Build Tools, and a dump of their own disc.
 
 ---
 
@@ -442,5 +457,8 @@ Dolphin-from-source (Qt + full CMake tree) is needed for FIFO capture and is unb
   how a guest `OSThread` switch — guest stack pointer swap, guest LR restore, and the
   `lmw` GQR0-7 + HID2 + DMAU/DMAL restore at `0x802597D8` — bridges to a host fiber whose
   C stack is mid-`fn_800A1234`. That bridge is the hard part and it needs its own slice.
-- **Graphics API.** Vulkan assumed; revisit if TEV translation is simpler elsewhere.
-- **Shader-compiler and SDL3 vendoring** (§10).
+- ~~**Graphics API.** Vulkan assumed; revisit if TEV translation is simpler elsewhere.~~
+  **Settled:** a software rasterizer, `runtime/gxr.c`. The TEV is emulated per
+  fragment rather than translated to shaders, so the question of which API dissolved.
+- ~~**Shader-compiler and SDL3 vendoring** (§10).~~ **Settled:** neither is vendored;
+  there is no third-party runtime dependency and the window is Win32.

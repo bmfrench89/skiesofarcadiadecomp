@@ -47,11 +47,10 @@ run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
 **Start here:** the cheap, well-specified items are gone. Done and run: A1,
-A2, A3, A4, B2, B3, C0, C2, C3, D1, D3, E1, F1, F2, F3 and G1. Half-done and
+A2, A3, A4, B2, B3, C0, C2, C3, D1, D3, E1, F1, F2, F3, G1 and G2. Half-done and
 named in place: B1 (one step needs the disc), B4 (the card is written; loading
 a save remains), C1 (the instrument is built and the defect was not what the
-entry said), E2 (the selftest half), G2 (both pages exist and the duplicated
-suffix list is now tied together by a test; SPEC §10 remains).
+entry said), E2 (the selftest half).
 
 What is left is larger and needs judgement about what the port is for: **D5**
 is the visible milestone and the one a person would notice, **C4** and **D4**
@@ -853,7 +852,7 @@ describes, though `config.yml:6` already records the DOL sha1 for dtk.
 *Done:* LICENSE exists and README links it, the run command works in a fresh
 PowerShell window, and a mutated DOL is refused with both hashes named.
 
-**G2. The missing pages, the corrections, the boundary** — *nearly done; one page left.*
+**G2. The missing pages, the corrections, the boundary** — *done (2026-09-21).*
 **Both pages exist** (`docs/TESTING.md`, `docs/ARCHITECTURE.md`, 2026-09-18).
 **The duplicated guard list is tied together** (2026-09-21).
 `tools/tests/test_guard.py` asserts that CI's history-scan regex covers exactly
@@ -862,12 +861,16 @@ number. They were already identical at 28 suffixes; the point is that they
 cannot part quietly now. Left deliberately as two lists rather than generating
 one from the other: the CI step is bash in YAML, and a test that reads both is
 simpler than a build step that writes one, and fails in the same place.
-*Left, and it is one thing:* `docs/SPEC.md` §10 still names
-`config/symbols.toml`, `tools/soa/sigs/`, a C++20 runtime, SDL3 + Vulkan and
-CMake + Ninja (`SPEC.md:371-391`), none of which exist and none of which is
-labelled a plan not taken — a reader takes that section for a description of
-the tree, and it is the last page that still describes the port that was
-planned rather than the one that was built.
+**SPEC §10 now says which of it was built** (2026-09-21). Every line of the
+component tree is marked `[built]`, `[built, elsewhere]` with where it actually
+lives, or `[not taken]`, and the technology table sets each planned choice
+against what was built instead: C rather than C++20, a software rasterizer and
+a Win32 window rather than SDL3 + Vulkan, `tools/recompile.py` driving MSVC
+rather than CMake + Ninja. The two open questions that assumed Vulkan and SDL3
+vendoring are struck through and settled. A banner says outright that the
+section is the plan and points at `docs/ARCHITECTURE.md` for the tree, because
+a reader was otherwise taking a list of four choices that were never made for a
+description of what is there.
 `docs/TESTING.md`: what the 167 tests cover, which need capstone or MSVC or
 a disc, what MATCH means, and the pre-PR list. `docs/ARCHITECTURE.md`: the
 path a frame takes, and a table mapping each `runtime/*.c` to the kind of
