@@ -21,6 +21,12 @@ rest.
 Clean tree, everything pushed, CI green on all four jobs. Nothing is in
 flight, no branch is half-finished, and no workflow is running.
 
+Since 2026-09-21 the renderer applies the EFB copy's deflicker filter (PLAN
+C3), `SOA_POKE` can write guest memory mid-run (PLAN D2's half), and the field
+can be teleported to the developers' test stage. Five field maps had ever been
+loaded by anything here before that, all of them by the story or by losing a
+fight; the disc has 264.
+
 The port boots, plays the opening with dialogue, wins the first battle, and
 moves around the Valuan ship's hold with menus, a minimap and random
 encounters. It renders in a window at the game's 30 fps cap, plays music,
@@ -129,10 +135,19 @@ washed-out colour and a correct fix would have failed the suite.
 The plan's cheap, well-specified items are done. What is left is larger and
 needs more judgement about what the port is for.
 
-1. **Drive the game past the ship's hold.** This is the visible milestone and
-   everything else is easier once scripted play can reach further. `SOA_PAD_RECORD`
-   and `SOA_PAD_FILE` exist for exactly this: play it in the window, replay it
-   headlessly. Plan item D5.
+1. **Finish the teleport.** This replaced "drive the game past the hold" on
+   2026-09-22 and is much closer than walking ever was. The retail executable
+   carries a stage select; `SOA_POKE` reaches it with three words and a START,
+   and stage **131e** renders a live field map after a single black frame. The
+   other 251 warpable maps load their geometry and draw pure black because
+   `scptInitial` is gated on the committed map number. The next experiment is
+   written up in `docs/FINDINGS.md`: poke `0x80311AC0`/`0x80311AC8` to 131/'e'
+   on **every frame** across 15080-15200, since the whole transition takes one
+   frame and the one attempt so far started at 15150 and may have been late.
+   Walking is still unattempted and still needs no position feedback -- the
+   hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire on
+   contact with no pad read, so a stick script could do it if it knew where to
+   walk.
 2. **The decompilation grind** (Track F). Two SDK libraries are complete. The
    match oracle is now sound, so a match means what it says.
 3. **Speed** (plan C4), read against the profiler rather than against the

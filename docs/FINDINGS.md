@@ -947,3 +947,24 @@ One note for anyone reading the disassembly here: `tools/disasm.py` annotates
 `lwzu r0, 6848(r3)` *updates* r3 to 0x80311AC0, so the byte read is
 0x80311AC8. The annotator does not track update-form loads. Do the arithmetic
 rather than trusting the comment.
+
+
+**Spoofing the gate did not work, at this timing.** The obvious next move --
+load one map's geometry from the working copy and then set the committed words
+to 131/'e' so the gate lets `scptInitial` run -- was tried and failed. The
+pokes landed (`0x80311AC0 <- 00000083 (was 000000C8)` at frame 15150, so the
+picker really had committed 200 and the spoof really did replace it), the
+geometry really was `/field/a200a.mld`, and every frame from 15300 on is still
+pure black.
+
+The most likely reason is timing rather than the idea: the whole transition in
+the 131e run took **one** frame, 15100 black and 15200 already drawing, so
+state 7 runs somewhere in 15100-15200 and the first spoof at 15150 may simply
+have arrived after it. Narrowing that needs a poke every frame across
+15080-15200, which is well inside `SOA_POKE`'s 256-item budget. Not yet tried.
+
+What is *not* established is whether `scptInitial` would even do the right
+thing if the gate passed: it may read the map identity itself and try to run
+`me131e.sct` against `a200a` geometry. The experiment is still worth running,
+because either outcome is informative, but a success should be checked by
+looking at the frame rather than by the absence of black.
