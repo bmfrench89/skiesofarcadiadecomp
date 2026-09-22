@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 19 bindings in `config/hle.txt` |
-| Python tests | 488 in 33 files (61 need MSVC and skip without it) |
+| Python tests | 497 in 34 files (69 need MSVC and skip without it) |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
@@ -535,7 +535,18 @@ anyone who has not read this file. The map list still waits on D2 and D4.
 *Done:* one command runs the title scenario end to end, prints what it
 checked, and exits non-zero naming the invariant when one breaks.
 
-**D2. Name every disc read, and add a poke** — *hours.*
+**D2. Name every disc read, and add a poke** — *the poke is done; the disc-read list is not.*
+**`SOA_POKE=frame:addr=value` is built** (2026-09-21): one 32-bit word into
+guest memory at the end of the named frame, once, printing what was there
+before, parsed at startup so a mistyped item is refused while you are still
+looking. `tools/tests/test_poke.py` covers it with no disc. It immediately
+earned itself -- three pokes make the field load an arbitrary one of the 264
+maps (FINDINGS "Warping the field by poke"). Note the shape of the plumbing:
+`gx.c` calls a frame hook `main.c` installs, rather than calling into `main.c`,
+because the renderer links on its own and PLAN A1 counts that as a property
+worth keeping -- a direct call compiled cleanly and broke 29 tests at the link
+step, which the compile-only CI job cannot see.
+*Left:* the `[progress]` disc-read list and `SOA_DUMP`.
 "How far did this run get?" is answerable only by `SOA_TRACE` and
 hand-reading register dumps — the 21 `field/` files any saved run names come
 from `[trace] LoadStart` lines — and tracepoints are compiled in, so moving

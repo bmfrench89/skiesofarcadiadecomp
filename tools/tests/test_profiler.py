@@ -93,6 +93,7 @@ void gxr_set_output(const char* p) { (void)p; }
 void watch_init(void) {}
 void window_start(void) {}
 void gx_set_frame_limit(unsigned f) { (void)f; }
+void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)) { (void)fn; }
 unsigned gx_frame_count(void) { return 0; }
 void gxr_draw_every_frame(void) {}
 int irq_in_handler(void) { return 0; }

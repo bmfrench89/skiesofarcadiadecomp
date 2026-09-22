@@ -69,6 +69,22 @@ static unsigned g_frame_limit;
 void hle_report(void);
 void gxr_flush(void);
 
+/* Something to do at each frame boundary, if anyone has asked. main.c hangs
+ * SOA_POKE off this rather than gx.c calling into main.c, because the renderer
+ * links on its own -- render_check.py and the four gxr tests build gx.c, gxr.c,
+ * gxr_tev.c and png.c with two stubs and no main.c, and PLAN A1 counts those
+ * two stubs as a property worth keeping. A direct call compiled fine and broke
+ * 29 tests at the link step, which is the failure the compile-only CI job
+ * cannot see. */
+static void (*g_frame_hook)(CpuState*, unsigned);
+
+void gx_set_frame_hook(void (*fn)(CpuState*, unsigned));
+
+void gx_set_frame_hook(void (*fn)(CpuState*, unsigned))
+{
+    g_frame_hook = fn;
+}
+
 void gx_set_frame_limit(unsigned frames)
 {
     g_frame_limit = frames;
@@ -127,6 +143,9 @@ static const char* dump_dir(void)
 static void frame_end(CpuState* s)
 {
     char path[256];
+    /* Before the capture below, so a frame that is both poked and dumped is
+     * dumped with the poke already in it. */
+    if (g_frame_hook) g_frame_hook(s, g_frame);
     if (frame_wanted(g_frame)) {
         const char* dir = dump_dir();
         snprintf(path, sizeof path, "%s/%04u.regs", dir, g_frame);

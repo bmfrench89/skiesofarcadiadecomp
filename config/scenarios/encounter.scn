@@ -1,7 +1,8 @@
-# A random encounter in the hold, which needs nothing but walking for long
-# enough. The battle system entered from the field rather than from a script.
+# A random encounter in the field, which needs nothing but walking for long
+# enough -- in the right room. The battle system entered from the field
+# rather than from a script.
 name: encounter
-summary: Walk the ship's hold for twenty minutes of game time until a fight starts.
+summary: Walk a101b for twenty minutes of game time until a fight starts.
 frames: 30000
 pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2200:start,2240:a
 pad: 2400:start,2440:a,2600:start,2640:a,2800:start,2840:a,3000:start,3040:a
@@ -37,3 +38,11 @@ note:   dismisses the title, A at 1640 takes New Game, and the eight pairs that
 note:   follow walk the first dialogue boxes. From 3600 one A press every 150
 note:   frames advances everything after that. Every saved run in build/ that
 note:   got past the title begins with exactly these nineteen events.
+note: The room matters, and this file used to name the wrong one. Of the five
+note:   maps any saved run has loaded, only a101b has an encounter table --
+note:   extracted/field/ has a101b_ep.enp and a101b.ect and there is no .enp or
+note:   .ect for a201a, a200a, a090a or a299a. The opening carries the player
+note:   a299a -> a201a -> a200a -> a101b on its own, with no stick input, by
+note:   frame 14710, so the walking below happens in a101b and that is why a
+note:   fight can start at all. See FINDINGS "Where scripted play actually gets
+note:   to, and why it stops".

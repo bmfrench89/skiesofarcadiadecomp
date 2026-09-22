@@ -32,6 +32,7 @@ void gxr_set_output(const char* png_path);
 void watch_init(void);
 void window_start(void);
 void gx_set_frame_limit(unsigned frames);
+void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)); /* SOA_POKE; see gx.c */
 unsigned gx_frame_count(void);
 void gxr_draw_every_frame(void);
 int irq_in_handler(void);
@@ -680,6 +681,92 @@ static void mem_poke(CpuState* s)
     }
 }
 
+/* SOA_POKE=frame:addr=value[,frame:addr=value...] stores one 32-bit word into
+ * guest memory at the end of the named frame, once, and says what was there
+ * before. PLAN D2 asked for this and gave the reason: nothing in runtime/ could
+ * write guest memory while the game ran, so every question of the form "what
+ * does the game do if this variable says that" needed a recompile to answer.
+ *
+ * SOA_MEMPOKE above is a different thing and stays: it fires before the disc is
+ * read, to test the out-of-range tripwire. This one fires inside the run.
+ *
+ * Fired on the first frame at or after the target rather than on equality: a
+ * frame number can be skipped -- SOA_SNAP skips rasterizing, the game can
+ * present nothing across a long load -- and a poke that silently never
+ * happened would be read as the game ignoring it, which is the worst possible
+ * failure for a switch whose whole purpose is answering that question.
+ *
+ * Addresses are the game's, so the useful ones are worth naming here. The
+ * field's own map identity, verified against the three MEM1 images in
+ * build/fifo (all of which say a101b, which is what the trace says loaded):
+ *   0x80311AC4  map number, a word          -- 101
+ *   0x80311AC8  map letter, top byte        -- 0x62000000 is 'b'
+ *   0x80311AEC  field state, a word         -- 8 is the steady per-frame update
+ * `/field/a%03d%c.mld` is sprintf'd from the first two (0x801017A8). */
+#define POKE_MAX 64
+
+typedef struct {
+    unsigned frame;
+    uint32_t ea, value;
+    int done;
+} Poke;
+
+static Poke g_pokes[POKE_MAX];
+static int g_poke_n = -1; /* -1 until SOA_POKE has been read */
+
+static void poke_parse(void)
+{
+    const char* p = getenv("SOA_POKE");
+    g_poke_n = 0;
+    if (!p || !*p) return;
+    while (*p && g_poke_n < POKE_MAX) {
+        char* end;
+        unsigned frame;
+        uint32_t ea, value;
+        frame = (unsigned)strtoul(p, &end, 10);
+        if (end == p || *end != ':') break;
+        p = end + 1;
+        ea = (uint32_t)strtoul(p, &end, 0);
+        if (end == p || *end != '=') break;
+        p = end + 1;
+        value = (uint32_t)strtoul(p, &end, 0);
+        if (end == p) break;
+        g_pokes[g_poke_n].frame = frame;
+        g_pokes[g_poke_n].ea = ea;
+        g_pokes[g_poke_n].value = value;
+        g_poke_n++;
+        p = end + (*end == ',' ? 1 : 0);
+    }
+    /* Refusing quietly is what a switch must never do: a run driven by a
+     * mistyped poke looks exactly like a run whose poke did nothing. */
+    if (*p)
+        fprintf(stderr, "[poke] SOA_POKE: stopped at %.32s -- each item is frame:addr=value, "
+                        "decimal frame, 0x addresses and values accepted, up to %d items; "
+                        "%d parsed\n", p, POKE_MAX, g_poke_n);
+    else if (g_poke_n)
+        fprintf(stderr, "[poke] %d poke(s) armed\n", g_poke_n);
+}
+
+void poke_at_frame(CpuState* s, unsigned frame);
+
+void poke_at_frame(CpuState* s, unsigned frame)
+{
+    int i;
+    if (g_poke_n < 0) poke_parse();
+    for (i = 0; i < g_poke_n; i++) {
+        if (g_pokes[i].done || frame < g_pokes[i].frame) continue;
+        g_pokes[i].done = 1;
+        if (is_mmio(g_pokes[i].ea)) {
+            fprintf(stderr, "[poke] frame %u: %08X is in the hardware window, not memory; skipped\n",
+                    frame, g_pokes[i].ea);
+            continue;
+        }
+        fprintf(stderr, "[poke] frame %u: %08X <- %08X (was %08X)\n", frame, g_pokes[i].ea,
+                g_pokes[i].value, mem_r32(s, g_pokes[i].ea));
+        mem_w32(s, g_pokes[i].ea, g_pokes[i].value);
+    }
+}
+
 #define ARENA_HI 0x81700000u
 #define GEKKO_PVR 0x00083214u
 
@@ -865,6 +952,12 @@ int main(int argc, char** argv)
     s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
     mem_poke(&s);
+    /* Read SOA_POKE here rather than at the first frame that needs it, so a
+     * mistyped item is refused while the person who typed it is still looking,
+     * instead of sixteen thousand frames later in a run that appears to have
+     * ignored them. The pokes themselves still fire at their own frames. */
+    poke_parse();
+    gx_set_frame_hook(poke_at_frame);
 
     snprintf(path, sizeof path, "%s/sys/main.dol", dir);
     dol = slurp(path, &dol_size);

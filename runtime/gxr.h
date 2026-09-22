@@ -32,6 +32,7 @@ const uint32_t* gx_bp_regs(void);
  * 0000.png and not NNNN.png, and SOA_PAD="N:a" needs SOA_FRAMES>N to fire. */
 unsigned gx_frame_count(void);
 void gx_set_frame_limit(unsigned frames);
+void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)); /* SOA_POKE; see gx.c */
 
 /* Pipeline (gxr.c) */
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);

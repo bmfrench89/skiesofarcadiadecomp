@@ -654,3 +654,122 @@ and the Alfonso scene reads "We've finally found her...".
   the console. The divergence that remained at the battle transition (a
   package entry whose data pointer read as `0xE0C0C2E7`, the same value in
   every run) was the ARAM DMA direction bit described above.
+
+
+## 11. ▲ Where scripted play actually gets to, and why it stops
+
+Measured 2026-09-21 from the two saved traced runs and the extracted disc, for
+PLAN D5. Everything here is a count from a log or a directory listing.
+
+**The opening moves you between four maps on its own.** Both saved runs load
+exactly the same field maps at almost the same frames, and `boot_field.log`
+had no stick input at all before frame 15000 — its whole script is START nine
+times and A every 150 frames:
+
+| frame (field / monkey) | map |
+|---|---|
+| 0 / 0 | `a299a` |
+| 2250 / 2250 | `a201a` |
+| 12910 / 12160 | `a201a` again |
+| 13210 / 12460 | `a200a` |
+| 14710 / 14010 | `a101b` |
+
+So `a200a` and `a101b` are reached by the story, not by walking, and the room
+the player is finally left standing in is **`a101b`** — not `a201a`, which is
+what the scenario files' prose calls "the hold". That distinction turns out to
+matter.
+
+**The hold cannot produce a random encounter.** Of the five maps any run has
+ever loaded, only `a101b` has an encounter table: `extracted/field/` holds
+`a101b_ep.enp` and `a101b.ect`, and there is no `.enp` or `.ect` for `a201a`,
+`a200a`, `a090a` or `a299a`. `encounter.scn` says it will "walk the ship's
+hold for twenty minutes of game time until a fight starts"; if that ever works
+it is because the run has already been carried into `a101b`, not because of
+the walking. The four random encounters in `boot_monkey.log` (frames 23860,
+37650, 45160 and 50860) all happen after `a101b` loads at 14010.
+
+**No saved run has ever walked anywhere.** This is the finding that matters,
+and it is easy to get wrong from the logs alone. `boot_monkey.log` does reach
+one map nothing else does — `a090a` at frame 52400 — but it is not a place the
+player walked to: the monkey scripts press **only START, B, Z, X, Y on five
+periods and never touch the stick** (`monkey.scn`'s own event list), the map
+loads 1,540 frames after a random encounter starts at 50860, and `a299a` and
+`a201a` follow it, which is the game over and restart `monkey.scn` claims. So
+`a090a` is the game-over screen. `boot_field.log` is the only run that
+scripted the stick at all, and it loaded nothing new after frame 14710: 40,500
+further frames, 355 A presses, zero loads.
+
+Every one of the five maps any run has reached was reached by the story or by
+losing a fight. The disc holds **264** root field maps (`aNNNx.mld`), 51 `.enp`
+and 35 `.ect`. Navigation is not "hard" in this port; it is **unattempted**,
+and the first honest attempt at it should expect to fail.
+
+The lesson for D5 is that the ceiling is not the input format — `SOA_PAD`
+composes diagonals with `+`, and `SOA_PAD_FILE` takes hand-written analog
+lines — it is that nothing tells the script where it is. A run's own trace
+already says when it arrives somewhere (`LoadStart "/field/aNNNx.mld"`), which
+is enough to score an attempt after the fact, but not to steer one.
+
+
+**The battle command wheel, read off the screen.** PLAN D5 wants a battle
+using every command and did not say what the commands are. They were found by
+parking the game on an open menu and rotating it: the menu waits for input
+indefinitely, so a script that stops pressing A leaves the wheel up for as
+long as you like, and `SOA_SNAP` then photographs each label. All seven names
+are confirmed from rendered frames of the first battle (Vyse, Lv 1, Mp 3/3,
+round 2 of 8):
+
+**Attack, Magic, Focus, S-move, Guard, Run, Item.**
+
+The d-pad rotates it -- `right` and `left`, not the stick -- and A commits.
+Measured transitions, each one a label read from a PNG:
+
+| from | input | to |
+|---|---|---|
+| Attack | `right` | Magic |
+| Magic | `right` | Focus |
+| Attack | `left` | Item |
+| Item | `left` | Run |
+| Run | `right` | Guard |
+| Guard | `right` | S-move |
+
+Committing S-move with A put Vyse's S-Move name box on screen, so a
+non-default command really does execute from a script.
+
+What is *not* established is the ring's order. Nine further `right` presses
+after Focus, and four further `left` presses after Run, changed nothing, which
+a simple circular list does not explain -- the wheel may refuse to wrap, or
+those presses may have been dropped while the game was busy, and the frames
+cannot tell the two apart. Anyone scripting this should drive it by the table
+above, one confirmed step at a time, rather than by an assumed ring.
+
+
+**Warping the field by poke: the load fires, the frame does not come back.**
+With `SOA_POKE` (PLAN D2) the field's map identity can be changed mid-run, and
+the game really does act on it. Poked at frame 16000 of a run standing in
+`a101b`:
+
+```
+[poke] frame 16000: 80311AC4 <- 000000C8 (was 00000065)   map number 101 -> 200
+[poke] frame 16000: 80311AC8 <- 61000000 (was 62000000)   map letter 'b' -> 'a'
+[poke] frame 16000: 80311AEC <- 00000003 (was 00000008)   field state 8 -> 3
+```
+
+and the trace then shows a sixth map load, `/field/a200a.mld`, which no run had
+ever produced from that point. So the loader does read those two words, and
+three words of poke are enough to make this game load an arbitrary one of its
+264 field maps.
+
+**It is not a working teleport yet.** Frames 15600-16000 are the room; from
+16200 to the end of the run every frame is black. The map loaded and nothing
+rendered, which is what forcing state 3 should be expected to do: state 3 is
+the *load* step of the 16-state field machine, and whatever the states around
+it normally arrange -- where the player stands, the camera, the return to the
+steady state 8 -- did not happen. The next thing to try is state **1**, the
+warp resolver (`fn_800FFB24`, which checks `/field/meNNNx.sct` and
+`/field/aNNNx.mld` for existence before committing), so the game performs its
+own warp instead of having the load forced on it. Untried at the time of
+writing.
+
+Worth knowing either way: a black frame after a poked load is not evidence
+that the map is broken. It is evidence that this route into it is.

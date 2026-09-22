@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-488 passed in 49.87s
+497 passed in 59.13s
 ```
 
-488 tests in 33 files, none of which reads the disc. They cover the Python
+497 tests in 34 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -60,6 +60,7 @@ its own and run it, some of the C as well:
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
 | `test_toolchain_inputs.py` | 11 | what a fresh checkout can check and with which compiler; every `src/**/*.c` is in `units.txt` |
 | `test_gxr_copy_filter.py` | 9 | what the EFB copy's vertical filter does to a pixel, including that the SDK's filter-off weights are the exact identity |
+| `test_poke.py` | 9 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
@@ -83,12 +84,12 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `488 passed` |
-| no capstone — **what CI installs** | `469 passed, 1 skipped` |
-| no MSVC | `427 passed, 61 skipped` |
-| neither — **the Ubuntu CI leg** | `408 passed, 62 skipped` |
+| everything (MSVC + capstone) | `497 passed` |
+| no capstone — **what CI installs** | `478 passed, 1 skipped` |
+| no MSVC | `428 passed, 69 skipped` |
+| neither — **the Ubuntu CI leg** | `409 passed, 70 skipped` |
 
-Two things follow. The 61 MSVC-gated tests are the ones that build a runtime
+Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -929,7 +930,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 61 of the 488 skip without a C compiler; they build one runtime file and run it.
+² 69 of the 497 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -940,8 +941,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 408 passed, 62 skipped |
-| **Tests** | windows | the same three — 469 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 409 passed, 70 skipped |
+| **Tests** | windows | the same three — 478 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

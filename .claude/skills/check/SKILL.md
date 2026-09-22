@@ -26,7 +26,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5b | `python tools/citest/dc_check.py` | 2.5 s | MSVC |
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 48.6 s | nothing (61 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 48.6 s | nothing (69 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -253,17 +253,17 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-488 passed in 49.87s
+497 passed in 59.13s
 ```
 
-488 tests in 33 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `469 passed, 1 skipped` without
+497 tests in 34 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `478 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `427 passed, 61 skipped` without MSVC.
+module-level skip), `428 passed, 69 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 61 MSVC-gated tests build one `runtime/*.c` and run
+than starting to pass. The 69 MSVC-gated tests build one `runtime/*.c` and run
 it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`
