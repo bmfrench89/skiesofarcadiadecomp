@@ -914,3 +914,36 @@ Also settled while reading: **0x80311AC0 is the committed map number and
 again on commit, and state 7 reads AC0. Earlier experiments here poked only
 AC4, which is why the load and the setup could disagree about which map they
 were in.
+
+
+**131e renders, and that is a working teleport.** The prediction from the
+state-7 gate held. Warping to stage 131 letter 'e' -- the one map that path
+calls `scptInitial` for -- gives a live field:
+
+| | frame 15000 | 15100 | 15200 onward |
+|---|---|---|---|
+| what is on screen | the old room | one black frame | the new map |
+| max channel | 174 | 0 | 161 |
+| non-black pixels | 307,200 | 0 | 307,200 |
+| distinct colours | 47,899 | 1 | 21,000-26,600 |
+
+`/field/a131e.mld` loads, the machine returns to state 8, and from 15200 the
+frames show the player standing in a room with the minimap drawn and the
+character animating between snapshots. One black frame is the whole
+transition. This is the first time anything in this project has reached a
+field map by any means other than the story carrying it there.
+
+The camera sits jammed against the player, which is what a test stage whose
+script never places a camera should look like, and is cosmetic.
+
+So the picker is a *working* teleport to one map and a geometry loader for the
+other 251. The thing standing between it and all of them is `scptInitial`
+being gated on the committed map number, and the gate reads 0x80311AC0 and
+0x80311AC8 while the filename was formatted earlier from 0x80311AC4 -- so the
+two can be made to disagree on purpose.
+
+One note for anyone reading the disassembly here: `tools/disasm.py` annotates
+`lbz r0, 8(r3)` at 0x801019C0 as `@ 0x80310008`, which is wrong. The preceding
+`lwzu r0, 6848(r3)` *updates* r3 to 0x80311AC0, so the byte read is
+0x80311AC8. The annotator does not track update-form loads. Do the arithmetic
+rather than trusting the comment.

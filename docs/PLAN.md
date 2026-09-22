@@ -636,7 +636,18 @@ realistic delays is what removed the memFree errors. Not before D3.
 *Done:* two headless runs of one scenario give byte-identical retrace, DI,
 PE, draw, vertex, triangle, pixel and copy counters, under load as well.
 
-**D5. Battles, then the ship and the overworld** — *a day, then week-plus.*
+**D5. Battles, then the ship and the overworld** — *a day, then week-plus; a route to the maps now exists.*
+**The teleport works for one map** (2026-09-22). The retail executable carries
+a stage select, and `SOA_POKE` reaches it: three words and a START load any of
+600 stage slots, and stage **131e** -- the developers' own test map, the only
+one the path starts a script for -- renders a live field with the player and
+the minimap after a single black frame. The other 251 warpable maps load their
+geometry and draw pure black, because `scptInitial` is gated on the committed
+map number at 0x80311AC0. See FINDINGS "There is a stage select left in the
+retail executable" and the three entries after it.
+**The seven battle commands are known** and measured off the screen: Attack,
+Magic, Focus, S-move, Guard, Run, Item, with the d-pad transitions that reach
+them. What is left of the battle half is scripting them, not discovering them.
 Roadmap 7.2 (`[~]`) and 7.3 (`[ ]`). Battles first, cheap once D3 exists:
 one encounter using magic, items and Focus with the A3 warnings,
 `SOA_STRICT` and `SOA_WAV` on — `/beff` holds 546 effect packages and three
