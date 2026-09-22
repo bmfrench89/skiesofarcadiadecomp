@@ -773,3 +773,92 @@ writing.
 
 Worth knowing either way: a black frame after a poked load is not evidence
 that the map is broken. It is evidence that this route into it is.
+
+
+**What the warp resolver actually requires, and how many maps pass it.**
+`fn_800FFB24` reads exactly the two words the poke writes -- `lwz` for the map
+number at 0x80311AC4 and `lbz` plus `extsb` for the *byte* at 0x80311AC8, which
+is why the letter has to go in the top byte of that word -- formats two paths
+through `fn_8025CB24` with the format strings at 0x802B2364 and 0x802B2374, and
+asks `fn_801CC62C` (DVDConvertPathToEntrynum) whether each exists. It returns
+success only if **both** `/field/meNNNx.sct` and `/field/aNNNx.mld` are on the
+disc, and `fn_80101828`'s state-1 arm advances to state 3 only on that success,
+so a warp to a map missing either file leaves the field parked in state 1.
+
+Counted against the extracted disc: 264 `aNNNx.mld`, 254 `meNNNx.sct`, and
+**252 maps have both** -- the set a warp can reach. Twelve maps have geometry
+and no script (`034j`, `102a`, `102b`, `102c`, `102e`, `102v`, `102z`, `199f`,
+`221a`, `300d`, `355a`, `398a`) and two have a script and no geometry (`121e`,
+`561a`). Sixty-six of the 252 are numbered 500 and above, which is the
+sky/overworld group the resolver special-cases at 0x800FFBE0.
+
+Against five maps ever loaded by any run, 252 is the size of the prize.
+
+
+**There is a stage select left in the retail executable.** This is the most
+useful thing found while chasing the warp, and it is in `fn_800FFB24` -- the
+same function the field's state-2 arm calls to resolve a warp. The function has
+two halves and a gate between them:
+
+```
+800FFB44  lwz   r0, -29092(r13)        the index, r13 = 0x8034E720 -> 0x8034757C
+800FFB4C  lwzx  r3, 0x80311A60, r0*4   an object; index is 0 in every capture,
+                                       so the object is 0x80311A44
+800FFB50  lwz   r0, 8(r3)              its flags word, 0x80311A4C
+800FFB54  rlwinm r0, r0, 0, 19, 19     bit 12
+800FFB58  bc    12,2 -> 800FFDC8       CLEAR -> the second half
+```
+
+Bit 12 set is the normal warp: format `/field/meNNNx.sct` and
+`/field/aNNNx.mld`, ask the disc whether both exist, return success. Bit 12
+clear is a **stage picker**. From 0x800FFDC8 it reads pad bits out of the
+field's own pad snapshot at `0x80311A14 + index*12` and applies them to the map
+number at 0x80311AC4: +100, -100, +5, -5, +1, -1, wrapping the number into
+0..599 (`+600` if it goes negative, `-599` if it passes 599) and clamping the
+letter at 0x80311AC8 into `'a'`..`'z'` with `'a'` as the default. It prints
+through the format string **`"Stage No: %03d%c"` at 0x802B2398** -- one hit in
+the whole image, in the same string cluster as the two path formats the warp
+half uses -- and on commit returns **16** at 0x80100018, which is nonzero, so
+the state-2 arm advances to state 3 and the stage loads.
+
+`r13 = 0x8034E720`, from the translated code (`gpr[13] = 0x80340000 | 0xE720`,
+`gen/chunk_000.c`). That is worth writing down once: this codebase addresses
+most of its globals off r13, and every `-N(r13)` in a disassembly is
+`0x8034E720 - N`.
+
+The gate's flags word reads **0** in all three MEM1 captures, so bit 12 is
+already clear in the steady field state. The reason normal play never sees the
+picker is therefore not the flag -- it is that state 2 is only entered when
+something requests a warp, and whatever requests one sets the bit first.
+
+Which makes the route in one line: get the field into state 2 without setting
+that bit. `SOA_POKE` can do exactly that.
+
+
+**The battle menu in the code, and where it disagrees with the screen.** The
+character command menu is `fn_8007A890`, an 8-state machine whose state byte is
+at task+25 with a jump table at 0x802DF83C, opened by `fn_8007C600(5)` and
+registered in the sbss global 0x80347308. Its widget is a 136-byte heap block
+at *(task+36): +1 is the command cursor, +2 an availability mask, +3 the row
+cursor. `fn_80079F74` builds the mask: bit 0 is code 9, Items, set only when
+the party holds an item whose record at `0x802C7C34 + (id-240)*36` has bit 0x02
+at byte +17; bit 1 is code 10, Attack, always set; bits 2 and 3 are codes 11
+and 12, whose lists live at 0x8030BC88 and 0x8030BDC8. RIGHT (0x0002) and LEFT
+(0x0001) come from the auto-repeat-filtered word at 0x8030A6E0 and move the
+cursor, wrapping and skipping unavailable entries; A (0x0100) and B (0x0200)
+come from the raw edge word at 0x8030A6DC. Target selection is `fn_80079C5C`,
+which starts on the actor's *remembered* target at byte +256 of
+*(0x80309DE4 + slot*4) -- which is why `battle.scn` wins the first fight with A
+presses and no direction presses at all.
+
+**The disagreement, left standing on purpose.** That reading says bits 4 and 5
+are never set, so there are exactly four selectable entries. The screen showed
+**seven** distinct labels reachable with LEFT and RIGHT in the first battle:
+Attack, Magic, Focus, S-move, Guard, Run, Item. Both observations are recorded
+because neither has been reconciled: the code may describe a different one of
+the two battle menus in the executable, the labels may include entries the
+cursor passes through without being able to commit, or the availability mask
+may differ from what the static read of `fn_80079F74` suggests. What must not
+happen is picking whichever is more convenient. The empirical table above is
+what a script should be driven by, because it was measured on the build that
+exists; the addresses here are where to look when someone wants to know why.

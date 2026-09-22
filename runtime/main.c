@@ -703,7 +703,9 @@ static void mem_poke(CpuState* s)
  *   0x80311AC8  map letter, top byte        -- 0x62000000 is 'b'
  *   0x80311AEC  field state, a word         -- 8 is the steady per-frame update
  * `/field/a%03d%c.mld` is sprintf'd from the first two (0x801017A8). */
-#define POKE_MAX 64
+/* Three words warp the field, so the limit is really "how many maps can one
+ * run visit": 256 items is 85 of them. */
+#define POKE_MAX 256
 
 typedef struct {
     unsigned frame;
