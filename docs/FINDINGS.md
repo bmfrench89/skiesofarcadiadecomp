@@ -862,3 +862,55 @@ may differ from what the static read of `fn_80079F74` suggests. What must not
 happen is picking whichever is more convenient. The empirical table above is
 what a script should be driven by, because it was measured on the build that
 exists; the addresses here are where to look when someone wants to know why.
+
+
+**The stage select fires, loads any stage, and draws nothing.** Poking the
+field to state 2 while bit 12 is clear enters the picker, and START commits it:
+
+```
+[poke] frame 15000: 80311AC4 <- 000000C8 (was 00000065)   map number -> 200
+[poke] frame 15000: 80311AC8 <- 61000000 (was 62000000)   letter -> 'a'
+[poke] frame 15000: 80311AEC <- 00000002 (was 00000008)   field state -> 2
+```
+
+and the trace shows `/field/a200a.mld` loading. Three pokes and a START reach
+a map the game had no reason to go to.
+
+**The state machine is not the problem.** Reading the state word back at ten
+frames across the rest of the run -- every `SOA_POKE` reports the value it
+replaced, which makes it a read primitive as well as a write one -- it is
+**8 at frame 15200 and at every frame after**. The chain 2 -> select -> 3
+(load) -> 4, 5, 6, 7 -> 8 completes in under 200 frames and parks in the
+steady rendering state, with the map loaded. That kills the theory that
+forcing a state strands the machine in one of the three wait states
+(state 4 spins on `fn_80090D78`, state 5 on `fn_80109D74` twice and
+`fn_800C7DD4`, state 6 on `fn_800C7DFC`).
+
+**What is actually wrong is that the scene is empty.** Every frame from the
+commit onward is *pure* black: min 0, max 0, one distinct colour, zero
+non-black pixels out of 307,200, measured on frames 15100, 16000 and 17600.
+Not a dark room -- nothing is submitted at all. The map file is read and no
+geometry, camera or player exists to draw.
+
+The likely reason is one line in state 7, and it is worth quoting because it
+names the developers' own test stage:
+
+```
+801019B8  cmpi cr0, r0, 131        ; 0x80311AC0, the COMMITTED map number
+801019BC  bc 4,2 -> 801019E8       ; not 131 -> skip
+801019C4  cmpi cr0, r0, 101        ; 0x80310008, 'e'
+801019C8  bc 4,2 -> 801019E8       ; not 'e' -> skip
+801019CC  bl -> 802126C8           scptInitial
+```
+
+`scptInitial` -- what starts a map's script, and therefore what places the
+camera, the player and the objects -- is called from this path **only for
+stage 131e**. Every other stage reaches state 8 with its geometry loaded and
+its script never started, which is exactly a black screen. So the picker was
+built to be driven to one test map, and 131e is the stage to try first.
+
+Also settled while reading: **0x80311AC0 is the committed map number and
+0x80311AC4 the working copy.** The picker copies AC4 into AC0 on entry and
+again on commit, and state 7 reads AC0. Earlier experiments here poked only
+AC4, which is why the load and the setup could disagree about which map they
+were in.
