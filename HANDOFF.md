@@ -50,7 +50,7 @@ compared. Seven of the twenty-one units are fully verified; fourteen are not.
 That is the oracle being honest rather than a defect, but do not quote the
 round number without it.
 
-## Seven things the history says that are wrong
+## Eight things the history says that are wrong
 
 Commit messages and older doc revisions are a record of what was believed at
 the time. These were each corrected later, and re-deriving any of them would
@@ -101,7 +101,18 @@ cost you a day.
    register layout alone lands you back on seven rows, which is how it was
    written the first time.
 
-The pattern behind all seven: a count or a description was read instead of the
+8. **"A scripted run left the ship's hold and found a new map."** Nothing in
+   this project has ever walked anywhere. Both traced runs follow the same
+   story-driven chain `a299a` -> `a201a` -> `a200a` -> `a101b`, and
+   `boot_field.log` had no stick input at all at those frames. The one map
+   nothing else reaches, `a090a`, loads 1,540 frames after a random encounter
+   and is followed by the title and a restart: it is the game-over screen, and
+   the monkey scripts that reached it press only START, B, Z, X and Y and never
+   touch the stick. Related: `encounter.scn` used to promise a random encounter
+   from walking the hold, which is the one room of the five with no encounter
+   table -- only `a101b` has a `.enp` and an `.ect`.
+
+The pattern behind all eight: a count or a description was read instead of the
 thing itself. Every correction came from disassembling, tracing, or rendering
 the frame and looking at it.
 
@@ -118,6 +129,76 @@ the frame and looking at it.
   help and a faster machine gets further.
 - Fixing a crash by changing the memory allocation. It hid it. For a
   layout-sensitive bug a run completing proves nothing.
+- Forcing the field's state machine to a state you want. **The field only
+  renders in state 8.** Poking the state word to 3 loads the map and every
+  frame after is pure black; poking it to 1 is black too, with no load at all.
+  Any route to a new map has to end back at 8, and the measured way there is
+  the stage select, not a forced state.
+- Blaming that black screen on the state machine being stranded. It is not:
+  the state word reads 8 again within 200 frames of a forced warp and stays
+  there. The scene is simply empty -- max channel 0, one distinct colour, zero
+  non-black pixels of 307,200. Measure the frame before theorising about the
+  machine.
+- Hijacking the story's own warp by overwriting the destination before its
+  frame-14710 load. Tried twice, at 50-frame and at 1-frame spacing over
+  different windows. The map name is formatted before any window a frame-end
+  poke can reach.
+- Spoofing the script gate by setting the committed map words to 131/'e' after
+  another map's geometry had loaded, at 50-frame spacing from frame 15150. The
+  pokes landed and the screen stayed black -- but the whole transition takes
+  *one* frame, so this is more likely a timing miss than a dead idea. The
+  every-frame version is the next thing to try and has not been run.
+
+## How to drive the game, which is most of what was missing
+
+`SOA_PAD` scripts are frame-keyed (`frame:buttons[@repeat][#hold]`, `+` for
+chords, so all eight stick directions are expressible). Two things about them
+cost this session runs, and both are cheap to know:
+
+- **A menu waits for input forever.** Stop pressing A and the battle command
+  wheel stays open indefinitely, which turns a blind script into an
+  experiment: park it there, press one direction, photograph the label with
+  `SOA_SNAP`, repeat. That is how the seven commands below were read.
+- **Do not change `SOA_SPEED` and reuse a frame-keyed script** -- and do not
+  blame it for a failure without isolating it either. A probe that stalled here
+  was fully explained by its A presses running out mid-dialogue, with speed a
+  confound that never got tested.
+
+**The battle command wheel** has seven labels, every one read off a rendered
+frame of the first battle: **Attack, Magic, Focus, S-move, Guard, Run, Item.**
+The d-pad rotates it, not the stick, and A commits; committing S-move put
+Vyse's S-Move name box on screen, so a non-default command does execute from a
+script. Measured transitions: Attack -right-> Magic -right-> Focus; Attack
+-left-> Item -left-> Run; Run -right-> Guard -right-> S-move. The ring's order
+is **not** established -- further presses past Focus and past Run changed
+nothing, and the frames cannot tell a refusal to wrap from a dropped press, so
+drive it one confirmed step at a time. `docs/FINDINGS.md` also records the
+menu's code (`fn_8007A890`, its mask in `fn_80079F74`, targets in
+`fn_80079C5C`), which says *four* selectable entries and so disagrees with the
+screen. Both are written down; neither has been reconciled.
+
+**`SOA_POKE` is a read primitive as well as a write one.** Every poke prints
+the value it replaced, so poking a word with its own value traces it across a
+run. That is how the field state was shown to return to 8, and it needs no
+tracepoint and no recompile -- which matters, because tracepoints are compiled
+in and cost a full retranslation.
+
+**The teleport**, which is the live lead. It needs a run that has already
+reached the field, which any scenario's nineteen-event preamble plus an A
+every 150 frames does by about frame 14710:
+
+```
+SOA_POKE=15000:0x80311AC4=131,15000:0x80311AC8=0x65000000,15000:0x80311AEC=2
+```
+
+and a START a hundred frames later. `0x80311AEC` is the field state,
+`0x80311AC4` the working map number, `0x80311AC8` the map letter in the **top
+byte**, and `0x80311AC0` the *committed* number -- which is the one the setup
+code reads, and the distinction cost several runs. Stage **131e** renders a
+live map after a single black frame. The other 251 warpable maps load their
+geometry and draw black because `scptInitial` is gated on the committed number
+being 131 and the letter being 'e'. `r13 = 0x8034E720`, so every `-N(r13)` in a
+disassembly is `0x8034E720 - N`.
 
 ## If you change the renderer
 
@@ -179,3 +260,20 @@ each overturning the last, and what is left is cosmetic and well documented.
 - The game's own decompiled code lives in `src/soa/`, never `src/game/`: both
   the ignore rules and the guard treat any path segment named `game` as game
   data, and several units silently went uncommitted because of it.
+- **Most tracked files here are CRLF and `sed -i` rewrites them to LF.** There
+  is no `.gitattributes` and `core.autocrlf` is false, so git stores the
+  change: a six-hunk edit to `docs/PLAN.md` committed as 896 insertions and 896
+  deletions, which destroys the diff and `git blame`. Check
+  `git diff --numstat` after any bulk documentation edit -- if the line count
+  equals the file length, that is what happened. `tools/guard.py` is one of the
+  few LF files, so do not assume either way.
+- **The renderer links on its own, and that is load-bearing.**
+  `tools/citest/render_check.py` and four `test_gxr_*` modules build `gx.c`,
+  `gxr.c`, `gxr_tev.c` and `png.c` with two stubs and no `main.c`. A call added
+  from `gx.c` into `main.c` compiles cleanly and breaks 29 tests at the link
+  step, which the compile-only CI job cannot see. Hang new per-frame work off
+  `gx_set_frame_hook` instead.
+- **`tools/disasm.py` does not track update-form loads in its annotations.** At
+  0x801019C0 it labels `lbz r0, 8(r3)` as `@ 0x80310008`, but the preceding
+  `lwzu` had already moved r3 to 0x80311AC0, so the byte is at 0x80311AC8. Do
+  the arithmetic rather than trusting the comment.
