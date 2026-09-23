@@ -661,8 +661,15 @@ stage-select route found first (state 2 and a START) is the resolver's debug
 path: it skips the teardown, and its black screens were never the gate the
 entry here used to blame. See FINDINGS "The name-driven warp works" and the
 entries before it; `HANDOFF.md` has the command. What is left of D5's reach
-is using it: a census of which of the 252 warpable maps render, and what the
+is using it: a census of which of the 255 warpable maps render, and what the
 runtime does with code no run has executed.
+**Reached by 2026-09-23**, each with its frames opened (FINDINGS section 11):
+118 maps in three censuses with no runtime fault; the developers' part select
+(`ME355A.SCT`) to story parts B, H and L; the world map; a ship battle; a
+field battle fought, won and returned from; the ending to "the End"; and a
+save from the field loaded back through Continue (B4). What is left of D5 is
+the battles the plan asked for -- magic, items and Focus, in a story state
+where the game allows the fight -- and the ship and world-map controls.
 **The seven battle commands are known** and measured off the screen: Attack,
 Magic, Focus, S-move, Guard, Run, Item, with the d-pad transitions that reach
 them. What is left of the battle half is scripting them, not discovering them.

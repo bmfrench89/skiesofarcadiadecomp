@@ -18,12 +18,29 @@ rest.
 
 ## State
 
-Everything is on `main` and pushed as of 2026-09-23: the name-driven teleport
-and its census, the first ship battle, 36 corrections from an audit, and the
-tests for them. Every pre-push check passed locally before the push -- guard
-and `guard.py --history`, `ruff check`, `ruff format --check`, 605 tests,
-`decomp.py`, the self test, `title --check` 4/4, and the replay 23/23 at four
-thread counts.
+`main` is pushed and CI is green. On 2026-09-22/23 the port went from the
+opening to reaching the whole game by jumping, and every step is in
+`docs/FINDINGS.md` section 11 with the frames that were opened to check it:
+
+- **Warp by name to any of the 255 warpable maps** (the game's own warp, five
+  pokes). Three censuses loaded 118 maps with no runtime fault.
+- **Save and load** (PLAN B4, done): one word opens the game's save menu from
+  any field; Continue reads it back. A run that loads a save reaches the field
+  by frame 2800 instead of 14710.
+- **The developers' part select** (`ME355A.SCT`) jumps to story parts B-L
+  with the game's own flags and party; saves made at parts H and L start a run
+  mid-story and near the end.
+- **The ending** plays to "the End" with one poke and returns to the title.
+- **A battle** can be forced, is fought and won, and returns -- faded in only
+  where the story allows a battle, which is the game's rule, not a defect.
+- `tools/sct.py` disassembles the field scripts that decide all of the above;
+  `docs/research/` holds four read-only investigations it grew out of.
+
+Nothing found so far would stop a person playing. Two things that looked like
+it -- a black field after a battle and a trap on `a116c` -- were both the test
+recipe putting the game in a state retail cannot reach, and are written up as
+such. 610 tests, the guard over the tree and over history, ruff, `decomp.py`,
+the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
 found that commits of 2026-09-15/16 added files under a directory the guard
@@ -37,11 +54,9 @@ commit ever held. Two stale git worktrees are left on the owner's machine
 (`git worktree list`); removing one was refused by a permission prompt.
 
 Since 2026-09-21 the renderer applies the EFB copy's deflicker filter (PLAN
-C3), `SOA_POKE` can write guest memory mid-run (PLAN D2's half), and the field
-can be warped to a field map by name, the way the game does it. Five field maps had ever been
-loaded by anything here before that, all of them by the story or by losing a
-fight; the saved logs now name 42 of the disc's 264, after a census that
-warped to 36 in one run without a runtime fault (FINDINGS, end of section 11).
+C3) and `SOA_POKE` can write guest memory mid-run (PLAN D2's half). Before
+2026-09-22 five field maps had ever been loaded by anything here, all of them by
+the story or by losing a fight.
 
 The port boots, plays the opening with dialogue, wins the first battle, and
 is carried by the story through the Valuan ship's hold into `a101b`, where
