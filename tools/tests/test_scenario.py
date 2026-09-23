@@ -118,8 +118,43 @@ def test_pad_parses_presses_repeats_holds_and_the_stick():
     assert events[3].every == 900 and events[3].hold == 300
 
 
-def test_pad_ignores_stray_commas_and_whitespace():
-    assert len(scenario.parse_pad(" 100:a , 200:b ,")) == 2
+def test_pad_takes_one_trailing_comma_because_si_does():
+    """script_init() steps over the comma after each event and then finds the
+    end of the string, so "100:a,200:b," is two events there too."""
+    assert len(scenario.parse_pad("100:a,200:b,")) == 2
+    assert scenario.parse_pad("") == []  # no script: si.c presses nothing and says nothing
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "5:start ,9:a",  # si.c looks up a button called "start ", finds none, presses nothing
+        "5:start, 9:a",
+        " 5:start",
+        "5: start",
+        "5:a\t+b",
+        "5:start ",  # at the very end of the script it is still inside the last item
+        "5:a#10 ",  # and after a number si.c stops at it, and says it did not understand
+        "5:a\n",
+    ],
+)
+def test_pad_refuses_whitespace_because_si_does_not_strip_it(script):
+    with pytest.raises(ScenarioError, match="whitespace"):
+        scenario.parse_pad(script)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "1700:start,,1800:a",  # si.c stops at the empty item: 1800:a never happens
+        ",1700:start",  # and here it stops before the first, so nothing is pressed
+        "1700:start,,",  # two trailing commas are one trailing comma and an empty item
+        ",",
+    ],
+)
+def test_pad_refuses_an_empty_item_because_si_stops_there(script):
+    with pytest.raises(ScenarioError, match="empty item"):
+        scenario.parse_pad(script)
 
 
 def test_pad_takes_a_hold_longer_than_its_repeat_and_says_what_it_means():
@@ -138,6 +173,11 @@ def test_pad_takes_a_hold_longer_than_its_repeat_and_says_what_it_means():
         "1600",  # no colon: si.c stops here, the rest of the script ignored
         "1600:",  # no buttons at all
         "abc:a",  # frame is not a number, so si.c stops here too
+        "1600:a#",  # a hold with no number, and a repeat with none
+        "1600:a@",
+        "1600:a#x",
+        "١٦٠٠:a",  # digits to Python's \d and int(), not to strtoul
+        "1600:a#١",
     ],
 )
 def test_pad_refuses_what_si_would_silently_drop(script):
@@ -198,6 +238,10 @@ def test_rendering_means_what_atoi_means(tmp_path):
         ("env: SOA_SNAP=50", "env: SOA_SNAP"),
         ("summary: Two presses and a repeat.", "sumary: typo."),
         ("pad: 1600:start,1640:a", "pad: 1600:fire"),
+        # the pad: lines are joined, and the joined script is what si.c reads
+        ("pad: 1600:start,1640:a", "pad: 1600:start ,1640:a"),
+        ("pad: 1600:start,1640:a", "pad: 1600:start,,1640:a"),
+        ("pad: 3600:a@150", "pad: , 3600:a@150"),
     ],
 )
 def test_scenario_rejects(tmp_path, mutation):

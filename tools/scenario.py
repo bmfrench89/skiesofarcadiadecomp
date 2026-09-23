@@ -186,7 +186,9 @@ class PadEvent:
     hold: int
 
 
-ITEM = re.compile(r"^(\d+):([a-z+]+)((?:[@#]\d+)*)$")
+# [0-9], not \d: Python's \d and int() take every Unicode digit, and strtoul()
+# in si.c takes these ten.
+ITEM = re.compile(r"^([0-9]+):([a-z+]+)((?:[@#][0-9]+)*)$")
 
 
 def parse_pad(script: str) -> list[PadEvent]:
@@ -197,12 +199,32 @@ def parse_pad(script: str) -> list[PadEvent]:
     scenario that silently drove half its script, or pressed nothing at all,
     would be worse than no scenario, so both raise here. What si.c does
     understand, this accepts, however odd it looks.
+
+    Nothing is stripped, because si.c strips nothing. This used to strip each
+    item and skip the empty ones, so "5:start ,9:a" validated here while si.c
+    looked up a button named "start " and pressed nothing, and
+    "1700:start,,1800:a" validated while si.c stopped at the empty item and
+    never pressed the A. The one thing si.c does forgive is a single comma at
+    the very end: it steps over the comma after an event and finds the end of
+    the string. Whitespace at the end is not forgiven there -- it is part of
+    the last button name, or, after a number, where the parse stops and says
+    so -- so it is not here either.
     """
     events: list[PadEvent] = []
-    for raw in script.split(","):
-        item = raw.strip()
+    items = script.split(",") if script else []
+    if len(items) > 1 and items[-1] == "":
+        items.pop()  # the one trailing comma
+    for n, item in enumerate(items, 1):
         if not item:
-            continue
+            raise ScenarioError(
+                f"item {n} is an empty item (two commas together, or a leading comma); "
+                "si.c stops parsing there and ignores the rest of the script"
+            )
+        if any(c.isspace() for c in item):
+            raise ScenarioError(
+                f"{item!r} has whitespace in it; si.c does not strip it, so the item does "
+                "not do what it says -- write the script with none"
+            )
         m = ITEM.match(item)
         if not m:
             raise ScenarioError(f"{item!r} is not frame:buttons[@repeat][#hold]")
@@ -232,11 +254,11 @@ def parse_pad(script: str) -> list[PadEvent]:
                     f"buttons are {' '.join(BUTTONS)} and the stick is {' '.join(STICKS)}"
                 )
         every, hold = 0, HOLD_FRAMES
-        for kind, n in re.findall(r"([@#])(\d+)", suffixes):
+        for kind, count in re.findall(r"([@#])([0-9]+)", suffixes):
             if kind == "@":
-                every = int(n)
+                every = int(count)
             else:
-                hold = int(n)
+                hold = int(count)
         events.append(PadEvent(frame, tuple(buttons), tuple(sticks), every, hold))
     if len(events) > MAX_EVENTS:
         raise ScenarioError(f"{len(events)} events; si.c keeps only the first {MAX_EVENTS} of them")
