@@ -19,7 +19,7 @@ rest.
 ## State
 
 **Not pushed.** As of 2026-09-22 the work of that day is on the local branch
-`teleport-and-audit`, fourteen commits ahead of `main` (which is still
+`teleport-and-audit`, fifteen commits ahead of `main` (which is still
 `2eac42c`, pushed, CI green): the name-driven teleport and its census, 36
 corrections from an audit, and the tests for them. Every pre-push check
 passes on it locally -- guard, `ruff check`, `ruff format --check`, 589
@@ -264,9 +264,10 @@ needs more judgement about what the port is for.
 
 1. **Keep using the teleport.** The first census (36 maps, FINDINGS)
    loaded every one and broke nothing: 27 end on a drawn scene, 3 black, 2
-   partial, and the four 5xx sky maps land on a frozen post-battle results
-   screen that is not understood. In order: one 5xx warp with
-   `SOA_WATCH=0x80311AEC` and A presses after it; then the other 216 warpable
+   partial, and the four 5xx sky maps start **ship battles** (a single warp
+   to `500a` with A presses reached The Blackbeard's battle interface; the
+   census's "frozen results screen" was its first screen waiting for A).
+   Next: drive that ship battle through its commands; then the other 216 warpable
    maps in six more census runs (the generator is seven lines of Python:
    the name as three big-endian words, the map words, 15); then a battle on a
    map with an encounter table, which is D5's other half. Check each run

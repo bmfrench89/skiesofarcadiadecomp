@@ -1139,3 +1139,24 @@ The three black maps and the two partial ones are not yet evidence of a
 defect: `a200a` was black too and is a map the story visits, so a map drawing
 nothing when entered out of story order is expected. Each needs its frame
 looked at against the story before anything in the renderer is suspected.
+
+
+**The 5xx rows explained: a warp to `500a` starts a ship battle.**
+`build/run_sky500.log` / `build/scenario-sky500.log`: the same preamble, one
+name-driven warp to `ME500A.SCT` at 15000, `SOA_WATCH=0x80311AEC`, and an A
+every 150 frames from 15400. The state word goes 15, 0, 1, 3, **4**, 5, 7, 8
+-- the first warp seen to pass through state 4, which waits on `fn_80090D78`
+-- and the trace loads `/field/sbek000...` before `/field/a500a.mld` and the
+status icons after it. Frames 15100 and 15200 are the census's 39,475-colour
+Exp/Gold screen, byte for byte the same count; after the first A it is gone.
+15500 is the Little Jack under full sail against a blue sky, and 17900 is the
+ship-battle interface -- the turn grid, round 2 of 8, Aika's portrait, the
+command wheel on Attack, and the enemy named **The Blackbeard** with its hull
+bar.
+
+So the census's "frozen results screen" was the first screen of this
+sequence, waiting for an A that script never pressed, and the four 5xx
+warps were four ship-battle entries. This is the first ship battle anything in
+this project has run (ROADMAP 7.3, PLAN D5), reached in 15,400 frames of
+scripted input and seven pokes. Whether every 5xx map starts one, and what
+the battle does when driven past Attack, is the next run.
