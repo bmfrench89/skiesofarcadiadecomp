@@ -1798,11 +1798,20 @@ static void copy_to_screen(const DrawCmd* D, int x0, int y0, int w, int h)
  * vertical filter reaches one row either side, and a half-scale copy pairs
  * rows. Both make the fused clear unsafe, so enqueue_copy publishes the clear
  * separately and this says so from the command alone. */
+static int copy_is_foreign(int half, int filtered, int y0)
+{
+    /* The third case: the copy picks its rows by destination y and reads
+     * source row y0 + y, while the rasterizer owns rows by absolute y, so the
+     * two coincide only when y0 is a multiple of the worker count. Found by
+     * reading the code, not by a sweep, which is the reason it can hide. */
+    return half || filtered || (g_nthreads > 1 && (unsigned)y0 % (unsigned)g_nthreads != 0);
+}
+
 static int copy_reads_foreign_rows(const DrawCmd* D)
 {
     int half = (D->cp_v >> 9) & 1;
     int filtered = !(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64);
-    return half || filtered;
+    return copy_is_foreign(half, filtered, (int)((D->cp_tl >> 10) & 0x3FF));
 }
 
 static void run_copy(const DrawCmd* D)
@@ -1944,7 +1953,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
     int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
     uint8_t f_up, f_mid, f_dn;
-    int filtered;
+    int filtered, foreign;
     /* Filtered iff the collapsed kernel is not the exact identity. Asking the
      * weights rather than masking the registers is what makes this right: the
      * mask here was 0x03FFFF against both words, which takes w3 alone for the
@@ -1974,7 +1983,8 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * filtered output row reads y-1 and y+1, which belong to the two
      * neighbouring workers, and workers advance independently. Without this
      * the frame depends on SOA_THREADS. */
-    if (half || filtered) gxr_flush();
+    foreign = copy_is_foreign(half, filtered, y0);
+    if (foreign) gxr_flush();
     if (queued() >= QUEUE_CAP) gxr_flush();
     D = &g_queue[g_published & QMASK];
     D->seq = g_published;
@@ -2025,7 +2035,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      *
      * An unfiltered, unscaled copy reads only rows the worker wrote itself, so
      * it keeps the fused clear and its exact previous behaviour. */
-    if (filtered || half) {
+    if (foreign) {
         gxr_flush();
         if (v & 0x800u) {
             D = &g_queue[g_published & QMASK];
