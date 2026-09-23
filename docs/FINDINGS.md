@@ -1313,3 +1313,50 @@ reaches the world map at part L, it means the executable's beginning, middle
 and end have all been run by this port -- by jumping, not by playing: nothing
 yet shows the scenes *between* those points, and the census and the part
 select are how to go looking.
+
+
+**A won battle leaves the field black: the player is never re-spawned.**
+The defect that matters most for someone playing, found 2026-09-23 and not
+yet fixed. A battle forced on `a101b` with the six-word script-battle request
+(`docs/research/encounters.md`: 0x803473C8 = 2, 0x803473CC = 0, 0x803473D0 =
+0, 0x803473D8 = -1, 0x80346D28 = 0, 0x803473D4 = 1) runs properly: field
+states 8, 9, 10, 11, the battle scene, a round against a Valuan "Soldier"
+(frame 4000 of `build/scenario-forcebattle.log`), the win (`/BEFF/PCWIN.MLK`),
+and the results screen -- 5 Gold, Vyse to Lv 2, magic experience per colour.
+The field then comes back (scene 6 from the battle exit's win arm, states 0,
+1, 3, **4** -- the results -- 5, 7, 8, `/player.mld` and `/field/a101b.mld`
+loading) and **every frame after the results is pure black**. Same after a
+New Game (`scenario-forcebattle-ng.log`, black from frame 17000 on) as after
+a Continue, so it is not the save.
+
+What is known about it:
+
+- It is not a fade. A capture of a black frame (`build/fifo-probe/5500`, taken
+  with `SOA_FIFO_DIR` pointed there) has 358 draws and **none of vertex format
+  2**, the world geometry, against 2,182 in the same room before the battle
+  (`build/fifo-probe/3200`): only HUD quads and degenerate strips. The world is
+  not submitted.
+- **The player task is gone.** Diffing the two captures' memory images, the
+  player-object pointer 0x80347450 (-29392(r13)) is 0x80F79320 before and 0
+  after. State 11 zeroes it on the way into the battle, and `playerAct`
+  (`fn_80119FF4`, the object table at 0x802E28A0 names it) stores its object
+  there every frame it runs -- so after the battle `playerAct` never runs.
+  With no player there is no camera, and nothing to draw.
+- The per-map flags are kept across a battle **on purpose**: `fn_801F72F8`
+  clears flags 1856-2047 only when 0x80347474 is nonzero, state 15 (a warp)
+  sets it to 1 and state 9 (a battle) to 0. `me101b`'s loop fades in only when
+  flag 1856 is clear, so after a battle that branch is skipped by design; its
+  init instead takes `IF (sys[15] == 10000)`, "back from a battle", and
+  `sys[15]` is 10000 because the scene dispatcher sets it on every battle frame.
+  Which step of that return path should re-spawn the player is the open
+  question, and a read-only investigation of it is in progress.
+- Whether a *natural* random encounter does the same is not established.
+  `boot_monkey.log` won two battles in this room and returned to it, and
+  encounters kept happening afterwards, so the field logic ran on; that run's
+  frames were not kept. If the forced request leaves something unset that a
+  real encounter sets, this is the recipe's fault and not the port's -- which
+  is exactly the question to settle before touching `runtime/`.
+
+The saves, the part select, the ending and every warp in this section went
+through state 15, which never zeroes the player; nothing else here is
+affected.

@@ -294,23 +294,29 @@ washed-out colour and a correct fix would have failed the suite.
 The plan's cheap, well-specified items are done. What is left is larger and
 needs more judgement about what the port is for.
 
-1. **Keep using the teleport.** The first census (36 maps, FINDINGS)
-   loaded every one and broke nothing: 27 end on a drawn scene, 3 black, 2
-   partial, and the four 5xx sky maps start **ship battles** (a single warp
-   to `500a` with A presses reached The Blackbeard's battle interface; the
-   census's "frozen results screen" was its first screen waiting for A).
-   Next: drive that ship battle through its commands; then the other 216 warpable
-   maps in six more census runs (the generator is seven lines of Python:
-   the name as three big-endian words, the map words, 15); then a battle on a
-   map with an encounter table, which is D5's other half. Check each run
-   prints `[poke] N poke(s) armed` with the N you asked for.
-   Walking is still unattempted and still needs no position feedback -- the
-   hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire on
-   contact with no pad read, so a stick script could do it if it knew where to
-   walk.
-2. **The decompilation grind** (Track F). Two SDK libraries are complete. The
+1. **Fix the black field after a won battle** -- the one defect found so far
+   that would stop a person playing. A forced battle on `a101b` is fought and
+   won, the results screen shows, and the field comes back with the player
+   task (`playerAct`) never re-spawned: the player pointer 0x80347450 stays 0,
+   no world geometry is submitted, every frame is black. FINDINGS section 11's
+   last entries have the measurements; settle first whether a *natural*
+   encounter does the same (the forced request may leave something unset),
+   then find which step of the return path should re-spawn the player.
+2. **Cover the rest of the game with the tools that now exist.** A save loads
+   to the field by frame 2800; the part select reaches story parts B-L; a
+   four-poke warp reaches any of the 255 warpable maps; one word plays the
+   ending. Two censuses loaded 72 maps with no runtime fault (a third, of 64,
+   was running when this was written -- `build/scenario-census3.log`). Still
+   untested: the ship battles entered the game's own way (opcode 210: the
+   return name at 0x802E5E68 and 0x803472E4 = 1, *not* state 15 --
+   `docs/research/ship-worldmap.md`), sailing the world map (`a099x`; its
+   controls are not established), and the maps between the part-select start
+   points. Walking is still unattempted and still needs no position feedback --
+   the hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire
+   on contact with no pad read.
+3. **The decompilation grind** (Track F). Two SDK libraries are complete. The
    match oracle is now sound, so a match means what it says.
-3. **Speed** (plan C4), read against the profiler rather than against the
+4. **Speed** (plan C4), read against the profiler rather than against the
    renderer track's assumption — see wrong statement 3 above.
 
 The deflicker filter, which this list used to name as the largest understood
