@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-605 passed in 70.28s
+610 passed in 79.44s
 ```
 
-605 tests in 36 files, none of which reads the disc. They cover the Python
+610 tests in 37 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -73,6 +73,7 @@ its own and run it, some of the C as well:
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_guard.py` | 22 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
+| `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
@@ -86,10 +87,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `605 passed` |
-| no capstone — **what CI installs** | `586 passed, 1 skipped` |
-| no MSVC | `519 passed, 86 skipped` |
-| neither — **the Ubuntu CI leg** | `500 passed, 87 skipped` |
+| everything (MSVC + capstone) | `610 passed` |
+| no capstone — **what CI installs** | `591 passed, 1 skipped` |
+| no MSVC | `524 passed, 86 skipped` |
+| neither — **the Ubuntu CI leg** | `505 passed, 87 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -932,7 +933,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 86 of the 605 skip without a C compiler; they build one runtime file and run it.
+² 86 of the 610 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
