@@ -1160,3 +1160,61 @@ warps were four ship-battle entries. This is the first ship battle anything in
 this project has run (ROADMAP 7.3, PLAN D5), reached in 15,400 frames of
 scripted input and seven pokes. Whether every 5xx map starts one, and what
 the battle does when driven past Attack, is the next run.
+
+
+**A second census, and 72 maps without a runtime fault.**
+`build/scenario-census2.log`, 2026-09-23: the next 36 maps below 500 in
+number order (002b to 034d), same method. Every map loaded; 0 unknown FIFO
+bytes, no `[mmio!]`, no tripwire. 33 end on a drawn scene; `013f` and `028d`
+are black and `019d` partial (17,048 px). With the first census that is 72
+maps loaded in two runs, 60 drawn, 5 black, 3 partial, 4 the 5xx artefact
+below -- and nothing the runtime refused.
+
+
+**What four read-only investigations found, and what it corrects.** On
+2026-09-23 four agents read the disassembly, the DOL and the decompressed
+scripts for the things a playthrough needs that the census cannot show. Their
+full reports are in `docs/research/` (`save-load.md`, `encounters.md`,
+`ship-worldmap.md`, `story-flags.md`); each claim there is marked verified
+or inferred, and none was run when written. The ones this section relied on,
+or that correct it:
+
+- **The 5xx "results screen" was made by the pokes, not by the game.** State
+  15's teardown calls `fn_8012A26C` *before* `fn_801004C4` parses the new
+  name, so it sees whatever map words are there; poking 0x80311AC0/AC4 to 500
+  first made it run the ship-battle teardown for a battle that never happened,
+  which sets 0x80347280 and sends the next load through state 4, the results
+  screen. So the map-word pokes this section called "belt and braces" are
+  harmful for a 5xx destination and unnecessary for any other: the name alone
+  sets all three words. The 5xx maps are ship-battle stages, one per fight,
+  entered in play by script opcode 210 (`fn_80147E2C`), which sets
+  0x803472E4 and state 12 rather than 15. The ship battle against The
+  Blackbeard at 17900 was real; its first screen was not.
+- **255 maps are warpable, not 252.** The disc lookup compares names through a
+  lower-case table, so `ME199F.sct`, `ME355A.sct` and `ME398A.sct` count.
+- **The executable names its maps.** The stage picker's label table at
+  0x802E4780 (158 entries, Shift-JIS) gives Pirate Isle for 002, Valua for
+  005, Nasr for 013, Shrine Island for 103, the Sky Map for 099, and an enemy
+  ship for each 5xx (500a is Baltor's). Decoded in `ship-worldmap.md`.
+- **The world map is map 099 in the field scene**, not a scene of its own; its
+  letter is ignored and chosen from byte 0x80310A22. There are ten scenes
+  (`fn_801DBE6C(n)`): 3 title, 6 field, 7 battle, 9 ending.
+- **Story progress is flags, and the disc carries the developers' part
+  select.** Flags 0-27,327 live at 0x80310B3C; each map's script tests them.
+  `a200a` is black because its loop does nothing once flag 2 is set -- the map
+  and the route were never at fault. `ME355A.SCT` is a menu that jumps to the
+  start of story parts B to L with each part's flags, party and destination.
+  The word at 0x80310BBC is party membership (flags 1026+ch, 1032+ch), not a
+  story flag.
+- **The battle wheel is `fn_8007CAB0`, and every scripted press moved two
+  slots.** Slots 0-6 are Focus, Magic, S-move, Attack, Guard, Item, Run, with
+  no wrap. The game's auto-repeat fires after 6 held frames and `si.c` holds a
+  press for 10, so a plain `left` is two steps; all six measured transitions
+  above fit that exactly. `fn_8007A890`/`fn_80079F74` are the *Item*
+  submenu's tabs, and `fn_80079C5C` cycles a weapon's Moon Stone colour: the
+  "four entries" disagreement was two different menus. Use `left#4` for one
+  step.
+- **A battle can be forced** with six words (the scripted-battle request of
+  opcode 112, read first and ungated in `fn_800C1C24`), and **a save can be
+  requested** with one (0x803473B4 = 1, which opens the game's own save menu
+  in every loaded field). Both recipes are in the reports; runs of them follow.

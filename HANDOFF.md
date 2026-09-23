@@ -226,18 +226,20 @@ warp takes (15, 0, 1, 3, 5, 7, 8). To `a103a`, with the letter in the **top
 byte** of `0x80311AC8`:
 
 ```
-SOA_POKE=16000:0x80305CF0=0x4D453130,16000:0x80305CF4=0x33412E53,16000:0x80305CF8=0x43540000,16000:0x80311AC0=103,16000:0x80311AC4=103,16000:0x80311AC8=0x61000000,16000:0x80311AEC=15
+SOA_POKE=16000:0x80305CF0=0x4D453130,16000:0x80305CF4=0x33412E53,16000:0x80305CF8=0x43540000,16000:0x80311AEC=15
 ```
 
-That is `"ME10" "3A.S" "CT\0\0"`, then the committed and working map
-numbers and the letter (belt and braces: the name overrides them), then the
-state. No button press is needed. It needs a run that has already reached the
+That is `"ME10" "3A.S" "CT\0\0"`, then the state. **Do not also poke
+the map words** (0x80311AC0/AC4/AC8), as the census runs of 2026-09-22 did:
+the teardown reads them before the name is parsed, and for a 5xx destination
+that runs a ship-battle teardown for a battle that never happened and puts a
+spurious Exp/Gold screen up. The name sets all three. No button press is needed. It needs a run that has already reached the
 field, which the `battle` scenario's preamble plus an A every 150 frames does
 by about frame 14710; `build/run_namewarp.log` has the whole command. `a103a`
 -- the first dungeon island, never reached by any run before -- draws its
 first frame 100 frames after the poke and plays its own arrival scene. The
 game zeroes the name's first byte after reading it, so poke all three words
-for every warp: seven pokes a warp, 36 warps a run.
+for every warp: four pokes a warp, 64 warps a run.
 
 The older stage-select route (`0x80311AEC=2` and a START) is the resolver's
 debug path; it skips the teardown and state 0's init. Do not use it.
