@@ -756,6 +756,50 @@ def stream_run(
     return code, "\n".join(lines), killed
 
 
+def is_the_corpus(directory: Path) -> bool:
+    """Is this build/fifo, however it is spelled?
+
+    Read from ROOT at call time rather than from FIFO_DIR, so that a test which
+    moves ROOT moves this with it. Compared resolved and case-folded because
+    "build/fifo/", "./build/../build/fifo" and "Build\\FIFO" are all the same
+    directory to Windows, and to the captures in it.
+    """
+
+    def canon(p: Path) -> str:
+        return os.path.normcase(str(p.resolve()))
+
+    return canon(directory) == canon(ROOT / "build" / "fifo")
+
+
+def refuse_capture_into_corpus(env: dict[str, str]) -> None:
+    """Raise if this environment would capture frames into build/fifo.
+
+    dump_dir() in gx.c writes to SOA_FIFO_DIR, or to build/fifo when that is
+    unset or empty -- and build/fifo is the corpus config/fifo_manifest.tsv
+    pins, game data that exists on one machine and is not in the repository.
+    The test suite once captured into it with no SOA_FIFO_DIR and overwrote
+    three captures, gone for good (CLAUDE.md). The runtime cannot tell a
+    deliberate capture from that accident, so the rule is enforced here,
+    before the port starts. Any non-empty SOA_FIFO_DUMP counts as capturing:
+    being wrong about one that names no frame costs a rerun, and being wrong
+    the other way costs a capture.
+    """
+    if not env.get("SOA_FIFO_DUMP"):
+        return
+    where = env.get("SOA_FIFO_DIR") or "build/fifo"
+    # The port runs with ROOT as its working directory (stream_run), so a
+    # relative SOA_FIFO_DIR means ROOT/<it>; an absolute one is itself.
+    if is_the_corpus(ROOT / where):
+        said = (
+            f"SOA_FIFO_DIR={env['SOA_FIFO_DIR']}" if env.get("SOA_FIFO_DIR") else "no SOA_FIFO_DIR"
+        )
+        raise ScenarioError(
+            f"SOA_FIFO_DUMP={env['SOA_FIFO_DUMP']} with {said} captures into build/fifo, "
+            "the corpus config/fifo_manifest.tsv pins, and an overwritten capture cannot be "
+            "restored; set SOA_FIFO_DIR to anything else (capture.scn uses build/fifo-new)"
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     sc = load_scenario(args.name, Path(args.dir))
     exe, data = ROOT / args.exe, ROOT / args.data
@@ -775,6 +819,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         extra[key] = value
     strict = args.check and not args.no_strict
     env = run_env(sc, extra, strict)
+    # After --env, which can point a scenario that captures safely at the
+    # corpus as easily as it can add a capture to one that did not.
+    refuse_capture_into_corpus(env)
     # What the checks are about is the run that happens, not the file it came
     # from: --env SOA_PAD=... really does replace the script, and expecting the
     # scenario's own event count then fails a check that is measuring the wrong
@@ -787,10 +834,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     full.update(env)
     # The capture path and the memory card write into directories they expect to
     # exist already (gx.c frame_end, exi.c). A scenario that captures says where
-    # with SOA_FIFO_DIR, and says somewhere other than build/fifo: that corpus is
-    # what config/fifo_manifest.tsv pins, the streams are not in the repository,
-    # and a run that overwrites one invalidates its blessed hash with nothing to
-    # restore from.
+    # with SOA_FIFO_DIR, and refuse_capture_into_corpus() above has already made
+    # sure that is somewhere other than build/fifo.
     for sub in ("frames", "fifo", "cards"):
         (ROOT / "build" / sub).mkdir(parents=True, exist_ok=True)
     if env.get("SOA_FIFO_DIR"):

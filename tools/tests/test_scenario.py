@@ -559,6 +559,53 @@ def test_an_env_override_is_what_the_checks_are_told_about(tmp_path, monkeypatch
     assert status(checks, "the pad script") == scenario.PASS
 
 
+@pytest.mark.parametrize(
+    "fifo_dir",
+    [
+        None,  # dump_dir() in gx.c falls back to build/fifo
+        "",  # and so does an empty value
+        "build/fifo",
+        "build/fifo/",
+        "./build/../build/fifo",
+        "ABSOLUTE",  # the same directory, spelled from the drive root
+    ],
+)
+def test_a_capture_into_the_pinned_corpus_is_refused(tmp_path, monkeypatch, fifo_dir):
+    """The test suite once ran a capture with no SOA_FIFO_DIR and overwrote
+    three captures in build/fifo, the corpus config/fifo_manifest.tsv pins.
+    They are game data, so nothing could restore them. However the directory
+    is spelled, a capture into it never starts."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    ran = []
+    monkeypatch.setattr(scenario, "stream_run", lambda *a: ran.append(a) or (0, "", False))
+    env = ["SOA_FIFO_DUMP=3600"]
+    if fifo_dir is not None:
+        spelled = str(tmp_path / "build" / "fifo") if fifo_dir == "ABSOLUTE" else fifo_dir
+        env.append(f"SOA_FIFO_DIR={spelled}")
+    with pytest.raises(ScenarioError, match="SOA_FIFO_DIR"):
+        scenario.cmd_run(run_args(tmp_path, env=env, check=False))
+    assert ran == [], "the port was started anyway"
+
+
+def test_a_capture_somewhere_else_runs(tmp_path, monkeypatch):
+    """capture.scn as committed: it names build/fifo-new, so it runs, and a
+    run that captures nothing may leave SOA_FIFO_DIR alone."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    ran = []
+    monkeypatch.setattr(scenario, "stream_run", lambda *a: ran.append(a) or (0, "", False))
+    assert scenario.cmd_run(run_args(tmp_path, name="capture", check=False)) == 0
+    assert scenario.cmd_run(run_args(tmp_path, check=False)) == 0
+    assert len(ran) == 2
+    # and an --env that points the committed scenario back at the corpus is refused
+    with pytest.raises(ScenarioError, match="SOA_FIFO_DIR"):
+        scenario.cmd_run(run_args(tmp_path, name="capture", env=["SOA_FIFO_DIR="], check=False))
+
+
+def test_no_committed_scenario_captures_into_the_corpus():
+    for sc in scenario.load_all():
+        scenario.refuse_capture_into_corpus(scenario.run_env(sc))
+
+
 def test_the_command_line_entry_points_work():
     assert scenario.main(["list"]) == 0
     assert scenario.main(["show", "title", "--command"]) == 0
