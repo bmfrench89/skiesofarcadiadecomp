@@ -1102,3 +1102,40 @@ The name's first byte is zeroed after the game reads it (`was 00453230`
 at 16000), so the name has to be poked whole for every warp. Seven pokes per
 warp and a 256-item `SOA_POKE` give 36 warps per run -- on a binary linked
 after commit 1bad9fb; the one used here predated it and allowed 64.
+
+
+**A census of 36 warps: every map loaded, the runtime survived all of them,
+and 27 end on a drawn scene.** `build/run_census.log` and `build/scenario-census.log`,
+2026-09-22: the `battle` preamble, then one name-driven warp every 600 frames
+from 15000 to 36000 (252 pokes, on a binary relinked that day), `SOA_SNAP=100`,
+`SOA_TRACE=1`. Every warp's own map appears in a `LoadStart` line after its
+poke. The whole run reports 0 unknown FIFO bytes and no `[mmio!]` line. The
+frames 300 and 500 after each warp say:
+
+| outcome | maps |
+|---|---|
+| a full scene (non-black > 280,000 px, > 13,000 colours) | 002a 005a 008a 010a 013a 018a 020a 028a 034a 035a 098a 099a 103b 106a 107a 109a 111a 112a 115a 116a 121a 123a 126a 130a 202a 213a 260a |
+| partial | 019a (31,050 px), 032a (106,083 px: a dusk sky over solid black) |
+| black, one colour | 017a 033a 240a |
+| the post-battle results screen, frozen | 500a 520a 550a 580a |
+
+`098a`'s row counts among the 27, but what it shows is `099a`: its own
+script warped the run onward before frame +300, so a script-driven exit
+works through this route too. Frame 24900 (`103b`)
+is a waterfall pouring through a ruin toward the sea, which is what a
+correctly lit map looks like here.
+
+The 5xx rows are not four overworld frames. From 34300, 100 frames after the
+`500a` warp, every frame is the same image: Exp/Gold and Vyse and Aika at Lv 1,
+the screen after a battle, waiting for an A this script never presses. The
+later three warps still load their maps behind it. The sky group is
+special-cased twice -- the resolver prints `/sound/f7000000.mlt` for 500-599,
+and state 8's arm sends a map number of 500 or more to state 14 instead of 12
+-- so these maps are likely entered through a ship mode this route does not
+set up. Unexplained; the next thing to try is a single 5xx warp with
+`SOA_WATCH=0x80311AEC` and A presses after it.
+
+The three black maps and the two partial ones are not yet evidence of a
+defect: `a200a` was black too and is a map the story visits, so a map drawing
+nothing when entered out of story order is expected. Each needs its frame
+looked at against the story before anything in the renderer is suspected.

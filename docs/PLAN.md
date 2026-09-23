@@ -17,7 +17,7 @@ are independent; inside a track, order matters.
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
-| `field/` files any saved run has opened | 21, of 1,862 stems in `extracted/field` — and only with `SOA_TRACE` on |
+| `field/` files any saved run has opened | 82, of 1,862 stems in `extracted/field`, 42 of them root maps -- 21 and 5 before the teleport census of 2026-09-22; only with `SOA_TRACE` on |
 | Memory card bytes the game has written | 40,960 — it formats a card (2026-09-18) |
 | Saved runs that played a sample | 0 of 27: every `[audio]` line says "(no output device)" |
 

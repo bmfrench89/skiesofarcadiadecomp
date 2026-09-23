@@ -23,9 +23,10 @@ flight, no branch is half-finished, and no workflow is running.
 
 Since 2026-09-21 the renderer applies the EFB copy's deflicker filter (PLAN
 C3), `SOA_POKE` can write guest memory mid-run (PLAN D2's half), and the field
-can be teleported to the developers' test stage. Five field maps had ever been
+can be warped to a field map by name, the way the game does it. Five field maps had ever been
 loaded by anything here before that, all of them by the story or by losing a
-fight; the disc has 264.
+fight; the saved logs now name 42 of the disc's 264, after a census that
+warped to 36 in one run without a runtime fault (FINDINGS, end of section 11).
 
 The port boots, plays the opening with dialogue, wins the first battle, and
 is carried by the story through the Valuan ship's hold into `a101b`, where
@@ -243,15 +244,15 @@ washed-out colour and a correct fix would have failed the suite.
 The plan's cheap, well-specified items are done. What is left is larger and
 needs more judgement about what the port is for.
 
-1. **Use the teleport.** It works (see above) and nothing has used it yet.
-   The obvious first run is a census: 36 warps a run, one every 600 frames,
-   `SOA_SNAP` on, and a table of which of the 252 maps render, which load
-   and draw black (like `a200a`, probably story-gated), and which break the
-   runtime -- the last being the reason to do it, since every map past the
-   opening is code and data this port has never run. Check the first run
-   prints `[poke] N poke(s) armed` with the N you asked for: the binary must
-   be linked after commit 1bad9fb, and the one on disk before 2026-09-22 was
-   not.
+1. **Keep using the teleport.** The first census (36 maps, FINDINGS)
+   loaded every one and broke nothing: 27 end on a drawn scene, 3 black, 2
+   partial, and the four 5xx sky maps land on a frozen post-battle results
+   screen that is not understood. In order: one 5xx warp with
+   `SOA_WATCH=0x80311AEC` and A presses after it; then the other 216 warpable
+   maps in six more census runs (the generator is seven lines of Python:
+   the name as three big-endian words, the map words, 15); then a battle on a
+   map with an encounter table, which is D5's other half. Check each run
+   prints `[poke] N poke(s) armed` with the N you asked for.
    Walking is still unattempted and still needs no position feedback -- the
    hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire on
    contact with no pad read, so a stick script could do it if it knew where to
