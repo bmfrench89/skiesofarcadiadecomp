@@ -22,6 +22,7 @@ from soa import dol as D  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
 from soa.ppc.fmt import format_insn  # noqa: E402
+from soa.ppc.regs import gpr_defs  # noqa: E402
 
 MMIO = {
     0xCC000000: "CP",
@@ -49,6 +50,13 @@ def _mmio_name(addr: int) -> str:
 
 
 _MEM_OPS = ("lwz", "lhz", "lha", "lbz", "stw", "sth", "stb", "lfs", "lfd", "stfs", "stfd")
+# The same accesses with update: rA is left holding the address they used.
+_MEM_UPDATE = tuple(m + "u" for m in _MEM_OPS)
+
+
+def _value_note(kind: str, val: int) -> str:
+    tag = _mmio_name(val)
+    return f"{kind} 0x{val:08X}" + (f" ({tag})" if tag else "")
 
 
 def _fn_name(addr: int, rows: dict[int, dict]) -> str:
@@ -62,8 +70,19 @@ def _fn_name(addr: int, rows: dict[int, dict]) -> str:
 
 
 def annotate(code, rows, start, end):
-    """Yield (addr, text, note) with symbolic notes."""
-    hi = {}  # reg -> value after a lis (cleared when the register is redefined)
+    """Yield (addr, text, note) with symbolic notes.
+
+    ``hi`` holds the registers known to contain a constant a lis started.
+    What each instruction overwrites comes from gpr_defs() in soa/ppc/regs.py,
+    where the PowerPC's scattered destinations are tabulated once: ori, or/mr,
+    rlwinm and the other logical ops keep their *source* in the rD field and
+    write rA, and update-form accesses write rA as well. This used to assume
+    rD, which forgot the register that survived and kept the one that was
+    overwritten -- and an annotation from a stale base names a real-looking
+    global the instruction never touches. rA=0 in addi (li) and in a D-form
+    access is the literal 0, not r0, so r0's value is never the base there.
+    """
+    hi = {}  # reg -> the constant it holds
     for a in range(start, end, 4):
         i = code.at(a)
         note = ""
@@ -71,23 +90,30 @@ def annotate(code, rows, start, end):
             yield a, format_insn(i), ""
             continue
         m = i.mnemonic
+        known = {}  # reg -> the constant this instruction leaves in it
         if m == "addis" and i.ra == 0:
-            hi[i.rd] = (i.imm & 0xFFFF) << 16
-        elif m in ("addi", "ori") and i.ra in hi:
-            val = (hi[i.ra] + (i.imm & 0xFFFF if m == "ori" else i.imm)) & 0xFFFFFFFF
-            tag = _mmio_name(val)
-            note = f"= 0x{val:08X}" + (f" ({tag})" if tag else "")
-            hi[i.rd] = val
-        elif m in _MEM_OPS and i.ra in hi:
+            known[i.rd] = (i.imm & 0xFFFF) << 16
+        elif m == "addi" and i.ra != 0 and i.ra in hi:
             val = (hi[i.ra] + i.imm) & 0xFFFFFFFF
-            tag = _mmio_name(val)
-            note = f"@ 0x{val:08X}" + (f" ({tag})" if tag else "")
-            if m.startswith("l") and i.rd in hi:
-                hi.pop(i.rd, None)
+            note = _value_note("=", val)
+            known[i.rd] = val
+        elif m == "ori" and i.rd in hi:
+            # ori rA, rS, UIMM: rS sits in the rD field, and is a register
+            # even when it is r0. An OR, which is an add only while the low
+            # half of rS is clear.
+            val = hi[i.rd] | i.imm
+            note = _value_note("=", val)
+            known[i.ra] = val
+        elif (m in _MEM_OPS or m in _MEM_UPDATE) and i.ra != 0 and i.ra in hi:
+            val = (hi[i.ra] + i.imm) & 0xFFFFFFFF
+            note = _value_note("@", val)
+            if m in _MEM_UPDATE:
+                known[i.ra] = val  # rA += d: the next access through rA starts here
         elif i.is_direct_branch and ((m == "b" and i.lk_bit) or not start <= i.target < end):
             note = _fn_name(i.target, rows)
-        elif i.rd in hi and i.form is not None and not m.startswith("st"):
-            hi.pop(i.rd, None)  # any other definition of the register loses the value
+        for reg in gpr_defs(i):
+            hi.pop(reg, None)  # any other definition of the register loses the value
+        hi.update(known)
         yield a, format_insn(i), note
 
 
