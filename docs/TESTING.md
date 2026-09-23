@@ -502,7 +502,7 @@ audio        11500 frames   19 events  The opening, headless, with every mixed s
 battle       12000 frames   19 events  The opening through to the first battle and out the other side.
 capture       4500 frames   18 events  Run the opening headless and dump three command streams for --replay.
 cardwrite     6000 frames    5 events  Blank card in slot A, New Game, then Yes to "Proceed with formatting?" -- the only CARDFormatAsync in the executable.
-encounter    30000 frames   23 events  Walk the ship's hold for twenty minutes of game time until a fight starts.
+encounter    30000 frames   23 events  Walk a101b for twenty minutes of game time until a fight starts.
 hold         16500 frames   21 events  Past the battle into the ship's hold, then walk Vyse with the stick.
 monkey      126000 frames   24 events  The hold and its menus mashed with five buttons on five different periods.
 newgame       3400 frames   18 events  Nine START/A pairs from 1600 to 3240: the title, New Game, the first dialogue.

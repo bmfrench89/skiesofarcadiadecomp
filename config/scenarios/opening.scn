@@ -16,8 +16,10 @@ shows:   software GX from the game's own command stream.
 shows: dialogue text, which was blank until the texture coordinate scale
 shows:   registers were indexed by coordinate rather than by map (FINDINGS
 shows:   "Text"). A frame with no glyphs in it is that defect returning.
-shows: the searchlight beams, the one open rendering defect (PLAN C1): they
-shows:   draw as near-black slabs with lit rims around frame 4000.
+shows: the searchlight beams around frame 4000 (PLAN C1). They are bright,
+shows:   and have been since the texture use-after-free was fixed; what is
+shows:   left is that no beam fragment samples a texel alpha below 176, so the
+shows:   sprite's fade never appears (FINDINGS).
 
 evidence: build/boot_text.log: 19 scripted events, START/A pairs to 3240 and
 evidence:   then A at 3600, 3750, 3900 ... 7350 -- one press every 150 frames,

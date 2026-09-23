@@ -27,8 +27,9 @@ separately and does not count as matches. Seven of the twenty-one units are
 fully verified. That is the oracle being honest, not a defect — and the figure
 was 41 until F1 fixed an oracle that compared relocated words on six bits.
 
-The port boots, plays the opening, wins the first battle and walks the
-Valuan ship's hold with menus and random encounters. Rates: one saved
+The port boots, plays the opening, wins the first battle and is carried by
+the story through the Valuan ship's hold into `a101b`, which has menus and
+random encounters (the hold has no encounter table; FINDINGS section 11). Rates: one saved
 session was windowed — `build/boot_window.log`, the only `[window]` line in
 `build/` — and its 667 screen copies against 1,495 VI retraces are 26.7 game
 frames per guest second, against the game's 30 fps cap; `boot_perf.log`
@@ -53,9 +54,10 @@ a save remains), C1 (the instrument is built and the defect was not what the
 entry said), E2 (the selftest half).
 
 What is left is larger and needs judgement about what the port is for: **D5**
-is the visible milestone and the one a person would notice, **C4** and **D4**
-are multi-day, and Track F is a grind that is now worth doing because F1 made
-a match mean what it says. Read `HANDOFF.md` before picking any of them — seven
+is the visible milestone and the one a person would notice, and since
+2026-09-22 a seven-word poke reaches field maps no run had seen; **C4** and
+**D4** are multi-day, and Track F is a grind that is now worth doing because F1 made
+a match mean what it says. Read `HANDOFF.md` before picking any of them — nine
 confident statements in the history are wrong and it lists them.
 
 ---
@@ -637,14 +639,18 @@ realistic delays is what removed the memFree errors. Not before D3.
 PE, draw, vertex, triangle, pixel and copy counters, under load as well.
 
 **D5. Battles, then the ship and the overworld** — *a day, then week-plus; a route to the maps now exists.*
-**The teleport works for one map** (2026-09-22). The retail executable carries
-a stage select, and `SOA_POKE` reaches it: three words and a START load any of
-600 stage slots, and stage **131e** -- the developers' own test map, the only
-one the path starts a script for -- renders a live field with the player and
-the minimap after a single black frame. The other 251 warpable maps load their
-geometry and draw pure black, because `scptInitial` is gated on the committed
-map number at 0x80311AC0. See FINDINGS "There is a stage select left in the
-retail executable" and the three entries after it.
+**The teleport works** (2026-09-22). It is the game's own warp request,
+driven by name: seven `SOA_POKE` words -- the destination's script name
+(`"ME103A.SCT"`) at 0x80305CF0, the map words, and state 15 at 0x80311AEC --
+and the field tears the old map down and loads the new one by exactly the path
+every story warp takes. `a103a`, the first dungeon island, never reached by
+any run before, renders 100 frames later and plays its own arrival scene. The
+stage-select route found first (state 2 and a START) is the resolver's debug
+path: it skips the teardown, and its black screens were never the gate the
+entry here used to blame. See FINDINGS "The name-driven warp works" and the
+entries before it; `HANDOFF.md` has the command. What is left of D5's reach
+is using it: a census of which of the 252 warpable maps render, and what the
+runtime does with code no run has executed.
 **The seven battle commands are known** and measured off the screen: Attack,
 Magic, Focus, S-move, Guard, Run, Item, with the d-pad transitions that reach
 them. What is left of the battle half is scripting them, not discovering them.

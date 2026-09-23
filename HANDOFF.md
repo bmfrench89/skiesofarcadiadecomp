@@ -28,8 +28,9 @@ loaded by anything here before that, all of them by the story or by losing a
 fight; the disc has 264.
 
 The port boots, plays the opening with dialogue, wins the first battle, and
-moves around the Valuan ship's hold with menus, a minimap and random
-encounters. It renders in a window at the game's 30 fps cap, plays music,
+is carried by the story through the Valuan ship's hold into `a101b`, where
+it moves around with menus, a minimap and random encounters (the hold itself
+has no encounter table; see wrong statement 8). It renders in a window at the game's 30 fps cap, plays music,
 effects and speech, takes keyboard or gamepad input, and reads and writes a
 memory card. Headless it runs about ten times real time.
 
@@ -50,7 +51,7 @@ compared. Seven of the twenty-one units are fully verified; fourteen are not.
 That is the oracle being honest rather than a defect, but do not quote the
 round number without it.
 
-## Eight things the history says that are wrong
+## Nine things the history says that are wrong
 
 Commit messages and older doc revisions are a record of what was believed at
 the time. These were each corrected later, and re-deriving any of them would
@@ -112,7 +113,15 @@ cost you a day.
    from walking the hold, which is the one room of the five with no encounter
    table -- only `a101b` has a `.enp` and an `.ect`.
 
-The pattern behind all eight: a count or a description was read instead of the
+9. **"`scptInitial` is called only for stage 131e, so every other stage is
+   black because its script never starts."** Written 2026-09-22 and wrong the
+   same day. The state-7 arm calls it for *every* map: 131e gets it before
+   `fn_8012A39C` plus 200 pre-run script ticks, and every other map gets it at
+   0x80101A00, after state 8 is stored (r30 is still 0 there). The quoted
+   disassembly stopped five instructions short of the second call. Whatever
+   makes a picker warp black, it is not that gate.
+
+The pattern behind all nine: a count or a description was read instead of the
 thing itself. Every correction came from disassembling, tracing, or rendering
 the frame and looking at it.
 
@@ -130,24 +139,30 @@ the frame and looking at it.
 - Fixing a crash by changing the memory allocation. It hid it. For a
   layout-sensitive bug a run completing proves nothing.
 - Forcing the field's state machine to a state you want. **The field only
-  renders in state 8.** Poking the state word to 3 loads the map and every
-  frame after is pure black; poking it to 1 is black too, with no load at all.
-  Any route to a new map has to end back at 8, and the measured way there is
-  the stage select, not a forced state.
+  renders in state 8.** Poking the state word to 3 loads the map on top of the
+  old one and every frame after is pure black; poking it to 1 parks it in
+  state 2, the stage picker, which waits for a START nobody pressed. The one
+  state worth poking is 15, and only with a warp name -- see the teleport
+  below.
 - Blaming that black screen on the state machine being stranded. It is not:
   the state word reads 8 again within 200 frames of a forced warp and stays
   there. The scene is simply empty -- max channel 0, one distinct colour, zero
   non-black pixels of 307,200. Measure the frame before theorising about the
-  machine.
+  machine. And do not blame the route either: `a200a`, the map every stage
+  select experiment warped to, is black through the game's own warp path too.
+  Test a warp on a map the story has not already used.
 - Hijacking the story's own warp by overwriting the destination before its
   frame-14710 load. Tried twice, at 50-frame and at 1-frame spacing over
   different windows. The map name is formatted before any window a frame-end
   poke can reach.
 - Spoofing the script gate by setting the committed map words to 131/'e' after
-  another map's geometry had loaded, at 50-frame spacing from frame 15150. The
-  pokes landed and the screen stayed black -- but the whole transition takes
-  *one* frame, so this is more likely a timing miss than a dead idea. The
-  every-frame version is the next thing to try and has not been run.
+  another map's geometry had loaded. There is no gate to spoof: `scptInitial`
+  runs for every map, and 131e only gets it earlier (wrong statement 9). Do
+  not run the every-frame version the previous handoff recommended.
+- Poking START (0x1000) into `0x80311A4C` to force the resolver's file-check
+  half. That word is the field's pad snapshot, not a flag, and the next pad
+  read overwrites it; the field sat in state 2 for 1,600 frames showing the
+  picker's one debug string, なし.
 
 ## How to drive the game, which is most of what was missing
 
@@ -181,24 +196,36 @@ screen. Both are written down; neither has been reconciled.
 the value it replaced, so poking a word with its own value traces it across a
 run. That is how the field state was shown to return to 8, and it needs no
 tracepoint and no recompile -- which matters, because tracepoints are compiled
-in and cost a full retranslation.
+in and cost a full retranslation. **`SOA_WATCH=addr` is better for a word
+that changes**: the compare is inlined into every translated store, so it too
+needs no rebuild, and it prints every store with the storing code's lr and a
+guest backtrace (the first 201). On the field state `0x80311AEC` it prints
+every transition of every warp, which is how the teleport below was found.
 
-**The teleport**, which is the live lead. It needs a run that has already
-reached the field, which any scenario's nineteen-event preamble plus an A
-every 150 frames does by about frame 14710:
+**The teleport works** (2026-09-22). It is the game's own warp, driven by
+name: write the destination's script file name into `0x80305CF0` and put the
+field in state 15. State 15 tears the old map down, parses the name into the
+map words and restarts the field, which then takes exactly the path every story
+warp takes (15, 0, 1, 3, 5, 7, 8). To `a103a`, with the letter in the **top
+byte** of `0x80311AC8`:
 
 ```
-SOA_POKE=15000:0x80311AC4=131,15000:0x80311AC8=0x65000000,15000:0x80311AEC=2
+SOA_POKE=16000:0x80305CF0=0x4D453130,16000:0x80305CF4=0x33412E53,16000:0x80305CF8=0x43540000,16000:0x80311AC0=103,16000:0x80311AC4=103,16000:0x80311AC8=0x61000000,16000:0x80311AEC=15
 ```
 
-and a START a hundred frames later. `0x80311AEC` is the field state,
-`0x80311AC4` the working map number, `0x80311AC8` the map letter in the **top
-byte**, and `0x80311AC0` the *committed* number -- which is the one the setup
-code reads, and the distinction cost several runs. Stage **131e** renders a
-live map after a single black frame. The other 251 warpable maps load their
-geometry and draw black because `scptInitial` is gated on the committed number
-being 131 and the letter being 'e'. `r13 = 0x8034E720`, so every `-N(r13)` in a
-disassembly is `0x8034E720 - N`.
+That is `"ME10" "3A.S" "CT\0\0"`, then the committed and working map
+numbers and the letter (belt and braces: the name overrides them), then the
+state. No button press is needed. It needs a run that has already reached the
+field, which the `battle` scenario's preamble plus an A every 150 frames does
+by about frame 14710; `build/run_namewarp.log` has the whole command. `a103a`
+-- the first dungeon island, never reached by any run before -- draws its
+first frame 100 frames after the poke and plays its own arrival scene. The
+game zeroes the name's first byte after reading it, so poke all three words
+for every warp: seven pokes a warp, 36 warps a run.
+
+The older stage-select route (`0x80311AEC=2` and a START) is the resolver's
+debug path; it skips the teardown and state 0's init. Do not use it.
+`r13 = 0x8034E720`, so every `-N(r13)` in a disassembly is `0x8034E720 - N`.
 
 ## If you change the renderer
 
@@ -216,15 +243,15 @@ washed-out colour and a correct fix would have failed the suite.
 The plan's cheap, well-specified items are done. What is left is larger and
 needs more judgement about what the port is for.
 
-1. **Finish the teleport.** This replaced "drive the game past the hold" on
-   2026-09-22 and is much closer than walking ever was. The retail executable
-   carries a stage select; `SOA_POKE` reaches it with three words and a START,
-   and stage **131e** renders a live field map after a single black frame. The
-   other 251 warpable maps load their geometry and draw pure black because
-   `scptInitial` is gated on the committed map number. The next experiment is
-   written up in `docs/FINDINGS.md`: poke `0x80311AC0`/`0x80311AC8` to 131/'e'
-   on **every frame** across 15080-15200, since the whole transition takes one
-   frame and the one attempt so far started at 15150 and may have been late.
+1. **Use the teleport.** It works (see above) and nothing has used it yet.
+   The obvious first run is a census: 36 warps a run, one every 600 frames,
+   `SOA_SNAP` on, and a table of which of the 252 maps render, which load
+   and draw black (like `a200a`, probably story-gated), and which break the
+   runtime -- the last being the reason to do it, since every map past the
+   opening is code and data this port has never run. Check the first run
+   prints `[poke] N poke(s) armed` with the N you asked for: the binary must
+   be linked after commit 1bad9fb, and the one on disk before 2026-09-22 was
+   not.
    Walking is still unattempted and still needs no position feedback -- the
    hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire on
    contact with no pad read, so a stick script could do it if it knew where to

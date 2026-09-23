@@ -682,8 +682,9 @@ matter.
 **The hold cannot produce a random encounter.** Of the five maps any run has
 ever loaded, only `a101b` has an encounter table: `extracted/field/` holds
 `a101b_ep.enp` and `a101b.ect`, and there is no `.enp` or `.ect` for `a201a`,
-`a200a`, `a090a` or `a299a`. `encounter.scn` says it will "walk the ship's
-hold for twenty minutes of game time until a fight starts"; if that ever works
+`a200a`, `a090a` or `a299a`. `encounter.scn` used to say it would "walk the
+ship's hold for twenty minutes of game time until a fight starts" (it names
+`a101b` now); if that ever works
 it is because the run has already been carried into `a101b`, not because of
 the walking. The four random encounters in `boot_monkey.log` (frames 23860,
 37650, 45160 and 50860) all happen after `a101b` loads at 14010.
@@ -968,3 +969,136 @@ thing if the gate passed: it may read the map identity itself and try to run
 `me131e.sct` against `a200a` geometry. The experiment is still worth running,
 because either outcome is informative, but a success should be checked by
 looking at the frame rather than by the absence of black.
+
+
+**Correction, 2026-09-22: `scptInitial` runs for every map, and the 131e test
+only decides *when*.** The two entries above read the state-7 gate as "the
+script is started only for stage 131e". The instructions after the gate say
+otherwise. The field's jump table at 0x802E471C puts state 6 at 0x80101998 and
+state 7 at 0x801019AC (state 6 falls through into 7), and r30 is set to 0 at
+the function's entry (0x8010183C) and is callee-saved, so every call in the
+arm preserves it:
+
+```
+801019B8  cmpi  r0, 131              committed number at 0x80311AC0
+801019BC  bne   -> 801019E8          not 131: r30 is still 0
+801019C4  cmpi  r0, 101              letter at 0x80311AC8
+801019C8  bne   -> 801019E8
+801019CC  bl    scptInitial          131e only: start the script now ...
+801019D4  bl    fn_80212130          ... and run it 200 ticks before the camera
+801019DC  ...   (loop 200)               setup below
+801019E4  li    r30, 1
+801019E8  bl    fn_8012A39C          every map
+801019F0  li    r0, 8                state = 8
+801019F4  cmpi  r30, 0
+801019FC  bne   -> 80101A04
+80101A00  bl    scptInitial          every map that is NOT 131e
+```
+
+So 200a's script *is* started -- after `fn_8012A39C` and without the 200
+pre-run ticks. The gate cannot be why every stage but 131e is black, and the
+every-frame spoof of 0x80311AC0 that the entry above proposed would only move
+`scptInitial` earlier and pre-run it; it is not worth a run on its own.
+
+
+**Three more things the stage-select entries above got wrong** (found by an
+audit of this section, 2026-09-22, each re-checked against the disassembly):
+
+- **The resolver is state 2, not state 1.** The jump table at 0x802E471C
+  gives state 1 = 0x801018B0 and state 2 = 0x80101898, and only the second
+  calls `fn_800FFB24`. State 1 goes to 2 when the word at r13-29004
+  (0x803475D4) is 0, and straight to 3 -- skipping the resolver -- when it is
+  not. A state-1 poke therefore parks the field in the picker, which is why
+  `run_warp2` loaded nothing: it never pressed START.
+- **The "flags word" at 0x80311A4C is the field's pad snapshot, and bit 12 is
+  START.** The picker half tests the same word with 0x200, 0x40, 0x20, 0x8,
+  0x4, 0x2 and 0x1 -- B, L, R, up, down, right, left -- beside stick and
+  trigger bytes compared against 25 and 10: a PADStatus. So "bit 12 clear is a
+  stage picker" means "START not pressed", and every picker run that pressed
+  START already ran the file-checking half. It reads 0 in the captures because
+  nobody was pressing anything.
+- **The picker half never returns 16.** 0x80100018 `li r3, 16` is the
+  argument to `fn_80290EA8`; the half ends at 0x801000D8 with `li r3, 0`, and it
+  copies the working number to the committed one every frame. The state-2 arm
+  advances only on the START half's `return 1` at 0x800FFDB0.
+- And "the transition takes one frame" is one *snapshot*: `SOA_SNAP=100`, so
+  15100 black and 15200 drawing bounds it at under 200 frames, not one.
+
+Poking 0x1000 into the snapshot to force the START half was tried anyway
+(`build/run_normalwarp.log`, frame 15000, with 200/'a' and state 2). The
+game's next pad read overwrote it: the state word was never written again in
+1,600 frames, and every frame shows the picker's screen -- black, with one
+debug string, **なし** ("none").
+
+
+**How the story's own warps run, from a store watchpoint.** `SOA_WATCH` needs
+no recompile (the compare is inlined into every translated store), and on the
+state word 0x80311AEC it prints every transition. Every story warp in the
+opening takes the same path, and it never enters state 2:
+
+```
+15  written by fn_80100178, the warp request           (lr 0x80100210)
+ 0  written by fn_801DBE6C, the scene change
+ 1  fn_80101378: the field's init, state 0's arm
+ 3  state 1 with r13-29004 set: straight to the load, no resolver
+ 5  fn_801015AC, the load, returns 5
+ 7  state 5, fn_800C7DD4 != 1
+ 8  state 7, then scptInitial at 0x80101A00
+```
+
+`fn_80100178(name)` is the request: it copies a *script file name* such as
+`"ME299A.SCT"` (0x802D9730) to 0x80305CF0, calls `fn_800FF908` and
+`fn_801F7B04(number*10 + letter-'a')`, stores state 15 and sets r13-29004 to
+1. State 15's arm, `fn_80101494`, is the teardown -- `fn_8022697C`,
+`fn_80101158` (which zeroes the script arrays; skipping it is what prints
+`scptArrayAlloc: initial two times` after every picker warp), `fn_8012A26C`
+-- then re-derives the map from that name with `fn_801004C4`, which parses
+`MEnnnX` into the committed number, the working number and the letter, and
+calls `fn_801DBE6C(6)` to restart the field at state 0.
+
+So a picker warp differs from a story warp in exactly the part that matters:
+it skips the teardown and state 0's init and loads a new map on top of the old
+one's objects and scripts. The faithful poke is the name plus state 15:
+`0x80305CF0` = `"ME20"`, `0x80305CF4` = `"0A.S"`, `0x80305CF8` = `"CT\0\0"`,
+then 15 into 0x80311AEC.
+
+
+**The name-driven warp works: `a103a`, a map no run had reached, renders with
+its own script running.** `build/run_namewarp.log` (the `battle` preamble, then
+seven pokes at frame 15000 and seven more at 16000, `SOA_WATCH=0x80311AEC`):
+
+```
+15000: 0x80305CF0="ME20" 0x80305CF4="0A.S" 0x80305CF8="CT\0\0"
+       0x80311AC0=200 0x80311AC4=200 0x80311AC8=0x61000000 0x80311AEC=15
+16000: the same with "ME103A.SCT", 103
+```
+
+Both warps took exactly the story's path, 15 -> 0 -> 1 -> 3 -> 5 -> 7 -> 8,
+with state 0 written by `fn_801DBE6C` from state 15's arm (lr 0x8010158C), and
+both loaded their map: `/player.mld` then `/field/a200a.mld`, and later
+`/player.mld` then `/field/a103a.mld`. After `a103a` the trace shows the map's
+script at work -- a sub-model `/field/a103aa19.mld`, the music bank
+`/sound/m5030000`, the effects bank `/sound/e6a019` -- and the frames agree:
+
+| frame | 15000 | 15100-16000 | 16100 | 16200 | 16400 |
+|---|---|---|---|---|---|
+| map | `a101b` | `a200a` | `a103a` | `a103a` | `a103a` |
+| non-black pixels | 307,200 | 0 | 307,200 | 298,700 | 302,216 |
+| distinct colours | 47,899 | 1 | 19,089 | 140,793 | 111,333 |
+
+16200 is Aika on a mossy ledge above turquoise water, facing a stone temple
+under a blue sky; by 16400 Vyse has joined her and a dialogue box reads
+"Vyse! Over there! Look at the size of that hole!" -- the map's own arrival
+scene, played by its own script.
+
+`a200a` is black through the faithful path too, so its black screen is not the
+route: that map is the one the story itself visits during the opening, and its
+script evidently draws nothing when entered at this point in the story.
+Stage-select warps to `a200a` were black for the same reason, not for the
+teardown they skip. What the picker's missing teardown costs is still
+unmeasured; the name-driven warp makes it moot.
+
+The name's first byte is zeroed after the game reads it (`was 00453230`
+at 16000), so the name has to be poked whole for every warp. Seven pokes per
+warp and a 256-item `SOA_POKE` give 36 warps per run -- on a binary linked
+after commit 1bad9fb; the one used here predated it and allowed 64.
