@@ -1547,3 +1547,15 @@ title and its attract demos (`a299a`, `a297a`) -- which is the game doing
 what it should. Parts J (home base) and E (Maramba's port) stayed in their
 maps. With the H and L soaks that is six story points and about two hours of
 random play with no runtime fault.
+
+
+**Battle soaks: random commands, no fault, and twenty effect packages.**
+`tools/soak.py --battle` (single-step d-pad presses among the A presses, so
+the wheel commits random commands), from the part-G save, seeds 101 and 202
+(`build/scenario-bsoak{101,202}.log`), 30,000 frames each under
+`SOA_STRICT=1`: exit 0, no `[mmio!]`, 0 unknown FIFO bytes. Random commands
+lose fights -- both runs took the game-over path to the title and on through
+the attract demos -- which is the game behaving correctly. They loaded seven
+and ten distinct `/BEFF/` effect packages; across every log in `build/` that
+is now **20 distinct effect packages**, against the three any run had loaded
+before 2026-09-23, of 576 on the disc.
