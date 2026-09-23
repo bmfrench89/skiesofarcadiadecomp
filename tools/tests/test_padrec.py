@@ -275,3 +275,39 @@ def test_a_v1_recording_still_replays(driver, tmp_path):
     assert "drift" not in err, err
     frames = [line.split()[0] for line in out.strip().splitlines()]
     assert frames == ["0", "3", "4", "8", "9"], out
+
+
+# Each of these used to parse as three events, one of which pressed nothing,
+# with nothing said: si.c looked a name up by exact length, so "start " and
+# "START" were names it did not know, and "#" with no number held for zero
+# frames. scenario.py's parse_pad has always refused them; SOA_PAD typed by
+# hand -- which is how the teleport experiments are driven -- never meets it.
+@needs_msvc
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "20:START",  # upper case
+        "20:strat",  # a typo
+        "20:start ",  # the space is part of the name
+        " 20:start",  # and strtoul would skip this one
+        "20:start#",  # held for no frames
+        "20:start@",  # repeated every no frames
+        "20:",  # nothing named at all
+        "20:a++b",  # an empty name between two '+'
+        "20:a@5x",  # trailing junk
+    ],
+)
+def test_a_script_item_si_cannot_read_stops_the_parse_and_is_named(driver, tmp_path, bad):
+    script = f"10:a,{bad},30:b"
+    _, err = run(driver, tmp_path, "script", {"SOA_PAD": script}, last=40)
+    assert "[si] 1 scripted controller events" in err, err
+    assert f'not understood from "{bad},30:b"' in err, err
+
+
+@needs_msvc
+def test_a_script_with_every_form_si_reads_parses_whole(driver, tmp_path):
+    """The control for the test above: the forms that are right still are."""
+    script = "10:a+sup@30#5,20:start,25:sdown+sleft+sright+b+x+y+z+l+r+up+down+left+right,"
+    _, err = run(driver, tmp_path, "script", {"SOA_PAD": script}, last=40)
+    assert "[si] 3 scripted controller events" in err, err
+    assert "not understood" not in err, err

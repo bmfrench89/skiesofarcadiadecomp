@@ -94,15 +94,26 @@ static void script_init(void)
     const char* p = env;
     g_script_n = 0;
     while (p && *p && g_script_n < (int)(sizeof g_script / sizeof g_script[0])) {
+        /* An item this cannot read ends the parse *at the item*, so the line
+         * below names it. Each of these used to be accepted as an event that
+         * pressed nothing, counted and silent: "START" or "strat" (unknown
+         * name), "start ," (the space is part of the name), "1700:#" (held for
+         * zero frames). tools/scenario.py rejects all of them, but SOA_PAD
+         * typed by hand never passes through it. */
+        const char* item = p;
+        int named = 0, bad = 0;
         char* end;
-        unsigned frame = (unsigned)strtoul(p, &end, 10), every = 0, hold = HOLD_FRAMES;
+        unsigned frame, every = 0, hold = HOLD_FRAMES;
         uint16_t buttons = 0;
-        if (end == p || *end != ':') break;
+        if (*p < '0' || *p > '9') break; /* strtoul would skip a space or take a sign */
+        frame = (unsigned)strtoul(p, &end, 10);
+        if (*end != ':') break;
         p = end + 1;
         uint8_t stick[2] = {128, 128};
         while (*p && *p != ',' && *p != '@' && *p != '#') {
             const char* q = p;
             size_t len;
+            uint16_t b;
             while (*q && *q != ',' && *q != '+' && *q != '@' && *q != '#') q++;
             len = (size_t)(q - p);
             /* sup/sdown/sleft/sright move the main stick; everything else is a button */
@@ -110,14 +121,19 @@ static void script_init(void)
             else if (len == 5 && strncmp(p, "sdown", 5) == 0) stick[1] = 0;
             else if (len == 5 && strncmp(p, "sleft", 5) == 0) stick[0] = 0;
             else if (len == 6 && strncmp(p, "sright", 6) == 0) stick[0] = 255;
-            else buttons |= button_named(p, len);
+            else if ((b = button_named(p, len)) != 0) buttons |= b;
+            else { bad = 1; break; }
+            named = 1;
             p = *q == '+' ? q + 1 : q;
         }
-        while (*p == '@' || *p == '#') {
-            unsigned n = (unsigned)strtoul(p + 1, &end, 10);
+        while (!bad && (*p == '@' || *p == '#')) {
+            unsigned n;
+            if (p[1] < '0' || p[1] > '9') { bad = 1; break; }
+            n = (unsigned)strtoul(p + 1, &end, 10);
             if (*p == '@') every = n; else hold = n;
             p = end;
         }
+        if (bad || !named || (*p && *p != ',')) { p = item; break; }
         g_script[g_script_n].frame = frame;
         g_script[g_script_n].every = every;
         g_script[g_script_n].hold = hold;

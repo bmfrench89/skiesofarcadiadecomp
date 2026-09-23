@@ -716,28 +716,43 @@ typedef struct {
 static Poke g_pokes[POKE_MAX];
 static int g_poke_n = -1; /* -1 until SOA_POKE has been read */
 
+/* One number of an item, or 0 if it is not one. strtoul alone read three
+ * things nobody typed and armed them without a word: MSVC's unsigned long is
+ * 32 bits, so 0x100000000 saturated to FFFFFFFF (and a frame past 2^32 never
+ * fired); base 0 read 0101 as octal 65; and it skips spaces and takes a sign,
+ * so -1 was FFFFFFFF. */
+static int poke_number(const char** p, int base, uint32_t* out)
+{
+    const char* s = *p;
+    char* end;
+    unsigned long long v;
+    if (*s < '0' || *s > '9') return 0;
+    if (base == 0 && s[0] == '0' && s[1] >= '0' && s[1] <= '9') return 0;
+    v = strtoull(s, &end, base);
+    if (end == s || v > 0xFFFFFFFFull) return 0;
+    *out = (uint32_t)v;
+    *p = end;
+    return 1;
+}
+
 static void poke_parse(void)
 {
     const char* p = getenv("SOA_POKE");
     g_poke_n = 0;
     if (!p || !*p) return;
     while (*p && g_poke_n < POKE_MAX) {
-        char* end;
-        unsigned frame;
-        uint32_t ea, value;
-        frame = (unsigned)strtoul(p, &end, 10);
-        if (end == p || *end != ':') break;
-        p = end + 1;
-        ea = (uint32_t)strtoul(p, &end, 0);
-        if (end == p || *end != '=') break;
-        p = end + 1;
-        value = (uint32_t)strtoul(p, &end, 0);
-        if (end == p) break;
+        const char* item = p; /* a refusal quotes the whole item, not the half of it that failed */
+        uint32_t frame, ea, value;
+        if (!poke_number(&p, 10, &frame) || *p != ':') { p = item; break; }
+        p++;
+        if (!poke_number(&p, 0, &ea) || *p != '=') { p = item; break; }
+        p++;
+        if (!poke_number(&p, 0, &value) || (*p && *p != ',')) { p = item; break; }
         g_pokes[g_poke_n].frame = frame;
         g_pokes[g_poke_n].ea = ea;
         g_pokes[g_poke_n].value = value;
         g_poke_n++;
-        p = end + (*end == ',' ? 1 : 0);
+        p += *p == ',' ? 1 : 0;
     }
     /* Refusing quietly is what a switch must never do: a run driven by a
      * mistyped poke looks exactly like a run whose poke did nothing. */

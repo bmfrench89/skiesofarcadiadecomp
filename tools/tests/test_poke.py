@@ -55,8 +55,12 @@ def run(exe, tmp_path, poke):
 def test_well_formed_pokes_are_armed_and_counted(tmp_path):
     """Both radices, in one switch: a decimal frame with a 0x address and a 0x
     value, and a wholly decimal item."""
-    out = run(build(tmp_path), tmp_path, "16000:0x80311AC4=200,100:2148535492=0x62000000")
-    assert "[poke] 2 poke(s) armed" in out, out
+    out = run(
+        build(tmp_path),
+        tmp_path,
+        "16000:0x80311AC4=200,100:2148535492=0x62000000,0:0x80311AEC=0,1:0xFFFFFFFF=0xFFFFFFFF",
+    )
+    assert "[poke] 4 poke(s) armed" in out, out
     assert "stopped at" not in out, out
 
 
@@ -69,8 +73,30 @@ def test_well_formed_pokes_are_armed_and_counted(tmp_path):
         ("16000:0x80311AC4:200", "a colon where the equals sign goes"),
         ("frame:0x80311AC4=200", "a frame that is not a number"),
         ("16000:=200", "an equals sign with no address"),
+        # The first six of these used to arm, and store something other than
+        # what was typed; the seventh was already refused and stays as a guard.
+        ("16000:0x80311AC4=0x100000000", "a value past 32 bits, saturated to FFFFFFFF"),
+        ("99999999999:0x80311AC4=1", "a frame past 32 bits, which then never fired"),
+        ("16000:0x180311AC4=1", "an address past 32 bits"),
+        ("16000:0x80311AC4=-1", "a sign, read as FFFFFFFF"),
+        ("16000:0x80311AC4=0101", "a leading zero, read as octal 65"),
+        ("16000: 0x80311AC4=1", "a space, which strtoul skips"),
+        ("16000:0x80311AC4=5x", "trailing junk after the value"),
     ],
-    ids=["no-colon", "no-value", "colon-for-equals", "frame-not-a-number", "no-address"],
+    ids=[
+        "no-colon",
+        "no-value",
+        "colon-for-equals",
+        "frame-not-a-number",
+        "no-address",
+        "value-over-32-bits",
+        "frame-over-32-bits",
+        "address-over-32-bits",
+        "negative",
+        "octal",
+        "space",
+        "junk-after-value",
+    ],
 )
 def test_a_malformed_item_is_refused_out_loud(tmp_path, bad, why):
     """Each of these used to be the shape of a switch that drove nothing and
