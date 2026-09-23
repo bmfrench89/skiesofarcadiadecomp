@@ -1248,3 +1248,46 @@ instead of 14710, five times less guest time per experiment, and a save made
 after any warp, part select or story poke carries that state to every later
 run. The card is game-written data, so the images stay in `build/` and are
 never committed.
+
+
+**The developers' part select reaches parts B, H and L.** 2026-09-23, each run
+starting from the save above (the field by frame 2800) and warping by name to
+`ME355A.SCT` at frame 3300. The map is a corridor with a Valuan officer; his
+first question and then 《どうする？》 with 「Bパートへ」「Cパートへ」「へ」
+(frame 4260 of `build/scenario-partsel.log`) are the first page of six --
+B/C, D/E, F/G, H/I, J/K, L -- each with "next" third.
+
+- **Part B** (`scenario-partsel.log`: A every 60 frames from 3500, so the first
+  choice everywhere). The A at 4280 runs routine `a`, and the watch on
+  0x80310B3C shows the flag word climb 6, e, 1e, ... 8003fe, 8007fe, a007fe,
+  e007fe, ... fffffe -- flags 1-23 set in exactly the order
+  `docs/research/story-flags.md` read from the script (9, then 23, 10, 21, 22,
+  19, 11, 12, 18, 20, 13...). Then `/field/a002b.mld`: frame 5000 is Vyse on
+  the Pirate Isle dock beside a ship, minimap drawn.
+- **Part H**, twice, by accident. Each page first shows 《どうする？》 as a
+  message box waiting for A (frame 4780, with the ▼), and only then the
+  choices; the downs meant for the choices hit the box and were dropped, so
+  every page after the first shifted by one and both runs took H:
+  `/field/a018a.mld`, Esperanza, frame 6000.
+- **Part L** (`scenario-partL3.log`): per page A, `down#4`, `down#4`, A. The
+  part routines run, the party is fixed, and the run warps to the world map --
+  `/field/sora02.mld`, then `/field/a099o.mld`, the letter 'o' being story
+  stage B[6] = 14 as the research said -- from which the story itself warps
+  on to `/field/a126a.mld`, the Dangral base: frame 7000 is Vyse on a cavern
+  floor facing a metal installation.
+
+Both H and L runs then saved with the one-word request (163,840 bytes written
+each); `build/savetest/card-partH.raw` and `card-partL.raw` on the machine
+that ran them start a run in the middle and near the end of the story. The
+pad for L, as generated:
+
+```python
+ev = ["1600:start","1640:a","1800:start","1840:a","2000:start","2040:a","2240:a","2440:a","2640:a"]
+ev += [f"{f}:a" for f in range(3500, 4221, 60)]    # the B/C page's choices, up by 4260
+ev += ["4270:down#4", "4300:down#4", "4340:a"]      # B/C: "next"
+t = 4420
+for page in range(4):                                # D/E, F/G, H/I, J/K
+    ev += [f"{t}:a", f"{t+60}:down#4", f"{t+90}:down#4", f"{t+130}:a"]
+    t += 210
+ev += [f"{t}:a", f"{t+80}:a"]                        # the L page: dismiss, take L
+```

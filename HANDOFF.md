@@ -195,18 +195,51 @@ cost this session runs, and both are cheap to know:
   was fully explained by its A presses running out mid-dialogue, with speed a
   confound that never got tested.
 
-**The battle command wheel** has seven labels, every one read off a rendered
-frame of the first battle: **Attack, Magic, Focus, S-move, Guard, Run, Item.**
-The d-pad rotates it, not the stick, and A commits; committing S-move put
-Vyse's S-Move name box on screen, so a non-default command does execute from a
-script. Measured transitions: Attack -right-> Magic -right-> Focus; Attack
--left-> Item -left-> Run; Run -right-> Guard -right-> S-move. The ring's order
-is **not** established -- further presses past Focus and past Run changed
-nothing, and the frames cannot tell a refusal to wrap from a dropped press, so
-drive it one confirmed step at a time. `docs/FINDINGS.md` also records the
-menu's code (`fn_8007A890`, its mask in `fn_80079F74`, targets in
-`fn_80079C5C`), which says *four* selectable entries and so disagrees with the
-screen. Both are written down; neither has been reconciled.
+**The battle command wheel** is `fn_8007CAB0`, seven slots with no wrap:
+0 Focus, 1 Magic, 2 S-move, 3 Attack (where it opens), 4 Guard, 5 Item, 6
+Run. **A plain scripted `left` moves two slots**: `si.c` holds a press for
+10 frames and the game's auto-repeat fires after 6, so every press measured
+here moved twice -- which is exactly why the transitions in FINDINGS looked
+like a ring that refused to wrap. Use `left#4` / `right#4` for one step.
+`fn_8007A890` is the *Item* submenu, not the wheel; the "four entries versus
+seven labels" disagreement was two different menus
+(`docs/research/encounters.md`).
+
+**Start a run from a save, not from New Game.** A save loads to the field by
+frame ~2800 instead of ~14710. Make one once (on a *copy* of the card --
+never `build/cards/slotA.raw`):
+
+```
+mkdir build/savetest; cp build/cards/slotA.raw build/savetest/card.raw
+python tools/scenario.py run battle --frames 16600 --log build/scenario-save.log \
+  --env SOA_CARD=build/savetest/card.raw \
+  --env SOA_POKE=15000:0x803473B0=0,15000:0x803473B4=1 \
+  --env SOA_PAD=<the battle preamble to 14850>,15300:a,15450:a,15600:a,15750:a,15900:a,16050:x,16200:x
+```
+
+`0x803473B4 = 1` is the request a save point makes; it opens the game's own
+save menu in any loaded field. Then every later run copies that card and
+boots with `1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2240:a,2440:a,2640:a`
+-- the last three walk the load menu -- and is standing in the saved map by
+2800. **Do not press A after the load**: the save point is right there and A
+opens it. `build/savetest/card-saved.raw` on the machine that wrote this is
+such a card (a101b, part A).
+
+**The developers' part select is on the disc.** Warp by name to `ME355A.SCT`
+(`0x4D453335 0x35412E53 0x43540000`, then 15) and an officer asks what you
+want; pressing only A reaches 《どうする？》「Bパートへ」「Cパートへ」「へ」,
+the first of six pages (B/C, D/E, F/G, H/I, J/K, L), each with "next" as its
+third choice. A choice runs the game's own routines for every earlier part --
+the watch shows flags 1-23 set in story order -- fixes the party with JOIN and
+LEAVE, and warps: B to Pirate Isle (`002b`), H to Esperanza (`018a`), L to the
+world map (`a099o`, from which the story carries the run into the Dangral base,
+`126a`). **Each page is two steps**: 《どうする？》 first appears as a message box
+waiting for A, and only then do the choices come up -- downs sent to the box
+are ignored, which is how two attempts at L landed on H. So per page: A, then
+`down#4`, `down#4`, then A (the B/C page's box is already dismissed by the
+A presses that reach it). The generator for L's pad is in FINDINGS;
+`build/savetest/card-partH.raw` and `card-partL.raw` hold saves made right
+after arriving. `docs/research/story-flags.md` has what each part sets.
 
 **`SOA_POKE` is a read primitive as well as a write one.** Every poke prints
 the value it replaced, so poking a word with its own value traces it across a
