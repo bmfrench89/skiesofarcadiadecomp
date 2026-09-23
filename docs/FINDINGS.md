@@ -1438,3 +1438,20 @@ random sky encounter, with its own map as the return point. `sbek0000.mld`,
 Prototype Cannons on the list, **round 3 of 41** -- the rounds advance under
 the scripted A presses. So the round-2 stall above was the part-A save's
 empty ship, and ship battles run.
+
+
+**A battle the story allows: two non-Attack commands, a win, and the field
+fades back in by itself.** `build/scenario-fairbattle.log`, 2026-09-23, from
+the save: the ship's alarm switched on first (flag 2556 set, 0x80310C78 =
+0x10000000; flag 1025 cleared, 0x80310BBC 0x430E -> 0x430C), then the six-word
+battle request. A watch on the wheel's words (`SOA_WATCH=0x80346B40,16`) shows
+its start slot 3 (Attack), then 2 and 1 for Vyse -- one slot per `right#4`,
+which confirms the auto-repeat reading above -- and 3 then 4 for Aika (Guard).
+The battle loads effect packages no run had loaded (`/BEFF/D2400600.MLK`,
+`/BEFF/E6700017.MLD`), is won (`PCWIN.MLK`), and the field comes back faded in
+with no poke: frame 7000 is the hold under red alarm lighting, Vyse by the
+save point. The earlier black field was the story's rule, and this is the
+same code path with the rule satisfied. (Each third single-step press in a
+row was not taken, so Vyse committed Magic rather than Focus and Aika Guard
+rather than Item; a press arriving while the wheel animates is dropped.
+Space single steps further apart than 60 frames.)

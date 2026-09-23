@@ -324,10 +324,12 @@ needs more judgement about what the port is for.
 1. **Test battles the way the story allows them.** A forced battle is fought,
    won and returned from correctly -- but only a battle the game's rules allow
    in that state comes back with the screen faded in (FINDINGS: the black field
-   after the first forced battle was the recipe's, not the port's). Set the
-   alarm first, or use a part-select save where encounters are live, and then
-   drive the wheel through Magic, Items and Focus: `/beff` has 546 effect
-   packages and only a handful have ever loaded.
+   after the first forced battle was the recipe's, not the port's). With the
+   alarm set first, a battle using Magic and Guard was won and faded back in
+   by itself. Still to drive: Items, Focus and S-moves (space single-step
+   presses over 60 frames apart -- a press during the wheel's animation is
+   dropped), and later-story battles from the H and L saves: `/beff` has 546
+   effect packages and only a handful have ever loaded.
 2. **Cover the rest of the game with the tools that now exist.** A save loads
    to the field by frame 2800; the part select reaches story parts B-L; a
    four-poke warp reaches any of the 255 warpable maps; one word plays the
