@@ -67,7 +67,7 @@ compared. Seven of the twenty-one units are fully verified; fourteen are not.
 That is the oracle being honest rather than a defect, but do not quote the
 round number without it.
 
-## Nine things the history says that are wrong
+## Ten things the history says that are wrong
 
 Commit messages and older doc revisions are a record of what was believed at
 the time. These were each corrected later, and re-deriving any of them would
@@ -137,7 +137,14 @@ cost you a day.
    disassembly stopped five instructions short of the second call. Whatever
    makes a picker warp black, it is not that gate.
 
-The pattern behind all nine: a count or a description was read instead of the
+10. **"A won battle leaves the field black because the player is never
+   re-spawned."** Written 2026-09-23 and wrong within the hour. The capture it
+   rested on was of a frame still on the results screen (field state 4), where
+   there is no player yet; at state 8 the room is fully drawn under a screen
+   fade that the map's script, in a story state where retail allows no battle,
+   never lifts. A fade poke brought the room back. The port was never at fault.
+
+The pattern behind all ten: a count or a description was read instead of the
 thing itself. Every correction came from disassembling, tracing, or rendering
 the frame and looking at it.
 
@@ -294,19 +301,20 @@ washed-out colour and a correct fix would have failed the suite.
 The plan's cheap, well-specified items are done. What is left is larger and
 needs more judgement about what the port is for.
 
-1. **Fix the black field after a won battle** -- the one defect found so far
-   that would stop a person playing. A forced battle on `a101b` is fought and
-   won, the results screen shows, and the field comes back with the player
-   task (`playerAct`) never re-spawned: the player pointer 0x80347450 stays 0,
-   no world geometry is submitted, every frame is black. FINDINGS section 11's
-   last entries have the measurements; settle first whether a *natural*
-   encounter does the same (the forced request may leave something unset),
-   then find which step of the return path should re-spawn the player.
+1. **Test battles the way the story allows them.** A forced battle is fought,
+   won and returned from correctly -- but only a battle the game's rules allow
+   in that state comes back with the screen faded in (FINDINGS: the black field
+   after the first forced battle was the recipe's, not the port's). Set the
+   alarm first, or use a part-select save where encounters are live, and then
+   drive the wheel through Magic, Items and Focus: `/beff` has 546 effect
+   packages and only a handful have ever loaded.
 2. **Cover the rest of the game with the tools that now exist.** A save loads
    to the field by frame 2800; the part select reaches story parts B-L; a
    four-poke warp reaches any of the 255 warpable maps; one word plays the
-   ending. Two censuses loaded 72 maps with no runtime fault (a third, of 64,
-   was running when this was written -- `build/scenario-census3.log`). Still
+   ending. Three censuses loaded 118 maps with no runtime fault; the third
+   then trapped on warp 47, `a116c` from `a116b`, right after the game's own
+   `Chgkmap Error 9001` (a camera the map lacks, most likely from entering
+   out of story order -- FINDINGS). Still
    untested: the ship battles entered the game's own way (opcode 210: the
    return name at 0x802E5E68 and 0x803472E4 = 1, *not* state 15 --
    `docs/research/ship-worldmap.md`), sailing the world map (`a099x`; its

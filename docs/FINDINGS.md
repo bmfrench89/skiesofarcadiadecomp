@@ -1315,48 +1315,72 @@ yet shows the scenes *between* those points, and the census and the part
 select are how to go looking.
 
 
-**A won battle leaves the field black: the player is never re-spawned.**
-The defect that matters most for someone playing, found 2026-09-23 and not
-yet fixed. A battle forced on `a101b` with the six-word script-battle request
-(`docs/research/encounters.md`: 0x803473C8 = 2, 0x803473CC = 0, 0x803473D0 =
-0, 0x803473D8 = -1, 0x80346D28 = 0, 0x803473D4 = 1) runs properly: field
-states 8, 9, 10, 11, the battle scene, a round against a Valuan "Soldier"
-(frame 4000 of `build/scenario-forcebattle.log`), the win (`/BEFF/PCWIN.MLK`),
-and the results screen -- 5 Gold, Vyse to Lv 2, magic experience per colour.
-The field then comes back (scene 6 from the battle exit's win arm, states 0,
-1, 3, **4** -- the results -- 5, 7, 8, `/player.mld` and `/field/a101b.mld`
-loading) and **every frame after the results is pure black**. Same after a
-New Game (`scenario-forcebattle-ng.log`, black from frame 17000 on) as after
-a Continue, so it is not the save.
+**A forced battle is fought, won and returned from correctly; the black field
+after it was the recipe's fault.** Written first on 2026-09-23 as "the player
+is never re-spawned", which was wrong within the hour -- recorded here because
+the way it went wrong is the lesson.
 
-What is known about it:
+A battle forced on `a101b` with the six-word script-battle request
+(`docs/research/encounters.md`: 0x803473C8 = 2, 0x803473CC = 0, 0x803473D0 = 0,
+0x803473D8 = -1, 0x80346D28 = 0, 0x803473D4 = 1) runs properly: field states
+8, 9, 10, 11, the battle scene, a round against a Valuan "Soldier" (frame 4000
+of `build/scenario-forcebattle.log`), the win (`/BEFF/PCWIN.MLK`), and the
+results screen -- 5 Gold, Vyse to Lv 2, magic experience per colour. The field
+comes back (states 0, 1, 3, 4 -- the results -- 5, 7, 8) and every frame after
+it is black, after a New Game as after a Continue.
 
-- It is not a fade. A capture of a black frame (`build/fifo-probe/5500`, taken
-  with `SOA_FIFO_DIR` pointed there) has 358 draws and **none of vertex format
-  2**, the world geometry, against 2,182 in the same room before the battle
-  (`build/fifo-probe/3200`): only HUD quads and degenerate strips. The world is
-  not submitted.
-- **The player task is gone.** Diffing the two captures' memory images, the
-  player-object pointer 0x80347450 (-29392(r13)) is 0x80F79320 before and 0
-  after. State 11 zeroes it on the way into the battle, and `playerAct`
-  (`fn_80119FF4`, the object table at 0x802E28A0 names it) stores its object
-  there every frame it runs -- so after the battle `playerAct` never runs.
-  With no player there is no camera, and nothing to draw.
-- The per-map flags are kept across a battle **on purpose**: `fn_801F72F8`
-  clears flags 1856-2047 only when 0x80347474 is nonzero, state 15 (a warp)
-  sets it to 1 and state 9 (a battle) to 0. `me101b`'s loop fades in only when
-  flag 1856 is clear, so after a battle that branch is skipped by design; its
-  init instead takes `IF (sys[15] == 10000)`, "back from a battle", and
-  `sys[15]` is 10000 because the scene dispatcher sets it on every battle frame.
-  Which step of that return path should re-spawn the player is the open
-  question, and a read-only investigation of it is in progress.
-- Whether a *natural* random encounter does the same is not established.
-  `boot_monkey.log` won two battles in this room and returned to it, and
-  encounters kept happening afterwards, so the field logic ran on; that run's
-  frames were not kept. If the forced request leaves something unset that a
-  real encounter sets, this is the recipe's fault and not the port's -- which
-  is exactly the question to settle before touching `runtime/`.
+**What was wrong.** A memory diff and a command-stream capture of a "black
+frame" showed the player pointer 0x80347450 at 0 and no world geometry, and
+were read as "the player task is gone". That capture was of a frame still in
+field state 4, the results screen, where the player does not exist yet and the
+world is not drawn (a read-only re-check of the same `.ram` found 0x80311AEC =
+4) -- the capture came from a run whose A presses were `#4` holds, which the
+results screen did not take. The "state 8" the conclusion needed was never
+captured.
 
-The saves, the part select, the ending and every warp in this section went
-through state 15, which never zeroes the player; nothing else here is
-affected.
+**What is right** (`build/scenario-fadetest.log`, 2026-09-23). The same battle,
+with a capture at frame 5900 and the fade poked at 6000:
+
+- at 5900, black on screen: field state 8, player pointer 0x80EB7BA0, and the
+  stream holds **2,186 world draws** (vertex format 2) -- the room is drawn --
+  under the screen fade, whose level at 0x80347510 is 1.0 and direction at
+  0x80347518 is 1 (out);
+- `0x80347518 <- 0` at 6000, and from frame 6100 the hold is back: Vyse by the
+  save point, 95,000 colours, frame 6300 opened and read.
+
+So the port redraws the field after a battle. What leaves it black is the
+game: every map load resets the fade to black (`fn_801CBC90` from
+`fn_80101264`), and `me101b`'s return-from-battle path (`sys[15] == 10000`)
+fades back in only when the ship's alarm is on (flag 2556) or after event a04
+(flag 3). This save has neither, and in retail a random encounter cannot happen
+here at all -- the encounter check refuses while flag 1025 is set (0x800C1D48
+reads bit 0x2 of 0x80310BBC, which is 0x430E here). The forced request made a
+battle the game's own rules forbid in that state, and the script, reasonably,
+has no path back from it. A fair test sets the alarm first
+(`0x80310C78 = 0x10000000`, `0x80310BBC = 0x0000430C` from this save) or
+fights where the story allows it.
+
+
+**A third census: 46 more warps without a fault, then the first trap.**
+`build/scenario-census3.log`, 2026-09-23, from the save, four pokes a warp, 64
+warps planned. Warps 1-46 (`034e` to `116b`): 27 drawn scenes, 3 black
+(`034h`, `101c`, `106b`), 1 partial (`034i`), and 15 warps to `099b`-`099q`,
+which all show the same world-map frame -- the letter is ignored for map 99
+and chosen from the story stage, as `ship-worldmap.md` said. 0 unknown FIFO
+bytes. (Rows after the trap are not counted: the table reads
+`build/frames/NNNN.png`, and those were stale files from earlier runs -- a
+census table must only read frames its own run wrote.)
+
+**Warp 47, `a116c` from `a116b`, trapped.** The map loaded, the game printed
+its own error, `Chgkmap Error 9001` -- the map's script asked (op 235,
+`fn_800E2924`) for camera object 9001, which the map does not have -- and then
+`fn_800E1A58` followed a garbage pointer: `[mem] a load from block 800E1B2C
+reached 81800018`, twenty `[mmio!]` reads of 0xCC0080xx, and a jump to
+0x52EC0861, which the port stops as a guest trap (exit 3). Backtrace
+800E2940 <- 8020B880 <- 8021137C <- 80212330 <- 80101A38: the script tick.
+The game's own error comes first, and the entry is out of story order (part
+A's flags, arriving from `116b`), so the likeliest reading is the game failing
+on a state it never meets, the way the battle above did; it is not
+established. The next step is to warp there from a part-select save made for
+that part of the story, and to read `me116c.sct` for which entry asks for
+camera 9001.
