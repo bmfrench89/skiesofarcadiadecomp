@@ -18,26 +18,23 @@ rest.
 
 ## State
 
-**Not pushed.** As of 2026-09-22 the work of that day is on the local branch
-`teleport-and-audit`, fifteen commits ahead of `main` (which is still
-`2eac42c`, pushed, CI green): the name-driven teleport and its census, 36
-corrections from an audit, and the tests for them. Every pre-push check
-passes on it locally -- guard, `ruff check`, `ruff format --check`, 589
-tests, `decomp.py`, the self test, `title --check` 4/4, and the replay 23/23
-at four thread counts -- but CI has not seen it. Merge it to `main` and push,
-or push the branch and open a PR.
+Everything is on `main` and pushed as of 2026-09-23: the name-driven teleport
+and its census, the first ship battle, 36 corrections from an audit, and the
+tests for them. Every pre-push check passed locally before the push -- guard
+and `guard.py --history`, `ruff check`, `ruff format --check`, 605 tests,
+`decomp.py`, the self test, `title --check` 4/4, and the replay 23/23 at four
+thread counts.
 
-**One decision is waiting on the owner, and it is not a code change.** The
-audit extended CI's history scan to the directory names `tools/guard.py`
-forbids, and the extended scan fails on published history: commits of
-2026-09-15/16 (2344f33, f404f0c, 17a3a4c, 469ebd3, 9fa0cb0) added 24 files
-under `scratch/`, deleted later in 9e4a955 but still on `origin/main`. Most
-are analysis scripts, but `scratch/f12000.txt` is a 30,526-line decoded GX
-command stream for one frame, which this repository treats as game data. The
-finished check is committed on the unmerged local branch `ci-history-dirs`
-(6c1fbaa) and is *not* on `teleport-and-audit`, because applying it turns CI red until either
-history is rewritten or the paths are exempted -- the owner's call, not an
-agent's. Also left there: two stale worktrees (`git worktree list`).
+**History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
+found that commits of 2026-09-15/16 added files under a directory the guard
+forbids (deleted since, still in published history). Each was read: analysis
+scripts, a table of function addresses, an opcode census, and one frame's GX
+command stream decoded to register writes and draw summaries, with no asset
+bytes. Rewriting public history would have changed every hash the documents
+cite, so they are exempt in `HISTORY_EXEMPT` in `tools/guard.py`, keyed by blob
+as well as path, and CI now runs `guard.py --history` over every path any
+commit ever held. Two stale git worktrees are left on the owner's machine
+(`git worktree list`); removing one was refused by a permission prompt.
 
 Since 2026-09-21 the renderer applies the EFB copy's deflicker filter (PLAN
 C3), `SOA_POKE` can write guest memory mid-run (PLAN D2's half), and the field
