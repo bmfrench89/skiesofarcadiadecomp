@@ -318,38 +318,28 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## What I would do next
 
-The plan's cheap, well-specified items are done. What is left is larger and
-needs more judgement about what the port is for.
+The question this project was stuck on for a week -- can anything reach the
+rest of the game -- is answered: every warpable map has loaded, the story's
+parts, the world map, ship battles and the ending all run, saves round-trip,
+and twenty-minute soaks of random play from mid- and late-story saves ran
+clean and walked through exits. Nothing found so far would stop a person
+playing. What is left is depth, and a person playing is now the best test.
 
-1. **Test battles the way the story allows them.** A forced battle is fought,
-   won and returned from correctly -- but only a battle the game's rules allow
-   in that state comes back with the screen faded in (FINDINGS: the black field
-   after the first forced battle was the recipe's, not the port's). With the
-   alarm set first, a battle using Magic and Guard was won and faded back in
-   by itself. Still to drive: Items, Focus and S-moves (space single-step
-   presses over 60 frames apart -- a press during the wheel's animation is
-   dropped), and later-story battles from the H and L saves: `/beff` has 546
-   effect packages and only a handful have ever loaded.
-2. **Cover the rest of the game with the tools that now exist.** A save loads
-   to the field by frame 2800; the part select reaches story parts B-L; a
-   four-poke warp reaches any of the 255 warpable maps; one word plays the
-   ending. Seven censuses loaded all 255 warpable maps with no runtime fault; the third
-   then trapped on warp 47, `a116c`, because the recipe left `sys[15]` saying
-   "arrived from a save" and that map's save-arrival branch asks for a camera
-   it lacks -- a branch retail cannot reach, since `a116c` has no save point.
-   Warps now set `sys[15]` too (below). Still
-   done since: the world map sails under a scripted stick, and a ship battle
-   entered the game's own way (opcode 210's words, not state 15) reaches The
-   Blackbeard's interface (stuck on round 2 from a part-A save, which has no
-   ship yet); from the part-L save a sky encounter runs properly -- the
-   Delphinus against the Black Pirates, rounds advancing.
-   Untested: the maps between the part-select start points. Walking is still unattempted and still needs no position feedback --
-   the hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire
-   on contact with no pad read.
-3. **The decompilation grind** (Track F). Two SDK libraries are complete. The
-   match oracle is now sound, so a match means what it says.
-4. **Speed** (plan C4), read against the profiler rather than against the
-   renderer track's assumption — see wrong statement 3 above.
+1. **Play it.** Windowed, with a pad (`README.md`), from a part-select save.
+   Every defect this project has found in two days was found by looking at
+   what the game did; a human session covers more of it in an hour than a
+   script does in a day. Keep `SOA_PAD_RECORD` on, so anything that breaks
+   can be replayed headless.
+2. **Soak longer and wider.** `tools/soak.py` with new seeds, from the H and L
+   saves and new part-select saves (C-K), under `SOA_STRICT=1`. A fault it
+   finds replays from its seed.
+3. **Battles past Attack.** Items, Focus and S-moves in a story state that
+   allows the fight (set the alarm first on `a101b`, or use the H/L saves);
+   single-step presses more than 60 frames apart.
+4. **Speed** (plan C4). A windowed run measured 26.7 game frames a second
+   against the game's 30; read the profiler first (wrong statement 3).
+5. **The decompilation grind** (Track F). Two SDK libraries are complete; the
+   match oracle is sound.
 
 The deflicker filter, which this list used to name as the largest understood
 fidelity gap, landed on 2026-09-21 and is no longer one. Do not take that as a

@@ -1507,3 +1507,8 @@ position feedback, only time.
 The generator is `tools/soak.py` (`--seed 7` reproduces this run exactly): an
 LCG choosing, each step, a held direction (60%), A (25%), B (10%) or a menu
 visit (5%), advancing 50-220 frames a step.
+
+The same from the part-L save (`build/scenario-soakL.log`, `tools/soak.py
+--seed 11`): 30,000 frames of random play in the Dangral base, exit 0, no
+`[mmio!]`, 0 unknown FIFO bytes -- and the random walk left `a126a` onto the
+world map (`a099o`) and came back in. Field to sky and back, by input alone.
