@@ -1291,3 +1291,25 @@ for page in range(4):                                # D/E, F/G, H/I, J/K
     t += 210
 ev += [f"{t}:a", f"{t+80}:a"]                        # the L page: dismiss, take L
 ```
+
+
+**The ending plays to "the End" and returns to the title.**
+`build/scenario-ending.log`, 2026-09-23: from the save, one word at frame 3300,
+`0x80310A68 = 0x4C000000` -- byte variable B[76] set to 'L' (the word was 0).
+State 8's arm sends a field with B[76] == 76 to state 15 (0x80101C88), and
+state 15's `fn_80101494` clears it and calls `fn_801DBE6C(9)` instead of
+restarting the field: the watch on the scene id 0x803475CC reads 9 from lr
+0x80101574, the branch the disassembly predicts. Scene 9 is `fn_801C8DF0`,
+the ending and staff roll. Frame 5000 is a page of it -- Daigo, "The Redeemed
+Prince", an epilogue card beside credits for scripting, technical support and
+the manual -- and the pages change through frame 12000; frame 13000 is
+"the End" in blue script on black. The ending then leaves by itself (scene 3,
+the title, from lr 0x801C9078) and the scripted A presses start a new game.
+No `[mmio!]`, 0 unknown FIFO bytes. The ending's streamed music (`m0N_L/R.dsp`)
+opens as the credits run.
+
+This is the last scene of the game. Together with the part select, which
+reaches the world map at part L, it means the executable's beginning, middle
+and end have all been run by this port -- by jumping, not by playing: nothing
+yet shows the scenes *between* those points, and the census and the part
+select are how to go looking.
