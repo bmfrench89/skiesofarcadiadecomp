@@ -64,16 +64,32 @@ FORBIDDEN_DIRS = {
 # A tracked text file this large is almost certainly not source.
 MAX_TRACKED_BYTES = 2 * 1024 * 1024
 
+# The repository this file is in, which is the one it guards, wherever it is
+# run from.
+ROOT = Path(__file__).resolve().parents[1]
 
-def tracked_files() -> list[str]:
-    out = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout
-    return [line for line in out.splitlines() if line]
+
+def tracked_files(root: Path) -> list[str]:
+    """Every path git tracks under ``root``, exactly as git stores it.
+
+    -z, because without it git C-quotes any path with a byte over 0x7F
+    (core.quotepath is true by default): café.dol came back as
+    "caf\\303\\251.dol", whose suffix is `.dol"`, and the guard passed it.
+    Decoded as UTF-8 rather than the locale's code page, which on Windows
+    would turn the name into one that is not on disk; surrogateescape keeps
+    a name that is not UTF-8 at all round-trippable instead of fatal.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True
+    ).stdout
+    return [p for p in out.decode("utf-8", "surrogateescape").split("\0") if p]
 
 
 def main() -> int:
     problems: list[str] = []
+    files = tracked_files(ROOT)
 
-    for rel in tracked_files():
+    for rel in files:
         path = Path(rel)
 
         if path.suffix.lower() in FORBIDDEN_SUFFIXES:
@@ -84,8 +100,10 @@ def main() -> int:
                 problems.append(f"{rel}: lives under '{part}/', which must not be tracked")
                 break
 
-        if path.exists():
-            size = path.stat().st_size
+        # Measured under ROOT, not the working directory: relative to anywhere
+        # else the path does not exist, and a file never found is never measured.
+        if (ROOT / path).exists():
+            size = (ROOT / path).stat().st_size
             if size > MAX_TRACKED_BYTES:
                 problems.append(f"{rel}: {size:,} bytes exceeds the {MAX_TRACKED_BYTES:,} limit")
 
@@ -100,7 +118,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"guard: {len(tracked_files())} tracked files, no game data")
+    print(f"guard: {len(files)} tracked files, no game data")
     return 0
 
 

@@ -18,6 +18,7 @@ CI actually runs rather than about a parsed abstraction of it.
 """
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,3 +78,60 @@ def test_every_forbidden_dir_is_matched_at_any_depth():
     assert "game" in guard.FORBIDDEN_DIRS
     for name in ("extracted", "build", "gen", "scratch", "vendor"):
         assert name in guard.FORBIDDEN_DIRS, name
+
+
+# --------------------------------------------------------------------------
+# the guard run against a repository of its own
+# --------------------------------------------------------------------------
+
+
+def scratch_repo(root: Path, files: dict[str, bytes]) -> Path:
+    """A throwaway repository with ``files`` staged. ls-files reads the index,
+    so nothing needs committing, and no identity needs configuring."""
+    root.mkdir(parents=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+    git("init", "-q")
+    # git's own default, written down: a machine that sets core.quotepath=false
+    # globally would otherwise hide the failure the next test exists for.
+    git("config", "core.quotepath", "true")
+    for rel, data in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    git("add", "-A")
+    return root
+
+
+def test_a_name_git_would_quote_is_still_seen_for_what_it_is(tmp_path, monkeypatch, capsys):
+    """`git ls-files` without -z C-quotes any path with a byte over 0x7F, so
+    café.dol came back as "caf\\303\\251.dol" -- whose suffix is `.dol"`, which
+    is on no list, and the guard passed a disc executable."""
+    repo = scratch_repo(tmp_path / "repo", {"café.dol": b"x", "src/ok.c": b"int x;\n"})
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(guard, "ROOT", repo, raising=False)
+    assert guard.main() == 1
+    err = capsys.readouterr().err
+    assert "café.dol: forbidden extension" in err
+    assert "ok.c" not in err
+
+
+def test_the_guard_reads_its_own_repository_from_anywhere(tmp_path, monkeypatch, capsys):
+    """git ran in the caller's working directory, and the size check stat()ed
+    each path relative to it as well: run from anywhere but the root, the
+    guard listed some other repository, or failed, and a path that did not
+    resolve was never measured at all."""
+    repo = scratch_repo(
+        tmp_path / "repo",
+        {"game/notes.txt": b"x", "big.txt": b"0" * (guard.MAX_TRACKED_BYTES + 1)},
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(guard, "ROOT", repo, raising=False)
+    assert guard.main() == 1
+    err = capsys.readouterr().err
+    assert "game/notes.txt: lives under 'game/'" in err
+    assert "big.txt:" in err and "exceeds" in err
