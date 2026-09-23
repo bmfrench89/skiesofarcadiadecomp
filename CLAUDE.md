@@ -120,16 +120,21 @@ the log path; three scenarios died part-way, silently, exit `-1`, with a second 
   to `src/game/` is untracked, `git add` says nothing, and a session's decompilation
   was invisible for a commit that way.
 - **Binding lists want lowercase `0x` and exactly eight hex digits** (`tools/soa/hle.py:20`):
-  `0X80005520`, `0x8000552` and `80005520` are each dropped with no error and no count.
-- **`units.txt` is tab-separated and `native` is lowercase.** Spaces raise an unhandled
-  `ValueError`; `Native` is silently ignored (`tools/recompile.py:71`), and the unit then
-  matches under `decomp.py` while never entering the port.
+  `0X80005520`, `0x8000552` and `80005520` were each dropped with no error and no count
+  until 2026-09-22; now any line that is not an entry, and a repeated address, stops the
+  build with the file and line. The rule is the same; only the silence is gone.
+- **`units.txt` is tab-separated and `native` is lowercase.** Spaces used to raise an
+  unhandled `ValueError` and `Native` was silently ignored, so the unit matched under
+  `decomp.py` while never entering the port. Since 2026-09-22 both readers share
+  `decomp.read_units`, which refuses either with the file and line -- but
+  `fetch_toolchain.py` and `test_decomp_native.py` still parse the file themselves.
 - **Counts in prose rot, and it is always the top-of-file status table.** `docs/PLAN.md`'s
   said 41 matching functions, 9 swapped in and 362 tests for three days, against a tree
   holding 83, 12 and 475 — and its C3 entry still said "all 20 captures" when the corpus
   had been 23 since `hold.scn`. Both are fixed. A single test module landing on
   2026-09-21 then moved the test count in six files at once, which is the real shape of
   this problem: one number lives in `docs/PLAN.md`, `docs/TESTING.md` (four places),
-  `HANDOFF.md`, `README.md` and `.claude/skills/check/SKILL.md`.
+  `HANDOFF.md`, `README.md`, `docs/ARCHITECTURE.md` and `.claude/skills/check/SKILL.md`
+  (the last copy found, 2026-09-22, still said 455).
   Measure before quoting a number; when you change one, fix every copy in the same change.
   `grep -rn "<the old number>" --include="*.md" .` is how you find them all.

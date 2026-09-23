@@ -34,23 +34,28 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-497 passed in 59.13s
+589 passed in 69.83s
 ```
 
-497 tests in 34 files, none of which reads the disc. They cover the Python
+589 tests in 36 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
 | File | Tests | What a failure means |
 |---|---|---|
+| `test_scenario.py` | 91 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
 | `test_cardformat.py` | 77 | the memory-card formatter: does the image it writes say what the mount reads? |
-| `test_scenario.py` | 59 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
 | `test_emit.py` | 21 | the emitter; the last cases compile the emitted C with MSVC and run it |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
+| `test_padrec.py` | 17 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
+| `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
+| `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
+| `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
+| `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
 | `test_aklz.py` | 14 | the AKLZ container decoder, on hand-built streams |
 | `test_formats.py` | 14 | the disc's format parsers, on synthesised fixtures |
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
@@ -60,19 +65,16 @@ its own and run it, some of the C as well:
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
 | `test_toolchain_inputs.py` | 11 | what a fresh checkout can check and with which compiler; every `src/**/*.c` is in `units.txt` |
 | `test_gxr_copy_filter.py` | 9 | what the EFB copy's vertical filter does to a pixel, including that the SDK's filter-off weights are the exact identity |
-| `test_poke.py` | 9 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
-| `test_padrec.py` | 7 | recording controller input and replaying it byte for byte |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
-| `test_decomp.py` | 6 | the `dc_*` rename scanner, on declarations that look like functions and are not |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
+| `test_guard.py` | 6 | the game-data guard's suffix and size limits, and the copy of them in CI's history scan — two lists that drift silently |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
-| `test_guard.py` | 4 | the game-data guard's suffix and size limits, and the copy of them in CI's history scan — two lists that drift silently |
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
@@ -84,10 +86,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `497 passed` |
-| no capstone — **what CI installs** | `478 passed, 1 skipped` |
-| no MSVC | `428 passed, 69 skipped` |
-| neither — **the Ubuntu CI leg** | `409 passed, 70 skipped` |
+| everything (MSVC + capstone) | `589 passed` |
+| no capstone — **what CI installs** | `570 passed, 1 skipped` |
+| no MSVC | `503 passed, 86 skipped` |
+| neither — **the Ubuntu CI leg** | `484 passed, 87 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -930,7 +932,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 69 of the 497 skip without a C compiler; they build one runtime file and run it.
+² 86 of the 589 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

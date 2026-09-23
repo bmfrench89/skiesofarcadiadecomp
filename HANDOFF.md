@@ -39,7 +39,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 497 |
+| Python tests | 589 |
 | Self-test cases | 73 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -300,6 +300,21 @@ each overturning the last, and what is left is cosmetic and well documented.
   from `gx.c` into `main.c` compiles cleanly and breaks 29 tests at the link
   step, which the compile-only CI job cannot see. Hang new per-frame work off
   `gx_set_frame_hook` instead.
+- **`gen/soa.exe` can be older than `runtime/`, and nothing says so.** The
+  binary every experiment of 2026-09-21/22 ran on was linked before commit
+  1bad9fb raised `SOA_POKE`'s limit from 64 to 256, so the "256-item budget"
+  in the docs was false on this machine for a day. After pulling runtime
+  changes, `python tools/recompile.py --link` (20 s) before trusting a run,
+  and read the `[poke] N poke(s) armed` line.
+- **A `run_*.log` has no trace lines in it.** `scenario.py run` echoes a
+  summary to stdout and writes the whole log, `[trace]` and `[watch]`
+  included, to `build/scenario-<name>.log` -- which the next run of the same
+  scenario overwrites. Pass `--log build/scenario-<experiment>.log` so the
+  evidence survives; the 131e load trace was lost that way.
+- **Probing line endings with `grep $'\r'` in Git Bash is unreliable** -- it
+  called three CRLF files LF on 2026-09-22. Ask Python:
+  `open(f,'rb').read().count(b'\r\n')`. Appending with a heredoc to a CRLF
+  file adds LF lines, which `ruff format --check` then flags.
 - **`tools/disasm.py` does not track update-form loads in its annotations.** At
   0x801019C0 it labels `lbz r0, 8(r3)` as `@ 0x80310008`, but the preceding
   `lwzu` had already moved r3 to 0x80311AC0, so the byte is at 0x80311AC8. Do

@@ -486,10 +486,10 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 455 tests, none of which needs a disc (anything that
+- `tools/tests/` — 589 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
-  `SOA_SELFTEST=1`, which does. A companion `docs/TESTING.md` is PLAN item
-  G2.
+  `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
+  it.
 - `config/scenarios/` — 13 scripted runs, each with its pad script, frame
   budget, environment and the evidence it was recovered from;
   `python tools/scenario.py list` prints them.
