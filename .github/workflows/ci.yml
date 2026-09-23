@@ -40,6 +40,16 @@ jobs:
           fi
           echo "history clean"
 
+      # The step above checks suffixes by blob, and names each blob once, under
+      # the first path it was reached by -- so a file renamed to main.dol and
+      # back is missed, and the eleven directory names guard.py refuses in the
+      # tree were never checked here at all. This checks every path any commit
+      # added or changed against both rules. HISTORY_EXEMPT in guard.py lists
+      # the 24 blobs, reviewed one by one, that published history already
+      # holds under scratch/.
+      - name: No forbidden path anywhere in history
+        run: python tools/guard.py --history
+
       - name: No oversized blobs in history
         run: |
           big=$(git rev-list --objects --all \

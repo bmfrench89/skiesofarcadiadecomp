@@ -58,7 +58,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 589 |
+| Python tests | 605 |
 | Self-test cases | 73 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |

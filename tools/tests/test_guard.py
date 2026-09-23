@@ -53,6 +53,32 @@ def test_the_history_scan_covers_exactly_the_suffixes_the_guard_refuses(workflow
     )
 
 
+def test_ci_scans_history_with_the_guard_itself(workflow):
+    """The directory names and the suffixes, over every path any commit
+    touched, are checked by guard.py --history rather than by a second copy
+    of the rules in bash -- so there is no copy to drift."""
+    assert "python tools/guard.py --history" in workflow
+
+
+@pytest.mark.parametrize(
+    "path,forbidden",
+    [
+        ("game/x.c", True),
+        ("src/game/x.c", True),  # the case that bit: any depth
+        ("src/Game/x.c", True),  # any case
+        ("a/b/BUILD/c/d.txt", True),
+        ("src/game.c", False),  # a file of that name is not a directory of it
+        ("src/games/x.c", False),
+        ("src/mygame/x.c", False),
+        ("src/soa/gen.c", False),
+        ("docs/refs.md", False),
+        ("my game/x.c", False),  # a component with a space in it is not "game"
+    ],
+)
+def test_a_forbidden_directory_is_any_directory_component(path, forbidden):
+    assert (guard.forbidden_dir(Path(path)) is not None) == forbidden, path
+
+
 def test_the_oversize_threshold_is_the_same_number_in_both(workflow):
     """guard.py caps a tracked file; CI caps a blob in history. Different
     limits would mean a file the guard accepts cannot be pushed."""
@@ -135,3 +161,100 @@ def test_the_guard_reads_its_own_repository_from_anywhere(tmp_path, monkeypatch,
     err = capsys.readouterr().err
     assert "game/notes.txt: lives under 'game/'" in err
     assert "big.txt:" in err and "exceeds" in err
+
+
+# --------------------------------------------------------------------------
+# guard.py --history, against a history of its own
+# --------------------------------------------------------------------------
+
+
+def history_repo(root: Path, steps: list[dict[str, bytes | None]]) -> Path:
+    """A repository with one commit per step; None deletes a path."""
+    root.mkdir(parents=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    for n, step in enumerate(steps):
+        for rel, data in step.items():
+            path = root / rel
+            if data is None:
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+        git("add", "-A")
+        git("commit", "-q", "--allow-empty", "-m", f"step {n}")
+    return root
+
+
+def blob_of(repo: Path, data: bytes) -> str:
+    return (
+        subprocess.run(
+            ["git", "hash-object", "--stdin"], cwd=repo, input=data, capture_output=True, check=True
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+
+def test_a_file_deleted_later_is_still_found(tmp_path):
+    """The reason history is scanned at all: a later commit cannot undo a
+    leak, and the tree check sees only the last commit."""
+    repo = history_repo(
+        tmp_path / "r", [{"game/notes.txt": b"x", "ok.c": b"1"}, {"game/notes.txt": None}]
+    )
+    problems = guard.history_problems(repo, frozenset())
+    assert len(problems) == 1 and "game/notes.txt" in problems[0] and "under 'game/'" in problems[0]
+
+
+def test_a_file_renamed_through_a_forbidden_name_is_found(tmp_path):
+    """The case rev-list --objects misses: the same bytes under an innocent
+    name and a forbidden one are one object, reported once, under whichever
+    path was reached first."""
+    repo = history_repo(
+        tmp_path / "r",
+        [
+            {"notes.txt": b"same bytes"},
+            {"notes.txt": None, "main.dol": b"same bytes"},
+            {"main.dol": None, "notes.txt": b"same bytes"},
+        ],
+    )
+    problems = guard.history_problems(repo, frozenset())
+    assert any("main.dol" in p and "forbidden extension" in p for p in problems), problems
+
+
+def test_an_exempt_blob_passes_and_new_bytes_at_its_path_do_not(tmp_path):
+    """HISTORY_EXEMPT is keyed by content as well as name, so the reviewed
+    file stays allowed and anything else written to that name is refused."""
+    repo = history_repo(
+        tmp_path / "r", [{"scratch/a.py": b"reviewed"}, {"scratch/a.py": b"something new"}]
+    )
+    exempt = frozenset({(blob_of(repo, b"reviewed"), "scratch/a.py")})
+    problems = guard.history_problems(repo, exempt)
+    assert len(problems) == 1 and blob_of(repo, b"something new")[:12] in problems[0], problems
+
+
+def test_a_clean_history_is_clean(tmp_path):
+    repo = history_repo(tmp_path / "r", [{"src/a.c": b"1"}, {"src/a.c": b"2", "docs/b.md": b"3"}])
+    assert guard.history_problems(repo, frozenset()) == []
+
+
+def test_this_repository_history_passes_and_every_exemption_is_used():
+    """Every entry in HISTORY_EXEMPT names a blob history really holds at that
+    path -- an exemption nothing needs is a hole waiting for a file. Skipped in
+    a shallow clone, which does not have the commits to check."""
+    shallow = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, capture_output=True, text=True
+    ).stdout.strip()
+    if shallow != "false":
+        pytest.skip("a shallow clone does not hold the history")
+    assert guard.history_problems(ROOT) == []
+    held = {(blob, rel) for _, blob, rel in guard.history_blobs(ROOT)}
+    assert held >= guard.HISTORY_EXEMPT, sorted(guard.HISTORY_EXEMPT - held)

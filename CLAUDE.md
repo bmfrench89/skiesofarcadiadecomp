@@ -16,6 +16,7 @@ In this order, cheapest first — about a minute in total:
 
 ```
 python tools/guard.py
+python tools/guard.py --history
 python -m ruff check tools
 python -m ruff format --check tools
 python -m pytest
