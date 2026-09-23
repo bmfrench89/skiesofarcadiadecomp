@@ -48,9 +48,8 @@ run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
 **Start here:** the cheap, well-specified items are gone. Done and run: A1,
-A2, A3, A4, B2, B3, C0, C2, C3, D1, D3, E1, F1, F2, F3, G1 and G2. Half-done and
-named in place: B1 (one step needs the disc), B4 (the card is written; loading
-a save remains), C1 (the instrument is built and the defect was not what the
+A2, A3, A4, B2, B3, B4, C0, C2, C3, D1, D3, E1, F1, F2, F3, G1 and G2. Half-done
+and named in place: B1 (one step needs the disc), C1 (the instrument is built and the defect was not what the
 entry said), E2 (the selftest half).
 
 What is left is larger and needs judgement about what the port is for: **D5**
@@ -343,7 +342,7 @@ run on the owner's machine or nowhere. What CI does hold is
 checksum; reverting any part of B2 fails it; a kill right after a save keeps the
 bytes. **First two met. The third needs a save, so it waits on B4.**
 
-**B4. Mount from the title, then round-trip a save** — *the write is done; loading a save remains.*
+**B4. Mount from the title, then round-trip a save** — *done: a save written from the field loads back through Continue (2026-09-23).*
 **The game has written to a memory card.** On 2026-09-18 a blank card in slot
 A produced the title screen's "Proceed with formatting?" prompt, Yes was
 confirmed, and `CARDFormatAsync` ran to completion: five sector erases, 960
@@ -373,6 +372,19 @@ card damaged with `tools/cardformat.py --damage dir` takes
 any prompt at all.
 *Done:* `[exi]` reports a non-zero written count, and
 `python tools/cardformat.py show` reads back what the game wrote. **Met.**
+**The round trip, 2026-09-23.** One word -- 0x803473B4 = 1, the request a save
+point's script opcode 138 makes -- opens the game's own save menu in any
+loaded field; five A presses and two X walk it to "Now saving" (frame 15900
+shows the file card: #01 Valuan Battle Ship, Lv 1, 0:07, Vyse and Aika), and
+the run writes 147,456 bytes. `cardformat.py show` then lists
+`GEAE 8P SA_LEGENDS.000`, 3 blocks. A second boot on that card takes title
+scenes 12, 13, **16, 17** -- Continue, never entered before -- reads 172,032
+bytes, writes none, and starts the field from the Continue path (state 0 from
+lr 0x80228B24) on `a101b`: Vyse standing at the save point by frame 2800,
+against frame 14710 for New Game. Both runs used a copy of the card
+(`build/savetest/`), never `build/cards/slotA.raw`. The recipe is in
+`docs/research/save-load.md` and FINDINGS section 11. The repair arm above is
+still unexercised.
 
 ---
 

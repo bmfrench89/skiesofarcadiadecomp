@@ -1218,3 +1218,33 @@ or that correct it:
   opcode 112, read first and ungated in `fn_800C1C24`), and **a save can be
   requested** with one (0x803473B4 = 1, which opens the game's own save menu
   in every loaded field). Both recipes are in the reports; runs of them follow.
+
+
+**A save written from the field loads back through Continue.**
+`build/scenario-save.log` then `build/scenario-load.log`, 2026-09-23, both on a
+copy of the formatted card in `build/savetest/`. The save run is the `battle`
+preamble to the field, then `SOA_POKE=15000:0x803473B0=0,15000:0x803473B4=1`
+and A at 15300, 15450, 15600, 15750 and 15900 and X at 16050 and 16200. The
+watch on 0x803473C4 reads 0 from lr 0x80123DE4 at the poke -- the save-point
+task opening the menu with `fn_801A21F8` -- and 1 from lr 0x8019E310 when it
+closes; between them the trace writes pages 0x3A00-0x3F80 and more, and the run
+ends `card 204800 bytes read, 147456 written`, which is one save and one
+overwrite from the spare A, as the research predicted to the byte. Frame
+15900 is the game's own screen: "Now saving. Please do not touch the Memory
+Card or the POWER Button.", file #01 "Valuan Battle Ship", Lv 1, 0:07, Vyse's
+and Aika's portraits. `cardformat.py show` reads back `SA_LEGENDS.000`, 3
+blocks, chain 8 9 10.
+
+The load run boots on that card with the preamble's START/A pairs and A every
+200 frames. The title goes through scenes 12, 13, then **16 and 17**, the
+Continue arm, which no run had entered; the field starts from its Continue
+path (state 0 written from lr 0x80228B24, then 1, 3, 5, 7, 8 -- no 15, no 2),
+`/field/a101b.mld` loads, and frame 3000 shows Vyse standing beside the
+glowing save point in the hold, minimap drawn. `card 172032 bytes read, 0
+written`. PLAN B4 is done.
+
+What it buys: a run that starts from a save reaches a field by frame 2800
+instead of 14710, five times less guest time per experiment, and a save made
+after any warp, part select or story poke carries that state to every later
+run. The card is game-written data, so the images stay in `build/` and are
+never committed.
