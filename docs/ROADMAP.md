@@ -160,7 +160,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 | `[x]` | **7.1** Title to field | M | **Done:** New Game, the opening, the deck battle and the Valuan ship's hold as the first navigable field, with dialogue, menus and the minimap rendering |
 | `[~]` | **7.2** Battle system | M | **The tutorial battle and random encounters in `a101b` run start to finish** (command wheel, targeting, attacks, damage, turns, victory); magic, items, Focus and boss fights not yet exercised |
 | `[~]` | **7.3** Ship/overworld | M | Airship sections. **Reached, not driven:** the world map (`a099x`) loads and draws, and a warp to `500a` fought a ship battle against The Blackbeard; sailing controls and the game's own entry to a ship battle (opcode 210) are untested |
-| `[~]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene. **Started:** a save round-trips through Continue, the part select reaches parts B-L, the ending plays, and 118 maps load without a runtime fault |
+| `[~]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene. **Started:** a save round-trips through Continue, the part select reaches parts B-L, the ending plays, and 169 maps load without a runtime fault |
 | `[ ]` | **7.5** Enhancements | **L, not M** | Widescreen, higher internal resolution. **Uncapped framerate is a re-architecture**, not a tweak: the engine is 480i-locked and retrace-driven |
 
 ---

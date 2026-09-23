@@ -1389,3 +1389,17 @@ And `a116c` has no save point -- no op 138 anywhere in its script, where
 and that branch, with its camera, is unreachable in retail. **A warp must also
 set `sys[15]`, the word at 0x8030E420**: 0 matches no script's `SWITCH` case
 and takes each map's default entrance. Five pokes a warp, 51 a run.
+
+
+**A fourth census, with `sys[15]` set: 51 warps, no fault, and `a116c` draws.**
+`build/scenario-census4.log`, 2026-09-23, from the save, five pokes a warp
+(name, `0x8030E420 = 0`, state 15), the 51 maps from `116c` to `238a`. Exit 0,
+0 unknown FIFO bytes, no `[mmio!]`. `a116c`, which trapped in census 3, now
+takes its default entrance and draws (297,703 px). 46 of the 51 end on a drawn
+scene; `205a`, `209a`, `215a` and `232a` are black and `230a` is a letterbox
+(86,400 px, 61 colours) -- the 2xx maps are the story's event stages, and like
+`a200a` they are expected to draw nothing out of order. Frames were cleared
+before the run, so every row read a frame this run wrote.
+
+Four censuses: **169 maps loaded with no runtime fault**, every warpable map
+below 500 but 14 of the 2xx event stages.
