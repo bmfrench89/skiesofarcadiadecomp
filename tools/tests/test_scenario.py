@@ -750,6 +750,37 @@ def test_replay_blesses_a_clean_sweep_and_then_holds_the_port_to_it(tmp_path, mo
     assert scenario.cmd_replay(args) == 1
 
 
+def test_bless_from_anywhere_but_the_corpus_is_refused(tmp_path, monkeypatch):
+    """The manifest pins build/fifo and nothing else. Blessing a sweep of
+    build/fifo-new would rewrite it with that directory's rows alone, and
+    every pinned capture would drop out of it without a word."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    monkeypatch.setattr(scenario, "MANIFEST", tmp_path / "fifo_manifest.tsv")
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "gen" / "soa.exe").write_bytes(b"")
+    data = tmp_path / "extracted"
+    (data / "sys").mkdir(parents=True)
+    for rel in scenario.NEEDED_FILES:
+        (data / rel).write_bytes(b"")
+    make_capture(tmp_path / "build" / "fifo", "0100")
+    pinned = {"0100": ("aaaa000000000000", "1111111111111111"), "0300": ("bbbb", "2222")}
+    scenario.write_manifest(scenario.MANIFEST, pinned)
+    before = scenario.MANIFEST.read_bytes()
+    elsewhere = tmp_path / "build" / "fifo-new"
+    make_capture(elsewhere, "3600")
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, REPLAY_TEXT))
+    args = argparse.Namespace(
+        exe="gen/soa.exe", fifo=str(elsewhere), threads="1", passes=1, bless=True
+    )
+    with pytest.raises(ScenarioError, match="--bless"):
+        scenario.cmd_replay(args)
+    assert scenario.MANIFEST.read_bytes() == before
+    # comparing a different directory against the manifest writes nothing, so it may run
+    args.bless = False
+    assert scenario.cmd_replay(args) == 1
+    assert scenario.MANIFEST.read_bytes() == before
+
+
 def test_replay_says_what_is_missing_rather_than_failing_oddly(tmp_path, monkeypatch):
     monkeypatch.setattr(scenario, "ROOT", tmp_path)
     args = argparse.Namespace(

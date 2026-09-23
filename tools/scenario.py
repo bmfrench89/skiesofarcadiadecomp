@@ -1055,6 +1055,18 @@ def keep_reference_pngs(directory: Path, echo=print) -> None:
 
 def cmd_replay(args: argparse.Namespace) -> int:
     exe, fifo = ROOT / args.exe, Path(args.fifo)
+    # The manifest pins build/fifo and nothing else, and --bless writes it from
+    # this sweep's rows alone: blessing build/fifo-new would replace the rows
+    # for every pinned capture with that directory's, and a check against it
+    # afterwards would be a check of the wrong corpus. Refused before the sweep,
+    # so the refusal does not cost one.
+    if args.bless and not is_the_corpus(fifo):
+        raise ScenarioError(
+            f"--bless writes {named(MANIFEST)}, which pins build/fifo alone; "
+            f"--fifo {named(fifo)} would replace its rows with that directory's. "
+            "Compare against it without --bless; a new capture joins the corpus by being "
+            "copied into build/fifo beside the others, and is blessed from there"
+        )
     # --replay takes the capture as its argument, so main.c falls back to the
     # literal directory "extracted" for the disc it still wants to open.
     missing = missing_inputs(exe, ROOT / DEFAULT_DATA)
