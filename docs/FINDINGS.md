@@ -1488,3 +1488,22 @@ That is coverage of the game's *data*: each map loaded, drew and ran its
 script for ten to twenty seconds. It is not a playthrough; what happens deep
 inside each map, and in the story sequences that join them, is still only
 what the censuses happened to show.
+
+
+**Twenty minutes of pseudo-random play in Esperanza: no fault, and the first
+map change made by walking.** `build/scenario-soakH.log`, 2026-09-23: the
+part-H save, then 321 generated pad events over 30,000 frames -- the stick held
+in one of eight directions for 40-120 frames, A, B, and now and then START
+into the menu and B out -- from a fixed seed, so the run repeats. Under
+`SOA_STRICT=1`, which stops at the first hardware access the runtime does not
+model: exit 0 at the frame limit, no `[mmio!]`, 0 unknown FIFO bytes. And the
+random walk took Vyse out of `a018a` into `a018b` at frame 26122 and back at
+26560 -- frame 26500 is him running across a rope bridge under a red sky, the
+minimap following. **Every earlier map change in this project was the story's,
+a lost fight's or a warp's; this is the first a player's input made.** The
+exit is a contact volume, as FINDINGS said of the hold's, so walking needed no
+position feedback, only time.
+
+The generator (`mksoak.py` in that session's scratchpad) is twenty lines: an
+LCG choosing, each step, a held direction (60%), A (25%), B (10%) or a menu
+visit (5%), advancing 50-220 frames a step.
