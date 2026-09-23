@@ -250,6 +250,16 @@ def test_scenario_rejects(tmp_path, mutation):
         scenario.parse_scenario(text, write_scn(tmp_path, text))
 
 
+@pytest.mark.parametrize("spelled", ["SOA_PAD =1:b", "SOA_PAD\t=1:b", "SOA_FRAMES =9"])
+def test_env_cannot_replace_the_pad_by_spelling_it_with_a_space(tmp_path, spelled):
+    """The key is stored stripped, so "SOA_PAD =1:b" became SOA_PAD in the run's
+    environment and replaced the pad: script, which the check on the unstripped
+    key had let through."""
+    text = SCN.replace("env: SOA_SNAP=50", f"env: {spelled}")
+    with pytest.raises(ScenarioError, match="comes from pad:/frames:"):
+        scenario.parse_scenario(text, write_scn(tmp_path, text))
+
+
 def test_scenario_needs_its_required_keys(tmp_path):
     text = SCN.replace("pad: 1600:start,1640:a\npad: 3600:a@150\n", "")
     with pytest.raises(ScenarioError):

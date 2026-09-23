@@ -338,11 +338,15 @@ def parse_scenario(text: str, path: Path) -> Scenario:
     env: dict[str, str] = {}
     for item in values["env"]:
         key, sep, value = item.partition("=")
+        # Stripped before it is checked, because it is stored stripped: checking
+        # the raw key let "SOA_PAD =1:b" through, and it then replaced the
+        # pad: script in the run's environment without a word.
+        key = key.strip()
         if not sep or not key:
             raise ScenarioError(f"{path}: env: {item!r} is not NAME=VALUE")
         if key in ("SOA_PAD", "SOA_FRAMES"):
             raise ScenarioError(f"{path}: env: {key} comes from pad:/frames:, not from env:")
-        env[key.strip()] = value.strip()
+        env[key] = value.strip()
     try:
         parse_pad(pad)
     except ScenarioError as e:
