@@ -18,8 +18,26 @@ rest.
 
 ## State
 
-Clean tree, everything pushed, CI green on all four jobs. Nothing is in
-flight, no branch is half-finished, and no workflow is running.
+**Not pushed.** As of 2026-09-22 the work of that day is on the local branch
+`teleport-and-audit`, fourteen commits ahead of `main` (which is still
+`2eac42c`, pushed, CI green): the name-driven teleport and its census, 36
+corrections from an audit, and the tests for them. Every pre-push check
+passes on it locally -- guard, `ruff check`, `ruff format --check`, 589
+tests, `decomp.py`, the self test, `title --check` 4/4, and the replay 23/23
+at four thread counts -- but CI has not seen it. Merge it to `main` and push,
+or push the branch and open a PR.
+
+**One decision is waiting on the owner, and it is not a code change.** The
+audit extended CI's history scan to the directory names `tools/guard.py`
+forbids, and the extended scan fails on published history: commits of
+2026-09-15/16 (2344f33, f404f0c, 17a3a4c, 469ebd3, 9fa0cb0) added 24 files
+under `scratch/`, deleted later in 9e4a955 but still on `origin/main`. Most
+are analysis scripts, but `scratch/f12000.txt` is a 30,526-line decoded GX
+command stream for one frame, which this repository treats as game data. The
+finished check is committed on the unmerged local branch `ci-history-dirs`
+(6c1fbaa) and is *not* on `teleport-and-audit`, because applying it turns CI red until either
+history is rewritten or the paths are exempted -- the owner's call, not an
+agent's. Also left there: two stale worktrees (`git worktree list`).
 
 Since 2026-09-21 the renderer applies the EFB copy's deflicker filter (PLAN
 C3), `SOA_POKE` can write guest memory mid-run (PLAN D2's half), and the field
