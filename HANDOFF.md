@@ -336,11 +336,11 @@ needs more judgement about what the port is for.
    "arrived from a save" and that map's save-arrival branch asks for a camera
    it lacks -- a branch retail cannot reach, since `a116c` has no save point.
    Warps now set `sys[15]` too (below). Still
-   untested: the ship battles entered the game's own way (opcode 210: the
-   return name at 0x802E5E68 and 0x803472E4 = 1, *not* state 15 --
-   `docs/research/ship-worldmap.md`), sailing the world map (`a099x`; its
-   controls are not established), and the maps between the part-select start
-   points. Walking is still unattempted and still needs no position feedback --
+   done since: the world map sails under a scripted stick, and a ship battle
+   entered the game's own way (opcode 210's words, not state 15) reaches The
+   Blackbeard's interface -- but sits on round 2 with Hp 0 from a part-A save,
+   probably an empty ship record; try a sky encounter from the part-L save.
+   Untested: the maps between the part-select start points. Walking is still unattempted and still needs no position feedback --
    the hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire
    on contact with no pad read.
 3. **The decompilation grind** (Track F). Two SDK libraries are complete. The

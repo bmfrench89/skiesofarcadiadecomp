@@ -1403,3 +1403,29 @@ before the run, so every row read a frame this run wrote.
 
 Four censuses: **169 maps loaded with no runtime fault**, every warpable map
 below 500 but 14 of the 2xx event stages.
+
+
+**The world map sails, and a ship battle enters the game's own way.**
+`build/scenario-sky.log`, 2026-09-23, from the save. A warp by name to
+`ME099A.SCT` (with `sys[15] = 0`) loads `/field/sora00.mld` and
+`/field/a099e.mld` -- the letter from the story stage, as the research said --
+and reaches state 8: frame 4200 is the Little Jack over Pirate Isle, its name
+on a banner, the altitude gauge on the left and the compass on the right.
+Holding the stick moves it: by frame 5300, after `sleft#300` and `sright#300`,
+the ship is in open sky with the island behind it and the compass turned. So
+the world map takes scripted stick input like the field does.
+
+At frame 7000 the game's own ship-battle entry, opcode 210, was reproduced
+without touching the state word: the name `ME500A.SCT` at 0x80305CF0, the
+return name `me099a.sct` at 0x802E5E68, and 0x803472E4 = 1. The field did
+exactly what `ship-worldmap.md` predicted -- `/sound/m0430.samp` (the preload
+only this path makes), states 12, 13, 14, 15, 0, 1, 3, `/field/sbek0000.mld`,
+5, `/field/a500a.mld`, 7, 8, and **no state 4**, so no spurious results screen
+-- and frame 9000 is the ship-battle interface against The Blackbeard.
+
+The battle then sits on round 2 with the command on Attack through frame 12400
+under an A every 150 frames, and its ship panel reads Hp 0. The save is from
+part A, before the party has a ship of its own (Drachma joins in part C), so
+the likeliest reading is an empty ship record rather than a stuck port; not
+established. A fair test is a sky random encounter (the 550-579 stages) from
+the part-L save.
