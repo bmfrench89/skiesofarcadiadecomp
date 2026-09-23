@@ -338,8 +338,9 @@ needs more judgement about what the port is for.
    Warps now set `sys[15]` too (below). Still
    done since: the world map sails under a scripted stick, and a ship battle
    entered the game's own way (opcode 210's words, not state 15) reaches The
-   Blackbeard's interface -- but sits on round 2 with Hp 0 from a part-A save,
-   probably an empty ship record; try a sky encounter from the part-L save.
+   Blackbeard's interface (stuck on round 2 from a part-A save, which has no
+   ship yet); from the part-L save a sky encounter runs properly -- the
+   Delphinus against the Black Pirates, rounds advancing.
    Untested: the maps between the part-select start points. Walking is still unattempted and still needs no position feedback --
    the hold's exit is a contact volume, event id 6500, and ids 6000-6999 fire
    on contact with no pad read.

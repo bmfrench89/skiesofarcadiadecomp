@@ -1429,3 +1429,12 @@ part A, before the party has a ship of its own (Drachma joins in part C), so
 the likeliest reading is an empty ship record rather than a stuck port; not
 established. A fair test is a sky random encounter (the 550-579 stages) from
 the part-L save.
+
+The fair test, same day (`build/scenario-sky550.log`): from the part-L save,
+the same three opcode-210 words sending the party from `a126a` into `550a`, a
+random sky encounter, with its own map as the return point. `sbek0000.mld`,
+`a550a.mld`, state 8, no results screen; frame 8000 is **the Delphinus, Hp
+36,000, against the Black Pirates**, four crew in the command grid, four
+Prototype Cannons on the list, **round 3 of 41** -- the rounds advance under
+the scripted A presses. So the round-2 stall above was the part-A save's
+empty ship, and ship battles run.
