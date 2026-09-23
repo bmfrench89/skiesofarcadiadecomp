@@ -17,19 +17,44 @@ interrupts, that is where the runtime delivers them.
 import re
 from pathlib import Path
 
-_LINE = re.compile(r"^\s*(0x[0-9A-Fa-f]{8})\s+(\S+)")
+# One entry, the whole line once its comment is gone: a lower-case 0x, exactly
+# eight hex digits, and one name.
+_LINE = re.compile(r"^\s*(0x[0-9A-Fa-f]{8})\s+(\S+)\s*$")
 
 
 def load_bindings(path: Path) -> dict[int, str]:
-    """{address: name} for every entry; comments and blanks ignored."""
+    """{address: name} for every entry; comments and blanks ignored.
+
+    Any other line is a ValueError naming the file and line, and so is a
+    second entry for an address. Both used to pass without a word: a line
+    the pattern missed (`0X80005520`, `0x8000552`, `80005520`) was skipped,
+    and a repeated address replaced the first. Every list this reads is baked
+    into the translated C, so a binding lost here is a function the runtime
+    was meant to answer that recompiled code answers instead, or a tracepoint
+    that never fires -- and nothing notices until someone wonders why.
+    """
     out: dict[int, str] = {}
-    if not Path(path).exists():
+    first: dict[int, int] = {}
+    path = Path(path)
+    if not path.exists():
         return out
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0]
+    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.split("#", 1)[0]
+        if not line.strip():
+            continue
         m = _LINE.match(line)
-        if m:
-            out[int(m.group(1), 16)] = m.group(2)
+        if not m:
+            raise ValueError(
+                f"{path}:{n}: not `0xXXXXXXXX name [# note]` (a lower-case 0x, eight hex "
+                f"digits, one name): {raw.strip()!r}"
+            )
+        addr = int(m.group(1), 16)
+        if addr in out:
+            raise ValueError(
+                f"{path}:{n}: 0x{addr:08X} is already bound, to {out[addr]} at line {first[addr]}"
+            )
+        out[addr] = m.group(2)
+        first[addr] = n
     return out
 
 
