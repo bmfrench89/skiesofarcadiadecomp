@@ -260,8 +260,8 @@ waiting for A, and only then do the choices come up -- downs sent to the box
 are ignored, which is how two attempts at L landed on H. So per page: A, then
 `down#4`, `down#4`, then A (the B/C page's box is already dismissed by the
 A presses that reach it). The generator for L's pad is in FINDINGS;
-`build/savetest/card-partH.raw` and `card-partL.raw` hold saves made right
-after arriving. `docs/research/story-flags.md` has what each part sets.
+`build/savetest/card-part{C..L}.raw` hold saves made right after arriving at
+ten points of the story (FINDINGS has the generalised pad). `docs/research/story-flags.md` has what each part sets.
 
 **`SOA_POKE` is a read primitive as well as a write one.** Every poke prints
 the value it replaced, so poking a word with its own value traces it across a

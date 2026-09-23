@@ -1512,3 +1512,26 @@ The same from the part-L save (`build/scenario-soakL.log`, `tools/soak.py
 --seed 11`): 30,000 frames of random play in the Dangral base, exit 0, no
 `[mmio!]`, 0 unknown FIFO bytes -- and the random walk left `a126a` onto the
 world map (`a099o`) and came back in. Field to sky and back, by input alone.
+
+
+**Saves at ten story points, and the black maps are the story's.** 2026-09-23.
+The part select, generalised (page = part / 2, option = part mod 2, each page
+dismissed with A before its choice), reached every part from C to K in one
+batch and saved at each, each to its own card, no `[mmio!]`: C Sailors'
+Island (`004a`), D Pirate Isle (`002e`), E Maramba's port (`008b`), F
+Horteka (`010a`), G `230a` then by the story into the Gargantua prison
+(`116a`), I Yafutoma (`019b`), J the world map then by the story into the home
+base (`017b`/`017c`), K the world map (`099l`) -- exactly the destinations
+`story-flags.md` read from `ME355A.SCT`. With H and L, `build/savetest/`
+holds a Continue into ten points of the story.
+
+The maps the first three censuses left black or partial were re-warped with
+`sys[15] = 0` (`build/scenario-rewarp.log`). Reading each map's loop had
+predicted which would change: `me013f`'s fade-ins (op 59) run only when
+`sys[15]` is 0 or 131, and census 2 had left it at the story's last value.
+**`013f` now draws**, as do `034h` and `034i`; `033a` and `032a` show dim
+scenes. `017a`, `240a`, `028d`, `101c` and `106b` stay black, and each loop
+tests story state first -- `101c` wants flag 4 clear and the story-step
+bytes B[4] = 0, B[5] = 4; `106b` wants to have come from `106a` or a battle.
+So of the maps any census left black, every one inspected is gated by the
+story or the entrance, and the one prediction made from a script came true.
