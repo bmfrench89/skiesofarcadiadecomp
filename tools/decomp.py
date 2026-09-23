@@ -27,18 +27,55 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 MATCH, DIFFERS, UNVERIFIED = 0, 1, 3
 
 
-def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
+class Unit(NamedTuple):
+    src: Path
+    version: str
+    flags: list[str]
+    native: bool
+
+
+def read_units(path: Path) -> list[Unit]:
+    """Every row of a units.txt, or a ValueError naming the line that is not one.
+
+    A row is tab-separated: the source, the compiler (a folder under
+    vendor/mwcc/GC/), the flags, and optionally a fourth column that is
+    ``native`` and nothing else. recompile.py reads the file through here too.
+    The two used to parse it apart and disagreed about a bad row: one written
+    with spaces crashed this tool with a bare ValueError out of an unpacking
+    and was skipped by recompile.py without a word, and a fourth column of
+    ``Native`` was ignored by both -- so the unit matched here and never
+    entered the port.
+    """
     units = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.startswith("#"):
             continue
-        src, version, flags = line.split("\t")[:3]
-        units.append((Path(src), version, flags.split()))
+        cols = line.split("\t")
+        if not 3 <= len(cols) <= 4 or not cols[0] or not cols[1]:
+            raise ValueError(
+                f"{path}:{n}: not source<TAB>compiler<TAB>flags[<TAB>native] "
+                f"({len(cols)} tab-separated column(s)): {line!r}"
+            )
+        flags = cols[2].split()
+        if "native" in flags:
+            # Separated by a space rather than a tab, it is a flag: mwcc is
+            # handed a file called "native" and the twin build never sees it.
+            raise ValueError(f"{path}:{n}: 'native' is in the flags; put a tab before it")
+        if len(cols) == 4 and cols[3].strip() != "native":
+            raise ValueError(
+                f"{path}:{n}: the fourth column is {cols[3]!r}; it is 'native' exactly, or absent"
+            )
+        units.append(Unit(Path(cols[0]), cols[1], flags, len(cols) == 4))
     return units
+
+
+def load_units(path: Path) -> list[tuple[Path, str, list[str]]]:
+    return [(u.src, u.version, u.flags) for u in read_units(path)]
 
 
 def missing_compilers(units, vendor: Path) -> dict[str, list[Path]]:

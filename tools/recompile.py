@@ -21,6 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# units.txt is read by one parser, which decomp.py owns (stdlib only, so the
+# no-pip CI job that imports this file still needs nothing installed).
+from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa import toolchain  # noqa: E402
@@ -62,14 +65,7 @@ def native_decomp_sources(units: Path) -> tuple[list[str], list[str]]:
     meaning depends on byte order, touching no memory-mapped register, and
     calling nothing undecompiled; units that read the game's globals fail the
     second of those until the native build maps them onto guest memory."""
-    files = []
-    if units.exists():
-        for line in units.read_text(encoding="utf-8").splitlines():
-            if not line.strip() or line.startswith("#"):
-                continue
-            cols = line.split("\t")
-            if len(cols) >= 4 and cols[3].strip() == "native":
-                files.append(Path(cols[0]))
+    files = [u.src for u in read_units(units) if u.native] if units.exists() else []
     names = set()
     for f in files:
         for name in _FUNC_DEF.findall(f.read_text(encoding="utf-8")):

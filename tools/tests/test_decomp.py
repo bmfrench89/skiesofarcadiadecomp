@@ -26,6 +26,8 @@ spec = importlib.util.spec_from_file_location(
 recompile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recompile)
 
+import decomp as DC  # noqa: E402
+
 
 def test_native_units_and_their_renames(tmp_path):
     (tmp_path / "a.c").write_text(
@@ -100,3 +102,51 @@ def test_the_typedefs_that_started_this_are_still_there():
     """Guard against the test above passing because ar.c stopped having one."""
     text = ROOT.joinpath("src/sdk/ar/ar.c").read_text(encoding="utf-8")
     assert "typedef void (*ARCallback)(void);" in text
+
+
+# --------------------------------------------------------------------------
+# a row of units.txt that is not a unit
+# --------------------------------------------------------------------------
+
+FLAGS = "-O4,p -nodefaults -proc gekko -i include"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        f"src/a.c 1.3.2 {FLAGS} native",  # spaces where the tabs go
+        f"src/a.c\t1.3.2 {FLAGS}",  # one tab of two
+        f"src/a.c\t1.3.2\t{FLAGS}\tNative",  # not native, and nothing said so
+        f"src/a.c\t1.3.2\t{FLAGS}\tnatve",
+        f"src/a.c\t1.3.2\t{FLAGS}\t",  # a fourth column with nothing in it
+        f"src/a.c\t1.3.2\t{FLAGS} native",  # native, after a space: a flag for mwcc
+        f"src/a.c\t1.3.2\t{FLAGS}\tnative\tagain",
+        f"\t1.3.2\t{FLAGS}",  # no source
+    ],
+)
+def test_a_row_that_is_not_a_unit_stops_both_readers_at_its_line(tmp_path, row):
+    """recompile.py and decomp.py read the same file and used to disagree about
+    a bad row: a space-separated one crashed decomp.py with a bare ValueError
+    from an unpacking and was skipped by recompile.py without a word, and a
+    fourth column of `Native` was ignored by both -- so the unit matched under
+    decomp.py and never entered the port."""
+    units = tmp_path / "units.txt"
+    units.write_text(f"# a comment\nsrc/ok.c\t1.3.2\t{FLAGS}\n\n{row}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"units\.txt:4: "):
+        recompile.native_decomp_sources(units)
+    with pytest.raises(ValueError, match=r"units\.txt:4: "):
+        DC.load_units(units)
+
+
+def test_both_readers_agree_on_a_good_file(tmp_path):
+    units = tmp_path / "units.txt"
+    (tmp_path / "a.c").write_text("int f(void)\n{\n    return 0;\n}\n", encoding="utf-8")
+    units.write_text(
+        f"{tmp_path / 'a.c'}\t1.3.2\t{FLAGS}\tnative\nsrc/b.c\t1.2.5n\t{FLAGS}\n",
+        encoding="utf-8",
+    )
+    assert recompile.native_decomp_sources(units)[0] == [str(tmp_path / "a.c")]
+    assert DC.load_units(units) == [
+        (tmp_path / "a.c", "1.3.2", FLAGS.split()),
+        (Path("src/b.c"), "1.2.5n", FLAGS.split()),
+    ]
