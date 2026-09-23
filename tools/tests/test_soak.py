@@ -42,3 +42,13 @@ def test_the_step_mix_is_the_documented_one():
     """Mostly stick, some A, less B, a few menu visits -- all four present."""
     text = soak.script(7, 3200, 60000)
     assert "#" in text and ":a," in text and ":b," in text and ":start," in text
+
+
+def test_the_battle_mix_turns_the_wheel_and_still_parses():
+    """Single-step d-pad presses, so the wheel lands on commands other than
+    Attack; and the default mix is untouched by the option existing."""
+    text = soak.script(21, 3200, 33000, battle=True)
+    events = scenario.parse_pad(text)
+    assert len(events) > 100 and len(events) <= 1000
+    assert any(t in text for t in ("left#4", "right#4", "up#4", "down#4"))
+    assert soak.script(7) == soak.script(7, battle=False)
