@@ -1378,9 +1378,14 @@ its own error, `Chgkmap Error 9001` -- the map's script asked (op 235,
 reached 81800018`, twenty `[mmio!]` reads of 0xCC0080xx, and a jump to
 0x52EC0861, which the port stops as a guest trap (exit 3). Backtrace
 800E2940 <- 8020B880 <- 8021137C <- 80212330 <- 80101A38: the script tick.
-The game's own error comes first, and the entry is out of story order (part
-A's flags, arriving from `116b`), so the likeliest reading is the game failing
-on a state it never meets, the way the battle above did; it is not
-established. The next step is to warp there from a part-select save made for
-that part of the story, and to read `me116c.sct` for which entry asks for
-camera 9001.
+**It is the warp recipe's, not the port's.** `me116c.sct`'s loop picks its
+entrance by `SWITCH (sys[15])` -- the map the party came from -- and asks for
+camera 9001 only on `20000`, "arrived by loading a save". A four-poke warp
+never updates `sys[15]` (the game's warp request `fn_80100178` does, through
+`fn_801F7B04`; the poke bypasses it), so after census 3 started from a
+Continue every map it visited believed it had just been loaded from a save.
+And `a116c` has no save point -- no op 138 anywhere in its script, where
+`me101b` and `me103a` each have one -- so no player can ever Continue into it
+and that branch, with its camera, is unreachable in retail. **A warp must also
+set `sys[15]`, the word at 0x8030E420**: 0 matches no script's `SWITCH` case
+and takes each map's default entrance. Five pokes a warp, 51 a run.

@@ -269,7 +269,12 @@ byte** of `0x80311AC8`:
 SOA_POKE=16000:0x80305CF0=0x4D453130,16000:0x80305CF4=0x33412E53,16000:0x80305CF8=0x43540000,16000:0x80311AEC=15
 ```
 
-That is `"ME10" "3A.S" "CT\0\0"`, then the state. **Do not also poke
+That is `"ME10" "3A.S" "CT\0\0"`, then the state. **Also poke
+`0x8030E420=0` with it**: that is `sys[15]`, "the map the party came from",
+which the game's own warp request sets and a poke does not, and maps choose
+their entrance by it -- left at 20000 after a Continue, it sends a map down its
+"loaded from a save" branch, which crashed `a116c`. 0 takes the default
+entrance. **Do not also poke
 the map words** (0x80311AC0/AC4/AC8), as the census runs of 2026-09-22 did:
 the teardown reads them before the name is parsed, and for a 5xx destination
 that runs a ship-battle teardown for a battle that never happened and puts a
@@ -279,7 +284,7 @@ by about frame 14710; `build/run_namewarp.log` has the whole command. `a103a`
 -- the first dungeon island, never reached by any run before -- draws its
 first frame 100 frames after the poke and plays its own arrival scene. The
 game zeroes the name's first byte after reading it, so poke all three words
-for every warp: four pokes a warp, 64 warps a run.
+for every warp: five pokes a warp, 51 warps a run.
 
 The older stage-select route (`0x80311AEC=2` and a START) is the resolver's
 debug path; it skips the teardown and state 0's init. Do not use it.
@@ -312,9 +317,10 @@ needs more judgement about what the port is for.
    to the field by frame 2800; the part select reaches story parts B-L; a
    four-poke warp reaches any of the 255 warpable maps; one word plays the
    ending. Three censuses loaded 118 maps with no runtime fault; the third
-   then trapped on warp 47, `a116c` from `a116b`, right after the game's own
-   `Chgkmap Error 9001` (a camera the map lacks, most likely from entering
-   out of story order -- FINDINGS). Still
+   then trapped on warp 47, `a116c`, because the recipe left `sys[15]` saying
+   "arrived from a save" and that map's save-arrival branch asks for a camera
+   it lacks -- a branch retail cannot reach, since `a116c` has no save point.
+   Warps now set `sys[15]` too (below). Still
    untested: the ship battles entered the game's own way (opcode 210: the
    return name at 0x802E5E68 and 0x803472E4 = 1, *not* state 15 --
    `docs/research/ship-worldmap.md`), sailing the world map (`a099x`; its
