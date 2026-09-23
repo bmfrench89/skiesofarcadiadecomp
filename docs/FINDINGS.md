@@ -1504,6 +1504,6 @@ a lost fight's or a warp's; this is the first a player's input made.** The
 exit is a contact volume, as FINDINGS said of the hold's, so walking needed no
 position feedback, only time.
 
-The generator (`mksoak.py` in that session's scratchpad) is twenty lines: an
+The generator is `tools/soak.py` (`--seed 7` reproduces this run exactly): an
 LCG choosing, each step, a held direction (60%), A (25%), B (10%) or a menu
 visit (5%), advancing 50-220 frames a step.
