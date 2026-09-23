@@ -1559,3 +1559,10 @@ the attract demos -- which is the game behaving correctly. They loaded seven
 and ten distinct `/BEFF/` effect packages; across every log in `build/` that
 is now **20 distinct effect packages**, against the three any run had loaded
 before 2026-09-23, of 576 on the disc.
+
+Four more battle-mix soaks the same day, from parts C (Sailors' Island), F
+(Horteka), I (Yafutoma) and K (the world map), seeds 303, 404, 505 and 606
+(`build/scenario-bsoak{303,404,505,606}.log`): exit 0, no `[mmio!]`, 0
+unknown FIFO bytes. They are towns and the sky, so no battle came up; part I
+walked from `019b` into `019c`. **Twelve soaks from ten story points, about
+four hours of random play, no runtime fault.**

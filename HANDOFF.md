@@ -321,8 +321,9 @@ washed-out colour and a correct fix would have failed the suite.
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's
 parts, the world map, ship battles and the ending all run, saves round-trip,
-and six twenty-minute soaks of random play from story parts D to L ran
-clean, walked through exits, and lost a fight into the game-over screen. Nothing found so far would stop a person
+and twelve twenty-minute soaks of random play from ten story points (C to L)
+ran clean, walked through exits, fought and lost into the game-over screen,
+and loaded 20 of the disc's battle-effect packages (3 before). Nothing found so far would stop a person
 playing. What is left is depth, and a person playing is now the best test.
 
 1. **Play it.** Windowed, with a pad (`README.md`), from a part-select save.
@@ -330,9 +331,10 @@ playing. What is left is depth, and a person playing is now the best test.
    what the game did; a human session covers more of it in an hour than a
    script does in a day. Keep `SOA_PAD_RECORD` on, so anything that breaks
    can be replayed headless.
-2. **Soak longer and wider.** `tools/soak.py` with new seeds, from the H and L
-   saves and new part-select saves (C-K), under `SOA_STRICT=1`. A fault it
-   finds replays from its seed.
+2. **Soak where the fights are.** `tools/soak.py --battle` turns the wheel to
+   random commands; soak saves in dungeons with encounter tables (FINDINGS
+   lists the 35 maps that have one) rather than towns, under `SOA_STRICT=1`.
+   A fault it finds replays from its seed.
 3. **Battles past Attack.** Items, Focus and S-moves in a story state that
    allows the fight (set the alarm first on `a101b`, or use the H/L saves);
    single-step presses more than 60 frames apart.
