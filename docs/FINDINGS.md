@@ -1535,3 +1535,15 @@ tests story state first -- `101c` wants flag 4 clear and the story-step
 bytes B[4] = 0, B[5] = 4; `106b` wants to have come from `106a` or a battle.
 So of the maps any census left black, every one inspected is gated by the
 story or the entrance, and the one prediction made from a script came true.
+
+
+**Four more soaks, from parts D, G, J and E: no fault.** 2026-09-23,
+`build/scenario-soak{D,G,J,E}.log`, `tools/soak.py` seeds 21, 33, 47 and 59,
+30,000 frames each under `SOA_STRICT=1`: exit 0 all four, no `[mmio!]`, 0
+unknown FIFO bytes. Part D walked off Pirate Isle onto the world map
+(`a099h`). Part G fought four random battles in the Gargantua prison, lost
+one to the random input, and took the game-over path -- `a090a`, then the
+title and its attract demos (`a299a`, `a297a`) -- which is the game doing
+what it should. Parts J (home base) and E (Maramba's port) stayed in their
+maps. With the H and L soaks that is six story points and about two hours of
+random play with no runtime fault.

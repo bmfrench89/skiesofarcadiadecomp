@@ -321,8 +321,8 @@ washed-out colour and a correct fix would have failed the suite.
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's
 parts, the world map, ship battles and the ending all run, saves round-trip,
-and twenty-minute soaks of random play from mid- and late-story saves ran
-clean and walked through exits. Nothing found so far would stop a person
+and six twenty-minute soaks of random play from story parts D to L ran
+clean, walked through exits, and lost a fight into the game-over screen. Nothing found so far would stop a person
 playing. What is left is depth, and a person playing is now the best test.
 
 1. **Play it.** Windowed, with a pad (`README.md`), from a part-select save.
