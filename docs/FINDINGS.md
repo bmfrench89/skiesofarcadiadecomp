@@ -1457,7 +1457,7 @@ rather than Item; a press arriving while the wheel animates is dropped.
 Space single steps further apart than 60 frames.)
 
 
-**A fifth census closes the maps below 500: 186 of them, no runtime fault.**
+**A fifth census closes the maps below 500: 189 of them, no runtime fault.**
 `build/scenario-census5.log`, 2026-09-23: the last 17 -- the 2xx event stages
 not yet visited, and the three maps that are warpable only because the disc
 lookup ignores case (`199f`, `355a`, `398a`). Every one loaded; exit 0, 0
@@ -1466,5 +1466,25 @@ the run on through `220a` and `221a`), six 2xx event stages are black like the
 others out of story order, and `398a`, the developers' ship-battle select,
 loaded after the last frame the run measured. With the four censuses before
 it, **every warpable map numbered below 500 has been loaded by this port --
-186 maps -- and none has faulted it.** What remains are the 66 ship-battle
+189 maps, the 186 in the disc's lower-case listing and these three -- and none
+has faulted it.** What remains are the 66 ship-battle
 stages (5xx), which are entered differently.
+
+
+**Every ship-battle stage enters the game's own way: all 255 warpable maps have
+now loaded.** `build/scenario-ships1.log` and `scenario-ships2.log`,
+2026-09-23: from the part-L save (the party has the Delphinus), each of the
+66 5xx stages entered as opcode 210 does -- the destination name, the return
+name `me126a.sct` at 0x802E5E68 and 0x803472E4 = 1, never the state word --
+one every 600 frames with an A every 150. All 66 loaded `sbek0000.mld` and
+their own map, every measured frame draws (frame 10200, `518a`'s darkest, is
+the opening shot of a Valuan warship's stern and propellers), exit 0 both
+times, 0 unknown FIFO bytes, no `[mmio!]`.
+
+With the five field censuses, **every one of the 255 warpable maps on the disc
+has been loaded by this port, and none has faulted it** -- the one trap on the
+way (`a116c`) was the warp recipe's and does not recur with `sys[15]` set.
+That is coverage of the game's *data*: each map loaded, drew and ran its
+script for ten to twenty seconds. It is not a playthrough; what happens deep
+inside each map, and in the story sequences that join them, is still only
+what the censuses happened to show.

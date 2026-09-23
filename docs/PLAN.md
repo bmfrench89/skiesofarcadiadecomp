@@ -664,7 +664,7 @@ entries before it; `HANDOFF.md` has the command. What is left of D5's reach
 is using it: a census of which of the 255 warpable maps render, and what the
 runtime does with code no run has executed.
 **Reached by 2026-09-23**, each with its frames opened (FINDINGS section 11):
-all 186 warpable maps below 500, in five censuses, with no runtime fault; the developers' part select
+all 255 warpable maps, field and ship-battle, in seven censuses, with no runtime fault; the developers' part select
 (`ME355A.SCT`) to story parts B, H and L; the world map; a ship battle; a
 field battle fought, won and returned from; the ending to "the End"; and a
 save from the field loaded back through Continue (B4). What is left of D5 is
