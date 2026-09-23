@@ -23,7 +23,7 @@ opening to reaching the whole game by jumping, and every step is in
 `docs/FINDINGS.md` section 11 with the frames that were opened to check it:
 
 - **Warp by name to any of the 255 warpable maps** (the game's own warp, five
-  pokes). Four censuses loaded 169 maps with no runtime fault.
+  pokes). Five censuses loaded all 186 warpable maps below 500 with no runtime fault.
 - **Save and load** (PLAN B4, done): one word opens the game's save menu from
   any field; Continue reads it back. A run that loads a save reaches the field
   by frame 2800 instead of 14710.
@@ -333,7 +333,7 @@ needs more judgement about what the port is for.
 2. **Cover the rest of the game with the tools that now exist.** A save loads
    to the field by frame 2800; the part select reaches story parts B-L; a
    four-poke warp reaches any of the 255 warpable maps; one word plays the
-   ending. Four censuses loaded 169 maps with no runtime fault; the third
+   ending. Five censuses loaded all 186 warpable maps below 500 with no runtime fault; the third
    then trapped on warp 47, `a116c`, because the recipe left `sys[15]` saying
    "arrived from a save" and that map's save-arrival branch asks for a camera
    it lacks -- a branch retail cannot reach, since `a116c` has no save point.

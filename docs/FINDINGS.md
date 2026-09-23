@@ -1455,3 +1455,16 @@ same code path with the rule satisfied. (Each third single-step press in a
 row was not taken, so Vyse committed Magic rather than Focus and Aika Guard
 rather than Item; a press arriving while the wheel animates is dropped.
 Space single steps further apart than 60 frames.)
+
+
+**A fifth census closes the maps below 500: 186 of them, no runtime fault.**
+`build/scenario-census5.log`, 2026-09-23: the last 17 -- the 2xx event stages
+not yet visited, and the three maps that are warpable only because the disc
+lookup ignores case (`199f`, `355a`, `398a`). Every one loaded; exit 0, 0
+unknown FIFO bytes, no `[mmio!]`. Ten draw a scene (`292a`'s own script carried
+the run on through `220a` and `221a`), six 2xx event stages are black like the
+others out of story order, and `398a`, the developers' ship-battle select,
+loaded after the last frame the run measured. With the four censuses before
+it, **every warpable map numbered below 500 has been loaded by this port --
+186 maps -- and none has faulted it.** What remains are the 66 ship-battle
+stages (5xx), which are entered differently.
