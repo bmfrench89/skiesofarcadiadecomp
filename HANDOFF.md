@@ -318,6 +318,15 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## What I would do next
 
+**The plan of record for the next phase is `docs/PLAN-60FPS-MODS.md`** (written
+2026-09-24): 60 fps by renderer interpolation, then a native mod framework
+(data patches, a safe point, `mod.dll` with a versioned API), targeted
+decompilation only where a mod needs it, and a soak programme with checked
+invariants. Its first three slices -- **H1** (what drawing every frame costs,
+no build), **S4a** (`SOA_PEEK`, a frame-tagged read) and **H2** (prove the
+logic is per frame by timing a fade in fields) -- decide whether that route is
+right before anything larger is built. The list below still stands beside it.
+
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's
 parts, the world map, ship battles and the ending all run, saves round-trip,

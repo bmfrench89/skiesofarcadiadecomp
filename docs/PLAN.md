@@ -47,6 +47,14 @@ person's shell history. What is still unchecked is the game itself: no saved
 run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
+**The next phase has its own plan: [PLAN-60FPS-MODS.md](PLAN-60FPS-MODS.md)** --
+60 frames a second, then native PC mods, in four tracks (H frame pacing and
+speed, M mods, F4+ targeted decompilation, S soak and regression), sliced
+evening by evening. Its central finding: the 30 fps cap is a constant
+(0x801DC4A4) and all game logic runs once per frame, so 60 fps is renderer
+interpolation with the logic kept at 30. Its first three slices are H1, S4a
+and H2. C4 is absorbed into its H15.
+
 **Start here:** the cheap, well-specified items are gone. Done and run: A1,
 A2, A3, A4, B2, B3, B4, C0, C2, C3, D1, D3, E1, F1, F2, F3, G1 and G2. Half-done
 and named in place: B1 (one step needs the disc), C1 (the instrument is built and the defect was not what the
