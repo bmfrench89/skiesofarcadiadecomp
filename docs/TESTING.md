@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-647 passed in 74.36s
+650 passed in 71.50s
 ```
 
-647 tests in 40 files, none of which reads the disc. They cover the Python
+650 tests in 41 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -82,6 +82,7 @@ its own and run it, some of the C as well:
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
+| `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
 | `test_gxr_lifetimes.py` | 3 | the lifetime rules the renderer's queue lives by — the texture use-after-free of 2026-09-17 |
 
 Anything that needs a C compiler or an optional package skips itself rather
@@ -90,10 +91,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `647 passed` |
-| no capstone — **what CI installs** | `628 passed, 1 skipped` |
-| no MSVC | `548 passed, 99 skipped` |
-| neither — **the Ubuntu CI leg** | `529 passed, 100 skipped` |
+| everything (MSVC + capstone) | `650 passed` |
+| no capstone — **what CI installs** | `631 passed, 1 skipped` |
+| no MSVC | `551 passed, 99 skipped` |
+| neither — **the Ubuntu CI leg** | `532 passed, 100 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -936,7 +937,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 99 of the 647 skip without a C compiler; they build one runtime file and run it.
+² 99 of the 650 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

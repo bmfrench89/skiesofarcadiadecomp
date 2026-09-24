@@ -1692,3 +1692,32 @@ H4 needs no draw tags, (d) has no role as a fallback either.
 
 Along the way the analyser found that `[gxr] ... texture copies` counts each
 copy twice (at enqueue, `gxr.c:2002`, and when it runs, `gxr.c:1737`).
+
+
+**H6: a pinned benchmark set, and today's nanoseconds per fragment.**
+2026-09-24. `build/perfset/` holds the five scene pairs of H4 plus copies of
+corpus 6000 and 15800 -- twelve captures, every one rendered and opened before
+`config/perfset_manifest.tsv` pinned their SHA-256s: Vyse by the save point in
+the Dangral base; Vyse and Aika against a Soldier under the alarm light; the
+Delphinus against the Black Pirates; Admiral Alfonso on his bridge ("her ship's
+in range of our cannons"); the Delphinus in night cloud on the world map.
+`tools/perfbench.py run` replays each five times on a scratch copy and divides
+worker busy time by the fragments processed (shaded, alpha- and depth-rejected).
+On AC power, Turbo plan, 8 threads, the medians:
+
+| scene | fragments | ns / fragment |
+|---|---|---|
+| field, Dangral base | 3.62 M | 74.6 |
+| cutscene, Alfonso's bridge | 2.61 M | 72.9-76.7 |
+| corpus 6000 / 15800 | 3.18 M / 2.31 M | 69.2 / 77.9 |
+| ship battle, `550a` | 1.77 M | 102.0-107.6 |
+| sky, `099l` | 1.56 M | 108.9 |
+| battle, `a101b` | 0.72 M | 111.8-125.7 |
+| all replays | | **85.4** |
+
+Against the ~55-61 ns that 60 images a second needs, the field-class scenes
+need about 1.3x and the sky, ship and battle scenes nearly 2x -- the battle's
+light frames cost the most per fragment. These single-frame replays run cheaper
+than H1's live 122 ns (292.9 ms busy over 2.40 M fragments), which carried the
+live game's contention; H13-H16 report against this set, so their before and
+after compare the same inputs.

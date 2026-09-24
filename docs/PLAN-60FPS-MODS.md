@@ -221,7 +221,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 
 *Done:* a FINDINGS verdict on route (d), in hand at the week-1 decision. Drop (d) if the lists are recorded inside the scene's update tasks. Otherwise name the recorder as the fallback in case H4 and H7 both fail.
 
-**H6. The performance capture set** — *hours, plus capture runs shared with H4.*
+**H6. The performance capture set** — *done 2026-09-24: 12 captures pinned in `config/perfset_manifest.tsv`, `tools/perfbench.py`, 85.4 ns/fragment overall. FINDINGS "H6".*
 - A named set in `build/perfset/`, captured with `SOA_FIFO_DIR` pointed there and never at `build/fifo`. It holds:
   - H4's four pairs;
   - a heavy Part L field frame;
