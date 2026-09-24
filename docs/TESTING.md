@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-630 passed in 76.99s
+647 passed in 74.36s
 ```
 
-630 tests in 39 files, none of which reads the disc. They cover the Python
+647 tests in 40 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -52,6 +52,7 @@ its own and run it, some of the C as well:
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_padrec.py` | 17 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
+| `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
@@ -89,10 +90,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `630 passed` |
-| no capstone — **what CI installs** | `611 passed, 1 skipped` |
-| no MSVC | `531 passed, 99 skipped` |
-| neither — **the Ubuntu CI leg** | `512 passed, 100 skipped` |
+| everything (MSVC + capstone) | `647 passed` |
+| no capstone — **what CI installs** | `628 passed, 1 skipped` |
+| no MSVC | `548 passed, 99 skipped` |
+| neither — **the Ubuntu CI leg** | `529 passed, 100 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -935,7 +936,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 99 of the 630 skip without a C compiler; they build one runtime file and run it.
+² 99 of the 647 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

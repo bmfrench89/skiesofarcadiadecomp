@@ -427,52 +427,66 @@ def dump_vertices(fifo: bytes, off: int, count: int, layout, cp, xf, ram, out):
     return off
 
 
-def decode(fifo: bytes, cp: dict, out, xf=None, ram=None, verts=None):
-    """Walk the command stream. `verts` is an inclusive (first, last) range of
-    draw numbers whose vertices to print; when it is set nothing else is."""
-    if xf is None:
-        xf = [0] * 4352
-    quiet = verts is not None
-    off = 0
-    nops = 0
-    draw = 0
+def walk(buf, cp: dict, xf, ram=None, bp=None, follow_lists: bool = False):
+    """Walk a command stream, one command at a time, applying each register
+    write to `cp`, `xf` and (when given) `bp` before yielding the command, so
+    whoever consumes a draw sees the state it was issued under.
 
-    def emit(line):
-        if not quiet:
-            out.append(line)
+    Every item is a tuple that starts (kind, offset, list): `offset` is where
+    the command starts in whatever holds it, and `list` is None for a command
+    in the stream itself or the address of the display list it sits in. Then,
+    by kind:
 
-    while off < len(fifo):
-        op = fifo[off]
-        if op == 0x00:
-            nops += 1
-            off += 1
-            continue
-        if nops:
-            emit(f"  ({nops} nops)")
-            nops = 0
-        if op == 0x48:
-            emit("  INVALIDATE_VTX_CACHE")
+      "nop", "inval"                      nothing more
+      "cp"          reg, value
+      "xf"          address, values       (one int per register written)
+      "xf_indexed"  array, index, first register, count, source address
+      "call"        address, size         a display-list call
+      "bp"          reg, value            (the 24-bit payload)
+      "draw"        opcode, count, layout, bytes per vertex, buffer, offset
+                    -- the last two are where the vertices can be read from
+      "unknown"     opcode                (skipped one byte at a time)
+
+    With `follow_lists` a call is followed into `ram` the way the runtime's
+    parser follows it (gx.c parse): one level deep, only when the list lies
+    wholly inside the image, and a command the end of a list cuts off ends the
+    list. Without it -- decode's listing -- a call is only reported.
+    """
+    yield from _walk(buf, 0, len(buf), None, cp, xf, ram, bp, follow_lists)
+
+
+def _walk(buf, start: int, end: int, where, cp, xf, ram, bp, follow: bool):
+    inside = where is not None
+    off = start
+    while off < end:
+        op = buf[off]
+        rel = off - start
+        if op == 0x00 or op == 0x48:
+            yield ("nop" if op == 0 else "inval", rel, where)
             off += 1
         elif op == 0x08:
-            reg, val = fifo[off + 1], int.from_bytes(fifo[off + 2 : off + 6], "big")
+            if inside and off + 6 > end:
+                return
+            reg, val = buf[off + 1], int.from_bytes(buf[off + 2 : off + 6], "big")
             cp[reg] = val
-            emit(f"  CP {reg:02X} {CP_NAMES.get(reg, ''):<14} = {val:08X}")
+            yield ("cp", rel, where, reg, val)
             off += 6
         elif op == 0x10:
-            n = int.from_bytes(fifo[off + 1 : off + 3], "big") + 1
-            addr = int.from_bytes(fifo[off + 3 : off + 5], "big")
-            vals = [
-                int.from_bytes(fifo[off + 5 + 4 * i : off + 9 + 4 * i], "big") for i in range(n)
-            ]
+            n = int.from_bytes(buf[off + 1 : off + 3], "big") + 1
+            if inside and off + 5 + 4 * n > end:
+                return
+            addr = int.from_bytes(buf[off + 3 : off + 5], "big")
+            vals = [int.from_bytes(buf[off + 5 + 4 * i : off + 9 + 4 * i], "big") for i in range(n)]
             for i, v in enumerate(vals):
                 if addr + i < len(xf):
                     xf[addr + i] = v
-            name = XF_NAMES.get(addr, "MTX" if addr < 0x1000 else "")
-            emit(f"  XF {addr:04X} {name:<14} x{n}: {xf_words(addr, vals)}")
+            yield ("xf", rel, where, addr, vals)
             off += 5 + 4 * n
         elif op in (0x20, 0x28, 0x30, 0x38):
-            idx = int.from_bytes(fifo[off + 1 : off + 3], "big")
-            v = int.from_bytes(fifo[off + 3 : off + 5], "big")
+            if inside and off + 5 > end:
+                return
+            idx = int.from_bytes(buf[off + 1 : off + 3], "big")
+            v = int.from_bytes(buf[off + 3 : off + 5], "big")
             array = 12 + (op - 0x20) // 8
             dst, n = v & 0xFFF, (v >> 12) + 1
             src, soff, addr = array_elem(cp, ram, array, idx, 4 * n)
@@ -482,37 +496,96 @@ def decode(fifo: bytes, cp: dict, out, xf=None, ram=None, verts=None):
                         xf[dst + i] = int.from_bytes(
                             bytes(src[soff + 4 * i : soff + 4 * i + 4]), "big"
                         )
-            emit(f"  XF_INDEXED array {array} index {idx} -> {dst:04X} x{n} (from {addr:08X})")
+            yield ("xf_indexed", rel, where, array, idx, dst, n, addr)
             off += 5
         elif op == 0x40:
-            addr = int.from_bytes(fifo[off + 1 : off + 5], "big")
-            size = int.from_bytes(fifo[off + 5 : off + 9], "big")
-            emit(f"  DISPLAY_LIST {addr:08X} size {size}")
+            if inside and off + 9 > end:
+                return
+            addr = int.from_bytes(buf[off + 1 : off + 5], "big")
+            size = int.from_bytes(buf[off + 5 : off + 9], "big")
+            yield ("call", rel, where, addr, size)
             off += 9
+            if follow and not inside and ram is not None:
+                lo = addr & MEM_MASK
+                if size <= len(ram) and lo <= len(ram) - size:
+                    yield from _walk(ram, lo, lo + size, addr, cp, xf, ram, bp, follow)
         elif op == 0x61:
-            v = int.from_bytes(fifo[off + 1 : off + 5], "big")
+            if inside and off + 5 > end:
+                return
+            v = int.from_bytes(buf[off + 1 : off + 5], "big")
             reg = v >> 24
-            emit(f"  BP {reg:02X} {BP_NAMES.get(reg, ''):<16} = {v & 0xFFFFFF:06X}")
+            if bp is not None:
+                bp[reg] = v & 0xFFFFFF
+            yield ("bp", rel, where, reg, v & 0xFFFFFF)
             off += 5
         elif 0x80 <= op < 0xC0:
-            n = int.from_bytes(fifo[off + 1 : off + 3], "big")
-            vat = op & 7
-            layout = vertex_layout(cp, vat)
+            if inside and off + 3 > end:
+                return
+            n = int.from_bytes(buf[off + 1 : off + 3], "big")
+            layout = vertex_layout(cp, op & 7)
             vs = sum(at.stream_bytes for at in layout)
+            if inside and off + 3 + n * vs > end:
+                return
+            yield ("draw", rel, where, op, n, layout, vs, buf, off + 3)
+            off += 3 + n * vs
+        else:
+            yield ("unknown", rel, where, op)
+            off += 1
+
+
+def decode(fifo: bytes, cp: dict, out, xf=None, ram=None, verts=None):
+    """Walk the command stream. `verts` is an inclusive (first, last) range of
+    draw numbers whose vertices to print; when it is set nothing else is."""
+    if xf is None:
+        xf = [0] * 4352
+    quiet = verts is not None
+    nops = 0
+    draw = 0
+
+    def emit(line):
+        if not quiet:
+            out.append(line)
+
+    for cmd in walk(fifo, cp, xf, ram):
+        kind = cmd[0]
+        if kind == "nop":
+            nops += 1
+            continue
+        if nops:
+            emit(f"  ({nops} nops)")
+            nops = 0
+        if kind == "inval":
+            emit("  INVALIDATE_VTX_CACHE")
+        elif kind == "cp":
+            reg, val = cmd[3:]
+            emit(f"  CP {reg:02X} {CP_NAMES.get(reg, ''):<14} = {val:08X}")
+        elif kind == "xf":
+            addr, vals = cmd[3:]
+            name = XF_NAMES.get(addr, "MTX" if addr < 0x1000 else "")
+            emit(f"  XF {addr:04X} {name:<14} x{len(vals)}: {xf_words(addr, vals)}")
+        elif kind == "xf_indexed":
+            array, idx, dst, n, addr = cmd[3:]
+            emit(f"  XF_INDEXED array {array} index {idx} -> {dst:04X} x{n} (from {addr:08X})")
+        elif kind == "call":
+            addr, size = cmd[3:]
+            emit(f"  DISPLAY_LIST {addr:08X} size {size}")
+        elif kind == "bp":
+            reg, val = cmd[3:]
+            emit(f"  BP {reg:02X} {BP_NAMES.get(reg, ''):<16} = {val:06X}")
+        elif kind == "draw":
+            op, n, layout, vs, buf, voff = cmd[3:]
             draw += 1
             line = (
-                f"  DRAW #{draw} {PRIMS.get(op & 0xF8, hex(op))} vat {vat} "
+                f"  DRAW #{draw} {PRIMS.get(op & 0xF8, hex(op))} vat {op & 7} "
                 f"count {n} ({vs} bytes/vertex)"
             )
             if verts is not None and verts[0] <= draw <= verts[1]:
                 out.append(line)
-                dump_vertices(fifo, off + 3, n, layout, cp, xf, ram, out)
+                dump_vertices(buf, voff, n, layout, cp, xf, ram, out)
             else:
                 emit(line)
-            off += 3 + n * vs
         else:
-            emit(f"  ?? {op:02X}")
-            off += 1
+            emit(f"  ?? {cmd[3]:02X}")
     if nops:
         emit(f"  ({nops} nops)")
 
@@ -529,6 +602,16 @@ def parse_range(spec: str) -> tuple[int, int]:
     return int(first) if first else 1, int(last) if last else 1 << 30
 
 
+def read_regs(path) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """A capture's .regs: the CP, XF and BP shadows as the frame began, as
+    gx.c frame_end writes them (256 + 4352 + 256 little-endian words)."""
+    regs = Path(path).read_bytes()
+    cp_regs = struct.unpack("<256I", regs[:1024])
+    xf_regs = struct.unpack("<4352I", regs[1024 : 1024 + 4352 * 4])
+    bp_regs = struct.unpack("<256I", regs[1024 + 4352 * 4 :])
+    return cp_regs, xf_regs, bp_regs
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("base")
@@ -538,10 +621,7 @@ def main() -> int:
         "--ram", metavar="PATH", help="RAM image for indexed attributes (default BASE.ram)"
     )
     args = ap.parse_args()
-    regs = Path(args.base + ".regs").read_bytes()
-    cp_regs = struct.unpack("<256I", regs[:1024])
-    xf_regs = struct.unpack("<4352I", regs[1024 : 1024 + 4352 * 4])
-    bp_regs = struct.unpack("<256I", regs[1024 + 4352 * 4 :])
+    cp_regs, xf_regs, bp_regs = read_regs(args.base + ".regs")
     cp = {i: v for i, v in enumerate(cp_regs) if v}
     if args.regs:
         for i, v in enumerate(cp_regs):
