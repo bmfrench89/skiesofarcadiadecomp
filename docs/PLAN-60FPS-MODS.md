@@ -167,7 +167,7 @@ Runs on copies of the cards, one `soa.exe` at a time.
 - The entry gives a verdict on the ~20 fps inference and says whether fps rises with the thread count.
 - PLAN's status table, C4 and HANDOFF's "30 fps cap" line are corrected to the measured figure, in every copy.
 
-**H2. Prove the cap and the per-frame logic, by poke and peek** — *hours, no rebuild. Needs S4a.*
+**H2. Prove the cap and the per-frame logic, by poke and peek** — *done 2026-09-24: per frame (29 frames, 58 fields capped, 37 uncapped); one uncapped frame in five needed 2 fields, so H13 before M11. FINDINGS "H2".*
 Run headless in snapshot mode, so the guest thread is measured rather than the rasterizer, on a copy of a Continue card.
 - **Baseline, capped:**
   - `SOA_PEEK` of 0x8034768C across a stretch of field frames.
@@ -738,7 +738,7 @@ It is small and fully understood, calls undecompiled SDK functions, and reads r1
 - Two `soa.exe` at once have caused three silent deaths, so runs stay serial.
 - The title drops into the attract demo after 92.267 s of wall clock. A slow run can miss Continue and "pass" while soaking the attract demo, so every run must assert its setup.
 
-**S4a. `SOA_PEEK`, and a watch you can aim** — *hours, `--link`. Before H2.*
+**S4a. `SOA_PEEK`, and a watch you can aim** — *done 2026-09-24 (commit ae74c35); both run-level criteria checked in H2's baseline.*
 - **`SOA_PEEK=addr@N[-M][,…]`** reads a word at frame N, or at every frame from N to M. It has its own list, not a share of `SOA_POKE`'s 256.
   - Each line is `[peek] frame F: ADDR = VALUE (retrace R)`, where R is the word at 0x80347A64.
   - Peeks run before pokes in the frame hook, so they read what the game wrote.

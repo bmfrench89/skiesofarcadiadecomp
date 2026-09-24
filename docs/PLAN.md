@@ -1017,10 +1017,10 @@ for the SDK libraries and a separate week-plus for game and middleware.
 
 Not answerable by reading this repository, and each blocks an item.
 
-**Is the game's logic clock the VI retrace or the presented frame?** Retrace
-counts track wall time and frame counts do not, which is strong evidence for
-the retrace, but nobody has traced the main loop around `VIWaitForRetrace` —
-and it decides how much D4 buys.
+**Is the game's logic clock the VI retrace or the presented frame?** *Answered
+2026-09-24 (H2): the presented frame.* A fade takes 29 frames whether a frame
+lasts two fields or one (58 fields capped, 37 uncapped); the cap is the
+immediate at 0x801DC4A4 and the logic advances once per frame. FINDINGS "H2".
 
 **Does the card mount once B2 lands, and where is the first save point?**
 Each blocker is fatal alone; whether a fourth sits behind them is unknown,

@@ -1603,3 +1603,41 @@ The first attempt at these Part L runs used the `battle` scenario's own
 `SOA_SNAP=100`, rasterised one frame in a hundred, and measured 29.4 fps and
 0.02 M fragments a frame -- a reminder that a scenario's `env:` lines apply
 unless overridden.
+
+
+**H2: the game's logic is per frame, the cap is one constant, and 60 fps has
+to be interpolation.** 2026-09-24, `build/h2-base.log` and `build/h2-uncap.log`,
+from the part-A save (the field at frame ~2650), snapshot mode, with S4a's
+`SOA_PEEK` reading words every frame across the Continue's arrival.
+
+Capped: the frame-start field count (0x8034768C, stored at 0x801DCB88)
+steps by **2** on 395 frames of the window, by 3 on three, and by 14 and 17 on
+two loading frames -- two fields a frame, 30 fps, the `cmpli r0,1` at
+0x801DC4A4. The fade level (0x80347510) shows the load's fade-out, 1/7 a frame
+over frames 2700-2706, and then the map's fade-in, **frames 2776 to 2805: 29
+frames, 58 fields**, falling 1/29 = 0.0345 a frame.
+
+Uncapped: `SOA_POKE` set 0x8034768C to 0 at the end of every frame from 2700
+to 2955, so the frame end's pre-wait passes at once. The same fade-in ran
+**frames 2817 to 2846: 29 frames, 37 fields.** Same frames, fewer fields --
+the fade counts frames, not time. (It started 41 frames later because the load
+is timed by the wall clock, and frames now came faster.) The poke's `was`
+values stepped by 1 field on 199 frames, 2 on 51, 3 on two: uncapped, the guest
+thread alone sometimes needs more than one field for a frame, as the research's
+18.2 ms worst case said it would.
+
+So:
+- **PLAN's open question -- is the logic clock the retrace or the presented
+  frame? -- is answered: the presented frame.** Every game frame advances the
+  logic once; the frame counter at 0x803475C0 equals the port's frame number
+  on every frame peeked (2650-3050).
+- Uncapping is a 2x-speed mode, not 60 fps; 60 fps is renderer interpolation
+  with the logic kept at 30, as `PLAN-60FPS-MODS.md` assumed. That plan stands.
+- The kill condition "steps of 2 or more while uncapped" fired on a fifth of the
+  frames, so H13 (guest-thread speed) comes before M11 (battle speed-up). It
+  does not touch the interpolation route, which keeps the logic at 30.
+
+S4a checked in the same baseline run: at frame 2900 `[peek] ... 8034768C =
+0000178C` and `[poke] ... 8034768C <- 00000000 (was 0000178C)` read the same
+value, and a watch with `SOA_WATCH_FROM=2700` printed its first line at frame
+2700.
