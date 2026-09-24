@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-616 passed in 62.58s
+630 passed in 76.99s
 ```
 
-616 tests in 38 files, none of which reads the disc. They cover the Python
+630 tests in 39 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -73,6 +73,7 @@ its own and run it, some of the C as well:
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_guard.py` | 22 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
+| `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
 | `test_soak.py` | 6 | `tools/soak.py`'s generated play: the same seed replays the same presses, every script passes the strict pad grammar and fits what `si.c` holds |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
@@ -88,10 +89,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `616 passed` |
-| no capstone — **what CI installs** | `597 passed, 1 skipped` |
-| no MSVC | `530 passed, 86 skipped` |
-| neither — **the Ubuntu CI leg** | `511 passed, 87 skipped` |
+| everything (MSVC + capstone) | `630 passed` |
+| no capstone — **what CI installs** | `611 passed, 1 skipped` |
+| no MSVC | `531 passed, 99 skipped` |
+| neither — **the Ubuntu CI leg** | `512 passed, 100 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -934,7 +935,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 86 of the 616 skip without a C compiler; they build one runtime file and run it.
+² 99 of the 630 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

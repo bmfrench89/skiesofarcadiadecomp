@@ -764,11 +764,83 @@ static void poke_parse(void)
         fprintf(stderr, "[poke] %d poke(s) armed\n", g_poke_n);
 }
 
+/* SOA_PEEK=addr@N[-M][,...] reads a word at the end of frame N, or of every
+ * frame from N to M, and prints it with the game's retrace count -- the read
+ * half of SOA_POKE without having to write the value back. SOA_WATCH cannot
+ * serve here: it stops after 201 hits and says which store, not which frame, so
+ * "how many fields does this fade take" had no answer without a tracepoint and
+ * a retranslation. Peeks fire before pokes in the same hook, so a peek and a
+ * poke of one word at one frame read what the game wrote. Its own list, not a
+ * share of SOA_POKE's 256. */
+#define PEEK_MAX 256
+#define VI_RETRACE_COUNT 0x80347A64u /* the VI library's retraceCount */
+
+typedef struct {
+    uint32_t ea;
+    unsigned first, last, done;
+} Peek;
+
+static Peek g_peeks[PEEK_MAX];
+static int g_peek_n = -1;
+
+static void peek_parse(void)
+{
+    const char* p = getenv("SOA_PEEK");
+    g_peek_n = 0;
+    if (!p || !*p) return;
+    while (*p && g_peek_n < PEEK_MAX) {
+        const char* item = p;
+        uint32_t ea, first, last;
+        if (!poke_number(&p, 0, &ea) || *p != '@') { p = item; break; }
+        p++;
+        if (!poke_number(&p, 10, &first)) { p = item; break; }
+        last = first;
+        if (*p == '-') {
+            p++;
+            if (!poke_number(&p, 10, &last) || last < first) { p = item; break; }
+        }
+        if (*p && *p != ',') { p = item; break; }
+        g_peeks[g_peek_n].ea = ea;
+        g_peeks[g_peek_n].first = first;
+        g_peeks[g_peek_n].last = last;
+        g_peeks[g_peek_n].done = 0;
+        g_peek_n++;
+        p += *p == ',' ? 1 : 0;
+    }
+    if (*p)
+        fprintf(stderr, "[peek] SOA_PEEK: stopped at %.32s -- each item is addr@frame or addr@first-last, "
+                        "up to %d items; %d parsed\n", p, PEEK_MAX, g_peek_n);
+    else if (g_peek_n)
+        fprintf(stderr, "[peek] %d peek(s) armed\n", g_peek_n);
+}
+
+static void peek_at_frame(CpuState* s, unsigned frame)
+{
+    int i;
+    if (g_peek_n < 0) peek_parse();
+    for (i = 0; i < g_peek_n; i++) {
+        Peek* k = &g_peeks[i];
+        /* A single frame fires once on the first frame at or after it, as a
+         * poke does; a range fires on every frame inside it that is presented. */
+        if (k->done || frame < k->first) continue;
+        if (k->first == k->last) k->done = 1;
+        else if (frame > k->last) { k->done = 1; continue; }
+        if (is_mmio(k->ea)) {
+            fprintf(stderr, "[peek] frame %u: %08X is in the hardware window, not memory; skipped\n", frame, k->ea);
+            k->done = 1;
+            continue;
+        }
+        fprintf(stderr, "[peek] frame %u: %08X = %08X (retrace %u)\n", frame, k->ea, mem_r32(s, k->ea),
+                mem_r32(s, VI_RETRACE_COUNT));
+    }
+}
+
 void poke_at_frame(CpuState* s, unsigned frame);
 
 void poke_at_frame(CpuState* s, unsigned frame)
 {
     int i;
+    peek_at_frame(s, frame);
     if (g_poke_n < 0) poke_parse();
     for (i = 0; i < g_poke_n; i++) {
         if (g_pokes[i].done || frame < g_pokes[i].frame) continue;
@@ -974,6 +1046,8 @@ int main(int argc, char** argv)
      * instead of sixteen thousand frames later in a run that appears to have
      * ignored them. The pokes themselves still fire at their own frames. */
     poke_parse();
+    peek_parse();
+    watch_init(); /* here with the others, so SOA_WATCH is read before the disc is */
     gx_set_frame_hook(poke_at_frame);
 
     snprintf(path, sizeof path, "%s/sys/main.dol", dir);
@@ -1018,7 +1092,6 @@ int main(int argc, char** argv)
     snprintf(path, sizeof path, "%s/disc.iso", dir);
     dvd_init(path);
     threads_init(&s);
-    watch_init();
     if (getenv("SOA_SELFTEST")) return selftest(&s) ? 7 : 0;
     if (argc > 2 && strcmp(argv[1], "--replay") == 0) {
         /* Render one captured frame (see gx.c frame capture) to <base>.png. */

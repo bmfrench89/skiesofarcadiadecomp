@@ -182,6 +182,8 @@ an unquoted path with a space in it is two arguments.
 | `SOA_CARD=path` | memory card image for slot A (default `build/cards/slotA.raw`, created blank on the first write; `tools/cardformat.py write` makes one the game will mount) |
 | `SOA_CARD_VERBOSE=1` | one `[card]` line per EXI transaction: the frame, the device, the command and the card address |
 | `SOA_TRACE=1` / `SOA_TRACE_DUMP=1` / `SOA_WATCH=addr,len` | tracepoints from `config/trace.txt`; 12 words of memory at each hit; a store watchpoint |
+| `SOA_PEEK=addr@N[-M][,...]` | print the word at guest address `addr` at the end of frame `N`, or of every frame from `N` to `M`, with the game's retrace count (`[peek] frame F: ADDR = VALUE (retrace R)`); fires before `SOA_POKE` in the same frame, so it reads what the game wrote. Up to 256 items, a list of its own. The way to time something in fields, e.g. a fade at 0x80347510 |
+| `SOA_WATCH_FROM=N` | start `SOA_WATCH` at the game's frame `N`: earlier stores are neither printed nor counted against its 201 lines. Every `[watch]` line ends with the frame it happened in |
 | `SOA_GXR_DEBUG=N` / `SOA_GXR_DRAWS=N` / `SOA_GXR_PIXEL=x,y` | renderer forensics in `--replay`: triangles from draw N on, stop after N draws, narrate one pixel |
 | `SOA_GXR_LIGHTS=N` / `SOA_GXR_NOTEX=1` / `SOA_CULLFLIP=1` | more renderer forensics: dump the lighting setup of the first N draws, draw every texture flat grey, reverse the winding the rasterizer culls by |
 | `SOA_NOAX=1` / `SOA_AX_VERBOSE=1` / `SOA_ARAM_VERBOSE=1` | audio forensics: skip the AX mixer entirely, one line per voice command, one line per ARAM DMA |
@@ -192,7 +194,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 616 tests; any that need a dump skip themselves
+python -m pytest                     # 630 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

@@ -64,6 +64,12 @@ void trace_hit(CpuState* s, uint32_t pc, const char* name)
 
 uint32_t g_watch_addr, g_watch_len;
 
+/* The game's own frame counter (advanced once per dispatcher call, 0x801DC390),
+ * which equals the port's frame number. Every hit prints it: a watch line used
+ * to say which store and not when, so a watch could not time anything. */
+#define GAME_FRAME_COUNTER 0x803475C0u
+static uint32_t g_watch_from; /* SOA_WATCH_FROM: hits before this frame are not printed or counted */
+
 void watch_init(void)
 {
     const char* env = getenv("SOA_WATCH");
@@ -82,14 +88,25 @@ void watch_init(void)
         g_watch_addr = 0;
         return;
     }
-    fprintf(stderr, "[watch] %08X..%08X\n", g_watch_addr, g_watch_addr + g_watch_len);
+    {
+        /* A word stored every frame from boot spends the 201 printed hits on the
+         * logos; this aims the watch at the part of the run it was set for. */
+        const char* from = getenv("SOA_WATCH_FROM");
+        if (from && *from) g_watch_from = (uint32_t)strtoul(from, NULL, 10);
+    }
+    if (g_watch_from)
+        fprintf(stderr, "[watch] %08X..%08X from frame %u\n", g_watch_addr, g_watch_addr + g_watch_len, g_watch_from);
+    else
+        fprintf(stderr, "[watch] %08X..%08X\n", g_watch_addr, g_watch_addr + g_watch_len);
 }
 
 void watch_hit(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 {
     static unsigned hits;
+    uint32_t frame = mem_r32(s, GAME_FRAME_COUNTER);
+    if (frame < g_watch_from) return;
     if (hits++ > 200) return;
-    fprintf(stderr, "[watch] %08X/%u = %llx at block %08X lr %08X r1 %08X;", ea, size,
-            (unsigned long long)v, s->pc, s->lr, s->gpr[1]);
+    fprintf(stderr, "[watch] %08X/%u = %llx at block %08X lr %08X r1 %08X frame %u;", ea, size,
+            (unsigned long long)v, s->pc, s->lr, s->gpr[1], frame);
     guest_backtrace(s, s->gpr[1]);
 }
