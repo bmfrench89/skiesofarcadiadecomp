@@ -199,7 +199,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - FINDINGS records the uncapped images-per-second ceiling in the opening, a battle and a ship battle, both in snapshot mode (the guest ceiling) and drawing every frame (the render ceiling).
 - H1's Part L every-frame runs are repeated with this build, so that H11 has CPU seconds to compare against.
 
-**H4. Can consecutive frames' draws be matched? Offline** — *a day.*
+**H4. Can consecutive frames' draws be matched? Offline** — *done 2026-09-24: 100% of 3D draw area matched in all five scenes; the literal all-area line fires only on unmoving full-screen 2D quads, so H7 is not needed. FINDINGS "H4".*
 - **Capture pairs** into `build/fifo-pairs`: create the directory, set `SOA_FIFO_DIR` to it (never `build/fifo`) and set `SOA_FIFO_DUMP=F,F+1`. Take pairs in a field, a battle, a ship battle and a cutscene.
 - **Write a pair analyser** on top of `fifo.py`'s parser. It keys draws by display-list address, CP array bases, texture addresses, primitive, vertex count and a hash of the TEV setup. It reports:
   - the share of pixels that come from matched draws;
@@ -214,7 +214,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - A synthetic test gives a mutated pair (one draw's texture changed) and requires a lower match share.
 - **Kill condition:** under about 90% of pixels matched in any scene means H7, draws tagged by the game, comes before H10.
 
-**H5. Route (d) spike, alongside H4** — *hours, no rebuild after S4a.*
+**H5. Route (d) spike, alongside H4** — *done 2026-09-24: dropped; the layer lists are reset per frame and recorded inside the scene update. FINDINGS "H5".*
 - Run with `SOA_WATCH=0x80308CBC`, the first layer's display-list head, and with S4a's `SOA_WATCH_FROM` set to a field frame. The head is zeroed every frame (801D0FF0), so an unstarted watch would spend its 201 hits on the logos.
 - Read the storing lr and backtraces to find what records the lists.
 - Take the inside-versus-outside display-list counts from H4's analyser.
@@ -235,7 +235,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - Today's ns per fragment for each capture is in FINDINGS, with the power mode.
 - H13–H16 report against this set and no other.
 
-**H7. Tag draws by the game (only if H4 < 90%)** — *several days to week-plus, plus one retranslation.*
+**H7. Tag draws by the game (only if H4 < 90%)** — *not needed: H4 matched every 3D draw (2026-09-24).*
 - **Research:** find the object-draw routine. No address is known; H5's recorder backtrace is the starting point.
 - **Tag each draw with its object pointer.**
   - Pass the tag through a renderer setter into each DrawCmd, so the renderer still links alone.

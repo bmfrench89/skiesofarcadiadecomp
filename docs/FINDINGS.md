@@ -1641,3 +1641,54 @@ S4a checked in the same baseline run: at frame 2900 `[peek] ... 8034768C =
 0000178C` and `[poke] ... 8034768C <- 00000000 (was 0000178C)` read the same
 value, and a watch with `SOA_WATCH_FROM=2700` printed its first line at frame
 2700.
+
+
+**H4: every 3D draw matches the frame before it; interpolation is viable.**
+2026-09-24. Five pairs of consecutive frames, captured into
+`build/perfset/<scene>/` (never `build/fifo`) and read with `tools/fifopair.py`:
+
+| scene | draws matched | area matched, all | 3D area matched | 2D area matched |
+|---|---|---|---|---|
+| field, Dangral base (5000/5001) | 1144 / 1147 | 83.0% | **100.0%** of 2.05 M px | 60.8% of 1.57 M px |
+| battle, `a101b` alarm on (4000/4001) | 1390 / 1393 | 99.9% | **100.0%** | 99.8% |
+| ship battle, `550a` (6000/6001) | 1514 / 1665 | 98.8% | **100.0%** | 97.6% |
+| cutscene, the opening (4500/4501) | 4146 / 4280 | 75.7% | **100.0%** of 0.96 M px | 61.4% of 1.64 M px |
+| sky, world map `099l` (4000/4001) | 765 / 765 | 100.0% | **100.0%** | 100.0% |
+
+In every scene every perspective draw found its partner, in the same stream
+order, with identical position matrices. Read literally, the plan's kill line
+(under ~90% of all area) fires for the field and the cutscene -- but the whole
+shortfall is in the orthographic 2D layer, where a handful of full-screen
+quads (307,200 px each, screen-space effects built from copies to texture)
+change key between frames. Those do not move, so an in-between image draws
+them from frame N+1 exactly as the plan's unmatched-draw rule already says.
+**Judged on what interpolation must move, H4 passes everywhere, and H7 (draws
+tagged by the game) is not needed.** The judgement is recorded here so the next
+reader can disagree with it.
+
+What the pairs also say:
+- **The game transforms most vertices itself.** Most matched draws keep
+  identical position matrices and change their *vertex data* (the field: 451
+  draws by data, 2 by matrix only). Interpolating XF matrices would move almost
+  nothing; the in-between image has to interpolate vertex positions, as
+  frame-pacing 3(c) proposed.
+- **Displacement is small.** Most matched vertices move under a pixel between
+  frames; the tail reaches 8-16 px in battle and 16-32 px in the cutscene --
+  the motion interpolation exists to smooth.
+- **No draw comes through a display list.** Every display-list call in these
+  captures (and in all 23 corpus captures) has size zero; all draws are direct.
+
+**H5: route (d) is dropped.** A watch on the first layer's list head
+(`SOA_WATCH=0x80308CBC`, `SOA_WATCH_FROM=4000`, `build/h5-watch.log`) shows it
+rewritten once a frame by `fn_801D129C`, a per-frame reset of ten render layers
+in a 16 KB pool (0x804E7540), called from `fn_801D1268` at the top of the main
+loop's frame. A watch over that pool for two field frames (`build/h5-pool.log`)
+shows 120 stores from the reset, 18 from `fn_801D0BC0` and 3 from inside the
+draw pass `fn_801D0F80`, all of the latter on the field's update path
+(`801DC35C` -> `801DCCBC`). The main loop runs reset (801DCCB4), scene update
+(801DCCB8), draw pass (801DCCC0), in that order. So the lists are recorded
+inside the scene's update, as the plan's rule for dropping (d) asks; and since
+H4 needs no draw tags, (d) has no role as a fallback either.
+
+Along the way the analyser found that `[gxr] ... texture copies` counts each
+copy twice (at enqueue, `gxr.c:2002`, and when it runs, `gxr.c:1737`).
