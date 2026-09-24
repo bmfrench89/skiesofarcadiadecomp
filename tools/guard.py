@@ -44,6 +44,16 @@ FORBIDDEN_SUFFIXES = {
     ".bnr",
     ".bin",
     ".map",
+    # What the port writes from the game while it runs (2026-09-24, PLAN S2):
+    # memory-card images, command-stream captures and their register and RAM
+    # images, recorded audio and rendered frames. Each carries the game's own
+    # data, and none is ever tracked.
+    ".raw",
+    ".fifo",
+    ".regs",
+    ".ram",
+    ".wav",
+    ".png",
 }
 
 # Directories that hold extracted or vendored material.

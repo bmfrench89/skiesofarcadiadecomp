@@ -258,3 +258,24 @@ def test_this_repository_history_passes_and_every_exemption_is_used():
     assert guard.history_problems(ROOT) == []
     held = {(blob, rel) for _, blob, rel in guard.history_blobs(ROOT)}
     assert held >= guard.HISTORY_EXEMPT, sorted(guard.HISTORY_EXEMPT - held)
+
+
+def test_the_files_the_port_writes_while_it_runs_are_refused(tmp_path, monkeypatch, capsys):
+    """Card images, command-stream captures with their register and RAM images,
+    recorded audio and rendered frames all carry the game's own data; the soak
+    and benchmark work of 2026-09-24 made hundreds of them (PLAN S2)."""
+    names = [
+        "cards/slot.raw",
+        "cap/5000.fifo",
+        "cap/5000.regs",
+        "cap/5000.ram",
+        "out.wav",
+        "frames/0100.png",
+    ]
+    repo = scratch_repo(tmp_path / "repo", {n: b"x" for n in names})
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(guard, "ROOT", repo, raising=False)
+    assert guard.main() == 1
+    err = capsys.readouterr().err
+    for n in names:
+        assert f"{n}: forbidden extension" in err, n
