@@ -38,6 +38,10 @@ fields, of which the game presents every other one. No saved log records
 wall-clock time at all, so every rate here is per *guest* second and equals
 wall time only at `SOA_SPEED=1`; the evidence that headless runs hold about
 ten times real time is FINDINGS.md's 594 retraces a second at `SOA_SPEED=10`.
+**Measured 2026-09-24 (H1), drawing every frame:** 22.3 fps in the opening and
+17.7 in the Dangral base, against the game's 30 -- windowed play draws every
+frame, so these are the rates a player sees in heavy scenes. The 26.7 above
+was the logos and title.
 
 What the port could not do, until A1 and D1, was tell you tomorrow that it
 still does all that. CI now compiles every line of the runtime and checks two
@@ -508,6 +512,9 @@ and three rows away — the zeros are the half that discriminates. And the
 SDK's filter-off set must copy bit-identically to today's unfiltered output.
 
 **C4. Speed, when it is needed** — *hours, then several days.*
+**Superseded by H1 (2026-09-24):** drawing every frame, the port runs 17.7-22.3
+fps in heavy scenes, not "5-11% short"; this item is absorbed into H15 of
+`PLAN-60FPS-MODS.md`. The text below is the earlier reading.
 The port is 5-11% short of the 30 fps cap and the items above cover that
 several times over; this matters when the heaviest content is reached, and
 for slice 7.5. The limiter is the fragment path: 862.5 M fragments in

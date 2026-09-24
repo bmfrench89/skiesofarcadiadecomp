@@ -61,7 +61,8 @@ the story or by losing a fight.
 The port boots, plays the opening with dialogue, wins the first battle, and
 is carried by the story through the Valuan ship's hold into `a101b`, where
 it moves around with menus, a minimap and random encounters (the hold itself
-has no encounter table; see wrong statement 8). It renders in a window at the game's 30 fps cap, plays music,
+has no encounter table; see wrong statement 8). It renders in a window -- at 18-22 fps in heavy scenes, below the game's
+30 fps cap, when every frame is drawn (FINDINGS, H1) -- plays music,
 effects and speech, takes keyboard or gamepad input, and reads and writes a
 memory card. Headless it runs about ten times real time.
 
@@ -347,7 +348,9 @@ playing. What is left is depth, and a person playing is now the best test.
 3. **Battles past Attack.** Items, Focus and S-moves in a story state that
    allows the fight (set the alarm first on `a101b`, or use the H/L saves);
    single-step presses more than 60 frames apart.
-4. **Speed** (plan C4). A windowed run measured 26.7 game frames a second
+4. **Speed** (plan C4, now H in `docs/PLAN-60FPS-MODS.md`). H1 measured
+   17.7-22.3 fps drawing every frame in heavy scenes; an older windowed run
+   measured 26.7 game frames a second
    against the game's 30; read the profiler first (wrong statement 3).
 5. **The decompilation grind** (Track F). Two SDK libraries are complete; the
    match oracle is sound.

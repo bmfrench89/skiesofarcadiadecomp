@@ -151,7 +151,7 @@ Sizes are in evenings, as in PLAN.md: **hours**, **a day**, **several days**, **
 - **The C3 race.** Removing the drains reopens C3's race, which showed up only on the fourth sweep.
 - **A parse thread breaks the synchronous frame end.** H13c must drain the parser at the XFB copy, or the frame hook fires after the spin.
 
-**H1. Every-frame cost, headless** — *hours, no rebuild.*
+**H1. Every-frame cost, headless** — *done 2026-09-24: 17.7-22.3 fps drawing every frame in heavy scenes; FINDINGS "H1".*
 Runs on copies of the cards, one `soa.exe` at a time.
 - **Opening:** `scenario.py run window --env SOA_WINDOW=0 --env SOA_CARD=build/savetest/perf.raw --log build/perf-full-opening.log`. Then run the same with `SOA_RENDER=0` as the guest-only baseline; its log also gives the opening's map sequence.
 - **Part L:** `--frames 3000` and `--frames 9000` on a copy of `card-partL.raw` with the Continue pad, subtracted from each other.

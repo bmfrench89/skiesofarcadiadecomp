@@ -1566,3 +1566,40 @@ Four more battle-mix soaks the same day, from parts C (Sailors' Island), F
 unknown FIFO bytes. They are towns and the sky, so no battle came up; part I
 walked from `019b` into `019c`. **Twelve soaks from ten story points, about
 four hours of random play, no runtime fault.**
+
+
+**H1: drawn every frame, the port runs 18-22 fps in heavy scenes, not 30.**
+2026-09-24, `build/h1-*.log`, on the Ryzen Z1 Extreme handheld, on AC power,
+Windows power plan "Turbo", 16 logical CPUs. Every run drew every frame
+(`SOA_RENDER=1`, `SOA_SNAP=0`, headless) and the Part L runs, traced, all
+loaded `a126a`. Frames over wall seconds, and the renderer's own counters per
+frame:
+
+| run | fps | fields/frame | workers busy | producer wait | fragments | `SelectThread` |
+|---|---|---|---|---|---|---|
+| opening, `SOA_RENDER=0` | 29.6 | 2.03 | -- | -- | -- | 48.2% |
+| opening, drawn | **22.3** | 2.48 | 173.8 ms | 12.0 ms | 1.61 M | 18.7% |
+| Part L 3000 frames (boot + title + 126a) | 24.1 | 2.15 | 167.4 ms | 13.7 ms | 1.45 M | 28.1% |
+| Part L 9000, 8 threads | **19.4** | 2.29 | 292.9 ms | 27.6 ms | 2.40 M | 13.0% |
+| Part L 9000, 4 threads | 14.6 | 2.32 | 241.3 ms | 49.1 ms | 2.40 M | 5.6% |
+| Part L 9000, 15 threads | 21.4 | 2.51 | 351.9 ms | 16.4 ms | 2.40 M | 14.6% |
+| Part L 9000, `SOA_SPEED=4` | 23.8 (guest 6.0) | 4.89 | 264.7 ms | 25.2 ms | 2.39 M | 1.3% |
+
+The 6,000 frames inside the Dangral base (9000 run minus 3000 run) take 339.6
+s: **17.7 fps**. At `SOA_SPEED=4` the port stops waiting for the clock
+(`SelectThread` 1.3%) and its throughput there is **23.8 images a second** --
+the ceiling on this machine today. Fps rises with the thread count but tails
+off: 14.6, 19.4, 21.4 at 4, 8 and 15. The single-thread point was not run:
+at about 3 fps the title's 92.267 s wall-clock timeout would fire before the
+START at frame 1600.
+
+The verdict on the plan's inference of "about 20 fps" for every-frame play:
+**confirmed**, 17.7 to 22.3 in the scenes measured. It matters now, not only
+for 60 fps: a window draws every frame, so windowed play in the Dangral base
+runs near 18 fps. The fragment path costs about 122 ns a fragment in worker
+time (292.9 ms / 2.40 M); 60 images a second of this scene needs about 55
+ns with eight workers, 2.2 times faster, inside the plan's 1.4-2.5 times.
+The first attempt at these Part L runs used the `battle` scenario's own
+`SOA_SNAP=100`, rasterised one frame in a hundred, and measured 29.4 fps and
+0.02 M fragments a frame -- a reminder that a scenario's `env:` lines apply
+unless overridden.
