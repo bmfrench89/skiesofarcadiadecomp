@@ -73,6 +73,8 @@ static void xf_f(CpuState* s, unsigned addr, unsigned n, const float* f)
 #define B_BASE 0x00600000u
 #define C_BASE 0x00700000u
 #define D_BASE 0x00800000u
+#define E_BASE 0x00900000u /* frame f's mipmapped texture at E_BASE + f * 0x40000 */
+#define E_LEVEL1 196608u  /* 256 x 192 RGBA8: its level 1, 128 x 96, starts here */
 #define SLOT 0x10000u      /* 128 x 96 RGBA8 is 48 KB */
 #define C4_TEX 0x00300000u
 #define XFB 0x00100000u
@@ -161,7 +163,7 @@ static uint64_t g_done = 1469598103934665603ull, g_cpu = 1469598103934665603ull;
 static void frame(CpuState* s, int f)
 {
     uint32_t a = A_BASE + (uint32_t)f * SLOT, b = B_BASE + (uint32_t)f * SLOT, c = C_BASE + (uint32_t)f * SLOT;
-    uint32_t d = D_BASE + (uint32_t)f * SLOT;
+    uint32_t d = D_BASE + (uint32_t)f * SLOT, e = E_BASE + (uint32_t)f * 0x40000u;
     int i;
     untextured(s);
     for (i = 0; i < 24; i++) {
@@ -199,6 +201,16 @@ static void frame(CpuState* s, int f)
     untextured(s);
     quad(s, 40, 30, 90, 70, colour(66, f));
     copy_tex(s, d); /* read by nothing but the CPU, after the token */
+    /* A copy into mip level 1 of a texture, then a draw that minifies it so
+     * the sampler picks level 1: the texture's read must wait for this copy
+     * although it does not touch the base level (the review of H14). */
+    quad(s, 24, 40, 100, 90, colour(88, f));
+    copy_tex(s, e + E_LEVEL1);
+    textured(s, e, 6, 256, 192, 0, 48, 64, 48);
+    bp_w(s, 0x80, 2u << 5);        /* point, with mipmaps */
+    bp_w(s, 0x84, 16u << 8);       /* max LOD 1.0: two levels */
+    quad(s, 0, 48, 64, 96, 0xFFFFFFFFu);
+    untextured(s);
     screen_copy(s);
     bp_w(s, 0x48, (uint32_t)f); /* a draw token */
     g_cpu = fnv(g_cpu, s->mem + d, W * H * 4);

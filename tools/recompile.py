@@ -218,9 +218,16 @@ def main() -> int:
                 print(proc.stdout[-2000:], file=sys.stderr)
                 return 1
             objs += sorted(ndir.glob("*.obj"))
+        # /Zi and /DEBUG write gen/soa.pdb without changing the code /O2 makes
+        # (/OPT:REF and /OPT:ICF are what /DEBUG would otherwise turn off): the
+        # runtime's functions and lines get names, which SOA_HOSTPROF's report
+        # and a crash's stack both need. The translated chunks carry no debug
+        # information and add only their public names.
         proc = toolchain.cl(
             [
                 *toolchain.CFLAGS,
+                "/Zi",
+                f"/Fd{args.out}/runtime.pdb",
                 f"/I{RUNTIME}",
                 f"/I{args.out}",
                 f"/Fo{args.out}/",
@@ -228,6 +235,9 @@ def main() -> int:
                 *map(str, sorted(RUNTIME.glob("*.c"))),
                 *map(str, objs),
                 "/link",
+                "/DEBUG",
+                "/OPT:REF",
+                "/OPT:ICF",
                 "/STACK:33554432",  # guest call depth becomes host call depth
             ],
             cwd=".",

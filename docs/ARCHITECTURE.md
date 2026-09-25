@@ -234,9 +234,14 @@ a texture (`gxr_texture_hazard`), a palette (BP 0x65), vertex arrays, a
 display list or an indexed XF load (`gxr_source_hazard`), a hook's peek,
 poke or mod access (`gxr_hook_hazard`) -- waits for the newest copy that
 overlaps it, found in the list of copy destinations with their exact
-extents and command numbers, and for nothing else. A draw token (BP
-0x47/0x48) waits for the newest copy, so a game that reads a copy after
-its token still sees it finished. `SOA_GXR_DRAIN=1` restores the drains.
+extents and command numbers, and for nothing else. A texture read covers
+every mip level its decode will read, not the base alone. A draw token (BP
+0x47/0x48) is answered as it is parsed and does not wait: this game writes
+its token at the top of each frame, before the frame's logic, and waiting
+there took all of H14's gain (FINDINGS "H14"), so a copy may still be
+running when a token is answered, and the report counts how often.
+`SOA_GXR_TOKENWAIT=1` makes a token wait for the newest copy, and
+`GXDrawDone` still drains. `SOA_GXR_DRAIN=1` restores the drains.
 
 ### 10. Out to the window
 
@@ -548,10 +553,12 @@ since H14 wait for each other in three ways, each named in the report's
   PNG; and when the arena, the graveyard or the copy list fills;
 - **a wait for one command** (`wait_ran`) holds the producer until every
   worker has finished that command and recycles nothing: to reuse a ring
-  slot, to read memory a queued copy writes, at a draw token;
+  slot, to read memory a queued copy writes, and at a draw token under
+  `SOA_GXR_TOKENWAIT=1`;
 - **a fence** holds a worker at a command until every other worker has
   finished the commands before it (section 9). Only copies that read rows
-  other workers own, the command after each, and screen copies carry one.
+  other workers own, the command after each, screen copies, and a copy
+  that writes memory an unfinished copy is still writing carry one.
 
 `SOA_GXR_DRAIN=1` puts back the drains around every such copy, as the
 oracle and the fallback, and `SOA_GXR_STALL` holds a worker back to turn a

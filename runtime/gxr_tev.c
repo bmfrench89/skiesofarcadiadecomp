@@ -655,15 +655,39 @@ static TexEntry* tex_take(const TexEntry* key)
     return e;
 }
 
+/* The bytes a decode of n levels reads, walked exactly as decode_texture walks
+ * them: the base, then each mip at half the size, stopping at 1x1. */
+static uint32_t chain_bytes(uint32_t fmt, uint32_t w, uint32_t h, int n)
+{
+    uint32_t total = 0;
+    int l;
+    if (n < 1) n = 1;
+    if (n > MAX_MIPS) n = MAX_MIPS;
+    for (l = 0; l < n; l++) {
+        total += texture_bytes(fmt, w, h);
+        if (w == 1 && h == 1) break;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+    }
+    return total;
+}
+
 static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt, int nlevels)
 {
     TexEntry key, *e;
     uint64_t hsh;
-    gxr_texture_hazard(addr, texture_bytes(fmt, w, h));
+    int levels;
     if (g_tex_verify < 0) g_tex_verify = getenv("SOA_TEXVERIFY") != NULL;
     g_lookups++;
     key.addr = addr; key.fmt = fmt; key.w = w; key.h = h; key.tlut_off = tlut_off; key.tlut_fmt = tlut_fmt;
     e = tex_find(&key);
+    /* Wait for any queued copy writing what a decode here could read: every
+     * level, not the base alone -- a copy into mip level 1 was waited for only
+     * by the drain after every copy until H14 took that away (found by the
+     * review of H14). Before anything is freed, so SOA_GXR_DRAIN's drain here
+     * cannot land between a free and a decode. */
+    levels = e && e->rgba && e->nlevels > nlevels ? e->nlevels : nlevels;
+    gxr_texture_hazard(addr, chain_bytes(fmt, w, h, levels));
     if (e && e->rgba) {
         e->stamp = ++g_stamp;
         if (e->hashed != g_tex_epoch || g_tex_verify) {

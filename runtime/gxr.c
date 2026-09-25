@@ -1725,6 +1725,145 @@ static DWORD WINAPI worker(LPVOID arg)
 }
 #endif
 
+/* ---- SOA_HOSTPROF: where the workers' time goes, by function and line ------
+ *
+ * The profile main.c prints samples the guest thread, and reads what it was
+ * running from words that thread writes; a worker writes none, so the pixel
+ * path was measurable only as a total. With SOA_HOSTPROF=1 a thread suspends
+ * each worker about once a millisecond, reads its instruction pointer and lets
+ * it go, and the report resolves the samples to functions and source lines
+ * through gen/soa.pdb (dbghelp). Suspending a thread costs it a few
+ * microseconds a millisecond, well under the drift this machine has between
+ * runs; a profiled run is for reading, not for timing. A sample in the kernel
+ * or a wait counts under the function the worker was waiting in. */
+#ifdef _WIN32
+#include <dbghelp.h>
+#include <process.h>
+#pragma comment(lib, "dbghelp.lib")
+#define HP_SLOTS 65536u
+static HANDLE g_worker_handle[MAX_THREADS + 1];
+static uint64_t g_hp_rip[HP_SLOTS];
+static uint32_t g_hp_count[HP_SLOTS];
+static uint64_t g_hp_samples, g_hp_lost;
+static volatile LONG g_hp_on;
+
+static void hp_add(uint64_t rip)
+{
+    uint32_t h = (uint32_t)((rip * 0x9E3779B97F4A7C15ull) >> 48) & (HP_SLOTS - 1), i;
+    for (i = 0; i < 64; i++) {
+        uint32_t k = (h + i) & (HP_SLOTS - 1);
+        if (g_hp_rip[k] == rip) { g_hp_count[k]++; return; }
+        if (!g_hp_rip[k]) { g_hp_rip[k] = rip; g_hp_count[k] = 1; return; }
+    }
+    g_hp_lost++;
+}
+
+static unsigned __stdcall hostprof_thread(void* arg)
+{
+    HANDLE timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* high resolution */, TIMER_ALL_ACCESS);
+    int n = (int)(intptr_t)arg, i;
+    for (;;) {
+        LARGE_INTEGER due;
+        due.QuadPart = -10000; /* 1 ms */
+        if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) WaitForSingleObject(timer, 100);
+        else Sleep(1);
+        for (i = 1; i <= n; i++) {
+            CONTEXT ctx;
+            if (SuspendThread(g_worker_handle[i]) == (DWORD)-1) continue;
+            memset(&ctx, 0, sizeof ctx);
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(g_worker_handle[i], &ctx)) {
+                hp_add(ctx.Rip);
+                g_hp_samples++;
+            }
+            ResumeThread(g_worker_handle[i]);
+        }
+    }
+}
+
+static void hostprof_start(int n)
+{
+    const char* env = getenv("SOA_HOSTPROF");
+    if (!env || !atoi(env) || n < 1) return;
+    g_hp_on = 1;
+    _beginthreadex(NULL, 0, hostprof_thread, (void*)(intptr_t)n, 0, NULL);
+    fprintf(stderr, "[hostprof] sampling %d worker thread%s every millisecond\n", n, n == 1 ? "" : "s");
+}
+
+typedef struct {
+    char name[160];
+    uint64_t count;
+} HpRow;
+
+static int hp_row_cmp(const void* a, const void* b)
+{
+    uint64_t x = ((const HpRow*)a)->count, y = ((const HpRow*)b)->count;
+    return x < y ? 1 : (x > y ? -1 : 0);
+}
+
+/* Fold the samples by key (function, or function and line) and print the top
+ * rows. The key strings come from dbghelp; a table of 4096 is ample, since the
+ * pixel path is a few functions. */
+static void hp_print(int by_line, int rows)
+{
+    static HpRow table[4096];
+    int nrows = 0, i;
+    uint32_t k;
+    HANDLE proc = GetCurrentProcess();
+    for (k = 0; k < HP_SLOTS; k++) {
+        char buf[sizeof(SYMBOL_INFO) + 256];
+        SYMBOL_INFO* sym = (SYMBOL_INFO*)buf;
+        char key[160];
+        DWORD64 disp = 0;
+        if (!g_hp_rip[k]) continue;
+        memset(buf, 0, sizeof buf);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        if (!SymFromAddr(proc, g_hp_rip[k], &disp, sym)) snprintf(key, sizeof key, "?? %llx", (unsigned long long)g_hp_rip[k]);
+        else if (by_line) {
+            IMAGEHLP_LINE64 line;
+            DWORD ldisp = 0;
+            memset(&line, 0, sizeof line);
+            line.SizeOfStruct = sizeof line;
+            if (SymGetLineFromAddr64(proc, g_hp_rip[k], &ldisp, &line)) {
+                const char* file = strrchr(line.FileName, '\\');
+                snprintf(key, sizeof key, "%s %s:%lu", sym->Name, file ? file + 1 : line.FileName, (unsigned long)line.LineNumber);
+            } else snprintf(key, sizeof key, "%s +%llx", sym->Name, (unsigned long long)disp);
+        } else snprintf(key, sizeof key, "%s", sym->Name);
+        for (i = 0; i < nrows; i++)
+            if (!strcmp(table[i].name, key)) break;
+        if (i == nrows) {
+            if (nrows == 4096) continue;
+            snprintf(table[nrows].name, sizeof table[nrows].name, "%s", key);
+            table[nrows++].count = 0;
+        }
+        table[i].count += g_hp_count[k];
+    }
+    qsort(table, (size_t)nrows, sizeof table[0], hp_row_cmp);
+    for (i = 0; i < nrows && i < rows; i++)
+        fprintf(stderr, "[hostprof] %5.1f%%  %s\n", 100.0 * (double)table[i].count / (double)g_hp_samples, table[i].name);
+}
+
+static void hostprof_report(void)
+{
+    if (!g_hp_on || !g_hp_samples) return;
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    if (!SymInitialize(GetCurrentProcess(), NULL, TRUE)) {
+        fprintf(stderr, "[hostprof] %llu samples, but dbghelp would not start, so no names\n", (unsigned long long)g_hp_samples);
+        return;
+    }
+    fprintf(stderr, "[hostprof] %llu samples of the workers (%llu past a full table); by function:\n",
+            (unsigned long long)g_hp_samples, (unsigned long long)g_hp_lost);
+    hp_print(0, 20);
+    fprintf(stderr, "[hostprof] by line:\n");
+    hp_print(1, 40);
+    SymCleanup(GetCurrentProcess());
+}
+#else
+static void hostprof_start(int n) { (void)n; }
+static void hostprof_report(void) {}
+#endif
+
 static void workers_start(void)
 {
     const char* env = getenv("SOA_THREADS");
@@ -1746,8 +1885,9 @@ static void workers_start(void)
     for (i = 1; i <= n; i++) {
         HANDLE h = CreateThread(NULL, 0, worker, (LPVOID)(intptr_t)i, 0, NULL);
         if (!h) { n = i - 1; break; }
-        CloseHandle(h);
+        g_worker_handle[i] = h; /* kept for SOA_HOSTPROF, which samples through it */
     }
+    hostprof_start(n);
 #else
     n = 0;
 #endif
@@ -2903,4 +3043,5 @@ void gxr_report(void)
         }
     }
     tex_report();
+    hostprof_report();
 }

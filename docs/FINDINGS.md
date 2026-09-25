@@ -2460,6 +2460,37 @@ workers contend. At one thread, where a replay's busy time is seconds: 61.1 /
 60.1 against **58.8 / 58.4 ns** (-3.5%), most in the sky (80 → 75) and ship
 (79 → 75) scenes, least in the Dangral base (56 → 54). One thing the one-thread
 figures say that the plan's budget did not: the same fragments cost about
-60 ns on one worker and about 90 on eight. The pool loses a third of its
-per-fragment speed to contention, which H15c/d's budget (61 ns at 8 threads)
-has to beat as well as the arithmetic.
+60 ns on one worker and about 90 on eight. What takes that third is not yet
+separated: on this handheld eight busy cores clock lower than one under the
+power limit, eight workers share SMT siblings with the producer, and they
+contend for memory. H15c/d's budget (61 ns at 8 threads) has to be met
+against it as well as against the arithmetic.
+
+
+**H14's review, and a profiler for the workers.** 2026-09-25. A read-only
+adversarial review of H14 (three lenses: threads, lifetimes, pixels; each
+finding then argued against) confirmed two things and refuted one:
+
+- **A texture read waited for copies into its base level only**, while its
+  decode reads every mip level. A copy into mip level 1 in the same frame as
+  a minified draw of the texture would have been read unfinished. Before H14
+  the drain after every copy hid this; nothing shows this game copies into a
+  mip level, so it was latent. The read now covers every level the decode will
+  read, and `tools/tests/test_gxr_overlap.py` gained the case: reverting the
+  fix turns six of its runs red.
+- **ARCHITECTURE still said a draw token waits**, from before the wait became
+  opt-in. Corrected, with the one fence case it had left out (a copy writing
+  memory an unfinished copy is still writing).
+- Refuted: that the store watchpoints in "H14" covered the wrong memory. The
+  addresses watched are where the game's texture copies land.
+
+`SOA_HOSTPROF=1` now samples every worker's instruction pointer about once a
+millisecond and ends the report with the busy time by function and source
+line, through `gen/soa.pdb`, which `--link` now writes (`/Zi`, `/DEBUG`,
+`/OPT:REF,ICF`: the code is unchanged, and every hash matched). Over Part L
+3000 at 8 workers (570,872 samples), of the workers' busy time `tev_pixel` is
+37%, `raster_triangle` (the per-pixel attribute stepping) 16%, `sample_level`
+15%, `blend_pixel` 13%, `shade` 7%, and the depth test, the copy filter, fog
+and texture wrapping the rest -- no hotspot, the generic path's cost spread
+over every stage of every fragment, which is the case H15c's specialising is
+for.
