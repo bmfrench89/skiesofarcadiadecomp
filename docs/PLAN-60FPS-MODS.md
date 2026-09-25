@@ -298,7 +298,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 - In H1's Part L every-frame run, TEV prepare and texture decode per drawn frame are at least halved.
 - Replay is 23/23 at 1, 2, 3 and 8 threads.
 
-**H13. Guest-thread speed** — *three slices, each measured.* M2's "about 60 a second" in heavy scenes needs these, and so does M11. They also free producer-thread time for route (c). Each reports guest ms per frame, meaning wall × (1 − `SelectThread` − the two spins), in snapshot runs of Part L and a battle, and H3's uncapped ceiling. The target is the heaviest scene's 18.2 ms brought under 16.7 ms; the research estimates 10–30% from all three together [I].
+**H13. Guest-thread speed** — *three slices, each measured. Done enough 2026-09-25: H13a's and H13b's first steps took the Dangral guest ceiling from 114 to 125 images a second, four times the cap (FINDINGS "H13, first steps"). The rest -- `fma` inline, PSMTXConcat native, H13c -- reopens only if M11's turbo or H17 measures the guest thread short of its budget.* M2's "about 60 a second" in heavy scenes needs these, and so does M11. They also free producer-thread time for route (c). Each reports guest ms per frame, meaning wall × (1 − `SelectThread` − the two spins), in snapshot runs of Part L and a battle, and H3's uncapped ceiling. The target is the heaviest scene's 18.2 ms brought under 16.7 ms; the research estimates 10–30% from all three together [I].
 
 **H13a. Paired singles and fma** — *a day, plus a full retranslation (`cpu.h`). First step done 2026-09-25: f32 loads and stores skip the scale and the quantized types build it from bits, no `ldexp`; a self-test case against the generic formula over every type and scale. With H13b, the Dangral guest ceiling +9%. `fma` inline is left. FINDINGS "H13, first steps".*
 - Specialise `psq_l`/`psq_st` for this binary's six constant GQRs, with no `ldexp` (`cpu.h:441`, `:467`, `:500`). Fall back to the generic path when a GQR differs.
@@ -354,13 +354,13 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 *Done:* C4's criterion of 1.5× on the heaviest captures, replay 23/23, and ns per fragment.
 
-**H15d. SIMD spans** — *several days to week-plus. First step done 2026-09-25: the per-pixel counters out of thread-local storage and the bilinear blend in SSE4.1 integer SIMD, bit for bit the scalar loop's (a differential test); -7% ns a fragment at one thread, every hash unchanged; at 8 threads no difference (72.0 against 71.7, interleaved, on a busy machine). The field captures meet 61 ns at 8 threads on a quiet machine; the ship and sky are 1.3-1.6x short. Paused 2026-09-25 while the owner weighs a GPU backend. FINDINGS "H15d's starting point", "H15d, first step", "H15d paused".*
+**H15d. SIMD spans** — *several days to week-plus. First step done 2026-09-25: the per-pixel counters out of thread-local storage and the bilinear blend in SSE4.1 integer SIMD, bit for bit the scalar loop's (a differential test); -7% ns a fragment at one thread, every hash unchanged; at 8 threads no difference (72.0 against 71.7, interleaved, on a busy machine). The field captures meet 61 ns at 8 threads on a quiet machine; the ship and sky are 1.3-1.6x short. Paused 2026-09-25 while the owner weighs a GPU backend, and deferred to that decision with H16 and H18. FINDINGS "H15d's starting point", "H15d, first step", "H15d paused".*
 
 *Done:*
 - At most 61 ns per fragment at 8 threads on the field captures, and on the sky and ship captures, which need about 2.9×.
 - If either falls short, write down the gap. That number is the owner's GPU-backend decision.
 
-**H16. Vertex setup onto the workers** — *a day to several days, `--link`. After H10.*
+**H16. Vertex setup onto the workers** — *a day to several days, `--link`. After H10. Deferred 2026-09-25 to the GPU-backend decision, with H15d's rest and H18: the producer is not the bottleneck now (FINDINGS "Copy images"), and a GPU backend changes where vertex setup runs.*
 Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's retention layout.
 
 *Done:*
@@ -368,7 +368,7 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - Replay 23/23 at 1, 2, 3 and 8 threads.
 - H10's synthetic midpoint test still passes.
 
-**H17a. Interpolation, headless, off by default** — *several days, `--link`.*
+**H17a. Interpolation, headless, off by default** — *several days, `--link`. Not blocked by the GPU decision: it builds a second stream of draw commands, which a GPU backend would draw as well. Ordered after milestone 1 of `docs/PLAN-GAMEPLAY-MODS.md` (the reorder of 2026-09-25, `docs/research/android-and-native.md` section 7; `docs/specs/now.md`). Its Done lines are to be restated as same-run checks (PLAN-GAMEPLAY-MODS.md section F).*
 `SOA_INTERP=1` does the following:
 - keeps frame N's vertices across the drain, in H10's layout;
 - needs no texture kept alive for a second frame: each in-between command is built alongside the real one and samples what F+1 samples (ARCHITECTURE section 12);
