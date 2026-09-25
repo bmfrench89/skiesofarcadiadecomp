@@ -2914,3 +2914,29 @@ only a non-zero one does -- and the report says when the pixel path ran
 without SIMD, which is how a run shows the switch reached it (the replay
 sweep strips every `SOA_` variable, so a sweep "with" it is the sweep
 without it).
+
+
+**H15d paused: where the pixel path stands.** 2026-09-25, `build/soa-h15d0.exe`
+(before H15d) against `build/soa-h15d1.exe` (its first step),
+`tools/perfbench.py` at 8 threads, interleaved in two blocks. Recorded
+because the owner is weighing a GPU backend before more of H15d.
+
+| build | ns a fragment, all captures | field (Dangral) | ship | sky |
+|---|---|---|---|---|
+| before H15d | 70.4 / 72.6; 72.1 / 72.8 | 58.0-63.5 | 79.3-102.0 | 89.7-96.1 |
+| first step | 70.3 / 64.9; 77.2 / 74.3 | 58.0-69.0 | 85.0-102.0 | 76.9-96.1 |
+
+**No difference at 8 threads** (72.0 against 71.7): the -7% of "H15d, first
+step" is at one thread, where the per-fragment work is all there is; at 8
+the pool's cost is dominated by what the change does not touch. And the
+machine was about 15% slower than when the morning's baseline was taken
+(62.5 then, 72.0 now, the same build), so no 8-thread figure from this
+session is to be compared with one from another without an interleaved base
+beside it. Against the plan's bar of 61 ns at 8 threads: the field captures
+meet it on a quiet machine and not on a busy one, and the ship and sky
+captures, at 80-100, are 1.3-1.6x short. The TEV's general path, which those
+two scenes use most, is the next CPU step if the pixel path stays on the CPU;
+the census (`tools/fifopair.py`-weighted) says one-stage shapes carry about
+80% of the perfset's area, and the rest is 3-5 stage chains whose operands
+are gathered through selector indices, which does not vectorise cheaply as it
+stands.
