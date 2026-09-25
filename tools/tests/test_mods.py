@@ -1,6 +1,7 @@
 """runtime/mod.c: mods as data patches (PLAN-60FPS-MODS M1), with no disc.
 
-A mod is a folder under SOA_MODS with a mod.ini (name, api, the DOL's SHA-1)
+A mod is a folder under SOA_MODS with a mod.ini (manifest 2's id and version,
+name, api, the DOL's SHA-1)
 and a patches.txt of `trigger address = value [when condition...]` lines. A
 mod with any fault is refused whole and says why, with the file and line --
 the binding lists drop a misspelled address without a word, and a mod that
@@ -862,3 +863,108 @@ def test_call_guest_is_refused_inside_an_interrupt_handler(driver, tmp_path):
     dll(tmp_path, "caller", "CALL")
     _, err = play(driver, tmp_path, "game irq safe")
     assert "call at safe point 0" in err and "refused: inside an interrupt handler" in err, err
+
+
+# --------------------------------------------------------------------------
+# Manifest 2 (PLAN-GAMEPLAY-MODS.md section F): an id and a version the
+# recording names a mod by, api as the least the mod needs, x_ keys kept for
+# later ports, and one id to one mod.
+# --------------------------------------------------------------------------
+
+V2 = f"manifest = 2\nid = enc\nversion = 1.2\nname = Enc\nauthors = someone\napi = 1\ndol_sha1 = {SHA}\n"
+
+
+@needs_msvc
+def test_a_manifest_2_mod_loads_and_the_recording_names_it_by_id(driver, tmp_path):
+    mod(tmp_path, "some-folder", ini=V2)
+    mod(tmp_path, "v1-folder")
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 2" in out, err
+    assert "some-folder, enc@1.2)" in err, err
+    line = next(x for x in out.splitlines() if x.startswith("describe ["))
+    # name order of the folders; a manifest 2 mod by id@version, a version 1
+    # mod by its folder as before, so a recording made before is still read
+    assert line.startswith("describe [mods=enc@1.2:") and ",v1-folder:" in line, line
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "ini, why",
+    [
+        (V2.replace("id = enc\n", ""), "manifest 2 and no `id = `"),
+        (V2.replace("version = 1.2\n", ""), "manifest 2 and no `version = `"),
+        (V2.replace("id = enc", "id = Enc"), "an id is lowercase letters"),
+        (V2.replace("id = enc", "id = -enc"), "an id is lowercase letters"),
+        (V2.replace("id = enc", "id = e,nc"), "an id is lowercase letters"),
+        (V2.replace("id = enc", "id = " + "e" * 64), "an id is lowercase letters"),
+        (V2.replace("version = 1.2", "version = 1,2"), "a version is letters"),
+        (V2.replace("version = 1.2", "version = .1"), "a version is letters"),
+        (V2.replace("manifest = 2", "manifest = 3"), "this port reads manifests 1 and 2"),
+        (
+            V2.replace("manifest = 2\n", ""),
+            "`id` is a manifest 2 key, and this mod.ini has no `manifest = 2`",
+        ),
+        (
+            V2.replace("manifest = 2", "manifest = 1"),
+            "`id` is a manifest 2 key, and this mod.ini has manifest = 1",
+        ),
+        (V2.replace("api = 1", "api = 0"), "is not a version number"),
+        (V2.replace("api = 1", "api = one"), "is not a version number"),
+        (V2.replace("api = 1", "api = 2"), "this port speaks api 1"),
+        (V2 + "homepage = x\n", "is not a mod.ini key"),
+    ],
+    ids=[
+        "no-id",
+        "no-version",
+        "upper-id",
+        "dash-first",
+        "comma-id",
+        "long-id",
+        "comma-version",
+        "dot-first",
+        "manifest-3",
+        "v2-key-no-manifest",
+        "v2-key-manifest-1",
+        "api-0",
+        "api-word",
+        "api-newer",
+        "unknown-key",
+    ],
+)
+def test_a_bad_manifest_2_is_refused(driver, tmp_path, ini, why):
+    mod(tmp_path, "m", ini=ini)
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and why in err and "the mod is not loaded" in err, err
+
+
+@needs_msvc
+def test_an_x_key_is_noted_and_the_mod_loads(driver, tmp_path):
+    """A key a later port may define: this one says it does not know it and
+    loads the mod; a misspelled key without the prefix still refuses it."""
+    mod(tmp_path, "m", ini=V2 + "x_homepage = https://example.invalid\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 1" in out, err
+    assert "mod.ini:8: `x_homepage` is not a key this port knows" in err, err
+
+
+@needs_msvc
+def test_two_mods_with_one_id_the_second_is_refused_and_names_the_first(driver, tmp_path):
+    mod(tmp_path, "a-first", ini=V2)
+    mod(tmp_path, "b-second", ini=V2.replace("version = 1.2", "version = 2.0"))
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 1" in out, err
+    assert "b-second/mod.ini: its id, enc, is already the mod's in folder a-first" in err, err
+    assert "describe [mods=enc@1.2:" in out, out
+
+
+def test_the_shipped_mods_are_manifest_2():
+    """The folders a mod author copies from carry the manifest a new mod
+    should: an id and a version, api as a minimum."""
+    for folder in ("mods/encounters-off", "examples/mods/map-log"):
+        keys = {}
+        for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
+            key, eq, value = line.partition("=")
+            if eq and not line.lstrip().startswith("#"):
+                keys[key.strip()] = value.strip()
+        assert keys.get("manifest") == "2" and keys.get("id") == Path(folder).name, (folder, keys)
+        assert keys.get("version") and keys.get("api") == "1", (folder, keys)

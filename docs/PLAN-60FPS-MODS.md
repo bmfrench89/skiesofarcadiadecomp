@@ -453,7 +453,7 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 
 **M1. The mod runtime, data patches only** — *done 2026-09-24: `runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`, 42 parser tests; accelerated part G fought 5 without the mod and 0 with it, peeks 100000+ against 0-1. FINDINGS "S3 and M1". The map condition reads the committed map 0x80311AC0, not 0x80311AC4, the picker's working copy (FINDINGS "131e renders").*
 - `runtime/mod.c` with `SOA_MODS`.
-- A `mod.ini` per mod: name, API version, and the required DOL SHA-1.
+- A `mod.ini` per mod: name, API version, and the required DOL SHA-1. Since 2026-09-25, manifest 2 adds a stable id and a version that recordings name the mod by, and `api` is a minimum (FINDINGS "Manifest 2").
 - A patch-list format: `addr = value`, with a `when` condition on scene, map or state, and a trigger of `every_frame`, `on_map_load` or `once`.
 - **Refusals:** MMIO addresses, writes into `.text`, anything outside MEM1, and badly spelled addresses (the `hle.py` rule, but refused loudly rather than dropped).
 - **A chained frame hook:** S4a's peeks first, so they read what the game wrote, then the pokes, then each mod. `gx.c` does not change.

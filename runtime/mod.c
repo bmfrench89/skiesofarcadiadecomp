@@ -5,7 +5,11 @@
  * is one, loaded in name order so that two runs apply them the same way:
  *
  *   mods/encounters-off/mod.ini
+ *       manifest = 2
+ *       id = encounters-off
+ *       version = 1.0
  *       name = Encounters off
+ *       authors = the port's authors
  *       api = 1
  *       dol_sha1 = 8c0e278126fa3b0173400fdb632038172743cc13
  *   mods/encounters-off/patches.txt
@@ -37,6 +41,19 @@
  * A mod may instead, or as well, hold a mod.dll: native code on the versioned
  * API in soa_mod.h (M3), loaded once the mod.ini checks pass and refused whole,
  * with its callbacks taken back, if its soa_mod_init declines.
+ *
+ * The manifest (docs/PLAN-GAMEPLAY-MODS.md section F, "Manifest v2"). A
+ * mod.ini without `manifest` is version 1: name, api and dol_sha1, and the
+ * recording names the mod by its folder. `manifest = 2` adds a stable `id`
+ * (lowercase letters, digits, '.', '_' and '-', a letter or digit first, under
+ * 64 characters) and a `version` (letters, digits, '.', '+' and '-', under 32),
+ * both required, and `authors`, optional; the recording names the mod
+ * id@version, and two mods with one id are refused, the second naming the
+ * first -- a save's chunk of a mod's data will be keyed by it. In either
+ * version `api` is the least API the mod needs: a port that speaks more still
+ * loads it, one that speaks less refuses it. A key beginning `x_` is kept for
+ * later ports: this one says it does not know it and loads the mod anyway,
+ * where any other unknown key refuses it, so a misspelling is still caught.
  *
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
@@ -76,8 +93,10 @@ typedef struct {
 } Patch;
 
 typedef struct {
-    char dir[64];   /* the folder's name: what the recording names */
+    char dir[64];   /* the folder's name: what the recording names a version 1 mod by */
     char name[96];  /* what mod.ini calls it */
+    char id[64];    /* manifest 2: its stable id, and its version -- the recording's id@version */
+    char version[32];
     uint32_t hash;  /* FNV-1a of mod.ini, patches.txt and mod.dll, for the recording */
     unsigned first, count;
     void* dll;          /* the loaded mod.dll, or NULL */
@@ -762,6 +781,29 @@ static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
 #endif
 }
 
+/* A manifest 2 id: lowercase letters, digits, '.', '_' and '-', a letter or
+ * digit first, under 64 characters. */
+static int good_id(const char* s)
+{
+    size_t i, n = strlen(s);
+    if (!n || n >= 64 || !(islower((unsigned char)s[0]) || isdigit((unsigned char)s[0]))) return 0;
+    for (i = 0; i < n; i++)
+        if (!(islower((unsigned char)s[i]) || isdigit((unsigned char)s[i]) || s[i] == '.' || s[i] == '_' || s[i] == '-'))
+            return 0;
+    return 1;
+}
+
+/* A version: letters, digits, '.', '+' and '-', a letter or digit first,
+ * under 32 characters -- nothing that could break the recording's line. */
+static int good_version(const char* s)
+{
+    size_t i, n = strlen(s);
+    if (!n || n >= 32 || !isalnum((unsigned char)s[0])) return 0;
+    for (i = 0; i < n; i++)
+        if (!(isalnum((unsigned char)s[i]) || s[i] == '.' || s[i] == '+' || s[i] == '-')) return 0;
+    return 1;
+}
+
 static void load_one(CpuState* s, const char* root, const char* dir, const char* dol_sha1,
                      const uint8_t* dol, size_t dol_size)
 {
@@ -769,8 +811,10 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     char *ini, *patches;
     const char* t;
     size_t ini_n = 0, patches_n = 0;
-    int have_api = 0, dll, got;
+    int have_api = 0, dll, got, manifest = 1, have_manifest = 0, i;
+    const char* v2_key = NULL; /* the first manifest 2 key seen, for a version 1 manifest that uses one */
     unsigned dll_hash = 0;
+    char num[16];
     Where w;
     Mod m;
     unsigned before = g_patch_n;
@@ -813,9 +857,31 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
             while (vl && (val[vl - 1] == ' ' || val[vl - 1] == '\t' || val[vl - 1] == '\r')) val[--vl] = '\0';
             if (!strcmp(key, "name")) {
                 snprintf(m.name, sizeof m.name, "%s", val);
+            } else if (!strcmp(key, "manifest")) {
+                have_manifest = 1;
+                if (!strcmp(val, "1")) manifest = 1;
+                else if (!strcmp(val, "2")) manifest = 2;
+                else refuse(&w, "manifest = %s, and this port reads manifests %s", val, "1 and 2");
+            } else if (!strcmp(key, "id")) {
+                if (!v2_key) v2_key = "id";
+                if (!good_id(val))
+                    refuse(&w, "id = %s: an id is lowercase letters, digits, '.', '_' and '-', a letter or digit first, under 64 characters%s", val, "");
+                else snprintf(m.id, sizeof m.id, "%s", val);
+            } else if (!strcmp(key, "version")) {
+                if (!v2_key) v2_key = "version";
+                if (!good_version(val))
+                    refuse(&w, "version = %s: a version is letters, digits, '.', '+' and '-', a letter or digit first, under 32 characters%s", val, "");
+                else snprintf(m.version, sizeof m.version, "%s", val);
+            } else if (!strcmp(key, "authors")) {
+                if (!v2_key) v2_key = "authors";
             } else if (!strcmp(key, "api")) {
+                /* The least API the mod needs: a newer port loads it too. */
+                char* end;
+                long need = strtol(val, &end, 10);
                 have_api = 1;
-                if (strcmp(val, "1") != 0) refuse(&w, "api = %s, and this port speaks api %s", val, "1");
+                snprintf(num, sizeof num, "%d", MOD_API);
+                if (!*val || *end || need < 1) refuse(&w, "api = %s is not a version number; this port speaks api %s", val, num);
+                else if (need > MOD_API) refuse(&w, "api = %s, and this port speaks api %s", val, num);
             } else if (!strcmp(key, "dol_sha1")) {
                 size_t i;
                 char lower[48];
@@ -825,12 +891,21 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
                     refuse(&w, "made for the DOL with SHA-1 %s, and this is %s", val, dol_sha1);
                 else
                     m.hash = 1; /* seen and matching; replaced by the content hash below */
+            } else if (!strncmp(key, "x_", 2)) {
+                fprintf(stderr, "[mod] %s:%u: `%s` is not a key this port knows; a key beginning x_ is kept for later ports, so the mod loads without it\n",
+                        path, w.line, key);
             } else {
-                refuse(&w, "`%s` is not a mod.ini key: name, api or dol_sha1%s", key, "");
+                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api or dol_sha1%s", key, "");
             }
         }
     }
     w.line = 0;
+    if (!w.failed && manifest == 1 && v2_key)
+        refuse(&w, "`%s` is a manifest 2 key, and this mod.ini has %s", v2_key, have_manifest ? "manifest = 1" : "no `manifest = 2`");
+    if (!w.failed && manifest == 2 && !m.id[0]) refuse(&w, "manifest 2 and no `id = `%s%s", "", "");
+    if (!w.failed && manifest == 2 && !m.version[0]) refuse(&w, "manifest 2 and no `version = `%s%s", "", "");
+    for (i = 0; !w.failed && m.id[0] && i < g_mod_n; i++)
+        if (!strcmp(g_mods[i].id, m.id)) refuse(&w, "its id, %s, is already the mod's in folder %s", m.id, g_mods[i].dir);
     if (!w.failed && !m.name[0]) refuse(&w, "no `name = `%s%s", "", "");
     if (!w.failed && !have_api) refuse(&w, "no `api = 1`%s%s", "", "");
     if (!w.failed && !m.hash) refuse(&w, "no `dol_sha1 = ` naming the DOL it was made for%s%s", "", "");
@@ -866,8 +941,12 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         m.first = before;
         m.count = g_patch_n - before;
         g_mods[g_mod_n++] = m;
-        fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
-                m.count, m.dll ? " and mod.dll" : "", MOD_API);
+        if (m.id[0])
+            fprintf(stderr, "[mod] loaded %s (%s/%s, %s@%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
+                    m.id, m.version, m.count, m.dll ? " and mod.dll" : "", MOD_API);
+        else
+            fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
+                    m.count, m.dll ? " and mod.dll" : "", MOD_API);
     }
     free(ini);
     free(patches);
@@ -926,13 +1005,17 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     g_s = s;
     mod_note_dol(dol, dol_size);
     for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
-    /* The recording's line: every mod by folder and hash while they fit, 24
-     * bytes kept back so the rest can still be named -- as a count and one
-     * hash over all of them -- rather than cut off mid-entry or dropped. */
+    /* The recording's line: every mod by name and hash while they fit -- a
+     * manifest 2 mod as id@version, a version 1 mod by its folder -- 24 bytes
+     * kept back so the rest can still be named, as a count and one hash over
+     * all of them, rather than cut off mid-entry or dropped. */
     g_describe[0] = '\0';
     for (i = 0; i < g_mod_n; i++) {
         size_t room = sizeof g_describe - 24 - used;
-        int k = snprintf(g_describe + used, room, "%s%s:%08x", i ? "," : "mods=", g_mods[i].dir, g_mods[i].hash);
+        int k = g_mods[i].id[0]
+                    ? snprintf(g_describe + used, room, "%s%s@%s:%08x", i ? "," : "mods=", g_mods[i].id, g_mods[i].version,
+                               g_mods[i].hash)
+                    : snprintf(g_describe + used, room, "%s%s:%08x", i ? "," : "mods=", g_mods[i].dir, g_mods[i].hash);
         if (k < 0 || (size_t)k >= room) {
             g_describe[used] = '\0';
             break;

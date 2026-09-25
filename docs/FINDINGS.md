@@ -2940,3 +2940,26 @@ the census (`tools/fifopair.py`-weighted) says one-stage shapes carry about
 80% of the perfset's area, and the rest is 3-5 stage chains whose operands
 are gathered through selector indices, which does not vectorise cheaply as it
 stands.
+
+
+**Manifest 2.** 2026-09-25, `docs/specs/now.md` N2, specified in
+`docs/PLAN-GAMEPLAY-MODS.md` section F. `mod.c` refused any `api` but the
+literal "1", so the first mod API bump would have refused every mod written
+before it. A `mod.ini` may now say `manifest = 2` and carry a stable `id`
+(lowercase letters, digits, `.`, `_`, `-`) and a `version`, both required
+then, and optional `authors`. The recording's config line names such a mod
+`id@version:hash` -- what a later save chunk (X2) and a content-id lock (T2)
+will key on -- and a second mod with an id already loaded is refused, naming
+the folder that has it. `api` is the least API a mod needs in either
+version, so a port that speaks a later one still loads it. A key beginning
+`x_` is noted and passed over, kept for later ports; any other unknown key
+still refuses the mod, so a misspelling is still caught. A `mod.ini`
+without `manifest` is version 1 and loads and records exactly as before,
+by folder, so recordings made with mods keep their lines. Both shipped mods
+(`mods/encounters-off`, `examples/mods/map-log`) are manifest 2; a real run
+with `SOA_MODS=mods` names it `encounters-off@1.0`. Checks:
+`test_mods.py` gains nineteen cases -- a manifest 2 mod beside a version 1
+one in the recording, fifteen refusals, an `x_` key loaded, a duplicate
+id -- and three breakages (duplicate ids allowed, `x_` keys refused, the
+recording naming by folder) each turn it red. That `api` below the port's
+own loads cannot be shown until the port speaks 2.
