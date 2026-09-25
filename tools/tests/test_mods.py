@@ -48,13 +48,16 @@ void mmio_write16(CpuState* s, uint32_t e, uint16_t v) { (void)s; (void)e; (void
 static unsigned g_frames;
 unsigned gx_frame_count(void) { return g_frames; }
 void hle_on_report(void (*fn)(void)) { (void)fn; }
+static void (*g_pad)(unsigned, void*);
+void si_set_pad_filter(void (*fn)(unsigned, void*)) { g_pad = fn; }
 void fn_8023F704(CpuState* s);
 
 /* mods.exe MODSDIR DOLFILE, then commands on stdin:
  *   set ADDR VALUE     store a word       setb ADDR VALUE   store a byte
  *   frame              one frame end      get ADDR          print a word
  *   report             mod_report()       describe          mod_describe()
- *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88 */
+ *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88
+ *   pad F B            a controller read at frame F with buttons B, through the filter */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -72,6 +75,12 @@ int main(int argc, char** argv)
         else if (!strcmp(cmd, "setb") && scanf("%x %x", &a, &v) == 2) mem_w8(&s, a, (uint8_t)v);
         else if (!strcmp(cmd, "frame")) { mod_frame(&s, frame++); g_frames = frame; }
         else if (!strcmp(cmd, "safe")) { s.lr = 0x801DCB88u; fn_8023F704(&s); }
+        else if (!strcmp(cmd, "pad") && scanf("%u %x", &a, &v) == 2) {
+            uint8_t pad[8] = {0};
+            pad[0] = (uint8_t)v; pad[1] = (uint8_t)(v >> 8); /* PadState's u16, host order */
+            if (g_pad) g_pad(a, pad);
+            printf("pad %u %04X %s\n", a, (unsigned)(pad[0] | pad[1] << 8), g_pad ? "filtered" : "unfiltered");
+        }
         else if (!strcmp(cmd, "get") && scanf("%x", &a) == 1) printf("%08X=%08X\n", a, mem_r32(&s, a));
         else if (!strcmp(cmd, "report")) { fflush(stdout); mod_report(); fflush(stderr); }
         else if (!strcmp(cmd, "describe")) printf("describe [%s]\n", mod_describe());
@@ -377,6 +386,10 @@ static void fe(void* u) { uint32_t v; (void)u; if (A->read32(0x80346D28, &v)) A-
 static void sp(void* u) { (void)u; snprintf(b, sizeof b, "safe point, scene %u", A->scene()); A->log(b); }
 static void ml(void* u, uint32_t map) { (void)u; snprintf(b, sizeof b, "map loaded %08X", map); A->log(b); }
 static void sc(void* u, uint32_t f, uint32_t t) { (void)u; snprintf(b, sizeof b, "scene %u -> %u", f, t); A->log(b); }
+#ifdef PADF
+/* from frame 10, START never reaches the game; everything else does */
+static void pf(void* u, uint32_t frame, SoaPad* p) { (void)u; if (frame >= 10) p->buttons &= ~SOA_PAD_START; }
+#endif
 
 __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
 {
@@ -406,6 +419,9 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
     api->on_safe_point(sp, NULL);
     api->on_map_loaded(ml, NULL);
     api->on_scene_change(sc, NULL);
+#ifdef PADF
+    api->pad_filter(pf, NULL);
+#endif
     return RC;
 }
 """
@@ -543,3 +559,23 @@ def test_the_example_dll_builds_and_loads(driver, tmp_path):
     out, err = play(driver, tmp_path, script)
     assert "loaded 1" in out, err
     assert "[mod] map-log: map-log loaded" in err and "[mod] map-log: entered a116a" in err, err
+
+
+@needs_msvc
+def test_a_pad_filter_changes_what_the_game_reads(driver, tmp_path):
+    """The filter sees each read with its frame and may change it: this one
+    drops START from frame 10 and leaves A alone. si.c calls it after the
+    recording's copy, so a recording holds the input as the person gave it."""
+    dll(tmp_path, "nostart", "PADF")
+    out, err = play(driver, tmp_path, "pad 5 1100 pad 20 1100 pad 21 0100 report")
+    pads = [line for line in out.splitlines() if line.startswith("pad ")]
+    assert pads == ["pad 5 1100 filtered", "pad 20 0100 filtered", "pad 21 0100 filtered"], out
+    assert "3 controller read(s)" in err, err
+
+
+@needs_msvc
+def test_without_a_filter_si_c_is_never_handed_one(driver, tmp_path):
+    """A mod that registers none leaves the read path exactly as it was."""
+    dll(tmp_path, "native")
+    out, _ = play(driver, tmp_path, "pad 20 1100")
+    assert "pad 20 1100 unfiltered" in out, out

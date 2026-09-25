@@ -87,6 +87,7 @@ void hle_frame_mark(void) {}
 void hle_frametime_restart(unsigned frame) { (void)frame; }
 void hle_on_report(void (*fn)(void)) { (void)fn; }
 void si_set_config_extra(const char* x) { (void)x; }
+void si_set_pad_filter(void (*fn)(unsigned, void*)) { (void)fn; }
 void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }

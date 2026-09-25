@@ -1944,3 +1944,29 @@ are unchanged and no `[mod]` line prints.
 
 Still M3's: `pad_filter` (M3b, in `si.c`) and the renderer's texture and
 projection filters (M3c).
+
+
+**M3b: a mod decides what the game reads from the controller.** 2026-09-25,
+`build/m3b-*.log`. `SoaModApi` gains `pad_filter`, appended to the table so a
+DLL built before it still loads (it checks `api->size`). `si.c` hands every
+read to the filters after the person's input and `SOA_PAD` are merged and
+after `SOA_PAD_RECORD` has its copy, and before the game and the `[si]` log
+see it: a recording holds the input as given, and a replay made with the same
+mod applies the filter again. `SoaPad` mirrors `si.c`'s `PadState` byte for
+byte, which a typedef in `si.c` now refuses to compile without. The title
+scenario, with `examples/mods/map-log` logging scene changes beside each
+filter:
+
+| filter | `title --check` | START read at 1600 | the title's demo left | filtered reads |
+|---|---|---|---|---|
+| passes everything through | 4/4 | yes | frame 1616 (START) | 4,181 |
+| drops START | 4/4 | no | frame 1656 (the A at 1640) | 4,188 |
+| drops every button | 4/4 | no | **never** | 4,174 |
+
+The plan's mutation -- "a filter that swallows START keeps the title run on
+the title" -- was wrong in its premise: A also leaves the attract demo, so
+dropping START only moved the scene change 40 frames and the New Game choice
+was never made, and `title --check` has no map to assert. Dropping every
+button is the mutation that holds: the game never leaves the demo. A recording
+made with the pass-through pair names both, with hashes over each DLL:
+`# config ... mods=map-log:132780d5,passthrough:4f07bb15`.

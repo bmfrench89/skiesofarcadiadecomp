@@ -38,7 +38,7 @@
 #define SOA_PAD_Y 0x0800u
 #define SOA_PAD_START 0x1000u
 
-/* One controller read, as si.c holds it (for pad_filter, M3b). */
+/* One controller read, laid out as si.c's PadState (for pad_filter, M3b). */
 typedef struct SoaPad {
     uint16_t buttons;  /* SOA_PAD_* */
     uint8_t stick[2];  /* 128 is centre */
@@ -81,6 +81,15 @@ typedef struct SoaModApi {
 
     /* One line to the port's log, prefixed with the mod's folder name. */
     void (*log)(const char* line);
+
+    /* Appended (M3b): check api->size before using what follows.
+     *
+     * Every controller read, after the person's input and SOA_PAD's are
+     * merged and after SOA_PAD_RECORD has its copy, before the game and the
+     * [si] log see it. Change *pad to change what the game reads. A recording
+     * holds the input as given, and a replay made with the same mod applies
+     * the filter again, so it stays exact. */
+    int (*pad_filter)(void (*fn)(void* user, uint32_t frame, SoaPad* pad), void* user);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

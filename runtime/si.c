@@ -707,6 +707,18 @@ static void pad_sample(PadState* st, unsigned frame)
     st->buttons &= BTN_ALL; /* the report carries twelve buttons and nothing else */
 }
 
+/* A mod's say in every read (mod.c, PLAN-60FPS-MODS M3b): after the recording
+ * has the input as it was given, before the guest and the [si] log see it. The
+ * pad is handed over as PadState, which soa_mod.h's SoaPad mirrors byte for
+ * byte -- the typedef below fails to compile if the two ever part. */
+typedef char pad_state_is_eight_bytes[sizeof(PadState) == 8 ? 1 : -1];
+static void (*g_pad_filter)(unsigned frame, void* pad);
+
+void si_set_pad_filter(void (*fn)(unsigned frame, void* pad))
+{
+    g_pad_filter = fn;
+}
+
 /* The 8-byte controller report: buttons, main stick, C stick, triggers. */
 static void pad_report(uint8_t out[8])
 {
@@ -737,6 +749,10 @@ static void pad_report(uint8_t out[8])
         latch_valid = 1;
     }
     if (g_rec) pad_record(&st, frame);
+    if (g_pad_filter) {
+        g_pad_filter(frame, &st);
+        st.buttons &= BTN_ALL;
+    }
     pad_log(&st, frame);
     g_pad_frame = frame;
     g_pad_seen = 1;
