@@ -1870,12 +1870,13 @@ static int hp_name_cmp(const void* a, const void* b)
     return strcmp(((const HpRow*)a)->name, ((const HpRow*)b)->name);
 }
 
-/* Fold the samples by key (function, or function and line) and print the top
- * rows. One row per sampled address, sorted by key and merged, because the
- * guest thread's translated code has far more distinct lines than a table
- * searched row by row could afford; an inlined helper sampled at several
- * addresses still folds into its one source line. */
-static void hp_print(const HpTable* t, int by_line, int rows)
+/* Fold the samples by key and print the top rows: mode 0 the function the
+ * address is in, 1 the innermost function inlined there, 2 that and its line.
+ * One row per sampled address, sorted by key and merged, because the guest
+ * thread's translated code has far more distinct lines than a table searched
+ * row by row could afford; an inlined helper sampled at several addresses
+ * still folds into its one source line. */
+static void hp_print(const HpTable* t, int mode, int rows)
 {
     HpRow* table = (HpRow*)malloc(sizeof(HpRow) * HP_SLOTS);
     int nrows = 0, merged = 0, i;
@@ -1893,12 +1894,26 @@ static void hp_print(const HpTable* t, int by_line, int rows)
         sym->SizeOfStruct = sizeof(SYMBOL_INFO);
         sym->MaxNameLen = 255;
         if (!SymFromAddr(proc, t->rip[k], &disp, sym)) snprintf(key, cap, "?? %llx", (unsigned long long)t->rip[k]);
-        else if (by_line) {
+        else if (mode) {
+            /* The innermost inlined frame when there is one: the pixel path's
+             * helpers are __forceinline, and without this every sample in them
+             * is charged to the line that calls them. */
             IMAGEHLP_LINE64 line;
-            DWORD ldisp = 0;
+            DWORD ldisp = 0, ictx = 0, iframe = 0;
+            BOOL got;
             memset(&line, 0, sizeof line);
             line.SizeOfStruct = sizeof line;
-            if (SymGetLineFromAddr64(proc, t->rip[k], &ldisp, &line)) {
+            if (SymAddrIncludeInlineTrace(proc, t->rip[k]) &&
+                SymQueryInlineTrace(proc, t->rip[k], 0, t->rip[k], t->rip[k], &ictx, &iframe)) {
+                DWORD64 idisp = 0;
+                if (SymFromInlineContext(proc, t->rip[k], ictx, &idisp, sym)) disp = idisp;
+                got = SymGetLineFromInlineContext(proc, t->rip[k], ictx, 0, &ldisp, &line);
+            } else {
+                got = SymGetLineFromAddr64(proc, t->rip[k], &ldisp, &line);
+            }
+            if (mode == 1) {
+                snprintf(key, cap, "%s", sym->Name);
+            } else if (got) {
                 const char* file = strrchr(line.FileName, '\\');
                 snprintf(key, cap, "%s %s:%lu", sym->Name, file ? file + 1 : line.FileName, (unsigned long)line.LineNumber);
             } else snprintf(key, cap, "%s +%llx", sym->Name, (unsigned long long)disp);
@@ -1928,14 +1943,16 @@ static void hostprof_report(void)
     fprintf(stderr, "[hostprof] %llu samples of the workers (%llu past a full table); by function:\n",
             (unsigned long long)g_hp_workers.samples, (unsigned long long)g_hp_workers.lost);
     hp_print(&g_hp_workers, 0, 20);
+    fprintf(stderr, "[hostprof] by the function inlined there:\n");
+    hp_print(&g_hp_workers, 1, 30);
     fprintf(stderr, "[hostprof] by line:\n");
-    hp_print(&g_hp_workers, 1, 40);
+    hp_print(&g_hp_workers, 2, 40);
     if (g_hp_guest.samples) {
         fprintf(stderr, "[hostprof] %llu samples of the guest thread (%llu past a full table); by function:\n",
                 (unsigned long long)g_hp_guest.samples, (unsigned long long)g_hp_guest.lost);
         hp_print(&g_hp_guest, 0, 40);
         fprintf(stderr, "[hostprof] by line:\n");
-        hp_print(&g_hp_guest, 1, 40);
+        hp_print(&g_hp_guest, 2, 40);
     }
     SymCleanup(GetCurrentProcess());
 }

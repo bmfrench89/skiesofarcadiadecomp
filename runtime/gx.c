@@ -576,13 +576,21 @@ static int load_capture(CpuState* s, const char* base, int with_ram, uint8_t** f
 
 int gx_replay(CpuState* s, const char* base)
 {
-    uint8_t* fifo;
-    size_t len, done;
-    if (load_capture(s, base, 1, &fifo, &len)) return 1;
-    gxr_reset_efb();
-    done = parse(s, fifo, len, 0);
-    gxr_flush();
-    fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);
+    uint8_t* fifo = NULL;
+    size_t len = 0, done = 0;
+    /* SOA_REPLAY_REPEAT=N renders the capture N times, each from its own RAM
+     * image, so that a profiler (SOA_HOSTPROF) has more than one frame's worth
+     * of the pixel path to sample. The PNG is the last pass's, the same. */
+    const char* rep = getenv("SOA_REPLAY_REPEAT");
+    int n = rep && atoi(rep) > 1 ? atoi(rep) : 1, i;
+    for (i = 0; i < n; i++) {
+        if (fifo) free(fifo);
+        if (load_capture(s, base, 1, &fifo, &len)) return 1;
+        gxr_reset_efb();
+        done = parse(s, fifo, len, 0);
+        gxr_flush();
+    }
+    fprintf(stderr, "[gx] replayed %zu of %zu bytes%s\n", done, len, n > 1 ? " (the last of the repeats)" : "");
     gx_report();
     free(fifo);
     return 0;

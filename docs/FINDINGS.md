@@ -2834,3 +2834,34 @@ an audio frame.) Checks: the full retranslation, the self test with its two
 new cases (each turned red by a deliberate breakage: the power of two off by
 one in the exponent, the syscall made for an empty range), replay 23/23,
 `title --check`, 849 tests.
+
+
+**H15d's starting point: where the workers' time goes, inlined helpers
+apart.** 2026-09-25, `build/hostprof5-L9000-s4.log`, `tools/perfbench.py`.
+`SOA_HOSTPROF` now resolves the innermost inlined frame, so the pixel path's
+`__forceinline` helpers get rows of their own instead of their callers' line,
+and `SOA_REPLAY_REPEAT=N` renders a replay N times so a single capture can be
+profiled. At 8 threads the perfset stands at **62.5 ns a fragment** over every
+replay: the Dangral field frames at 55 (under the plan's 61 already), the
+cutscene 54-58, the early-game corpus frames 47-52, and the ones short of it
+the ship battle (79) and the sky (77-83); the battle frames, 0.7 M fragments,
+are 98, mostly the fixed cost of a small frame.
+
+Worker time in the Dangral window with the clock out (render-bound, 40
+fps, workers 85% busy), by the function inlined at each sample: the
+rasterizer's own per-pixel attribute work 18.0%, the TEV 17.5%, texture
+sampling 17.2% (`sample_level` 10.7, `sample` 3.3, `fast_floor` 2.1, `wrap`
+1.1), `blend_pixel` 8.7%, `shade`'s own body 6.3% -- of which the per-pixel
+`g_pixels++`, a thread-local counter, is 3.2% of all worker time -- then
+`clamp255` 2.3, `depth_test` 2.1, the copy filter and decode 4.4, fences 3.0.
+The hottest single line is the bilinear blend (`gxr_tev.c`, 6.8%). In the sky
+capture the busy time is sampling ~27%, the TEV's general path ~25% (the
+one-stage fast shapes do not cover it), the rasterizer 15% and fog 7%, a
+per-pixel `exp2f` among it.
+
+So the order for H15d: the counters out of thread-local storage; the
+bilinear blend four channels at a time in integer SIMD (exact, the same
+arithmetic in lanes); the TEV's general path the same way; then the
+rasterizer's attribute stepping, which repeats an addition per pixel that a
+four-pixel span could not reproduce bit for bit -- that one would move
+hashes, and waits until everything that cannot has been done.
