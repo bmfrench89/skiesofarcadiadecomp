@@ -10,6 +10,8 @@ and mark a slice done here the way docs/PLAN.md does. -->
 
 # Gameplay mods, new content, and beyond the GameCube
 
+> **Order and implementation specs, from 2026-09-25:** [PLAN-NEXT.md](PLAN-NEXT.md) says what comes next, and in what order. Milestone 1 (the comfort pack) is specified to implementation level in [specs/comfort-pack.md](specs/comfort-pack.md), and T1 in [specs/disc-layer.md](specs/disc-layer.md) (I6-I8). Where a slice here and a spec disagree on design, the reviewed spec wins. This plan keeps the tracks, the rules and the later milestones.
+
 **For the owner.** [PLAN-60FPS-MODS.md](PLAN-60FPS-MODS.md) builds the mod *framework*: the patch loader (M1), the safe point and tick (M2), mod DLLs (M3), calls into game code (M4), settings (M5), the overlay (M8), texture packs (M9), widescreen, and hook sites (M13). This plan is what gets built *on* that framework. It has three goals:
 
 1. **The comfort mods players ask for most**: fewer random battles, a speed-up, Dolphin saves, dialogue that advances itself, co-op battles, and a completion tracker.
@@ -87,7 +89,8 @@ Sizes are evenings, as in PLAN.md: **hours**, **a day**, **several days**, **wee
 5. **Hooks never go where the game waits on an interrupt.** A `hooks.txt` entry strips `irq_poll` from every back-edge of its function. The research marks each proposed site; the card writer `fn_801A3B30` and the AI walker `fn_8008A424` are the two to keep `hooks.txt` away from.
 6. **Everything that changes the game is recorded.** Settings that change the game, DLL inputs, hotkeys and network events go into the pad recording's event track, or a modded session cannot be replayed (section F's event track).
    - Its settings lines come first, in milestone 2; the hotkey and overlay lines wait on M8.
-   - Until then, P1's preset, P6's seed and P10's pad 2 are not in the recording. P10's sessions cannot be replayed. P1's and P6's sessions replay as made only with the same `SOA_ENCOUNTERS` and seed. Each logs its own case once per run.
+   - **Settings are already recorded (P6, 24d9235 and 79c9ad8).** The recording's `# config` line names each setting that changes the game, as it is in effect: the seed now, and P1's, P10's, P11's and M11a's keys as they land. A replay made with a different value warns. Refusing a mismatch outright waits for the event track (specs/comfort-pack.md 3.3).
+   - P10's pad 2, hold-to-skip and the chord toggles are not in the recording until the event track lands, so those sessions cannot be replayed yet. Each logs that once per run.
 7. **No completion check compares two live runs.** Loads run on the wall clock, so two live runs differ even with no mod (checked here: 22 of 40 title hashes).
    - **A check is one of:**
      - a **replay** of a capture;
@@ -301,7 +304,7 @@ The first idea list was comfort and community features, the second gameplay and 
 
 **Goal.** The comfort features, each off by default and switched in `soa.ini` (M5). P2, turbo, moved into section F's M11 entry.
 
-**P1. Encounter slider and hold-B** — *hours; ships now as a `mod.dll`, plus one `settings.c` line (a relink)* (M3 done).
+**P1. Encounter slider and hold-B** — *hours; ships now as a `mod.dll`, plus one `settings.c` line (a relink)* (M3 done). *Specified as P1a (the mod) and P1b (the encounter contrast) in [specs/comfort-pack.md](specs/comfort-pack.md) 3.4, which supersedes the design below where they differ: `normal` writes nothing, hold-B restores the game's value on release, and the addresses were read in a run (2026-09-25). P1a in progress.*
 - **How the game already does it [checked here].** The game reads the u8 at `0x8030B7AD` at `0x800C2000`. It sign-extends it, skips it at −1, and otherwise multiplies the encounter odds by byte/50:
   - the usable range is 0–127, which is 0–254%;
   - 128–254 are negative and turn encounters off;
@@ -374,7 +377,7 @@ The first idea list was comfort and community features, the second gameplay and 
   - "The display copy only" cannot be seen in a hash of `g_screen`, so it is a synthetic-stream test beside `test_gxr_copy_filter.py`, with the switch on: a display copy under the game's weights comes out byte for byte the same as under the SDK's identity set (0,0,21,22,21,0,0), and a texture copy under the game's weights does not.
 - It does not wait for H8.
 
-**P6. Race seed** — *hours, `--link`.*
+**P6. Race seed** — *hours, `--link`. Done 2026-09-25: 24d9235, and the follow-up 79c9ad8 (each pin in the log with a checker, the reload after a battle, the recording naming the seed in effect). FINDINGS "P6: the race seed pinned, and settings that change the game recorded", "P6, followed up". Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.3.*
 - In `guest_timebase_lo`, return a pinned value when `s->pc == 0x8023851C` (`OSGetTick`) and `s->lr` is `0x801012B0` (field load), `0x8000A1D0` or `0x8000A1D8` (battle start).
 - The value is derived from the user's seed and a per-site counter.
 - No `hle.txt` line and no retranslation.
@@ -460,7 +463,7 @@ The first idea list was comfort and community features, the second gameplay and 
 - The handover test: A held across the handover does not confirm.
 - **Owner:** two pads, one battle.
 
-**P11. Dialogue auto-advance and hold-to-skip** — *hours; M3b is done.*
+**P11. Dialogue auto-advance and hold-to-skip** — *hours; M3b is done. The spike is done (b911380, FINDINGS "P11's spike"): the window's state word is `0x80346E64`, the task is at `0x80346E4C`, and `0x80346E60` below is the wrong word (the draw stores 0 back to it every frame). Re-specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.5 as P11 (auto-advance) and P11b (hold-to-skip, after CH1).*
 - A `pad_filter` mod finds the message window through `0x80346E60`. A page is complete when window+56 ≥ window+54; then it sends one A.
 - It leaves choice boxes alone (a spike finds SELECT's marker; `0x8030E468` is also set for plain messages) and respects window flag 0x1000.
 - Hold-to-skip sends A on every complete page while a chord is held.
@@ -1226,7 +1229,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
   - P1 reads its preset (off, half, normal, double) from `SOA_ENCOUNTERS`, which a new `encounters` line in `settings.c`'s `k_settings` sets from `soa.ini` (a relink). M16 later makes it a declared option.
   - P6's and P10's checks close without R0, both in `battle.scn`'s deck fight; P10's pad 2 is scripted through an environment variable the mod reads. Both repeat on R0 once it lands.
   - P10 sessions cannot be replayed until pad 2 goes into the event track (rule 6); the mod logs that once per run.
-  - P1's preset and P6's seed change the game but are not in the recording until the event track's settings lines land in milestone 2. Until then each logs, once per run, that its sessions replay as made only with the same `SOA_ENCOUNTERS` and seed.
+  - P1's preset and P6's seed are in the recording's `# config` line since P6 (24d9235, 79c9ad8), and a replay with a different value warns (rule 6). The event track's strict refusal comes in milestone 2.
 - **Slices that must land first:**
   - T9 (names) before T3 and R0, so nothing new is written against raw hex;
   - T4 before N10 (its fight list);
@@ -1281,7 +1284,7 @@ X1 (a day, `--link`) comes first in milestone 5, because T11 is its first user: 
 These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They are listed here for the owner and that session to adopt, not edited into those files. The ids are proposals.
 
 **For Track M (mods):**
-- **Manifest v2** — *hours; now, before any API bump.*
+- **Manifest v2** — *hours; now, before any API bump. Done 2026-09-25: 3949028, b071949, b1199b3 (FINDINGS "Manifest 2"). `requires =` and `--build-info` remain a later slice.*
   - `mod.ini` gains a stable id, a version, authors and `manifest = 2`. Unknown keys under a reserved prefix warn instead of refusing, and `api` becomes a minimum.
   - Today `mod.c` refuses any `api` but the literal "1" (`mod.c:818`, checked here), so the first API bump would refuse every existing mod.
   - Recordings name mods as `id@version:hash`. Two mods with the same id are refused, because X2's chunk key and T2's lock depend on unique ids.
