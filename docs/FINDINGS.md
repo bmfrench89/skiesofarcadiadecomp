@@ -3177,3 +3177,49 @@ alone; `HALF` refused), with the spec's two mutations built from the shipped
 source -- halving the byte read back reads 50, 25, 12 where the mod holds
 50, and without the restore battles stay off after B; `test_settings.py`'s
 "does nothing" line and choices; the self test's new case.
+
+
+**P11: dialogue that turns its own pages.** 2026-09-25, `build/p11/`.
+`mods/autotext` is a `mod.dll` with one controller filter: in the field,
+when the message window's state (the s16 at `0x80346E64`, read through the
+task at `0x80346E4C` and its context at +36, as P11's spike found) is 4, a
+complete page, and neither flag 0x10 nor 0x40 is set on it -- the pages the
+game turns on its own countdown -- it waits `SOA_AUTOTEXT` frames (`on` is
+45) and presses A, two frames down and two up, once; it arms again only
+when the state has left 4. Never in any other state, never over the
+person's own A or B. `autotext` is a recorded setting.
+
+Three runs from copies of `card-saved`, each the Continue preamble, a warp
+by name to `ME355A.SCT` at 3000, A at 6000, 6900 and 7300, and the state
+and the committed map peeked every frame:
+- with the mod at 45: four presses (3132, 6472, 6567, 6955), each with the
+  state at 4 the frame before; the officer's page complete at 3086 and the
+  choice after it up at 3139, 53 frames on (the spike, without the mod,
+  rested at 4 for 2,913); the state 6 on every frame from 3139 to 5999, so
+  no press in the choice; and `a002b` committed at 7336, after the last A;
+- without `SOA_MODS` (the mutation): no press, the choice not up until
+  6007, and `a002b` never committed;
+- with `SOA_AUTOTEXT_TEST=press-in-choice` (the other mutation): presses
+  in the choice boxes too (3185, 3805, 3913 of seven), so the state leaves 6
+  at 3185, and the first choice of every box takes the run to `a002b` at
+  3949, before the A at 6000.
+
+**Two things the spec had not seen.** The part select has one more menu
+than section 3.5 says: after みる come two pages, then 《どうする？》 with
+「パートにとびたい」 and two other entries (up at 6574), then one page, and
+only then the B/C box (6962); so the run takes a third A (7300), where the
+spec's fallback said to move the second. And a choice box's context carries
+flag 0x10 -- the choice marker -- so a flags guard applied in every state
+kept the test switch from ever pressing in one: the first press-in-choice
+run pressed exactly where the plain run did, so the mutation passed. The
+guard now applies to state 4 only, the fake guest's choice carries 0x10 as
+the game's does, and the rerun above fails as it should. (Play is
+unchanged: outside the test switch the mod only ever arms in state 4.)
+
+Checks: `test_mods.py` on the fake guest -- a press 45 frames into a page,
+two frames down and two up, not again on the same page, again on the next;
+none after a choice (0x10), on an auto-scroll page (0x40), in a choice, in
+state 8 or with no window; none over the person's own A; none when off,
+`0` or a value it does not take -- and, from the shipped source, the guard
+removed presses on a page the game turns itself, and the test switch
+presses in a choice.

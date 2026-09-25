@@ -38,7 +38,7 @@ int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
                                   "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED",
-                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B"};
+                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B", "SOA_AUTOTEXT"};
     const char* disc;
     unsigned i;
     char rec[320];
@@ -114,7 +114,7 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "disc = C:\\Games\\Skies\\extracted\n"
         "render = 1\nwindow = 1\nscale = 3\nthreads = 6\nmods = C:\\Games\\mods\n"
         "card = C:\\Games\\card.raw\nrecord = play.pad\nnosound = 1\nuncap = 3300\nseed = 12345\n"
-        "encounters = half\nencounters_hold_b = 0\n",
+        "encounters = half\nencounters_hold_b = 0\nautotext = on\n",
         encoding="utf-8",
     )
     disc, got, err = run(driver)
@@ -132,8 +132,9 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_SEED": "12345",
         "SOA_ENCOUNTERS": "half",
         "SOA_ENCOUNTERS_HOLD_B": "0",
+        "SOA_AUTOTEXT": "on",
     }, got
-    assert "12 setting(s) applied, 0 overridden" in err, err
+    assert "13 setting(s) applied, 0 overridden" in err, err
 
 
 @needs_msvc

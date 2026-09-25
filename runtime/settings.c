@@ -53,6 +53,8 @@ static const Setting k_settings[] = {
      1, "encounter-rate", "off|half|normal|double"},
     {"encounters_hold_b", "SOA_ENCOUNTERS_HOLD_B", "0: holding B no longer keeps random battles away (mod encounter-rate)",
      1, "encounter-rate", "0|1"},
+    {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
+     "autotext", NULL},
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 

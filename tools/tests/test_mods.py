@@ -973,7 +973,12 @@ def test_two_mods_with_one_id_the_second_is_refused_and_names_the_first(driver, 
 def test_the_shipped_mods_are_manifest_2():
     """The folders a mod author copies from carry the manifest a new mod
     should: an id and a version, api as a minimum."""
-    for folder in ("mods/encounter-rate", "examples/mods/encounters-off", "examples/mods/map-log"):
+    for folder in (
+        "mods/autotext",
+        "mods/encounter-rate",
+        "examples/mods/encounters-off",
+        "examples/mods/map-log",
+    ):
         keys = {}
         for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
             key, eq, value = line.partition("=")
@@ -1041,20 +1046,21 @@ ACC_210 = "set 8030b808 00d20000 set 802c75f8 54000064 "
 ACC_211_ON_1 = "set 8030b864 00d30000 set 802c7620 54000005 "
 
 
-def shipped(tmp_path: Path, source: str | None = None) -> Path:
-    """mods/encounter-rate built with the line --link uses, into a folder
-    whose mod.ini pins the fake DOL -- or, given `source`, a mutation of it."""
+def shipped(tmp_path: Path, source: str | None = None, folder: Path = ENC) -> Path:
+    """A shipped mod (mods/encounter-rate unless `folder` says) built with the
+    line --link uses, into a folder whose mod.ini pins the fake DOL -- or,
+    given `source`, a mutation of it."""
     import recompile
     from soa import toolchain
 
-    d = tmp_path / "encounter-rate"
+    d = tmp_path / folder.name
     d.mkdir(parents=True)
-    ini = (ENC / "mod.ini").read_text(encoding="utf-8")
+    ini = (folder / "mod.ini").read_text(encoding="utf-8")
     (d / "mod.ini").write_text(
         ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
     )
     src = d / "mod.c"
-    src.write_text(source or (ENC / "mod.c").read_text(encoding="utf-8"), encoding="utf-8")
+    src.write_text(source or (folder / "mod.c").read_text(encoding="utf-8"), encoding="utf-8")
     proc = toolchain.cl(recompile.mod_dll_command(src), cwd=d)
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     return d
@@ -1080,7 +1086,7 @@ def test_every_shipped_mod_is_built_by_link():
     import recompile
 
     srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
-    assert {"mods/encounter-rate", "examples/mods/map-log"} <= srcs, srcs
+    assert {"mods/autotext", "mods/encounter-rate", "examples/mods/map-log"} <= srcs, srcs
 
 
 @needs_msvc
@@ -1201,3 +1207,105 @@ def test_the_mutations_fail_the_checks(driver, tmp_path):
     shipped(tmp_path / "b", src.replace(restore, ""))
     out, _ = play(driver, tmp_path / "b", HOLD)
     assert multipliers(out)[30:] == [0] * 5, out  # the shipped mod reads FF
+
+
+# --------------------------------------------------------------------------
+# mods/autotext (PLAN-GAMEPLAY-MODS P11) on the fake guest
+# --------------------------------------------------------------------------
+
+AUTO = ROOT / "mods" / "autotext"
+
+
+def window(state: int, flags: int = 0, task: int = 0x80400000) -> str:
+    """The message window as the game keeps it: the task at 0x80346E4C, its
+    context at task + 36, the flags the context's first halfword, and the
+    state the s16 at 0x80346E64 (the high half of its word)."""
+    ctx = 0x80400100
+    return (
+        f"set 803475cc 6 set 80346e4c {task:x} set 80400024 {ctx:x} "
+        f"set {ctx:x} {flags << 16:x} set 80346e64 {(state & 0xFFFF) << 16:x} "
+    )
+
+
+def reads(first: int, last: int, buttons: int = 0) -> str:
+    return "".join(f"pad {f} {buttons:x} " for f in range(first, last + 1))
+
+
+def pressed(out: str) -> list[int]:
+    """The frames whose controller read the game got with A down."""
+    got = []
+    for line in out.splitlines():
+        parts = line.split()
+        if parts[:1] == ["pad"] and int(parts[2], 16) & 0x0100:
+            got.append(int(parts[1]))
+    return got
+
+
+@needs_msvc
+def test_autotext_presses_a_once_per_complete_page_after_the_delay(driver, tmp_path):
+    """State 4 and no flags: the wait starts at the first read, and 45
+    frames on (SOA_AUTOTEXT=on) A goes down for two frames and up for two;
+    not again while the page is still up; again on the next page."""
+    shipped(tmp_path, folder=AUTO)
+    script = window(4) + reads(1, 60) + window(3) + reads(61, 62) + window(4) + reads(63, 120)
+    out, err = play(driver, tmp_path, script, SOA_AUTOTEXT="on")
+    assert pressed(out) == [46, 47, 108, 109], pressed(out)
+    assert "[mod] autotext: frame 46 page advanced after 45 frames" in err, err
+    assert "[mod] autotext: frame 108 page advanced after 45 frames" in err, err
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "state, flags, task",
+    [
+        (4, 0x10, 0x80400000),
+        (4, 0x40, 0x80400000),
+        (6, 0x10, 0x80400000),  # a choice box carries 0x10, as the game's does
+        (8, 0, 0x80400000),
+        (4, 0, 0),
+    ],
+    ids=["after-a-choice", "auto-scroll", "choice", "state-8", "no-window"],
+)
+def test_autotext_never_presses_where_the_game_decides(driver, tmp_path, state, flags, task):
+    shipped(tmp_path, folder=AUTO)
+    out, _ = play(driver, tmp_path, window(state, flags, task) + reads(1, 120), SOA_AUTOTEXT="10")
+    assert pressed(out) == [], pressed(out)
+
+
+@needs_msvc
+def test_autotext_leaves_a_page_the_person_pressed_on(driver, tmp_path):
+    shipped(tmp_path, folder=AUTO)
+    script = window(4) + reads(1, 5) + reads(6, 6, 0x0100) + reads(7, 60)
+    out, _ = play(driver, tmp_path, script, SOA_AUTOTEXT="10")
+    assert pressed(out) == [6], pressed(out)  # theirs, and no press of the mod's
+
+
+@needs_msvc
+@pytest.mark.parametrize("value", ["0", "", "soon"])
+def test_autotext_off_never_presses(driver, tmp_path, value):
+    shipped(tmp_path, folder=AUTO)
+    out, err = play(driver, tmp_path, window(4) + reads(1, 120), SOA_AUTOTEXT=value)
+    assert pressed(out) == [] and "unfiltered" in out, out
+    if value == "soon":
+        assert "SOA_AUTOTEXT=soon is not 0, 1, on or a number of frames" in err, err
+
+
+@needs_msvc
+def test_autotext_mutations_fail_the_checks(driver, tmp_path):
+    """Without the flags guard it presses on a page the game turns itself;
+    the test switch presses in a choice box."""
+    src = (AUTO / "mod.c").read_text(encoding="utf-8")
+    guard = " && !(state == STATE_PAGE && (flags & (FLAG_AFTER_CHOICE | FLAG_AUTO_SCROLL)))"
+    assert src.count(guard) == 1
+    shipped(tmp_path / "a", src.replace(guard, ""), folder=AUTO)
+    out, _ = play(driver, tmp_path / "a", window(4, 0x10) + reads(1, 30), SOA_AUTOTEXT="10")
+    assert pressed(out) == [11, 12], pressed(out)
+    shipped(tmp_path / "b", folder=AUTO)
+    out, _ = play(
+        driver,
+        tmp_path / "b",
+        window(6, 0x10) + reads(1, 30),
+        SOA_AUTOTEXT="10",
+        SOA_AUTOTEXT_TEST="press-in-choice",
+    )
+    assert pressed(out) == [11, 12], pressed(out)
