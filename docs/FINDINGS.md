@@ -2963,3 +2963,30 @@ one in the recording, fifteen refusals, an `x_` key loaded, a duplicate
 id -- and three breakages (duplicate ids allowed, `x_` keys refused, the
 recording naming by folder) each turn it red. That `api` below the port's
 own loads cannot be shown until the port speaks 2.
+
+
+**P11's spike: the message window's state word, read in a run.** 2026-09-25,
+`build/p11spike.log`, frames in `build/p11spike/`. The comfort-pack spec's
+draft reads the field message window through the task at `0x80346E4C` and
+its state, an s16, at `0x80346E64` -- not the plan's `0x80346E60`, which the
+draw stores 0 back into -- all from the disassembly. One run checked it
+before any mod code: a copy of `card-saved`, the Continue preamble, a warp
+by name to `ME355A.SCT` at frame 3000 (HANDOFF's five pokes), no A after the
+load, `SOA_PEEK` of both words and the scene id every frame from 2900 to
+6600, and one A at 6000.
+
+| frames | task (`0x80346E4C`) | state (upper half of `0x80346E64`) |
+|---|---|---|
+| 2900-3000 | `80E44A80` | 1, waiting for a message |
+| 3001-3002 | 0 | 255 -- the warp's teardown |
+| 3003-3075 | `80E44A80` | 1 |
+| 3076-3086 | | 2, opening, then 3, revealing |
+| **3087-5999** | | **4**: the page complete and waiting for A (frame 5900: 《どうせみないでしょ？》 with the page marker) |
+| 6000-6006 | | the A: 5, scrolling, then 3 |
+| **6007-6600** | | **6**: a choice (frame 6500: 「みる」「みない」) |
+
+The scene id read 6, the field, throughout. The state rested at 4 with no A
+pressed for 2,913 frames, the A moved it on, and the choice box that
+followed rested at 6: what the draft predicted, so P11 can build on these
+words. The task reads 0 for two frames of a warp, which a mod must treat as
+"no window".
