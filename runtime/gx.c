@@ -53,6 +53,121 @@ static uint64_t g_bytes, g_cmds, g_draws, g_verts, g_dl_calls, g_bp_loads, g_xf_
 static uint64_t g_finishes, g_tokens, g_efb_copies, g_xfb_copies, g_unknown;
 static uint32_t g_last_unknown;
 
+/* SOA_GX_DLLOG=1 (PLAN C5a, from the GPU spec's research): whether the game
+ * records display lists by pointing the CPU FIFO at a buffer of its own --
+ * GXBeginDisplayList through GXSetCPUFifo, which writes the PI FIFO base, top
+ * and write pointer -- while the port, which parses every gather-pipe store as
+ * it comes, runs those commands at once and leaves the list empty. It logs
+ * each move of the PI FIFO base away from the command processor's FIFO base
+ * and back, with the draws and bytes parsed while it was away, and each
+ * display-list call with its size; the report sums them. Diagnostic only:
+ * nothing here changes what is parsed. */
+static int g_dllog = -1;
+static int g_dl_away;                          /* the PI FIFO base is not the CP's */
+static uint64_t g_dl_moves, g_dl_away_draws, g_dl_away_bytes, g_dl_zero, g_dl_sized;
+static uint64_t g_dl_draws0, g_dl_bytes0;       /* at the move away */
+static unsigned g_dl_lines;
+static uint32_t g_dl_cp_seen;                   /* the CP's FIFO base, last logged */
+#define DLLOG_LINES 400
+
+/* Per buffer the CPU FIFO was pointed at, or list called: how often each,
+ * and the draws parsed while it was the CPU FIFO. */
+typedef struct {
+    uint32_t addr;
+    uint64_t moves, calls, draws, bytes;
+} DlBuf;
+#define DL_BUFS 32
+static DlBuf g_dl_buf[DL_BUFS];
+static unsigned g_dl_nbuf, g_dl_cur = DL_BUFS;
+static uint64_t g_dl_spill;
+
+static unsigned dl_buf(uint32_t addr)
+{
+    unsigned i;
+    addr &= 0x1FFFFFFFu;
+    for (i = 0; i < g_dl_nbuf; i++)
+        if (g_dl_buf[i].addr == addr) return i;
+    if (g_dl_nbuf == DL_BUFS) { g_dl_spill++; return DL_BUFS; }
+    g_dl_buf[g_dl_nbuf].addr = addr;
+    return g_dl_nbuf++;
+}
+
+static uint32_t cp_fifo_base(void)
+{
+    return ((uint32_t)g_cp_mmio[0x22 >> 1] << 16 | g_cp_mmio[0x20 >> 1]) & 0x1FFFFFFFu;
+}
+
+unsigned gx_frame_count(void);
+
+static int dllog_on(void)
+{
+    if (g_dllog < 0) g_dllog = getenv("SOA_GX_DLLOG") && atoi(getenv("SOA_GX_DLLOG")) ? 1 : 0;
+    return g_dllog > 0;
+}
+
+static void dllog_line(const char* fmt, uint32_t a, uint32_t b, unsigned long long c, unsigned long long d)
+{
+    if (g_dl_lines++ < DLLOG_LINES) {
+        fprintf(stderr, "[dl] frame %u: ", gx_frame_count());
+        fprintf(stderr, fmt, a, b, c, d);
+        fputc('\n', stderr);
+    }
+}
+
+/* After every PI FIFO register write: has the base moved away, or back? */
+static void dllog_pi(void)
+{
+    uint32_t pi = g_pi_fifo[0], cp = cp_fifo_base();
+    int away = pi && cp && pi != cp;
+    if (away && !g_dl_away) {
+        g_dl_away = 1;
+        g_dl_moves++;
+        g_dl_draws0 = g_draws;
+        g_dl_bytes0 = g_bytes;
+        g_dl_cur = dl_buf(pi);
+        if (g_dl_cur < DL_BUFS) g_dl_buf[g_dl_cur].moves++;
+        dllog_line("CPU FIFO moved to %08X (the CP's is at %08X)%.0llu%.0llu", pi, cp, 0ull, 0ull);
+    } else if (!away && g_dl_away) {
+        g_dl_away = 0;
+        g_dl_away_draws += g_draws - g_dl_draws0;
+        g_dl_away_bytes += g_bytes - g_dl_bytes0;
+        if (g_dl_cur < DL_BUFS) {
+            g_dl_buf[g_dl_cur].draws += g_draws - g_dl_draws0;
+            g_dl_buf[g_dl_cur].bytes += g_bytes - g_dl_bytes0;
+        }
+        dllog_line("CPU FIFO back at %08X; write pointer %08X; %llu draw(s) and %llu byte(s) parsed while it was away", pi,
+                   g_pi_fifo[2], (unsigned long long)(g_draws - g_dl_draws0), (unsigned long long)(g_bytes - g_dl_bytes0));
+    }
+}
+
+void gx_dllog_report(void)
+{
+    if (g_dllog <= 0) return;
+    fprintf(stderr, "[dl] %llu move(s) of the CPU FIFO away from the CP's, %llu draw(s) and %llu byte(s) parsed while away%s; "
+                    "%llu display-list call(s), %llu of size 0 and %llu with a size\n",
+            (unsigned long long)g_dl_moves, (unsigned long long)g_dl_away_draws, (unsigned long long)g_dl_away_bytes,
+            g_dl_away ? " (and away at the end)" : "", (unsigned long long)(g_dl_zero + g_dl_sized),
+            (unsigned long long)g_dl_zero, (unsigned long long)g_dl_sized);
+    {
+        unsigned i;
+        for (i = 0; i < g_dl_nbuf; i++)
+            fprintf(stderr, "[dl]   %08X: the CPU FIFO %llu time(s), %llu draw(s) and %llu byte(s) parsed there; called %llu time(s)\n",
+                    g_dl_buf[i].addr, (unsigned long long)g_dl_buf[i].moves, (unsigned long long)g_dl_buf[i].draws,
+                    (unsigned long long)g_dl_buf[i].bytes, (unsigned long long)g_dl_buf[i].calls);
+        if (g_dl_spill) fprintf(stderr, "[dl]   and %llu more past the table's %d\n", (unsigned long long)g_dl_spill, DL_BUFS);
+    }
+}
+
+/* After a CP MMIO write: has the FIFO the command processor reads moved? */
+static void dllog_cp(void)
+{
+    uint32_t cp = cp_fifo_base();
+    if (cp != g_dl_cp_seen) {
+        g_dl_cp_seen = cp;
+        dllog_line("the CP's FIFO base is now %08X (the CPU FIFO's is %08X)%.0llu%.0llu", cp, g_pi_fifo[0], 0ull, 0ull);
+    }
+}
+
 /* ---- frame capture ---------------------------------------------------
  * SOA_FIFO_DUMP=a,b,c names frame numbers (frames end at a copy to the
  * XFB). For each, NNNN.regs holds the CP/XF/BP shadows as the frame began,
@@ -354,6 +469,13 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             addr = be32(p + off + 1);
             size = be32(p + off + 5);
             g_dl_calls++;
+            if (g_dllog > 0) {
+                unsigned b = dl_buf(addr);
+                if (b < DL_BUFS) g_dl_buf[b].calls++;
+                if (size) g_dl_sized++;
+                else g_dl_zero++;
+                dllog_line("display list %08X called, %u byte(s)%.0llu%.0llu", addr, size, 0ull, 0ull);
+            }
             /* size is the guest's, and the same wrap applies to it. */
             if (!in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
                 size_t done;
@@ -475,6 +597,7 @@ int gx_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     }
     if (ea >= CP_BASE && ea < CP_BASE + 0x80 && size == 2) {
         g_cp_mmio[(ea - CP_BASE) >> 1] = (uint16_t)v;
+        if ((ea - CP_BASE == 0x20 || ea - CP_BASE == 0x22) && dllog_on()) dllog_cp();
         return 1;
     }
     if (ea >= PE_BASE && ea < PE_BASE + 0x10 && size == 2) {
@@ -487,6 +610,7 @@ int gx_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     }
     if (size == 4 && ea >= PI_FIFO_BASE && ea <= PI_FIFO_WPTR) {
         g_pi_fifo[(ea - PI_FIFO_BASE) >> 2] = (uint32_t)v & 0x1FFFFFFFu;
+        if (dllog_on()) dllog_pi();
         return 1;
     }
     return 0;
@@ -513,6 +637,7 @@ void gx_report(void)
             (unsigned long long)g_verts, (unsigned long long)g_finishes,
             (unsigned long long)g_tokens, (unsigned long long)g_efb_copies,
             (unsigned long long)g_unknown);
+    gx_dllog_report();
     gxr_report();
 }
 

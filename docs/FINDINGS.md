@@ -1685,6 +1685,9 @@ What the pairs also say:
   the motion interpolation exists to smooth.
 - **No draw comes through a display list.** Every display-list call in these
   captures (and in all 23 corpus captures) has size zero; all draws are direct.
+  *Amended 2026-09-25:* the sizes are right and the reading is wrong -- the
+  game records lists every frame and the port parses them as they are
+  recorded; see "Recorded display lists (C5a)" below.
 
 **H5: route (d) is dropped.** A watch on the first layer's list head
 (`SOA_WATCH=0x80308CBC`, `SOA_WATCH_FROM=4000`, `build/h5-watch.log`) shows it
@@ -1697,6 +1700,10 @@ draw pass `fn_801D0F80`, all of the latter on the field's update path
 (801DCCB8), draw pass (801DCCC0), in that order. So the lists are recorded
 inside the scene's update, as the plan's rule for dropping (d) asks; and since
 H4 needs no draw tags, (d) has no role as a fallback either.
+*Amended 2026-09-25:* the port parses a recorded list's commands at the
+recording, inside that update, not at the draw pass's call -- see "Recorded
+display lists (C5a)". (d) stays dropped; the order it was dropped on is
+the game's, and C5b makes it the port's too.
 
 Along the way the analyser found that `[gxr] ... texture copies` counts each
 copy twice (at enqueue, `gxr.c:2002`, and when it runs, `gxr.c:1737`).
@@ -3025,3 +3032,49 @@ the self test runs the game's own OSGetTick and srand through the pin at
 each site twice, and from `0x8000A1DC` -- the plan's mutation -- gets the
 clock; `test_settings.py` has `seed` recorded only when set. Whether one
 seed gives one battle is K6's question, and waits on it.
+
+
+**Recorded display lists (C5a): the chain confirmed.** 2026-09-25,
+`build/scenario-c5a.log`. `SOA_GX_DLLOG=1` (`runtime/gx.c`) logs each move
+of the CPU FIFO -- the PI FIFO base, which `GXSetCPUFifo` (`fn_8024C5FC`)
+writes -- away from the command processor's FIFO base and back, with the
+draws and bytes the port parsed while it was away; each display-list call
+with its size; each change of the CP's FIFO base; and at the report a table
+per buffer. It changes nothing parsed. The opening scenario to frame 5000:
+
+- 35,574 moves away. 1,929,546 of the run's 6,764,969 draws (28.5%) and 512
+  MB of its 1.70 GB of pipe bytes were parsed while the CPU FIFO pointed at
+  a buffer the command processor was not reading.
+- 27,871 display-list calls, **every one of size 0**.
+- The buffers are heap blocks 0x80 apart from `0x804EB5A0` up, about 1,900
+  of them, and they are the addresses the lists are called at: `0x804EB620`,
+  for one, was the CPU FIFO 3,484 times with 552,337 draws parsed there, and
+  was called 3,261 times, each time with size 0.
+
+So the redirection the GPU spec's section 2.8 read out of the disassembly
+happens in a run: the port parses what the game records at once, during the
+scene update (H5's order: reset, update, draw pass), and the list the draw
+pass calls is empty. H4's "all draws are direct" and ARCHITECTURE's PI FIFO
+registers "stored and read back but never used to route" describe the port,
+not the game. C5b -- record into guest memory at the PI write pointer, parse
+at the call -- follows, and moves H10's pair keys, so H4's match rates are
+re-measured after it.
+
+Two things C5b has to handle that the spec did not name:
+
+- **Not every redirect is a list, and the base test alone would lose the
+  logos.** At frame 1 the game points the CPU FIFO at `0x804024E0`, points
+  the CP's there too and back to `0x804A74E0` (the only CP base changes in
+  the run, frames 0 and 1), and leaves the CPU FIFO at `0x804024E0` until
+  frame 385: 1,548 draws, never called as a list -- and they are the
+  "Created by Overworks" screen (`build/frames/0200.png`), which the
+  console shows. A C5b that stops parsing whenever the two bases differ
+  would draw nothing there. Bracketing by the list functions themselves
+  (`fn_80251D80` and `fn_80251E48` in the spec) would not. How the console
+  reaches those bytes is not known.
+- **Recordings outnumber calls**: 35,574 against 27,871 -- `0x804EB5A0` was
+  recorded 7,186 times and called 4,089. A list recorded again before its
+  call, or never called, is drawn by the port today at every recording;
+  with C5b only what the list holds at the call is drawn. (Counted per
+  buffer address, and a block the heap reuses for another list counts under
+  the same address, so the per-list numbers are an upper bound.)
