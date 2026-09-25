@@ -1196,7 +1196,11 @@ part-G card at 116a, comes first.*
   - The contract holds.
 
 **CH1. Gamepad chords and host buttons** — *a day; `--link`; prerequisites none (the API append is
-after MV2, landed). **Owner.***
+after MV2, landed). **Owner.** Landed as d1000af, but for the owner's check. The live Done held exactly:
+`[chord]` lines at 1700 and 1900 and none at 1800, no `[si]` change after 1650, and both `# chord` lines
+in the `.pad`; the LB→Z mutation reads 0010 at 1700 and 1800. Also in it: `host_update` runs after the
+pad sample, so the host bits are the current read's; `si_chord_name()` names the arms for main.c; port
+1 follows the slot, and M18's motor follows it too.*
 - Files: `runtime/si.c`, `runtime/window.c`, `runtime/main.c`, `runtime/mod.c`, `runtime/soa_mod.h`,
   `tools/scenario.py`, `tools/tests/test_padrec.py` (the `window_host` stub),
   `tools/tests/test_scenario.py`, `tools/tests/test_mods.py`, README.md.
@@ -1220,7 +1224,11 @@ after MV2, landed). **Owner.***
   - `python tools/scenario.py run title --check` (the pad-grammar row of CLAUDE.md's table).
   - **Owner:** with the pad in slot 1 or 2 (not 0), port 1 plays.
 
-**P11b. Hold-to-skip** — *hours; none; prerequisites P11, CH1.*
+**P11b. Hold-to-skip** — *hours; none; prerequisites P11, CH1. Landed as 4c698f5. With `3000:lb#2400`,
+skip presses at 3086 (state 3), 3090 (state 4) and 3096 (state 3), and the page-to-choice time fell
+from 54 frames to 10; the choice stayed at 6 until 6000, and a002b came after 7300. **One choice made
+in the build:** hold-to-skip works only while autotext is on; with `SOA_AUTOTEXT` off, the mod registers
+no filter. A separate skip switch would be a new slice.*
 - Files: `mods/autotext/mod.c`, `tools/tests/test_mods.py`.
 - *Done:*
   - `python -m pytest tools/tests/test_mods.py`: on the fake guest, with host LB set by the stub, the
@@ -1236,7 +1244,14 @@ after MV2, landed). **Owner.***
     least 45 frames after the first 4.
 
 **H19a. Fullscreen, DPI, resizing, letterbox** — *a day to several days; `--link`; prerequisites none
-(its chord arm replaces CH1's). **Owner.***
+(its chord arm replaces CH1's). **Owner.** Landed as 63661a0, but for the owner's check. The owner's
+display is a 3440×1440 ultrawide at 85 Hz: fullscreen is 1920×1440 at +760+0; the window is 1280×960
+(2×; 3× does not fit a 1440-high work area with borders); at 1000×700 the picture is 640×480 at
++180+110. No present or resize failed, under DXGI or GDI, each run checked alone by `test_picture.py
+<log>`. Differences from the text below: the `[window]` line also logs `from WxH` (the frame's size)
+and `window|fullscreen`, and the checker uses the logged source size; a fullscreen line needs the
+client size to equal the monitor's. **Its limit:** the lines report the presenter's computed rectangle,
+so they check the layout and sizes, not the pixels. That is the owner's check.*
 - Files: `runtime/window.c`, `runtime/picture.c` (layout and interval), `runtime/main.c` (the chord
   arm), `runtime/settings.c`, `tools/tests/test_picture.py` (new), README.md.
 - What: 3.8.

@@ -105,8 +105,9 @@ and P6b have landed, and so have T0c and a manifest 2 follow-up, taken in betwee
 **Landed after dc0cc98:** **P1a** (090eea6), with its accessory case as a self-test case
 (specs/comfort-pack.md P1a), and the A5 and B3 edits (1a09d4a). **In flight at 1a09d4a:** P11 in its
 live checks, M18 written, and I2 being built in a separate worktree. Since then P11 (664f005), M18
-(3d08479, but for the owner's check) and I2 (12077d1, but for the owner's prune) have landed; CH1, then
-P11b and H19a, are next.
+(3d08479, but for the owner's check) and I2 (12077d1, but for the owner's prune) have landed, then
+CH1 (d1000af), P11b (4c698f5) and H19a (63661a0), the last two but for the owner's checks. M5b, then
+M19, are next.
 
 ### A2. H13 is closed as "done enough"
 
@@ -381,9 +382,9 @@ cost least.
 | 6 | **I2** (gap) one copy on disk: the tools read the image; `--prune-loose`. **Done, 12077d1**, but for the owner's prune | hours to a day | none | — | **Owner** runs the prune in session A |
 | 7 | **P1b** the encounter contrast (long runs at `SOA_SPEED=3`) | a day to several days | `--link` | P1a; a card and walk in a rate-20 zone where the step counter counts (Q-I5: `card-saved`'s a101b spot is zone 0, and the counter stayed 0) | — |
 | 8 | **M18** rumble. **Done, 3d08479**, but for the owner's check | hours | `--link` | P6 | **Owner** (A) |
-| 9 | **CH1** chords and host buttons (the chord arms log "not built yet") | a day | `--link` | — | **Owner** (A) |
-| 10 | **P11b** hold-to-skip | hours | none | P11, CH1 | — |
-| 11 | **H19a** fullscreen, DPI, resize, letterbox, `present_interval` in `picture.c` | a day to several days | `--link` | D-2 (defaults otherwise) | **Owner** (A) |
+| 9 | **CH1** chords and host buttons (the chord arms log "not built yet"). **Done, d1000af**, but for the owner's check | a day | `--link` | — | **Owner** (A) |
+| 10 | **P11b** hold-to-skip. **Done, 4c698f5** (only while autotext is on) | hours | none | P11, CH1 | — |
+| 11 | **H19a** fullscreen, DPI, resize, letterbox, `present_interval` in `picture.c`. **Done, 63661a0**, but for the owner's check | a day to several days | `--link` | D-2 (defaults otherwise) | **Owner** (A) |
 | 12 | **M5b** a first run without a terminal | a day | `--link` | D-3 | **Owner** (A) |
 | 13 | **M19** a clock that survives sleep | several days | `--link` | — | **Owner** (A) |
 | — | **Owner session A** (C8) | — | — | 8, 9, 11, 12, 13 landed | **Owner** |
@@ -685,7 +686,7 @@ cancellation. Each returns on the condition shown.
 | | |
 |---|---|
 | **When** | Now, at sitting 1 |
-| **Why now** | H8 found your display running at **85 Hz**, where 30 fps cannot be paced evenly (FINDINGS "H8"). H8's verdict, H17b's pacing target and M11a's presenter all assume 60 or 120 Hz, and H19a's default window size depends on the screen. A ROG Ally or Ally X (7 inch, 1920×1080, 120 Hz) and a Legion Go (8.8 inch, 2560×1600, 144 Hz) need different defaults, and at 144 Hz the game paces unevenly until H9 |
+| **Why now** | H8 found your display running at **85 Hz**, where 30 fps cannot be paced evenly (FINDINGS "H8"). H19a's run (63661a0) found it is a **3440×1440 ultrawide**, so the question is also whether you play on that monitor, on the handheld's own screen, or on both. H8's verdict, H17b's pacing target and M11a's presenter all assume 60 or 120 Hz, and H19a's default window size depends on the screen. A ROG Ally or Ally X (7 inch, 1920×1080, 120 Hz) and a Legion Go (8.8 inch, 2560×1600, 144 Hz) need different defaults, and at 144 Hz the game paces unevenly until H9 |
 | **It decides** | H19a's defaults, the display for sessions A and D, whether H9 is needed, and M11a's presenter table |
 | **If unanswered** | H19a picks the largest whole multiple of 640×480 that fits, and the sessions run at 60 Hz, which you set before session A |
 

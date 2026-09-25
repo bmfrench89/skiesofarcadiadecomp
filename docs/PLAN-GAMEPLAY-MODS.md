@@ -1348,7 +1348,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Today it sits in step 4 of "After the first two weeks" (§C), behind step 3's pacing work (H9, H17a, H17b, H18a–e).
   - Here it gates the chords' overlay withholding, the event track's hotkey and overlay lines, P7, P9, P12, R5, T11's placement mode and N10. The proposal is to take it right after M5.
   - Its Done warps and saves from the menu, which are M7b's and M7a's actions: either they move with it, or that part of its Done waits for them.
-- **M8 amendment: every action from the gamepad** — *hours to a day. Specified as comfort-pack CH1 (3.6).*
+- **M8 amendment: every action from the gamepad** — *hours to a day. Specified as comfort-pack CH1 (3.6); CH1 done (d1000af), the overlay withholding still waits on M8.*
   - Chords on buttons the game never sees (LB, View, the stick clicks), detected in `window.c`/`si.c`, because `pad_filter` gets only the 12 GameCube buttons. The chords land in milestone 1, ahead of M8.
   - Once M8's overlay exists: while it is open, withhold the d-pad, A and B from the game before they are recorded.
   - Use the first connected XInput slot, not always slot 0. Remapping and presets go in M5.
@@ -1398,7 +1398,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
     - :505 should say what FINDINGS "M3c" records: an identity projection filter matches 23 of 23 captures under `--replay`, and a wider view matches only the four orthographic boot frames.
 
 **For Track H (frame pacing and speed):**
-- **H19. Fullscreen and a window that fits a 7–8 inch screen** — *hours first, then several days. Specified as comfort-pack H19a (3.8).*
+- **H19. Fullscreen and a window that fits a 7–8 inch screen** — *hours first, then several days. Specified as comfort-pack H19a (3.8); H19a done (63661a0), but for the owner's check.*
   - Today the window is a fixed 1280×960, not resizable and not DPI-aware.
   - First: per-monitor DPI awareness, a resizable window, borderless fullscreen (Alt+Enter, F11 or a chord), letterboxing, a hidden cursor.
   - Then: fullscreen keys in M5, P5's sharp-bilinear filter, H9 rows for 144 Hz and VRR panels, and M10's aspect as a parameter (16:9 or 16:10).
