@@ -14,9 +14,12 @@
  *
  * A patch writes one 32-bit word at the end of a frame. Its trigger is
  * every_frame; once, the first frame its conditions hold; or on_map_load,
- * the first frame the field is running (state 8) in a map other than the
- * one it was last seen running in -- so a reload of the same map after a
- * battle is not a load, and a patch applied there never compounds. The
+ * the first frame the field is running (state 8) after a load -- a load state
+ * (3 or 5) seen since it last ran, or a different map. A reload of the same
+ * map after a battle is a load: it puts the map's words back as the disc has
+ * them, so a patch has to be applied again, and a store applied once per load
+ * cannot compound (the review of 2026-09-25 caught the older rule, a change of
+ * map only, leaving the rest of a stay unpatched after the first battle). The
  * conditions read the scene id (0x803475CC: 6 is the field, 7 battle), the
  * field state (0x80311AEC) and the committed map, number and letter
  * (0x80311AC0 and the byte at 0x80311AC8; 0x80311AC4 is the picker's working
@@ -86,6 +89,7 @@ static int g_mod_n;
 static Patch g_patches[PATCH_MAX];
 static unsigned g_patch_n;
 static uint32_t g_last_map = 0xFFFFFFFFu;
+static int g_patch_reload; /* a load state (3 or 5) seen at a frame end since the field last ran */
 static char g_describe[300]; /* fits si.c's config line; later mods are left off */
 static unsigned long long g_maps_loaded;
 
@@ -329,20 +333,24 @@ static char* slurp_text(const char* path, size_t* size)
     return buf;
 }
 
-/* The next line of `text`, copied into `line` (at most LINE_MAX_LEN). */
+/* The next line of `text`, copied into `line`: 1, or 2 when it was longer
+ * than LINE_MAX_LEN - 1 and had to be cut -- which the callers refuse, since
+ * a cut token can parse as a different valid one (`state=18` as `state=1`). */
 static int next_line(const char** text, char* line)
 {
     const char* p = *text;
     size_t n = 0;
+    int cut = 0;
     if (!*p) return 0;
     while (*p && *p != '\n') {
         if (n < LINE_MAX_LEN - 1) line[n++] = *p;
+        else cut = 1;
         p++;
     }
     if (*p) p++;
     line[n] = '\0';
     *text = p;
-    return 1;
+    return cut ? 2 : 1;
 }
 
 /* ---- native mods: mod.dll on SoaModApi (PLAN M3) ------------------------ */
@@ -431,9 +439,15 @@ static int api_story_flag(uint32_t n)
 }
 static uint32_t api_frame(void) { return gx_frame_count(); }
 
+/* Registration is open only while a soa_mod_init runs: the dispatchers are
+ * wired into tick.c, si.c and the renderer once, when loading ends, so a
+ * callback registered later would be accepted and never called (the review
+ * of 2026-09-25). Refusing it makes the 0 say so. */
+static int g_in_init;
+
 static int api_register(int kind, void* fn, void* user)
 {
-    if (!fn || g_cb_n[kind] == CB_MAX) return 0;
+    if (!fn || !g_in_init || g_cb_n[kind] == CB_MAX) return 0;
     g_cb[kind][g_cb_n[kind]].fn = fn;
     g_cb[kind][g_cb_n[kind]].user = user;
     g_cb[kind][g_cb_n[kind]].mod = g_cur_mod;
@@ -496,6 +510,12 @@ static int mod_texture(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, cons
         got = ((int (*)(void*, uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, SoaImage*))g_cb[CB_TEXTURE][i].fn)(
             g_cb[CB_TEXTURE][i].user, hash, fmt, w, h, rgba, &img);
         if (got && img.rgba && img.w && img.h) {
+            if (img.w > 4096 || img.h > 4096) {
+                /* the renderer's limit; the next provider may have one that fits */
+                fprintf(stderr, "[mod] %s: texture %016llx: a %ux%u image is refused, 4096 on a side is the most\n",
+                        g_mods[g_cur_mod].dir, (unsigned long long)hash, img.w, img.h);
+                continue;
+            }
             *out = img.rgba;
             *out_w = img.w;
             *out_h = img.h;
@@ -605,7 +625,9 @@ static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
     for (k = 0; k < CB_KINDS; k++) before[k] = g_cb_n[k];
     g_cur_mod = g_mod_n;
     snprintf(g_cur_dir, sizeof g_cur_dir, "%s", m->dir);
+    g_in_init = 1;
     rc = init(&g_api, SOA_MOD_API_VERSION);
+    g_in_init = 0;
     g_cur_mod = -1;
     if (rc != 0) {
         char code[16];
@@ -637,7 +659,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     char *ini, *patches;
     const char* t;
     size_t ini_n = 0, patches_n = 0;
-    int have_api = 0, dll;
+    int have_api = 0, dll, got;
     unsigned dll_hash = 0;
     Where w;
     Mod m;
@@ -658,9 +680,13 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         free(ini);
         return;
     }
-    for (t = ini; next_line(&t, line);) {
+    for (t = ini; (got = next_line(&t, line)) != 0;) {
         char* eq;
         w.line++;
+        if (got == 2) {
+            refuse(&w, "a line longer than %s characters%s", "511", "");
+            continue;
+        }
         if ((eq = strchr(line, '#')) != NULL) *eq = '\0';
         if (!(eq = strchr(line, '='))) {
             if (split(line, tok, 8) != 0) refuse(&w, "`%s` is not `key = value`%s", line, "");
@@ -703,9 +729,10 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     patches = slurp_text(ppath, &patches_n);
     if (patches) {
         w.path = ppath;
-        for (t = patches; next_line(&t, line) && !w.failed;) {
+        for (t = patches; !w.failed && (got = next_line(&t, line)) != 0;) {
             w.line++;
-            parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
+            if (got == 2) refuse(&w, "a line longer than %s characters%s", "511", "");
+            else parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
         }
         if (!w.failed && g_patch_n == before) {
             w.line = 0;
@@ -738,6 +765,18 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
 
 static int cmp_name(const void* a, const void* b) { return strcmp((const char*)a, (const char*)b); }
 
+/* One folder under SOA_MODS: kept for loading, or -- a name too long for the
+ * table, or one folder past what it holds -- said so, never dropped quietly. */
+static void note_folder(char (*names)[64], int* n, const char* dir, const char* name)
+{
+    if (strlen(name) >= 64)
+        fprintf(stderr, "[mod] %s/%s: a mod's folder name has to be under 64 characters; not read\n", dir, name);
+    else if (*n == MOD_MAX * 2)
+        fprintf(stderr, "[mod] %s/%s: more than %d folders in %s; not read\n", dir, name, MOD_MAX * 2, dir);
+    else
+        snprintf(names[(*n)++], 64, "%s", name);
+}
+
 int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
 {
     static char names[MOD_MAX * 2][64];
@@ -756,7 +795,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     }
     do {
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
-        if (n < MOD_MAX * 2 && strlen(fd.cFileName) < 64) snprintf(names[n++], 64, "%s", fd.cFileName);
+        note_folder(names, &n, dir, fd.cFileName);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #else
@@ -768,7 +807,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     }
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
-        if (n < MOD_MAX * 2 && strlen(e->d_name) < 64) snprintf(names[n++], 64, "%s", e->d_name);
+        note_folder(names, &n, dir, e->d_name);
     }
     closedir(d);
 #endif
@@ -781,12 +820,24 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
             g_text[i][1] = g_text[i][0] + be32p(dol + 0x90 + i * 4);
         }
     for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
+    /* The recording's line: every mod by folder and hash while they fit, 24
+     * bytes kept back so the rest can still be named -- as a count and one
+     * hash over all of them -- rather than cut off mid-entry or dropped. */
     g_describe[0] = '\0';
     for (i = 0; i < g_mod_n; i++) {
-        int k = snprintf(g_describe + used, sizeof g_describe - used, "%s%s:%08x", i ? "," : "mods=",
-                         g_mods[i].dir, g_mods[i].hash);
-        if (k < 0 || (size_t)k >= sizeof g_describe - used) break;
+        size_t room = sizeof g_describe - 24 - used;
+        int k = snprintf(g_describe + used, room, "%s%s:%08x", i ? "," : "mods=", g_mods[i].dir, g_mods[i].hash);
+        if (k < 0 || (size_t)k >= room) {
+            g_describe[used] = '\0';
+            break;
+        }
         used += (size_t)k;
+    }
+    if (i < g_mod_n) {
+        uint32_t rest = 2166136261u;
+        int left = g_mod_n - i;
+        for (; i < g_mod_n; i++) rest = fnv1a(fnv1a(rest, g_mods[i].dir, strlen(g_mods[i].dir)), (const char*)&g_mods[i].hash, 4);
+        snprintf(g_describe + used, sizeof g_describe - used, "%s+%d more:%08x", used ? "," : "mods=", left, rest);
     }
     if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE]) tick_on_safe_point(mod_safe_point);
     if (g_cb_n[CB_PAD_FILTER]) si_set_pad_filter(mod_pad);
@@ -811,8 +862,12 @@ void mod_frame(CpuState* s, unsigned frame)
     number = mem_r32(s, MAP_NUMBER);
     letter = mem_r8(s, MAP_LETTER);
     key = (number << 8) | letter;
-    loaded = state == FIELD_RUNNING && key != g_last_map;
-    if (state == FIELD_RUNNING) g_last_map = key;
+    if (state == 3 || state == 5) g_patch_reload = 1;
+    loaded = state == FIELD_RUNNING && (key != g_last_map || g_patch_reload);
+    if (state == FIELD_RUNNING) {
+        g_last_map = key;
+        g_patch_reload = 0;
+    }
     for (i = 0; i < g_patch_n; i++) {
         Patch* p = &g_patches[i];
         if (p->trigger == T_ONCE && p->fired) continue;

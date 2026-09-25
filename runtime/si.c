@@ -31,6 +31,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "soa_mod.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -231,7 +232,10 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
  *
  * Both are comments: a v1 recording still replays, a hand-written line still
  * works, and a hand-edited one only loses the drift check for that line. */
-typedef struct { uint16_t buttons; uint8_t stick[2], cstick[2], trig[2]; } PadState;
+/* One controller read. It is the mods' SoaPad itself (soa_mod.h), not a copy
+ * of its layout, so a pad_filter can never be handed bytes that mean something
+ * else (the review of 2026-09-25). */
+typedef SoaPad PadState;
 static const PadState PAD_NEUTRAL = {0, {128, 128}, {128, 128}, {0, 0}};
 
 static unsigned g_pad_frame; /* the frame of the most recent controller read */
@@ -288,10 +292,15 @@ void si_set_config_extra(const char* extra)
 static void pad_config(char* out, size_t cap)
 {
     const char* card = env_or("SOA_CARD", "build/cards/slotA.raw");
-    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s",
+    /* SOA_UNCAP changes how many frames a second of guest time holds, which
+     * is what a recording is keyed by; named only when on, so a recording
+     * made without it keeps the line it always had. */
+    const char* uncap = getenv("SOA_UNCAP");
+    int un = uncap && *uncap && strcmp(uncap, "0") != 0;
+    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s%s%s",
              env_or("SOA_RENDER", "-"), env_or("SOA_WINDOW", "-"), env_or("SOA_SPEED", "1"),
              env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card),
-             g_cfg_extra[0] ? " " : "", g_cfg_extra);
+             un ? " uncap=" : "", un ? uncap : "", g_cfg_extra[0] ? " " : "", g_cfg_extra);
 }
 
 /* An hour of play is not worth an overwrite: a second run with the same
@@ -709,9 +718,7 @@ static void pad_sample(PadState* st, unsigned frame)
 
 /* A mod's say in every read (mod.c, PLAN-60FPS-MODS M3b): after the recording
  * has the input as it was given, before the guest and the [si] log see it. The
- * pad is handed over as PadState, which soa_mod.h's SoaPad mirrors byte for
- * byte -- the typedef below fails to compile if the two ever part. */
-typedef char pad_state_is_eight_bytes[sizeof(PadState) == 8 ? 1 : -1];
+ * pad is handed over as PadState, which is SoaPad. */
 static void (*g_pad_filter)(unsigned frame, void* pad);
 
 void si_set_pad_filter(void (*fn)(unsigned frame, void* pad))

@@ -11,8 +11,14 @@
  * yourself (say why with api->log first).
  *
  * The table holds plain data and function pointers only, and grows only at the
- * end: a mod built against version N runs on a port at N or later, and checks
- * `api->size` before touching a member added after the version it knows.
+ * end: a mod built against version N runs on a port at N or later. Check that
+ * the table reaches the last member you use, not that it is as large as the one
+ * you built against -- an older port that has every member you call is fine:
+ *
+ *     if (api->size < SOA_MOD_HAS(pad_filter)) return 1;  // needs M3b's filter
+ *
+ * Register every callback inside soa_mod_init. Registration closes when it
+ * returns, and a later registration returns 0 and is never called.
  *
  * Everything here runs on the guest CPU thread, the one thread allowed to
  * touch guest state. Never call the API from a thread of your own.
@@ -20,6 +26,7 @@
 #ifndef SOA_MOD_API_H
 #define SOA_MOD_API_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define SOA_MOD_API_VERSION 1u
@@ -79,7 +86,7 @@ typedef struct SoaModApi {
     uint32_t (*frame)(void);         /* frames the port has presented */
 
     /* Callbacks, each with a pointer handed back to it. Each returns 1, or 0
-     * when its table is full. */
+     * when its table is full or soa_mod_init has already returned. */
     int (*on_frame_end)(void (*fn)(void* user), void* user);   /* inside the XFB copy: memory writes only */
     int (*on_safe_point)(void (*fn)(void* user), void* user);  /* the top of the main loop, nothing started */
     int (*on_map_loaded)(void (*fn)(void* user, uint32_t map), void* user);  /* at a safe point, once per map entered */
@@ -109,14 +116,19 @@ typedef struct SoaModApi {
      * its source bytes (and palette, for the indexed formats), the key the
      * port's cache uses, the same from run to run; `rgba` is the decoded base
      * level, w x h. Return 1 with out->rgba set to replace it with an RGBA8
-     * image of any size (the sampler scales by its size over the game's), 0 to
-     * keep it. The port copies the image before the call returns. Among mods,
-     * the first provider that answers 1 wins. */
+     * image up to 4096 on a side (the sampler scales by its size over the
+     * game's), 0 to keep it. The port copies the image before the call
+     * returns. Among mods, the first provider that answers 1 with an image
+     * that fits wins; a larger one is refused with a line, and the next
+     * provider is asked. */
     int (*texture_provider)(int (*fn)(void* user, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h,
                                       const uint8_t* rgba, SoaImage* out),
                             void* user);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);
+
+/* The size a table must reach to hold `member`: compare api->size with it. */
+#define SOA_MOD_HAS(member) (offsetof(SoaModApi, member) + sizeof(((SoaModApi*)0)->member))
 
 #endif

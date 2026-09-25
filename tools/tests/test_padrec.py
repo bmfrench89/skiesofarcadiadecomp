@@ -140,7 +140,14 @@ def run(driver, tmp_path, mode, env=None, last=100, per=2):
     """One run of the driver. Reports go to stdout, everything si.c says to
     stderr, so the two are never confused for each other."""
     e = dict(os.environ)
-    for name in ("SOA_PAD", "SOA_PAD_RECORD", "SOA_PAD_FILE", "SOA_PAD_STOP", "SOA_FRAMES"):
+    for name in (
+        "SOA_PAD",
+        "SOA_PAD_RECORD",
+        "SOA_PAD_FILE",
+        "SOA_PAD_STOP",
+        "SOA_FRAMES",
+        "SOA_UNCAP",
+    ):
         e.pop(name, None)
     # The configuration line a recording carries: pin every switch it names, so
     # a machine with any of them set in the environment does not fail the test
@@ -311,3 +318,18 @@ def test_a_script_with_every_form_si_reads_parses_whole(driver, tmp_path):
     _, err = run(driver, tmp_path, "script", {"SOA_PAD": script}, last=40)
     assert "[si] 3 scripted controller events" in err, err
     assert "not understood" not in err, err
+
+
+@needs_msvc
+def test_an_uncapped_recording_says_so_and_a_capped_one_is_unchanged(driver, tmp_path):
+    """SOA_UNCAP changes how many frames a second of guest time holds, which
+    a recording is keyed by; it is named when on, and a recording made
+    without it carries exactly the line it always did."""
+    rec = tmp_path / "fast.pad"
+    run(driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec), "SOA_UNCAP": "3300"}, last=20)
+    assert " uncap=3300" in rec.read_text(), rec.read_text()[:300]
+    _, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=20)
+    assert "recorded with" in err and "uncap=3300" in err, err
+    plain = tmp_path / "plain.pad"
+    run(driver, tmp_path, "record", {"SOA_PAD_RECORD": str(plain)}, last=20)
+    assert " uncap=" not in plain.read_text()  # the temp path itself contains "uncap"

@@ -1130,15 +1130,6 @@ int main(int argc, char** argv)
     }
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
-    /* Mods check themselves against this DOL, so they load once it is here;
-     * a recording then names them, and the report says what each applied. */
-    {
-        const char* mods = getenv("SOA_MODS");
-        if (mods && *mods && mod_load(&s, mods, dol, dol_size)) {
-            si_set_config_extra(mod_describe());
-            hle_on_report(mod_report);
-        }
-    }
 
     /* The apploader parks the FST at the top of memory, 32-byte aligned, and
      * ends the arena where it starts. Both files are bounded before they are
@@ -1159,6 +1150,19 @@ int main(int argc, char** argv)
     fst_addr = (ARENA_HI - (uint32_t)fst_size) & ~31u;
     memcpy(s.mem + (fst_addr & MEM_MASK), fst, fst_size);
     setup_low_memory(s.mem, boot, fst_addr, fst_max);
+
+    /* Mods check themselves against the DOL, and load once memory holds what
+     * the game starts from -- after the low-memory block, which would
+     * otherwise overwrite what a mod's init wrote and hand its reads zeros
+     * (the review of 2026-09-25). A recording then names them, and the report
+     * says what each applied. */
+    {
+        const char* mods = getenv("SOA_MODS");
+        if (mods && *mods && mod_load(&s, mods, dol, dol_size)) {
+            si_set_config_extra(mod_describe());
+            hle_on_report(mod_report);
+        }
+    }
 
     s.spr[287] = GEKKO_PVR;
     s.msr = 0x00002030u; /* FP | IR | DR -- __init_hardware rewrites it anyway */

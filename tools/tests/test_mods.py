@@ -328,10 +328,12 @@ def test_once_applies_the_first_frame_its_conditions_hold(driver, tmp_path):
 
 
 @needs_msvc
-def test_on_map_load_fires_once_per_map_entered_and_never_compounds(driver, tmp_path):
+def test_on_map_load_fires_on_every_load_of_its_map(driver, tmp_path):
     """Keyed on the committed map (0x80311AC0, letter byte at 0x80311AC8),
-    once the field is running: the reload after a battle is the same map and
-    does not fire again; leaving and coming back does."""
+    once the field is running after a load: the reload after a battle puts
+    the map's words back as the disc has them, so it fires again (the review
+    of 2026-09-25: the old rule left the rest of the stay unpatched); a map
+    whose condition fails does not fire; coming back does."""
     mod(tmp_path, "m", patches="on_map_load 0x80346d28 = 1 when map=116a\n")
 
     def at(number, letter, state):
@@ -348,7 +350,7 @@ def test_on_map_load_fires_once_per_map_entered_and_never_compounds(driver, tmp_
         + at(116, "a", 3)
         + step  # battle and reload of the same map
         + at(116, "a", 8)
-        + step  # same map again: no
+        + step  # running again after the reload: fires
         + at(116, "b", 8)
         + step  # another map: condition fails
         + at(116, "a", 8)
@@ -356,7 +358,7 @@ def test_on_map_load_fires_once_per_map_entered_and_never_compounds(driver, tmp_
     )
     out, _ = play(driver, tmp_path, script)
     got = [line[-1] for line in out.splitlines() if line.startswith("80346D28")]
-    assert got == ["0", "1", "0", "0", "0", "0", "1"], out
+    assert got == ["0", "1", "0", "0", "1", "0", "1"], out
 
 
 @needs_msvc
@@ -426,8 +428,24 @@ static int tex(void* u, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, con
 {
     (void)u; (void)fmt; (void)w; (void)h; (void)rgba;
     if ((hash & 0xFF) != 0x42) return 0;
+#ifdef BIG
+    out->w = 5000; out->h = 5000; out->rgba = k_img; /* refused before it is read */
+#else
     out->w = 2; out->h = 2; out->rgba = k_img;
+#endif
     return 1;
+}
+#endif
+#ifdef LATE
+/* registers a pad filter from a frame end, after soa_mod_init has returned */
+static void late_pad(void* u, uint32_t f, SoaPad* p) { (void)u; (void)f; p->buttons = 0; }
+static void late(void* u)
+{
+    static int once;
+    (void)u;
+    if (once++) return;
+    snprintf(b, sizeof b, "late registration %d", A->pad_filter(late_pad, NULL));
+    A->log(b);
 }
 #endif
 #ifdef PADF
@@ -465,6 +483,9 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
     api->on_scene_change(sc, NULL);
 #ifdef PADF
     api->pad_filter(pf, NULL);
+#endif
+#ifdef LATE
+    api->on_frame_end(late, NULL);
 #endif
 #ifdef PROJ
     api->projection_filter(wide, NULL);
@@ -685,3 +706,62 @@ def test_without_a_provider_the_renderer_is_never_handed_one(driver, tmp_path):
     dll(tmp_path, "native")
     out, _ = play(driver, tmp_path, "tex 42 4 4")
     assert "tex kept (no provider)" in out, out
+
+
+# --------------------------------------------------------------------------
+# The review of 2026-09-25
+# --------------------------------------------------------------------------
+
+
+@needs_msvc
+def test_a_callback_registered_after_init_is_refused(driver, tmp_path):
+    """The dispatchers are wired when loading ends, so a later registration
+    would be accepted and never called; now it returns 0, and the filter it
+    offered never touches a read."""
+    dll(tmp_path, "latecomer", "LATE")
+    out, err = play(driver, tmp_path, "frame pad 5 1100")
+    assert "[mod] latecomer: late registration 0" in err, err
+    assert "pad 5 1100 unfiltered" in out, out
+
+
+@needs_msvc
+def test_a_line_too_long_to_read_whole_is_refused(driver, tmp_path):
+    """Cut at 511 characters, `state=18` would read as `state=1`."""
+    long_line = "every_frame 0x80346d28 = 0 when scene=6" + " " * 480 + "state=18\n"
+    mod(tmp_path, "m", patches=long_line)
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "patches.txt:1: a line longer than 511 characters" in err, err
+
+
+@needs_msvc
+def test_a_folder_the_table_cannot_hold_is_named(driver, tmp_path):
+    name = "a" * 70
+    mod(tmp_path, name)
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out, err
+    assert f"{name}: a mod's folder name has to be under 64 characters; not read" in err, err
+
+
+@needs_msvc
+def test_mods_past_the_recording_line_are_counted_not_cut(driver, tmp_path):
+    """The config line keeps whole entries and names the rest as a count and
+    one hash, never a folder name with half a hash."""
+    names = [f"mod-{i:02d}-with-a-long-folder-name" for i in range(12)]
+    for n in names:
+        mod(tmp_path, n)
+    out, _ = play(driver, tmp_path, "describe")
+    line = next(x for x in out.splitlines() if x.startswith("describe ["))[len("describe [") : -1]
+    entries = line[len("mods=") :].split(",")
+    *whole, rest = entries
+    assert all(e.split(":")[0] in names and len(e.split(":")[1]) == 8 for e in whole), line
+    count, digest = rest.split(":")
+    assert count == f"+{12 - len(whole)} more" and len(digest) == 8, line
+
+
+@needs_msvc
+def test_an_image_too_large_is_refused_and_the_next_provider_asked(driver, tmp_path):
+    dll(tmp_path, "a-huge", "TEX=100", "BIG")
+    dll(tmp_path, "b-pack", "TEX=200")
+    out, err = play(driver, tmp_path, "tex 42 4 4")
+    assert "a 5000x5000 image is refused, 4096 on a side is the most" in err, err
+    assert "tex replaced 2x2 first C80000FF" in out, out

@@ -42,7 +42,9 @@ static void on_scene_change(void* user, uint32_t from, uint32_t to)
 
 __declspec(dllexport) int soa_mod_init(const SoaModApi* api, uint32_t version)
 {
-    if (version < 1 || api->size < sizeof(SoaModApi)) return 1; /* built against a newer API than this port */
+    /* log is the last member this mod calls, so a port whose table reaches it
+     * has everything the mod needs, whatever was appended since. */
+    if (version < 1 || api->size < SOA_MOD_HAS(log)) return 1;
     g_api = api;
     api->on_safe_point(on_safe_point, NULL);
     api->on_map_loaded(on_map_loaded, NULL);

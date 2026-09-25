@@ -2031,3 +2031,30 @@ With that, M3's criteria are met: `mod.dll` with a versioned API, the safe
 point, map loads and scene changes, the pad filter, the projection filter
 and the texture provider, each held by tests that build a DLL against
 `runtime/soa_mod.h`, and CI's Windows leg builds and loads the example.
+
+
+**A review of the mod layer found eleven defects, and all are fixed.**
+2026-09-25. A workflow of four reviewers (memory, threads, the contract with
+everything off, semantics against the plan) read `runtime/mod.c`, `soa_mod.h`,
+`tick.c`, the frame hook, the pad, projection and texture hooks and the
+frame-time record; each of the sixteen findings went to a skeptic told to
+refute it, and none was refuted. Merged, eleven defects:
+
+| defect | severity | fix |
+|---|---|---|
+| a callback registered after `soa_mod_init` returned 1 and was never called: the dispatchers are wired once, when loading ends | medium | registration is open only inside `soa_mod_init`; later it returns 0 |
+| an `on_map_load` patch skipped the reload after a battle, which puts the map's words back as the disc has them, while `on_map_loaded` counted it | medium | a load state (3 or 5) seen since the field last ran is a load, as the safe point already said |
+| the `[frametime]` report read the buffer twice across a `malloc` on the UI thread while the guest thread appended and reallocated it (a window closed mid-frame) | low | one lock, and the report works from a copy taken under it |
+| mods loaded before the low-memory block was written, so an init's reads saw zeros and its writes were overwritten | low | `mod_load` runs after `setup_low_memory` |
+| the recording's mod list kept a half-written entry and dropped later mods past 300 bytes | low | whole entries only, and the rest as `+N more:hash` |
+| mod folders with names of 64 characters or more, or past the 64th, were skipped without a word | low | each is named with the reason |
+| a `patches.txt` or `mod.ini` line over 511 characters was cut, so `state=18` could read as `state=1` | low | refused with its line |
+| a texture over 4096 on a side was dropped silently, and blocked the providers after it | low | refused with a line, and the next provider is asked |
+| `SOA_UNCAP` was not in a recording's config line, though it changes frames per second of guest time | low | named there when on; a line without it is unchanged |
+| the example refused a port with every member it uses because its table was smaller than the header's | low | `SOA_MOD_HAS(member)`: check the last member used |
+| `si.c`'s `PadState` mirrored `SoaPad` by size only | low | `PadState` is `SoaPad` |
+
+Each has a test that fails without its fix, bar the lock (a race of
+microseconds) and the load order (the one `main.c` move), which the title run
+with `examples/mods/map-log` covers: the same safe points and map load as
+before. The self test, `title --check` and the replay are unchanged.

@@ -361,6 +361,18 @@ static double* g_ft;
 static size_t g_ft_n, g_ft_cap;
 static double g_ft_last = -1.0;
 static unsigned g_ft_from; /* 0: every frame of the run */
+/* The guest thread marks frames while a window's close can run the report on
+ * the UI thread, so the buffer is locked: the report copies it under the lock
+ * and works from the copy (the review of 2026-09-25 found the report reading
+ * g_ft_n twice across a malloc while a mark could append or realloc). */
+#ifdef _WIN32
+static SRWLOCK g_ft_lock = SRWLOCK_INIT;
+#define FT_LOCK() AcquireSRWLockExclusive(&g_ft_lock)
+#define FT_UNLOCK() ReleaseSRWLockExclusive(&g_ft_lock)
+#else
+#define FT_LOCK() ((void)0)
+#define FT_UNLOCK() ((void)0)
+#endif
 
 /* Forget the frames so far, and count from frame `frame` on: SOA_UNCAP=N
  * calls this at N, so an uncapped run's percentiles are the uncapped
@@ -368,24 +380,31 @@ static unsigned g_ft_from; /* 0: every frame of the run */
  * there. */
 void hle_frametime_restart(unsigned frame)
 {
+    FT_LOCK();
     g_ft_n = 0;
     g_ft_from = frame;
+    FT_UNLOCK();
 }
 
 void hle_frame_mark(void)
 {
     double now = hle_wall_seconds();
+    FT_LOCK();
     if (g_ft_last >= 0.0 && g_ft_n < (1u << 22)) {
         if (g_ft_n == g_ft_cap) {
             size_t cap = g_ft_cap ? g_ft_cap * 2 : 4096;
             double* p = (double*)realloc(g_ft, cap * sizeof *g_ft);
-            if (!p) return;
+            if (!p) {
+                FT_UNLOCK();
+                return;
+            }
             g_ft = p;
             g_ft_cap = cap;
         }
         g_ft[g_ft_n++] = now - g_ft_last;
     }
     g_ft_last = now;
+    FT_UNLOCK();
 }
 
 static int cmp_double(const void* a, const void* b)
@@ -412,16 +431,22 @@ static double process_cpu_seconds(double* user, double* kernel)
 static void frametime_report(void)
 {
     double user, kernel, cpu = process_cpu_seconds(&user, &kernel);
-    if (g_ft_n) {
-        double* s = (double*)malloc(g_ft_n * sizeof *s);
+    double* s = NULL;
+    size_t n;
+    unsigned ft_from;
+    FT_LOCK();
+    n = g_ft_n;
+    ft_from = g_ft_from;
+    if (n && (s = (double*)malloc(n * sizeof *s)) != NULL) memcpy(s, g_ft, n * sizeof *s);
+    FT_UNLOCK();
+    if (n) {
         if (s) {
-            size_t i, n = g_ft_n;
+            size_t i;
             double total = 0.0;
             char from[48] = "";
-            memcpy(s, g_ft, n * sizeof *s);
             for (i = 0; i < n; i++) total += s[i];
             qsort(s, n, sizeof *s, cmp_double);
-            if (g_ft_from) snprintf(from, sizeof from, " from frame %u", g_ft_from);
+            if (ft_from) snprintf(from, sizeof from, " from frame %u", ft_from);
             fprintf(stderr, "[frametime] %zu frames%s, %.1f a second; wall ms per frame: p50 %.1f, p95 %.1f, "
                             "p99 %.1f, max %.1f", n, from, total > 0.0 ? (double)n / total : 0.0, s[n / 2] * 1e3,
                     s[(n * 95) / 100] * 1e3, s[(n * 99) / 100] * 1e3, s[n - 1] * 1e3);

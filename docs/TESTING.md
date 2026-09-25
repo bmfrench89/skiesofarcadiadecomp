@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-763 passed in 121.26s
+769 passed in 112.13s
 ```
 
-763 tests in 44 files, none of which reads the disc. They cover the Python
+769 tests in 44 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -45,7 +45,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_scenario.py` | 91 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
 | `test_cardformat.py` | 77 | the memory-card formatter: does the image it writes say what the mount reads? |
-| `test_mods.py` | 55 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads |
+| `test_mods.py` | 60 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
@@ -54,7 +54,7 @@ its own and run it, some of the C as well:
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
-| `test_padrec.py` | 17 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
+| `test_padrec.py` | 18 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
@@ -94,10 +94,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `763 passed` |
-| no capstone — **what CI installs** | `744 passed, 1 skipped` |
-| no MSVC | `590 passed, 173 skipped` |
-| neither — **the Ubuntu CI leg** | `571 passed, 174 skipped` |
+| everything (MSVC + capstone) | `769 passed` |
+| no capstone — **what CI installs** | `750 passed, 1 skipped` |
+| no MSVC | `590 passed, 179 skipped` |
+| neither — **the Ubuntu CI leg** | `571 passed, 180 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -955,7 +955,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 173 of the 763 skip without a C compiler; they build one runtime file and run it.
+² 179 of the 769 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -966,8 +966,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 571 passed, 174 skipped |
-| **Tests** | windows | the same three — 744 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 571 passed, 180 skipped |
+| **Tests** | windows | the same three — 750 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
