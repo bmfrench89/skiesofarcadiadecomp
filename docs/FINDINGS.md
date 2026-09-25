@@ -3283,3 +3283,26 @@ refused, the chord a comment in the recording and absent from its replay);
 `test_scenario.py` (the grammar); `test_mods.py` (`host_buttons` as si.c
 gives it; map-log built against the header before it still loads). The
 owner's check -- a pad in slot 1 or 2 plays port 1 -- is session A's.
+
+
+**P11b: hold LB to skip dialogue.** 2026-09-25, `build/p11/skip.log`. With
+`mods/autotext` on, holding the host button LB (CH1; the keyboard's Tab)
+presses A in states 3 and 4 -- text appearing, and a complete page -- two
+frames down and two up for as long as it is held: a press in state 3 shows
+the page at once and the next turns it. Never in a choice box, never on a
+page the game turns itself, never over the person's own A or B; let go, and
+the ordinary auto-advance takes over. Host buttons are not in recordings
+yet, so the first skip says once that a replay will not skip.
+
+P11's run with `3000:lb#2400` added: skip presses at 3086 (state 3), 3090
+(state 4) and 3096 (state 3); the officer's page, which took 54 frames from
+its first 3 to the choice with auto-advance alone, took 10; the choice
+still rested at 6 until the A at 6000, and `a002b` came after the A at 7300.
+`python tools/tests/test_mods.py p11b <log>` checks those rules: `ok` on it,
+and on the same run without the `lb` item (the mutation, `build/p11/on.log`)
+it names no skip press in state 3 and a first choice 54 frames after the
+first 3. Its pytest feeds it a synthetic log with each rule broken in turn.
+On the fake guest: presses at frames 1-2, 5-6 and 9-10 through states 3
+and 4, none after LB is let go on a page already pressed, none in a choice,
+on a flagged page, in state 8 or 1, and with LB clear only the auto-advance
+at its delay.

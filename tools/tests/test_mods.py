@@ -15,7 +15,9 @@ on stdin. That the patches do what they say in the game is a run: FINDINGS
 
 import hashlib
 import os
+import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1373,3 +1375,122 @@ def test_a_mod_built_against_the_header_before_host_buttons_still_loads(driver, 
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     out, err = play(driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe")
     assert "loaded 1" in out and "[mod] map-log: map-log loaded" in err, (out, err)
+
+
+def skipping(state: int, flags: int = 0) -> str:
+    return window(state, flags) + "host 1 "
+
+
+@needs_msvc
+def test_hold_to_skip_presses_in_states_3_and_4_while_lb_is_held(driver, tmp_path):
+    """P11b: with the host LB held, A on the two-on, two-off cadence in state 3
+    (text appearing) and 4 (a complete page) -- at once, not after the
+    delay -- and nothing once LB is let go but the ordinary auto-advance."""
+    shipped(tmp_path, folder=AUTO)
+    script = (
+        skipping(3)
+        + reads(1, 8)
+        + skipping(4)
+        + reads(9, 12)
+        + window(4)
+        + "host 0 "
+        + reads(13, 80)
+    )
+    out, err = play(driver, tmp_path, script, SOA_AUTOTEXT="on")
+    assert pressed(out)[:6] == [1, 2, 5, 6, 9, 10], pressed(out)
+    assert "[mod] autotext: frame 1 skip press in state 3" in err, err
+    assert "[mod] autotext: frame 9 skip press in state 4" in err, err
+    assert err.count("host buttons are not in recordings yet") == 1, err
+    # LB let go on a page the skip already pressed: it waits for the next page
+    assert pressed(out)[6:] == [], pressed(out)
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "state, flags", [(6, 0x10), (4, 0x10), (4, 0x40), (3, 0x40), (8, 0), (1, 0)]
+)
+def test_hold_to_skip_never_presses_where_the_game_decides(driver, tmp_path, state, flags):
+    shipped(tmp_path, folder=AUTO)
+    out, _ = play(driver, tmp_path, skipping(state, flags) + reads(1, 60), SOA_AUTOTEXT="100")
+    assert pressed(out) == [], pressed(out)
+
+
+@needs_msvc
+def test_without_lb_it_only_auto_advances(driver, tmp_path):
+    shipped(tmp_path, folder=AUTO)
+    out, err = play(
+        driver, tmp_path, window(3) + reads(1, 10) + window(4) + reads(11, 70), SOA_AUTOTEXT="on"
+    )
+    assert pressed(out) == [56, 57] and "skip press" not in err, (pressed(out), err)
+
+
+RE_PEEK = re.compile(r"^\[peek\] frame (\d+): ([0-9A-Fa-f]{8}) = ([0-9A-Fa-f]{8})")
+
+
+def check_p11b(log: str) -> list[str]:
+    """P11b's live rules, over a run of P11's with LB held from 3000 and
+    SOA_PEEK of the window state and the committed map: a skip press in
+    state 3; the first choice (6) after 3002 under 45 frames after the first
+    3 after 3002; the choice resting at 6 until 6000; a002b only after the
+    A at 7300."""
+    state, mapn, letter = {}, {}, {}
+    for ln in log.splitlines():
+        m = RE_PEEK.match(ln)
+        if m:
+            f, a, v = int(m.group(1)), int(m.group(2), 16), int(m.group(3), 16)
+            if a == 0x80346E64:
+                state[f] = v >> 16
+            elif a == 0x80311AC0:
+                mapn[f] = v
+            elif a == 0x80311AC8:
+                letter[f] = v >> 24
+    problems = []
+    if "skip press in state 3" not in log:
+        problems.append("no skip press in state 3")
+    first3 = next((f for f in sorted(state) if f > 3002 and state[f] == 3), None)
+    first6 = next((f for f in sorted(state) if f > 3002 and state[f] == 6), None)
+    if first3 is None or first6 is None or first6 - first3 >= 45:
+        problems.append(
+            f"the first 6 ({first6}) is not under 45 frames after the first 3 ({first3})"
+        )
+    if first6 is not None and any(state[f] != 6 for f in sorted(state) if first6 <= f < 6000):
+        problems.append(f"the choice left 6 before 6000 (from {first6})")
+    a002b = next((f for f in sorted(mapn) if mapn[f] == 2 and letter.get(f) == 0x62), None)
+    if a002b is None or a002b < 7300:
+        problems.append(f"a002b committed at {a002b}, not after 7300")
+    return problems
+
+
+def test_the_p11b_check_fails_each_rule_broken():
+    """The live check's own test: a synthetic log that passes, and the same
+    log with each rule broken in turn."""
+
+    def log(skip3=True, first6=3100, rest6=True, a002b=7336):
+        lines = []
+        if skip3:
+            lines.append("[mod] autotext: frame 3090 skip press in state 3")
+        for f in range(3003, 7400):
+            s = 1 if f < 3085 else 3 if f < first6 else 6 if f < 6000 else 1
+            if not rest6 and f == 5000:
+                s = 4
+            lines.append(f"[peek] frame {f}: 80346E64 = {s << 16:08X} (retrace 1)")
+            n, letter = (2, 0x62) if f >= a002b else (355, 0x61)
+            lines.append(f"[peek] frame {f}: 80311AC0 = {n:08X} (retrace 1)")
+            lines.append(f"[peek] frame {f}: 80311AC8 = {letter << 24:08X} (retrace 1)")
+        return "\n".join(lines)
+
+    assert check_p11b(log()) == []
+    assert check_p11b(log(skip3=False)) == ["no skip press in state 3"]
+    assert "not under 45 frames" in check_p11b(log(first6=3140))[0]
+    assert "left 6 before 6000" in check_p11b(log(rest6=False))[0]
+    assert "a002b committed at 5000" in check_p11b(log(a002b=5000))[0]
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["p11b"] and len(sys.argv) == 3:
+        found = check_p11b(Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace"))
+        for p in found:
+            print(f"[p11b-check] {p}")
+        print(f"[p11b-check] {'FAIL' if found else 'ok'}")
+        sys.exit(1 if found else 0)
+    sys.exit("usage: python tools/tests/test_mods.py p11b <log>")

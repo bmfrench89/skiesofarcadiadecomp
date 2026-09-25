@@ -22,6 +22,14 @@
  *     SOA_AUTOTEXT=on or 1      45 frames, a second and a half
  *     SOA_AUTOTEXT=N            N frames, for N of 2 or more
  *
+ * Hold-to-skip (P11b): while the host button LB is held (CH1; the
+ * keyboard's Tab), it presses A in states 3 and 4 -- text still appearing,
+ * and a complete page -- two frames down and two up for as long as LB is
+ * held, never in a choice box and never on a page the game turns itself.
+ * A press in state 3 shows the page at once, the next turns it. Host
+ * buttons are not in recordings yet, so a replay does not skip; the first
+ * skip says so, once.
+ *
  * SOA_AUTOTEXT_TEST=press-in-choice also presses in state 6: the mutation
  * the Done runs, never for play. soa.ini's `autotext` sets the same switch.
  * Built beside its mod.ini by `python tools/recompile.py --link`.
@@ -39,6 +47,7 @@
 #define FLAG_AFTER_CHOICE 0x10u  /* context flags: the game advances these pages itself */
 #define FLAG_AUTO_SCROLL 0x40u
 #define SCENE_FIELD 6u
+#define STATE_REVEAL 3
 #define STATE_PAGE 4
 #define STATE_CHOICE 6
 #define PRESS_FRAMES 2u
@@ -50,6 +59,8 @@ static uint32_t g_delay;       /* frames on a complete page before pressing */
 static int g_press_in_choice;  /* SOA_AUTOTEXT_TEST=press-in-choice */
 static int g_phase = ARMED;
 static uint32_t g_since, g_until; /* the frame the wait began; the frame this phase ends */
+static int g_skipping, g_skip_told;
+static uint32_t g_skip_next, g_skip_down_until; /* hold-to-skip's cadence */
 
 /* The window's state, or -1 when there is no window to read. */
 static int window_state(uint16_t* flags)
@@ -68,7 +79,28 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     int state = g_api->scene() == SCENE_FIELD ? window_state(&flags) : -1;
     int page = state == STATE_PAGE || (g_press_in_choice && state == STATE_CHOICE);
     int theirs = (pad->buttons & (SOA_PAD_A | SOA_PAD_B)) != 0;
+    int held = g_api->size >= SOA_MOD_HAS(host_buttons) && (g_api->host_buttons() & SOA_HOST_LB);
     (void)user;
+    if (held && (state == STATE_REVEAL || state == STATE_PAGE) && !(flags & (FLAG_AFTER_CHOICE | FLAG_AUTO_SCROLL)) &&
+        !theirs) {
+        if (!g_skipping || frame >= g_skip_next) {
+            char line[96];
+            if (!g_skip_told) {
+                g_skip_told = 1;
+                g_api->log("hold-to-skip in use: host buttons are not in recordings yet, so a replay will not skip");
+            }
+            snprintf(line, sizeof line, "frame %u skip press in state %d", frame, state);
+            g_api->log(line);
+            g_skipping = 1;
+            g_skip_down_until = frame + PRESS_FRAMES;
+            g_skip_next = frame + 2 * PRESS_FRAMES;
+        }
+        if (frame < g_skip_down_until) pad->buttons |= SOA_PAD_A;
+        else pad->buttons &= (uint16_t)~SOA_PAD_A;
+        g_phase = PRESSED; /* the page is being skipped: auto-advance re-arms once it leaves 4 */
+        return;
+    }
+    g_skipping = 0;
     switch (g_phase) {
     case ARMED:
         /* On a page, the two flags mean the game turns it itself; in a choice
