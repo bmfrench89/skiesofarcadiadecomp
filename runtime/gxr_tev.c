@@ -41,6 +41,8 @@ typedef struct {
     uint64_t hash;
     uint64_t hashed; /* the epoch the hash was taken in */
     int replaced; /* a mod's image stands in for the decode: one level, any size */
+    int from_copy; /* the decode is a copy's image, made in the pool by command copy_cmd */
+    long long copy_cmd;
 } TexEntry;
 
 /* The texture epoch (PLAN-60FPS-MODS H12). A texture's source bytes are
@@ -61,6 +63,13 @@ static unsigned long long g_lookups, g_hashes, g_hash_bytes, g_decodes, g_missed
  * again -- and how many of those came out as they were. */
 static unsigned long long g_dec_new, g_dec_rewritten, g_dec_levels, g_dec_dropped, g_dec_same;
 static unsigned long long g_tlut_loads, g_tlut_marked;
+/* Copy images: made by copies to memory; draws that sampled one while its copy
+ * was queued; lookups that found one retired by the drain, or overwritten by a
+ * newer copy, and read the texture from memory instead. */
+static unsigned long long g_img_made, g_img_used, g_img_retired, g_img_overwritten;
+/* The fence the draw being set up needs: every worker past the copies whose
+ * images it samples. Producer only; tev_prepare starts it at 0. */
+static long long g_tex_fence;
 
 void tex_epoch_advance(void)
 {
@@ -169,7 +178,11 @@ void tex_graveyard_empty(void)
 void tex_invalidate_all(void)
 {
     int i;
-    for (i = 0; i < g_cache_used; i++) { tex_free_later(g_cache[i].rgba); g_cache[i].rgba = NULL; }
+    for (i = 0; i < g_cache_used; i++) {
+        tex_free_later(g_cache[i].rgba);
+        g_cache[i].rgba = NULL;
+        g_cache[i].from_copy = 0;
+    }
 }
 
 /* Bytes a texture occupies in memory, from its tiled layout. */
@@ -300,6 +313,12 @@ void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes
 
 /* ---- texture decode --------------------------------------------------- */
 
+#ifdef _MSC_VER
+#define TEX_INLINE static __forceinline
+#else
+#define TEX_INLINE static inline
+#endif
+
 static void tlut_color(uint32_t tlut_off, uint32_t tlut_fmt, unsigned index, uint8_t* out)
 {
     const uint8_t* p = g_tmem + ((tlut_off + index * 2) & ((1u << 20) - 1));
@@ -372,6 +391,72 @@ static void decode_cmpr_block(const uint8_t* p, uint8_t* out, unsigned ox, unsig
     }
 }
 
+/* One texel: column ix, row iy of its tile, in format fmt, to RGBA. */
+TEX_INLINE void decode_texel(const uint8_t* tile, unsigned ix, unsigned iy, uint32_t fmt, uint32_t tlut_off,
+                             uint32_t tlut_fmt, uint8_t* o)
+{
+    unsigned v;
+    switch (fmt) {
+    case 0: /* I4 */
+        v = tile[iy * 4 + ix / 2];
+        v = (ix & 1) ? (v & 15) : (v >> 4);
+        o[0] = o[1] = o[2] = o[3] = (uint8_t)(v * 17);
+        break;
+    case 1: /* I8 */
+        v = tile[iy * 8 + ix];
+        o[0] = o[1] = o[2] = o[3] = (uint8_t)v;
+        break;
+    case 2: /* IA4 */
+        v = tile[iy * 8 + ix];
+        o[0] = o[1] = o[2] = (uint8_t)((v & 15) * 17);
+        o[3] = (uint8_t)((v >> 4) * 17);
+        break;
+    case 3: /* IA8 */
+        o[3] = tile[(iy * 4 + ix) * 2];
+        o[0] = o[1] = o[2] = tile[(iy * 4 + ix) * 2 + 1];
+        break;
+    case 4: /* RGB565 */
+        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+        rgb565(v, o);
+        break;
+    case 5: /* RGB5A3 */
+        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+        if (v & 0x8000) {
+            o[0] = (uint8_t)(((v >> 10) & 31) * 255 / 31);
+            o[1] = (uint8_t)(((v >> 5) & 31) * 255 / 31);
+            o[2] = (uint8_t)((v & 31) * 255 / 31);
+            o[3] = 255;
+        } else {
+            o[0] = (uint8_t)(((v >> 8) & 15) * 17);
+            o[1] = (uint8_t)(((v >> 4) & 15) * 17);
+            o[2] = (uint8_t)((v & 15) * 17);
+            o[3] = (uint8_t)(((v >> 12) & 7) * 255 / 7);
+        }
+        break;
+    case 6: /* RGBA8: 16 AR pairs then 16 GB pairs */
+        o[3] = tile[(iy * 4 + ix) * 2];
+        o[0] = tile[(iy * 4 + ix) * 2 + 1];
+        o[1] = tile[32 + (iy * 4 + ix) * 2];
+        o[2] = tile[32 + (iy * 4 + ix) * 2 + 1];
+        break;
+    case 8: /* C4 */
+        v = tile[iy * 4 + ix / 2];
+        v = (ix & 1) ? (v & 15) : (v >> 4);
+        tlut_color(tlut_off, tlut_fmt, v, o);
+        break;
+    case 9: /* C8 */
+        tlut_color(tlut_off, tlut_fmt, tile[iy * 8 + ix], o);
+        break;
+    case 10: /* C14X2 */
+        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+        tlut_color(tlut_off, tlut_fmt, v & 0x3FFF, o);
+        break;
+    default:
+        o[0] = 255; o[1] = 0; o[2] = 255; o[3] = 255; /* unsupported: magenta */
+        break;
+    }
+}
+
 static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt)
 {
     const uint8_t* base;
@@ -432,69 +517,10 @@ static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, 
                 if (y >= h) break;
                 for (ix = 0; ix < tw; ix++) {
                     uint8_t* o;
-                    unsigned v;
                     x = tx * tw + ix;
                     if (x >= w) break;
                     o = out + (y * w + x) * 4;
-                    switch (fmt) {
-                    case 0: /* I4 */
-                        v = tile[iy * 4 + ix / 2];
-                        v = (ix & 1) ? (v & 15) : (v >> 4);
-                        o[0] = o[1] = o[2] = o[3] = (uint8_t)(v * 17);
-                        break;
-                    case 1: /* I8 */
-                        v = tile[iy * 8 + ix];
-                        o[0] = o[1] = o[2] = o[3] = (uint8_t)v;
-                        break;
-                    case 2: /* IA4 */
-                        v = tile[iy * 8 + ix];
-                        o[0] = o[1] = o[2] = (uint8_t)((v & 15) * 17);
-                        o[3] = (uint8_t)((v >> 4) * 17);
-                        break;
-                    case 3: /* IA8 */
-                        o[3] = tile[(iy * 4 + ix) * 2];
-                        o[0] = o[1] = o[2] = tile[(iy * 4 + ix) * 2 + 1];
-                        break;
-                    case 4: /* RGB565 */
-                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                        rgb565(v, o);
-                        break;
-                    case 5: /* RGB5A3 */
-                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                        if (v & 0x8000) {
-                            o[0] = (uint8_t)(((v >> 10) & 31) * 255 / 31);
-                            o[1] = (uint8_t)(((v >> 5) & 31) * 255 / 31);
-                            o[2] = (uint8_t)((v & 31) * 255 / 31);
-                            o[3] = 255;
-                        } else {
-                            o[0] = (uint8_t)(((v >> 8) & 15) * 17);
-                            o[1] = (uint8_t)(((v >> 4) & 15) * 17);
-                            o[2] = (uint8_t)((v & 15) * 17);
-                            o[3] = (uint8_t)(((v >> 12) & 7) * 255 / 7);
-                        }
-                        break;
-                    case 6: /* RGBA8: 16 AR pairs then 16 GB pairs */
-                        o[3] = tile[(iy * 4 + ix) * 2];
-                        o[0] = tile[(iy * 4 + ix) * 2 + 1];
-                        o[1] = tile[32 + (iy * 4 + ix) * 2];
-                        o[2] = tile[32 + (iy * 4 + ix) * 2 + 1];
-                        break;
-                    case 8: /* C4 */
-                        v = tile[iy * 4 + ix / 2];
-                        v = (ix & 1) ? (v & 15) : (v >> 4);
-                        tlut_color(tlut_off, tlut_fmt, v, o);
-                        break;
-                    case 9: /* C8 */
-                        tlut_color(tlut_off, tlut_fmt, tile[iy * 8 + ix], o);
-                        break;
-                    case 10: /* C14X2 */
-                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                        tlut_color(tlut_off, tlut_fmt, v & 0x3FFF, o);
-                        break;
-                    default:
-                        o[0] = 255; o[1] = 0; o[2] = 255; o[3] = 255; /* unsupported: magenta */
-                        break;
-                    }
+                    decode_texel(tile, ix, iy, fmt, tlut_off, tlut_fmt, o);
                 }
             }
         }
@@ -536,6 +562,34 @@ static void decode_texture(TexEntry* e, int nlevels)
         out += (size_t)e->lw[l] * e->lh[l] * 4;
     }
     for (; l < MAX_MIPS; l++) e->level[l] = NULL;
+}
+
+/* Row y of a w-wide texture in format fmt, tiled at base, into row y of the
+ * RGBA image out -- the texels decode_level would give that row, from the same
+ * bytes through the same decode_texel. A worker runs it on each row of a copy
+ * it has just written (copy images, FINDINGS "Copy images"); every texel of a
+ * row is written by the one worker that owns the row, so it reads only bytes
+ * it wrote. The formats a copy makes, which need no palette. */
+void tex_decode_row(uint8_t* out, const uint8_t* base, uint32_t fmt, uint32_t w, uint32_t y)
+{
+    unsigned tw, th, bytes_per_tile, tiles_w, tx, ix, iy, x;
+    const uint8_t* row;
+    switch (fmt) {
+    case 0: tw = 8; th = 8; bytes_per_tile = 32; break;
+    case 1: case 2: tw = 8; th = 4; bytes_per_tile = 32; break;
+    case 3: case 4: case 5: tw = 4; th = 4; bytes_per_tile = 32; break;
+    case 6: tw = 4; th = 4; bytes_per_tile = 64; break;
+    default: return;
+    }
+    tiles_w = (w + tw - 1) / tw;
+    row = base + (y / th) * tiles_w * bytes_per_tile;
+    iy = y % th;
+    for (tx = 0; tx < tiles_w; tx++)
+        for (ix = 0; ix < tw; ix++) {
+            x = tx * tw + ix;
+            if (x >= w) break;
+            decode_texel(row + tx * bytes_per_tile, ix, iy, fmt, 0, 0, out + ((size_t)y * w + x) * 4);
+        }
 }
 
 /* After a decode, with the entry's hash set: a mod's image replaces it, as one
@@ -674,6 +728,7 @@ static TexEntry* tex_take(const TexEntry* key)
     }
     tex_free_later(e->rgba);
     e->rgba = NULL;
+    e->from_copy = 0;
     tex_index_remove(victim);
     return e;
 }
@@ -699,11 +754,36 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
 {
     TexEntry key, *e;
     uint64_t hsh;
-    int levels;
+    int levels, retired = 0;
     if (g_tex_verify < 0) g_tex_verify = getenv("SOA_TEXVERIFY") != NULL;
     g_lookups++;
+    /* One key per picture: the address as memory sees it, and no palette for
+     * a format that has none -- the TLUT register a draw leaves set is
+     * whatever the last palettised draw wanted, and it neither changes these
+     * pixels nor goes into their hash. A copy's image is keyed the same way. */
+    addr &= MEM_MASK;
+    if (fmt != 8 && fmt != 9 && fmt != 10) tlut_off = tlut_fmt = 0;
     key.addr = addr; key.fmt = fmt; key.w = w; key.h = h; key.tlut_off = tlut_off; key.tlut_fmt = tlut_fmt;
     e = tex_find(&key);
+    /* A copy's own image (FINDINGS "Copy images"). While the copy that makes
+     * it is the newest queued write to these bytes, the draw samples what the
+     * copy is decoding in the pool and is fenced there on it: no wait here, no
+     * hash, no decode. Once a newer copy writes here, or the drain that ends a
+     * frame has retired this one, the texture is read from memory as any other
+     * is. A draw that wants mip levels, or SOA_TEXVERIFY, reads memory too. */
+    if (e && e->from_copy) {
+        long long c = gxr_pending_newest(addr, texture_bytes(fmt, w, h));
+        if (c == e->copy_cmd && e->rgba && nlevels <= 1 && !g_tex_verify) {
+            g_img_used++;
+            if (c + 1 > g_tex_fence) g_tex_fence = c + 1;
+            e->stamp = ++g_stamp;
+            return e;
+        }
+        if (c < 0) g_img_retired++;
+        else g_img_overwritten++;
+        e->from_copy = 0;
+        retired = 1;
+    }
     /* Wait for any queued copy writing what a decode here could read: every
      * level, not the base alone -- a copy into mip level 1 was waited for only
      * by the drain after every copy until H14 took that away (found by the
@@ -723,10 +803,10 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         /* rewritten in place, or more levels wanted -- which a replaced
          * texture, one level by design, never is, or it would be decoded
          * again on every draw */
-        if (e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
+        if (retired || e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
             tex_free_later(e->rgba);
             g_decodes++;
-            if (e->hash != hsh) g_dec_rewritten++;
+            if (retired || e->hash != hsh) g_dec_rewritten++;
             else g_dec_levels++;
             TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
             e->hash = hsh;
@@ -757,6 +837,51 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
     return e;
 }
 
+/* A copy to memory is about to make texture (addr, fmt, w, h): give its cache
+ * entry a fresh image for the workers to decode their rows into as they copy
+ * them, and remember which command makes it (FINDINGS "Copy images"). The
+ * decode it replaces goes to the graveyard as any other. Returns the image,
+ * or NULL when there is none. */
+uint8_t* tex_copy_image(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, long long cmd)
+{
+    TexEntry key, *e;
+    uint8_t* img;
+    int l;
+    /* With a mod's texture provider, none: it is asked with the texture's
+     * hash, which a copy's image does not have, so a replacement that matched
+     * a copy's bytes would come and go (found by the review). */
+    if (fmt > 6 || !w || !h || g_tex_provider) return NULL;
+    img = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!img) return NULL;
+    key.addr = addr & MEM_MASK; key.fmt = fmt; key.w = w; key.h = h; key.tlut_off = 0; key.tlut_fmt = 0;
+    e = tex_find(&key);
+    if (!e) {
+        e = tex_take(&key);
+        e->addr = key.addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = 0; e->tlut_fmt = 0;
+        tex_index_add((int)(e - g_cache));
+    } else {
+        tex_free_later(e->rgba);
+    }
+    e->rgba = img;
+    e->level[0] = img;
+    for (l = 1; l < MAX_MIPS; l++) e->level[l] = NULL;
+    e->lw[0] = (int)w; e->lh[0] = (int)h;
+    e->nlevels = 1;
+    e->replaced = 0;
+    e->hashed = 0; /* no hash: once the copy is retired the texture is read from memory again */
+    e->from_copy = 1;
+    e->copy_cmd = cmd;
+    e->stamp = ++g_stamp;
+    g_img_made++;
+    return img;
+}
+
+/* The fence the draw just set up needs, for its command (gxr_draw_inner). */
+long long tex_draw_fence(void)
+{
+    return g_tex_fence;
+}
+
 /* For gxr_report (declared there): what the cache did, and what
  * SOA_TEXVERIFY caught. */
 void tex_report(void)
@@ -765,6 +890,9 @@ void tex_report(void)
     fprintf(stderr, "[gxr] textures: %llu lookups, %llu hashed (%.1f MB), %llu decoded (%llu new, %llu rewritten, %llu for more levels, %llu dropped and made again, %llu of those unchanged), %u evicted from %d entries (%d used); %llu palette loads touched %llu decodes",
             g_lookups, g_hashes, (double)g_hash_bytes / 1e6, g_decodes, g_dec_new, g_dec_rewritten, g_dec_levels,
             g_dec_dropped, g_dec_same, g_evicted, TEX_CACHE, g_cache_used, g_tlut_loads, g_tlut_marked);
+    if (g_img_made)
+        fprintf(stderr, "; %llu copy images made, sampled by %llu lookups; %llu retired and %llu overwritten before a lookup, which read memory",
+                g_img_made, g_img_used, g_img_retired, g_img_overwritten);
     if (g_tex_verify > 0)
         fprintf(stderr, "; SOA_TEXVERIFY: %llu changed inside an epoch\n", g_missed);
     else
@@ -829,12 +957,7 @@ static int konst_value(unsigned sel, int channel)
 
 /* The per-fragment helpers, inlined whether MSVC would or not: the worker
  * profile found sample_level, wrap and the alpha compare as calls of their
- * own (H15c). */
-#ifdef _MSC_VER
-#define TEX_INLINE static __forceinline
-#else
-#define TEX_INLINE static inline
-#endif
+ * own (H15c). TEX_INLINE itself is defined above the decoder. */
 
 TEX_INLINE int compare(unsigned mode, int a, int b);
 TEX_INLINE int alpha_passes(const TevSetup* T, int alpha);
@@ -934,6 +1057,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
      * lookup below can flush; g_building is what keeps that flush from freeing
      * the maps this draw has already resolved. */
     for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
+    g_tex_fence = 0;
     g_building = T;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];

@@ -79,7 +79,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 847 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 848 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -111,7 +111,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 847 |
+| Python tests | 848 |
 | Self-test cases | 75 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -388,16 +388,20 @@ fences instead of drains around copies; the pixel path a quarter faster; 12
 workers by default; FINDINGS "H12", "H14", "H15c"), and the Dangral base runs
 at about 27 fps drawn every frame. Texture decoding is 80-90% smaller since
 (palette loads no longer throw decodes out; FINDINGS "Palette loads"), and
-the frame rate did not move: neither thread is the bottleneck -- the workers
-idle half the time, the guest thread 40% in the game's idle loop -- and what
-holds the frame is the order between them, a draw sampling a texture copied
-earlier in the frame waiting on the guest thread for the workers to finish
-everything before that copy. So next: copy images (the plan's H14 step 6: the
-copy's texture made in the pool, the sampling draw fenced there), then H13
-(guest-thread speed; `SOA_HOSTPROF=1` now samples the guest thread too), H16
-(vertex setup onto the workers) and H11's other half (the guest idle loop
-still spins on one core); H15d (SIMD spans) waits until the workers are the
-bottleneck again. M4 (`call_guest`) is done, and M5,
+the frame rate did not move: what held the frame was a draw sampling a
+texture copied earlier in the frame, waiting on the guest thread for the
+workers to finish everything before that copy. **Copy images** (the plan's
+H14 step 6) took that wait away -- the copy's texture is decoded by the
+workers as they copy, the sampling draw fenced in the pool -- and the Dangral
+base went from about 26 to about 28 fps (+9% pooled over two interleaved
+A/Bs; the median frame 36.4 -> 33.9 ms; FINDINGS "Copy images"). What the
+guest waits for now is the frame gate, the workers finishing the frame
+before, so the pool is the critical path again in the heaviest frames. So
+next: the gate (let the next frame's commands in while the workers finish
+the last, recycling the arena and graveyard by command number instead of a
+drain), H15d (SIMD spans), then H13 (guest-thread speed; `SOA_HOSTPROF=1`
+samples the guest thread too, and the guest idles ~40% here), H16 and H11's
+other half (the guest idle loop still spins on one core). M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

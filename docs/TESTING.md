@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-847 passed in 204.01s
+848 passed in 177.43s
 ```
 
-847 tests in 51 files, none of which reads the disc. They cover the Python
+848 tests in 51 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -51,8 +51,8 @@ its own and run it, some of the C as well:
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
 | `test_guard.py` | 23 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
 | `test_emit.py` | 21 | the emitter; the last cases compile the emitted C with MSVC and run it |
+| `test_gxr_overlap.py` | 21 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
-| `test_gxr_overlap.py` | 20 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_padrec.py` | 18 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
@@ -101,10 +101,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `847 passed` |
-| no capstone — **what CI installs** | `828 passed, 1 skipped` |
-| no MSVC | `613 passed, 234 skipped` |
-| neither — **the Ubuntu CI leg** | `594 passed, 235 skipped` |
+| everything (MSVC + capstone) | `848 passed` |
+| no capstone — **what CI installs** | `829 passed, 1 skipped` |
+| no MSVC | `613 passed, 235 skipped` |
+| neither — **the Ubuntu CI leg** | `594 passed, 236 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -984,7 +984,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 234 of the 847 skip without a C compiler; they build one runtime file and run it.
+² 235 of the 848 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -995,8 +995,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 235 skipped |
-| **Tests** | windows | the same three — 828 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 236 skipped |
+| **Tests** | windows | the same three — 829 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

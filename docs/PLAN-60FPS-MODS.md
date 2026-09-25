@@ -329,7 +329,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 - `SOA_FIFO_DUMP` captures are byte-identical to those from the synchronous parser.
 - Guest ms per frame falls by about the parse share.
 
-**H14. Remove the two full drains around each filtered copy** — *done 2026-09-25: fences between the workers, one-copy waits for the producer's reads, and one drain a frame (the gate); `SOA_GXR_DRAIN=1` keeps the drains. Paced fps +10% where the port is not raster-bound (Part L 3000: 24.55 → 27.0, the retrace back from 52 to 57 Hz), +1% in the raster-bound Dangral base, none with the clock out; CPU +3-4%. The done line below cannot be met while a scene is raster-bound, and is restated in FINDINGS "H14"; copy images (the plan's Step 6) wait for H15.*
+**H14. Remove the two full drains around each filtered copy** — *done 2026-09-25: fences between the workers, one-copy waits for the producer's reads, and one drain a frame (the gate); `SOA_GXR_DRAIN=1` keeps the drains. Paced fps +10% where the port is not raster-bound (Part L 3000: 24.55 → 27.0, the retrace back from 52 to 57 Hz), +1% in the raster-bound Dangral base, none with the clock out; CPU +3-4%. The done line below cannot be met while a scene is raster-bound, and is restated in FINDINGS "H14". Step 6, copy images, done 2026-09-25 after H15: a draw sampling a texture copied earlier in the frame takes the copy's image, decoded by the workers, instead of waiting for the copy; the Dangral base +9% pooled over two A/Bs (25.9 -> 28.3 fps), p50 36.4 -> 33.9 ms (FINDINGS "Copy images").*
 Either order the workers against their neighbours' rows, or snapshot the three source rows the filter reads.
 
 *Done:*

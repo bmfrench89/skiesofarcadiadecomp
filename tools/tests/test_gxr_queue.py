@@ -168,9 +168,11 @@ int main(void)
                 if ((i & 3) == 3) {
                     /* The draw after this copy samples what the copy has not
                      * written yet, so tev_prepare flushes with the draw half
-                     * built. */
+                     * built. A 16x16 texture inside the 32x32 copy: the copy's
+                     * own texture would be its image, which a draw samples in
+                     * the pool without waiting (FINDINGS "Copy images"). */
                     copy_to_memory(&s, 0x00300000u + (uint32_t)(i * 4096), 32, 32);
-                    use_texture(&s, 0x00300000u + (uint32_t)(i * 4096), 4, 32, 32);
+                    use_texture(&s, 0x00300000u + (uint32_t)(i * 4096), 4, 16, 16);
                     quad(&s, (float)(100 + i + f), (float)(60 + i), (float)(140 + i + f), (float)(100 + i), 0x00FF00FFu);
                 }
                 if ((i % 17) == 16) bp_w(&s, 0x45, 2); /* GXDrawDone: flushes */

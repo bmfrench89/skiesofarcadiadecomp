@@ -243,6 +243,24 @@ running when a token is answered, and the report counts how often.
 `SOA_GXR_TOKENWAIT=1` makes a token wait for the newest copy, and
 `GXDrawDone` still drains. `SOA_GXR_DRAIN=1` restores the drains.
 
+A draw that samples a copy's own texture does not wait at all (**copy
+images**, FINDINGS "Copy images"). At the copy, `tex_copy_image` points the
+texture cache's entry for exactly what the copy makes -- its address,
+format and size, no palette -- at a fresh RGBA image, and each worker,
+having written its rows of the copy to memory, decodes those rows into it
+(`tex_decode_row`, through the same `decode_texel` a decode from memory
+uses; a row's texels are all its owner's). A lookup of that key while the
+copy is still the newest queued write to those bytes takes the image,
+unhashed and undecoded, and raises the draw's fence to the copy, so no
+worker rasterizes the draw until every worker has finished the copy.
+Anything else retires the image and the texture is decoded from memory as
+before: a newer copy over any of its bytes, a drain, a token that finds
+every copy finished (the game may write the destination then), a hook's
+wait on those bytes, a lookup wanting mip levels, `SOA_TEXVERIFY`. No
+images are made under `SOA_GXR_DRAIN=1`, with no workers, or while a mod's
+texture provider is registered, which is asked by a hash an image does not
+have.
+
 ### 10. Out to the window
 
 `runtime/window.c` · `ui_thread` polls `gxr_presented()` and, when it moves,
@@ -557,8 +575,9 @@ since H14 wait for each other in three ways, each named in the report's
   `SOA_GXR_TOKENWAIT=1`;
 - **a fence** holds a worker at a command until every other worker has
   finished the commands before it (section 9). Only copies that read rows
-  other workers own, the command after each, screen copies, and a copy
-  that writes memory an unfinished copy is still writing carry one.
+  other workers own, the command after each, screen copies, a copy that
+  writes memory an unfinished copy is still writing, and a draw that
+  samples a copy's image carry one.
 
 `SOA_GXR_DRAIN=1` puts back the drains around every such copy, as the
 oracle and the fallback, and `SOA_GXR_STALL` holds a worker back to turn a
@@ -600,7 +619,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 847 tests, none of which needs a disc (anything that
+- `tools/tests/` — 848 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

@@ -160,7 +160,7 @@ int main(void)
      * and the green quad never ran at all. */
     quad(&s, 100.0f, 100.0f, 200.0f, 200.0f, RED);
     copy_to_memory(&s, 0x00300000u, 32, 32);
-    use_texture(&s, 0x00300000u, 4, 32, 32);
+    use_texture(&s, 0x00300000u, 4, 16, 16); /* inside the copy, not its own texture, which would be its image */
     quad(&s, 300.0f, 300.0f, 400.0f, 400.0f, GREEN);
     gxr_flush();
     printf("[lifetime] hazard red=%06X green=%06X\n", px(150, 150), px(350, 350));

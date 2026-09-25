@@ -138,6 +138,15 @@ int tex_graveyard_full(void);
 void tex_set_memory(CpuState* s);
 void tex_epoch_advance(void); /* texture memory may have changed: hash each texture again at its next use */
 void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes);
+/* Copy images (FINDINGS "Copy images"): the producer gives a copy's texture a
+ * fresh image at the copy, the workers decode each row into it as they copy
+ * it, and a draw sampling it while the copy is queued is fenced on the copy in
+ * the pool. gxr_pending_newest is the newest queued copy writing into a range,
+ * or -1; tex_draw_fence is the fence the draw just set up needs. */
+uint8_t* tex_copy_image(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, long long cmd);
+void tex_decode_row(uint8_t* out, const uint8_t* base, uint32_t fmt, uint32_t w, uint32_t y);
+long long tex_draw_fence(void);
+long long gxr_pending_newest(uint32_t addr, uint32_t bytes);
 
 extern uint8_t g_efb[EFB_H][EFB_W][4];
 extern uint32_t g_efb_z[EFB_H][EFB_W];

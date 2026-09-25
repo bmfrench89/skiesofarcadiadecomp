@@ -2672,3 +2672,66 @@ palette load, which no longer frees anything; it now comes from
 700 draws walk a 256-entry cache over (it has held 1,024 since H12) is gone.
 Replay 23/23 at 1, 2, 3 and 8 threads with every hash unchanged; the self
 test.
+
+
+**Copy images: the hazard wait is gone, and the frame gate is what is
+left.** 2026-09-25, `build/soa-base-img.exe` against `build/soa-img.exe` and
+the final `build/soa-img2.exe`, `build/exeab-9000-*.log`.
+"Palette loads" above left the frame held by one order: a draw sampling a
+texture copied earlier in the frame waited on the guest thread for the
+workers to finish everything drawn before that copy, then decoded the copy
+from memory. This is the plan's H14 step 6. At the copy, the texture cache's
+entry for exactly what the copy makes gets a fresh RGBA image; each worker,
+as it writes its rows of the copy, decodes those rows into the image through
+the same per-texel decode a decode from memory uses (every texel of a row is
+its owner's); and a draw that samples that texture while the copy is the
+newest queued write to its bytes takes the image with no wait, hash or
+decode, fenced in the pool on the copy instead. Anything that could make
+memory differ from the image retires it and the texture is read from memory
+as before: a newer copy over its bytes, a drain, a token that finds the
+copies finished, a hook's wait. The cache key also drops the palette fields
+for formats that have none, and masks the address as memory does -- neither
+changes a decode or a hash, and without it the image's key would miss draws
+whose TLUT register was left set.
+
+Dangral window, frames 3000-9000 of H1's Part L run, two interleaved A/Bs
+(base, new, new, base), the second on the final build -- the review's fixes
+below change nothing on this path: the same 19,005 lookups served, none
+retired:
+
+| A/B | build | fps | p50 | p99 | producer wait | decode | CPU |
+|---|---|---|---|---|---|---|---|
+| 1 | base | 25.5 / 24.6 | 36.0 / 38.2 ms | 73.3 / 71.6 | 42.7 / 47.9 s (hazard 41.1 / 46.0) | 9.2 / 10.0 s | 2,535 / 2,583 s |
+| 1 | copy images | 29.3 / 28.1 | 33.4 / 33.8 ms | 53.3 / 63.2 | 10.3 / 19.9 s (gate only) | 0.2 / 0.2 s | 2,495 / 2,520 s |
+| 2 | base | 27.2 / 26.1 | 35.1 / 36.2 ms | 55.6 / 61.8 | 36.5 / 41.5 s (hazard 35.7 / 40.4) | 8.1 / 9.0 s | 2,421 / 2,482 s |
+| 2 | final | 28.4 / 27.2 | 33.8 / 34.4 ms | 61.1 / 69.7 | 19.0 / 32.7 s (gate only) | 0.2 / 0.2 s | 2,497 / 2,634 s |
+
++14.6% in the first and +4.3% in the second: this machine's drift between
+runs is as wide as the effect, so the figure to quote is the pooled one,
+**+9% (25.9 -> 28.3 fps)**, with the median frame 36.4 -> 33.9 ms, at or
+near the 30 fps cap's two fields in every run. All 19,005 lookups of a
+copied texture were served by one of the 12,670 images. The hazard waits are
+gone; what the guest thread waits for now is the frame gate, the one drain a
+frame (0.7-1.8 s -> 10-33 s), which is the workers finishing the frame
+before. So in these frames the pool is the critical path again: a gate that
+let the next frame's commands in while the workers finish the last one, or a
+faster pixel path (H15d), is where the next frame of time is.
+
+An adversarial review (three reviewers, a skeptic for each finding) found no
+concurrency defect and three real gaps, all fixed before this commit: an
+image outlived a token that had proved the copy finished, a hook's poke, and
+a copy on the no-worker path (the retirements above, and no images with no
+workers); it bypassed a mod's texture provider (no images while one is
+registered); and no test showed the image path was taken at all. Checks:
+replay 23/23 at 1, 2, 3 and 8 threads with every hash unchanged, and the four
+copy captures (1550, 4500, 6000, 16300) each serve three lookups from two
+images with no hazard wait. `test_gxr_overlap.py` gains an overwritten
+image, an unfiltered copy (whose only fence is the draw's), a drain then a
+CPU write, a hook's write, and a token between a copy and its draw, with the
+drains (`SOA_GXR_DRAIN=1`, no images) as the reference; a new test pins the
+producer's image counts per protocol. Seven deliberate breakages each turn
+it red: no draw fence, an image used under a newer copy, rows never decoded,
+the wrong tile row, a retired image served, a token or a hook that retires
+nothing. The lifetime and queue tests sample a texture inside a copy rather
+than the copy's own, so their draws still take the wait they are there to
+test.

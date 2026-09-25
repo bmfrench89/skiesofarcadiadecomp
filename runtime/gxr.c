@@ -853,6 +853,7 @@ typedef struct {
      * set for the whole run, so that bug would be invisible in every capture we
      * have and would wait for the first stream that reprograms the filter. */
     uint8_t cp_f_up, cp_f_mid, cp_f_dn;
+    uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
 } DrawCmd;
 
@@ -2332,7 +2333,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    D = claim_slot(0, 0);
+    D = claim_slot(0, tex_draw_fence()); /* every worker past the copies whose images it samples */
     D->tev = g_prep;
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
@@ -2503,6 +2504,9 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
                 break;
             }
         }
+        /* The row's texels are this worker's alone, so its image row can be
+         * decoded from what was just written (FINDINGS "Copy images"). */
+        if (D->cp_image) tex_decode_row(D->cp_image, base, texfmt, (uint32_t)ow, (uint32_t)y);
     }
 }
 
@@ -2613,24 +2617,31 @@ typedef struct {
 static Pending g_pending[QUEUE_CAP];
 static int g_pending_n;
 
+/* The texture format copy_to_texture maps a copy command word to, and 99 for
+ * one it does not write. */
+static unsigned copy_texfmt(uint32_t v)
+{
+    unsigned tpf = (v >> 3) & 15, fmt = tpf / 2 + (tpf & 1) * 8;
+    if ((v >> 15) & 1) return fmt <= 3 ? fmt : 99;
+    switch (fmt) {
+    case 0: return 0;
+    case 1: case 7: case 8: case 9: case 10: return 1;
+    case 2: return 2;
+    case 3: case 11: case 12: return 3;
+    case 4: return 4;
+    case 5: return 5;
+    case 6: return 6;
+    default: return 99;
+    }
+}
+
 /* What a copy to memory writes, in bytes: its tiled size in the texture
  * format copy_to_texture maps it to, and 0 for a format it does not write. */
 static uint32_t copy_bytes(uint32_t v, int w, int h)
 {
-    unsigned tpf = (v >> 3) & 15, fmt = tpf / 2 + (tpf & 1) * 8, texfmt, tw, th, bpt;
-    int intensity = (v >> 15) & 1, half = (v >> 9) & 1;
+    unsigned texfmt = copy_texfmt(v), tw, th, bpt;
+    int half = (v >> 9) & 1;
     int ow = half ? w / 2 : w, oh = half ? h / 2 : h;
-    if (intensity) texfmt = fmt <= 3 ? fmt : 99;
-    else switch (fmt) {
-    case 0: texfmt = 0; break;
-    case 1: case 7: case 8: case 9: case 10: texfmt = 1; break;
-    case 2: texfmt = 2; break;
-    case 3: case 11: case 12: texfmt = 3; break;
-    case 4: texfmt = 4; break;
-    case 5: texfmt = 5; break;
-    case 6: texfmt = 6; break;
-    default: texfmt = 99; break;
-    }
     if (texfmt == 99) return 0;
     switch (texfmt) {
     case 0: tw = 8; th = 8; bpt = 32; break;
@@ -2651,6 +2662,11 @@ static long long pending_overlap(uint32_t addr, uint32_t bytes)
     for (i = g_pending_n - 1; i >= 0; i--)
         if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) return g_pending[i].cmd;
     return -1;
+}
+
+long long gxr_pending_newest(uint32_t addr, uint32_t bytes)
+{
+    return g_pending_n ? pending_overlap(addr, bytes) : -1;
 }
 
 /* A read of guest memory on the producer that a queued copy may be writing:
@@ -2680,7 +2696,17 @@ void gxr_source_hazard(uint32_t addr, uint32_t bytes)
 
 void gxr_hook_hazard(uint32_t addr, uint32_t bytes)
 {
+    int i, n = 0;
     gxr_ram_hazard(addr, bytes, W_HOOK);
+    /* A hook may write here (SOA_POKE, a mod's patch or API call), and every
+     * copy it overlaps is over now -- it waited for the newest, and a worker
+     * runs its commands in order. Forget those, so a copy's image of these
+     * bytes retires at its next lookup and the draw reads what the hook wrote
+     * (FINDINGS "Copy images"). */
+    addr &= MEM_MASK;
+    for (i = 0; i < g_pending_n; i++)
+        if (!(addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr)) g_pending[n++] = g_pending[i];
+    g_pending_n = n;
 }
 
 long gxr_presented(void)
@@ -2900,6 +2926,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     }
     D = claim_slot(1, want);
     D->s = s;
+    D->cp_image = NULL;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
     D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
@@ -2910,6 +2937,14 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
             g_pending[g_pending_n].bytes = bytes;
             g_pending[g_pending_n].cmd = D->seq;
             g_pending_n++;
+            /* The copy's image (FINDINGS "Copy images"), where copy_to_texture
+             * will write: not past the end of memory, which it refuses; not
+             * under SOA_GXR_DRAIN, which keeps the old protocol whole; and not
+             * with no workers, where the copy has run by the time anything
+             * could sample it, so an image would save nothing and would outlive
+             * a CPU write to its bytes. */
+            if (!g_legacy && g_workers > 0 && dest + bytes <= MEM1_SIZE)
+                D->cp_image = tex_copy_image(dest, copy_texfmt(v), (uint32_t)(half ? w / 2 : w), (uint32_t)(half ? h / 2 : h), D->seq);
         }
         g_copies_tex++;
     }
@@ -3007,9 +3042,19 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
      * drawing and took all of H14's gain (FINDINGS "H14"). GXDrawDone, which is
      * how a game waits before reading what was drawn, still drains. These are
      * counted either way. */
-    if ((reg == 0x47 || reg == 0x48) && gxr_enabled() && !g_legacy && g_last_copy >= 0 && ran_min() <= g_last_copy) {
-        g_tokens_waited++;
-        if (g_token_wait) wait_ran(g_last_copy, W_TOKEN);
+    if ((reg == 0x47 || reg == 0x48) && gxr_enabled() && !g_legacy && g_last_copy >= 0) {
+        if (ran_min() <= g_last_copy) {
+            g_tokens_waited++;
+            if (g_token_wait) wait_ran(g_last_copy, W_TOKEN);
+        }
+        /* Every copy is over, and the game has been told so: it may write a
+         * copy's destination now. Forget them as a drain would, recycling
+         * nothing, so a copy's image retires at its next lookup and the draw
+         * reads memory (FINDINGS "Copy images"; found by its review). Without
+         * SOA_GXR_TOKENWAIT only when the copies happen to be done: a game that
+         * wrote a destination while its copy was still running raced it
+         * before, and still does. */
+        if (g_token_wait || ran_min() > g_last_copy) g_pending_n = 0;
     }
     if (reg == 0x52 && gxr_enabled()) { /* EFB copy (GXCopyTex / GXCopyDisp) */
         TIMED(T_COPY, enqueue_copy(s, bp, v));

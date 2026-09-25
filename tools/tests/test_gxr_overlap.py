@@ -19,7 +19,10 @@ lets them draw over them.
 The oracle is the one-worker run. Every other thread count and stall must
 leave the same copied memory, the same screen, the same EFB and the same
 decoded textures, frame for frame -- and the frames must differ from each
-other, or matching proves nothing. Built like test_gxr_queue.py: the renderer
+other, or matching proves nothing. A draw that samples a copy's own texture
+takes the copy's image (FINDINGS "Copy images"), the one-worker run included,
+so for those the SOA_GXR_DRAIN=1 runs, which make no images and read memory,
+are what the image is held to. Built like test_gxr_queue.py: the renderer
 on its own, a synthetic stream, no disc and no game data. The driver includes
 gxr_tev.c itself, to hash what the texture cache decoded.
 """
@@ -76,6 +79,11 @@ static void xf_f(CpuState* s, unsigned addr, unsigned n, const float* f)
 #define E_BASE 0x00900000u /* frame f's mipmapped texture at E_BASE + f * 0x40000 */
 #define E_LEVEL1 196608u  /* 256 x 192 RGBA8: its level 1, 128 x 96, starts here */
 #define SLOT 0x10000u      /* 128 x 96 RGBA8 is 48 KB */
+#define G_BASE 0x00B00000u /* frame f's copy image overwritten in part, at G_BASE + f * SLOT */
+#define K_BASE 0x00C00000u /* frame f's unfiltered copy, at K_BASE + f * SLOT */
+#define M_BASE 0x00D00000u /* frame f's copy the CPU rewrites after GXDrawDone */
+#define N_BASE 0x00E00000u /* frame f's copy a token separates from its draw */
+#define Q_BASE 0x00F00000u /* frame f's copy a hook pokes */
 #define C4_TEX 0x00300000u
 #define XFB 0x00100000u
 
@@ -141,6 +149,15 @@ static void copy_tex(CpuState* s, uint32_t dest)
     bp_w(s, 0x52, 0x000063u); /* RGBA8 to memory, no clear */
 }
 
+/* The first rows only, as RGB565: another size and format from copy_tex's,
+ * over the first tile row of an RGBA8 copy at the same address. */
+static void copy_rows(CpuState* s, uint32_t dest, unsigned rows)
+{
+    bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((rows - 1) << 10) | (W - 1)); bp_w(s, 0x4D, 0x28);
+    bp_w(s, 0x4B, (dest >> 5) & 0x1FFFFFu);
+    bp_w(s, 0x52, 0x000043u); /* RGB565 to memory, no clear */
+}
+
 static void screen_copy(CpuState* s)
 {
     bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((H - 1) << 10) | (W - 1)); bp_w(s, 0x4D, 0x28);
@@ -154,6 +171,25 @@ static uint64_t fnv(uint64_t h, const uint8_t* p, size_t n)
     return h;
 }
 
+/* Every level the cache holds for one texture a draw samples, found by its
+ * key. By key and not by walking the cache: a copy image (FINDINGS "Copy
+ * images") gives every copy's destination an entry whether or not a draw
+ * samples it, which SOA_GXR_DRAIN does not, so what is compared is what the
+ * draws sampled -- a copy's image under the default protocol, memory's decode
+ * under the drains, the same pixels. */
+static uint64_t decoded(uint64_t h, uint32_t addr, uint32_t fmt, uint32_t w, uint32_t ht)
+{
+    TexEntry key;
+    const TexEntry* e;
+    int l;
+    memset(&key, 0, sizeof key);
+    key.addr = addr & MEM_MASK; key.fmt = fmt; key.w = w; key.h = ht;
+    e = tex_find(&key);
+    if (!e || !e->rgba) return fnv(h, (const uint8_t*)"none", 4);
+    for (l = 0; l < e->nlevels; l++) h = fnv(h, e->level[l], (size_t)e->lw[l] * e->lh[l] * 4);
+    return h;
+}
+
 /* What the CPU reads of the fourth copy: after GXDrawDone, which a game
  * waits on before it reads what was drawn and which must find it finished;
  * and after a draw token, which finds it finished only with
@@ -163,7 +199,9 @@ static uint64_t g_done = 1469598103934665603ull, g_cpu = 1469598103934665603ull;
 static void frame(CpuState* s, int f)
 {
     uint32_t a = A_BASE + (uint32_t)f * SLOT, b = B_BASE + (uint32_t)f * SLOT, c = C_BASE + (uint32_t)f * SLOT;
-    uint32_t d = D_BASE + (uint32_t)f * SLOT, e = E_BASE + (uint32_t)f * 0x40000u;
+    uint32_t d = D_BASE + (uint32_t)f * SLOT, e = E_BASE + (uint32_t)f * 0x40000u, g = G_BASE + (uint32_t)f * SLOT;
+    uint32_t k = K_BASE + (uint32_t)f * SLOT, m = M_BASE + (uint32_t)f * SLOT, n = N_BASE + (uint32_t)f * SLOT;
+    uint32_t q = Q_BASE + (uint32_t)f * SLOT;
     int i;
     untextured(s);
     for (i = 0; i < 24; i++) {
@@ -199,6 +237,28 @@ static void frame(CpuState* s, int f)
     textured(s, a, 6, W, H, 0, 0, W / 2, H / 2);     /* samples it: must be this copy, not the first */
     quad(s, 0, 0, W / 2, H / 2, 0xFFFFFFFFu);
     untextured(s);
+    /* A copy, GXDrawDone, then the CPU rewriting the copy's bytes, which
+     * GXDrawDone told it it may: the draw after must read what the CPU wrote,
+     * not the copy's image, which the drain retired. */
+    quad(s, 70, 20, 120, 60, colour(22, f));
+    copy_tex(s, m);
+    bp_w(s, 0x45, 0x000002u);
+    for (i = 0; i < 64; i++) s->mem[m + (uint32_t)i * 97u] ^= (uint8_t)(0x5A + f + i);
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, m, 6, W, H, W / 2, 0, W / 2, H / 2);
+    quad(s, W / 2, 0, W, H / 2, 0xFFFFFFFFu);
+    untextured(s);
+    /* A hook writing a copy's bytes in the middle of a frame, as SOA_POKE or a
+     * mod does: it waits for the copy through gxr_hook_hazard, then writes,
+     * and the draw after must read what it wrote. */
+    quad(s, 10, 50, 60, 80, colour(5, f));
+    copy_tex(s, q);
+    gxr_hook_hazard(q, 256);
+    for (i = 0; i < 64; i++) s->mem[q + (uint32_t)i * 4u] = (uint8_t)(0xC3 ^ (f * 7 + i));
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, q, 6, W, H, 0, 0, W / 2, H / 2);
+    quad(s, 0, 0, W / 2, H / 2, 0xFFFFFFFFu);
+    untextured(s);
     quad(s, 40, 30, 90, 70, colour(66, f));
     copy_tex(s, d); /* read by nothing but the CPU, after the token */
     /* A copy into mip level 1 of a texture, then a draw that minifies it so
@@ -210,6 +270,39 @@ static void frame(CpuState* s, int f)
     bp_w(s, 0x80, 2u << 5);        /* point, with mipmaps */
     bp_w(s, 0x84, 16u << 8);       /* max LOD 1.0: two levels */
     quad(s, 0, 48, 64, 96, 0xFFFFFFFFu);
+    untextured(s);
+    /* A copy's image (FINDINGS "Copy images") overwritten in part by a newer
+     * copy of another size and format: the draw after both must read memory,
+     * the two copies' bytes together, and not the first copy's image. */
+    quad(s, 60, 10, 110, 50, colour(44, f));
+    copy_tex(s, g);
+    copy_rows(s, g, 8);
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, g, 6, W, H, W / 2, H / 2, W / 2, H / 2);
+    quad(s, W / 2, H / 2, W, H, 0xFFFFFFFFu);
+    untextured(s);
+    /* An unfiltered copy reads only rows its own worker drew, so it carries no
+     * fence, and the draw that samples its image is the one that has to wait
+     * for every worker to have finished it. */
+    bp_w(s, 0x53, 0x556000u); bp_w(s, 0x54, 0x000015u); /* the identity: 22 + 21 + 21 on the centre row */
+    quad(s, 20, 60, 70, 90, colour(33, f));
+    copy_tex(s, k);
+    bp_w(s, 0x53, 0x30A208u); bp_w(s, 0x54, 0x00820Au); /* the deflicker again */
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, k, 6, W, H, 0, H / 2, W / 2, H / 2);
+    quad(s, 0, H / 2, W / 2, H, 0xFFFFFFFFu);
+    untextured(s);
+    /* A token between a copy and the draw sampling it: once the token has
+     * found every copy finished -- always under SOA_GXR_TOKENWAIT, which waits
+     * -- the game may write the copy's bytes, so the image retires and the
+     * draw reads memory. Nothing writes them here: the pixels are the same
+     * either way, and the counts say which way it went. */
+    quad(s, 30, 70, 80, 95, colour(11, f));
+    copy_tex(s, n);
+    bp_w(s, 0x48, 0x100u + (uint32_t)f);
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, n, 6, W, H, W / 2, H / 2, W / 2, H / 2);
+    quad(s, W / 2, H / 2, W, H, 0xFFFFFFFFu);
     untextured(s);
     screen_copy(s);
     bp_w(s, 0x48, (uint32_t)f); /* a draw token */
@@ -252,10 +345,16 @@ int main(int argc, char** argv)
     printf("[overlap] drawdone reads %016llx\n", (unsigned long long)g_done);
     printf("[overlap] screen %016llx\n", (unsigned long long)gxr_screen_hash());
     printf("[overlap] efb %016llx\n", (unsigned long long)fnv(1469598103934665603ull, &g_efb[0][0][0], sizeof g_efb));
-    h = 1469598103934665603ull;
-    for (i = 0; i < g_cache_used; i++)
-        if (g_cache[i].rgba && g_cache[i].level[0])
-            h = fnv(fnv(h, (const uint8_t*)&g_cache[i].addr, 4), g_cache[i].level[0], (size_t)g_cache[i].lw[0] * g_cache[i].lh[0] * 4);
+    h = decoded(1469598103934665603ull, C4_TEX, 8, 8, 8);
+    for (f = 0; f < FRAMES; f++) {
+        h = decoded(h, A_BASE + (uint32_t)f * SLOT, 6, W, H);
+        h = decoded(h, E_BASE + (uint32_t)f * 0x40000u, 6, 256, 192);
+        h = decoded(h, G_BASE + (uint32_t)f * SLOT, 6, W, H);
+        h = decoded(h, K_BASE + (uint32_t)f * SLOT, 6, W, H);
+        h = decoded(h, M_BASE + (uint32_t)f * SLOT, 6, W, H);
+        h = decoded(h, N_BASE + (uint32_t)f * SLOT, 6, W, H);
+        h = decoded(h, Q_BASE + (uint32_t)f * SLOT, 6, W, H);
+    }
     printf("[overlap] decodes %016llx\n", (unsigned long long)h);
     gxr_report();
     fflush(stdout);
@@ -405,6 +504,38 @@ def test_the_copies_were_fenced_not_drained(runs):
             tok = other == "SOA_GXR_TOKENWAIT=1" and not hashed
             want = ("hazard", "tlut", "source") + (("token",) if tok else ())
             assert all(w.get(k, 0) for k in want), (threads, hashed, w)
+
+
+def images(text: str):
+    m = re.search(
+        r"(\d+) copy images made, sampled by (\d+) lookups; (\d+) retired and (\d+) overwritten",
+        text,
+    )
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+@needs_msvc
+def test_the_copy_images_were_taken_where_they_should_be(runs):
+    """Copy images (FINDINGS "Copy images"), counted by the producer, so the
+    same at any timing but one: every copy to memory makes one, 12 a frame
+    over 12 frames. The A and K draws sample theirs; G's is overwritten by a
+    newer copy first; M's is retired by GXDrawDone and Q's by a hook's wait;
+    N's is retired by the token when the token finds the copies done, which
+    SOA_GXR_TOKENWAIT makes certain and timing decides otherwise. SOA_GXR_DRAIN=1 makes none. Without
+    this, the image path could stop being taken and every comparison above
+    would still pass."""
+    for (threads, stall, _hashed, other), res in runs.items():
+        got = images(res["text"])
+        if other == "SOA_GXR_DRAIN=1":
+            assert got is None, (threads, stall, got)
+            continue
+        assert got, (threads, stall, res["text"][-2000:])
+        made, used, retired, overwritten = got
+        assert made == 12 * 12 and overwritten == 12, (threads, stall, got)
+        if other == "SOA_GXR_TOKENWAIT=1":
+            assert (used, retired) == (24, 36), (threads, stall, got)
+        else:
+            assert used >= 24 and retired >= 24 and used + retired == 60, (threads, stall, got)
 
 
 @needs_msvc
