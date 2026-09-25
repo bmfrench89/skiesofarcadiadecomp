@@ -350,7 +350,7 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 *Done:* replay 23/23, and ns per fragment before and after.
 
-**H15c. Specialise the fragment function per draw** — *several days.*
+**H15c. Specialise the fragment function per draw** — *several days. Two stages done 2026-09-25: the one-stage TEV shapes most pixels use and the source-alpha blend run directly, -17% ns a fragment at one thread, every hash unchanged, a differential test against the general path. The attribute stepping and the sampler are next. FINDINGS "H15c".*
 
 *Done:* C4's criterion of 1.5× on the heaviest captures, replay 23/23, and ns per fragment.
 

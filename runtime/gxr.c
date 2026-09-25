@@ -804,6 +804,10 @@ typedef struct {
     uint32_t fog_b_mag;
     unsigned fog_b_shift;
     uint8_t fog_color[3];
+    /* blend_pixel's case, decided once a draw (H15c): 0 the general one, 1 no
+     * blend and no logic op, 2 the source-alpha blend (GX_BL_SRCALPHA,
+     * GX_BL_INVSRCALPHA, adding), which 57% of the H6 set's pixels use. */
+    unsigned blend_kind;
 } PixelCfg;
 
 /* The 20-bit floats in the fog registers: sign, 8-bit exponent, 11-bit mantissa. */
@@ -896,6 +900,8 @@ static void pixel_prepare(const uint32_t* bp, PixelCfg* px)
     px->fog_color[0] = (uint8_t)((bp[0xF2] >> 16) & 0xFF);
     px->fog_color[1] = (uint8_t)((bp[0xF2] >> 8) & 0xFF);
     px->fog_color[2] = (uint8_t)(bp[0xF2] & 0xFF);
+    px->blend_kind = !px->blend_en && !px->logic_en ? 1u
+                   : (px->blend_en && px->sfac == 4 && px->dfac == 5 && !px->subtract ? 2u : 0u);
 }
 
 /* Fog blends the TEV output toward the fog colour by a function of eye
@@ -945,7 +951,15 @@ static inline void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t s
     int out[4], i;
     int sa = px->const_alpha >= 0 ? px->const_alpha : src[3], da = dst[3];
 
-    if (px->blend_en) {
+    /* The two cases most pixels take, as the general code below computes
+     * them with the factors fixed (H15c): the source as it is, and
+     * src * a + dst * (255 - a), rounded, which cannot leave 0..255. */
+    if (px->blend_kind == 1) {
+        out[0] = src[0]; out[1] = src[1]; out[2] = src[2];
+    } else if (px->blend_kind == 2) {
+        int sf = src[3], df = 255 - src[3];
+        for (i = 0; i < 3; i++) out[i] = (src[i] * sf + dst[i] * df + 127) / 255;
+    } else if (px->blend_en) {
         int sf, df;
         switch (px->sfac) {
         case 0: sf = 0; break; case 1: sf = 255; break; case 2: sf = -1; break; case 3: sf = -2; break;

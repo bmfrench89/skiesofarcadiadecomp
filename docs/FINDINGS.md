@@ -2494,3 +2494,64 @@ line, through `gen/soa.pdb`, which `--link` now writes (`/Zi`, `/DEBUG`,
 and texture wrapping the rest -- no hotspot, the generic path's cost spread
 over every stage of every fragment, which is the case H15c's specialising is
 for.
+
+
+**H15c, first two stages: the shapes most pixels use run directly; 17% off
+the pixel path.** 2026-09-25, `build/soa-h15a.exe` against
+`build/soa-h15c1.exe`. A census of the H6 set by `fifopair`'s estimated screen
+area found 33 distinct TEV setups, and the one-stage ones carrying most of the
+area: the vertex colour alone (about 35%) and texture times vertex colour,
+sometimes doubled (about 45%). The pixel engine is as concentrated: the
+source-alpha blend (`GX_BL_SRCALPHA`, `GX_BL_INVSRCALPHA`) with no fog is 57%.
+The worker profile (`SOA_HOSTPROF`, "H14's review") put the generic TEV at
+37% of the workers' busy time and the blend at 13%, spread over bank set-up,
+selector lookups and per-channel branches rather than any one line.
+
+- `tev_prepare` recognises those shapes -- only where every other choice is
+  the plain one: identity swaps, colour channel 0, no bias, adding, clamped,
+  into the output register -- and `tev_pixel` runs them as the stage formula
+  with the constant operands put in, skipping the register bank;
+- `pixel_prepare` gives `blend_pixel` a case for "no blend" and one for the
+  source-alpha blend, the general formula with the factors fixed.
+
+Every pinned hash is unchanged (replay 23/23 at 1, 2, 3 and 8 threads). Since
+a wrong specialised body is exactly what a replay can miss -- it neither
+crashes nor diffs when no capture uses it -- `tools/tests/test_gxr_fastpath.py`
+compares the two paths directly: 4,000 random register sets through the real
+`tev_prepare`, weighted to the recognised shapes but with near misses (a
+swap, a bias, a shift, a second stage, the other channel) the recogniser must
+refuse, 64 random pixels each through both paths; and 400,000 random blends.
+Dropping the doubling, a wrong alpha formula, a recogniser that takes a bias,
+or a blend that rounds up each turn it red.
+
+Measured at one thread, interleaved (base, new, new, base), on the H6 set:
+
+| capture | before (ns a fragment) | after |
+|---|---|---|
+| all twelve | 56.3 / 62.2 | **49.0 / 49.0** |
+| field, Dangral base | 52.5 / 53.9 | 45.6 / 44.2 |
+| cutscene | 46.0 / 51.8 | 36.5 / 38.4 |
+| corpus 6000 (early game) | 45.6 / 48.7 | 36.2 / 34.6 |
+| sky | 76.9 / 83.3 | 67.3 / 64.1 |
+| ship battle | 73.6 / 79.3 | 65.1 / 65.1 |
+
+About 17% off the whole set, a quarter off the scenes that are mostly vertex
+colour and plain texturing.
+
+**The worker count.** H1 measured 15 workers faster than 8 in the Dangral
+base; now that idle workers sleep (H11) and fences park (H14), the sweep was
+repeated, interleaved, on H1's Part L 9000 run (Dangral window from frame
+3000; `build/threads-*.log`):
+
+| workers | fps | p50 | p99 | CPU |
+|---|---|---|---|---|
+| 8 (the default: half the logical CPUs) | 19.2 / 19.0 | 51.7 / 52.2 ms | 67.9 / 67.0 | 2,937 / 3,011 s |
+| 12 | **23.4 / 23.8** | **42.7 / 42.5 ms** | 62.1 / 63.8 | 3,456 / 3,478 s |
+| 15 | 19.6 / 19.7 | 50.8 / 50.7 ms | 69.6 / 71.0 | 3,973 / 3,982 s |
+
+Twelve is 24% faster than eight for 17% more CPU (less a frame); fifteen gives
+it back, because fifteen workers with the guest, audio and window threads
+oversubscribe sixteen logical CPUs and the guest thread -- the critical path
+-- loses its core. The default is not changed by this entry: a finer sweep
+(10 to 14) and a check that the lighter Part L 3000 run does not lose come
+first, and are the next entry.

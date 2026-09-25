@@ -122,6 +122,10 @@ typedef struct {
     int aref0, aref1;
     unsigned acomp0, acomp1, alogic;
     int alpha_always; /* the alpha compare passes every alpha 0-255, so depth can be tested first (H15a) */
+    /* A one-stage shape tev_pixel runs directly (H15c), 0 when none: colour 1
+     * the vertex colour, 2 texture x vertex colour (cshift 0 or 1); alpha 1
+     * konst, 2 vertex alpha, 3 texture x vertex alpha. */
+    unsigned fast_c, fast_a;
     int reg_init[4][4];
 } TevSetup;
 

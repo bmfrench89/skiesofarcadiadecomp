@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-844 passed in 141.74s
+846 passed in 137.21s
 ```
 
-844 tests in 50 files, none of which reads the disc. They cover the Python
+846 tests in 51 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -93,6 +93,7 @@ its own and run it, some of the C as well:
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
 | `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
+| `test_gxr_fastpath.py` | 2 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
@@ -100,10 +101,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `844 passed` |
-| no capstone — **what CI installs** | `825 passed, 1 skipped` |
-| no MSVC | `613 passed, 231 skipped` |
-| neither — **the Ubuntu CI leg** | `594 passed, 232 skipped` |
+| everything (MSVC + capstone) | `846 passed` |
+| no capstone — **what CI installs** | `827 passed, 1 skipped` |
+| no MSVC | `613 passed, 233 skipped` |
+| neither — **the Ubuntu CI leg** | `594 passed, 234 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -983,7 +984,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 231 of the 844 skip without a C compiler; they build one runtime file and run it.
+² 233 of the 846 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -994,8 +995,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 232 skipped |
-| **Tests** | windows | the same three — 825 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 234 skipped |
+| **Tests** | windows | the same three — 827 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

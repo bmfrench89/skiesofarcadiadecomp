@@ -859,6 +859,36 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         if (S->chan < 2) T->used_chan |= 1u << S->chan;
     }
 
+    /* The one-stage shapes that carry most of the pixels (H15c; a census of
+     * the H6 set: the vertex colour alone, about 35% of the area, and texture
+     * times vertex colour, about 45%). Only where the general path's every
+     * other choice is the plain one -- identity swaps, colour channel 0, no
+     * bias, adding, clamped, into the register the output is read from -- so
+     * that tev_pixel's direct arithmetic is the general formula with those
+     * choices put in, and so the same result. */
+    T->fast_c = T->fast_a = 0;
+    if (T->stages == 1) {
+        const Stage* S = &T->st[0];
+        int plain = S->chan == 0 && S->rswap[0] == 0 && S->rswap[1] == 1 && S->rswap[2] == 2 && S->rswap[3] == 3 &&
+                    (!S->texen || (S->tswap[0] == 0 && S->tswap[1] == 1 && S->tswap[2] == 2 && S->tswap[3] == 3)) &&
+                    S->cbias == 0 && S->cop == 0 && S->cclamp && S->cdest == 0 && S->abias == 0 && S->aop == 0 &&
+                    S->aclamp && S->adest == 0 && S->ashift == 0;
+        /* GX_CC: 8 TEXC, 10 RASC, 15 ZERO. GX_CA: 4 TEXA, 5 RASA, 6 KONST, 7 ZERO. */
+        if (plain) {
+            if (S->cshift == 0 && ((S->ca == 10 && S->cb == 15 && S->cc == 15 && S->cd == 15) ||
+                                   (S->ca == 15 && S->cb == 15 && S->cc == 15 && S->cd == 10)))
+                T->fast_c = 1;
+            else if (S->texen && S->cshift <= 1 && S->ca == 15 && S->cb == 8 && S->cc == 10 && S->cd == 15)
+                T->fast_c = 2;
+            if (S->aa == 6 && S->ab == 7 && S->ac == 7 && S->ad == 7) T->fast_a = 1;
+            else if ((S->aa == 5 && S->ab == 7 && S->ac == 7 && S->ad == 7) || (S->aa == 7 && S->ab == 7 && S->ac == 7 && S->ad == 5))
+                T->fast_a = 2;
+            else if (S->texen && S->aa == 7 && S->ab == 4 && S->ac == 5 && S->ad == 7)
+                T->fast_a = 3;
+            if (!T->fast_c || !T->fast_a) T->fast_c = T->fast_a = 0;
+        }
+    }
+
     /* textures: decode (cached) and resolve sampling state per map used.
      * From here until the loop ends the setup names decoded textures, and a
      * lookup below can flush; g_building is what keeps that flush from freeing
@@ -1035,6 +1065,38 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], ui
      * stage (H15a): stages that share a coordinate share its s and t, and the
      * division is the same one, so the result is the same float. */
     float sd[8], td[8];
+    if (T->fast_c && !g_tev_narrate) { /* SOA_GXR_PIXEL narrates the general path */
+        /* A one-stage shape tev_prepare recognised (H15c): the stage's formula
+         * -- (a*(256-c') + b*c' + 128) >> 8, plus d, clamped, c' = c + (c >> 7)
+         * -- with its constant operands put in. The vertex colour passes
+         * through it unchanged (a = RASC with c = 0 gives (a*256 + 128) >> 8,
+         * which is a; d = RASC with a = b = c = 0 gives d), and texture times
+         * vertex colour is (t*c' + 128) >> 8, doubled when cshift is 1. */
+        const Stage* S = &T->st[0];
+        const int* r = ras[0];
+        uint8_t t[4] = {0, 0, 0, 0};
+        if (S->texen) {
+            const float* tc = tex[S->texcoord];
+            float q = tc[2];
+            sample(&T->tex[S->texmap], q != 0.0f ? tc[0] / q : tc[0], q != 0.0f ? tc[1] / q : tc[1], tc[3], t);
+        }
+        if (T->fast_c == 1) {
+            out[0] = (uint8_t)r[0]; out[1] = (uint8_t)r[1]; out[2] = (uint8_t)r[2];
+        } else {
+            for (i = 0; i < 3; i++) {
+                int cc = r[i] + (r[i] >> 7), v = (t[i] * cc + 128) >> 8;
+                out[i] = (uint8_t)clamp255(S->cshift == 1 ? v << 1 : v);
+            }
+        }
+        if (T->fast_a == 1) out[3] = (uint8_t)S->konst[3];
+        else if (T->fast_a == 2) out[3] = (uint8_t)r[3];
+        else {
+            int cc = r[3] + (r[3] >> 7);
+            out[3] = (uint8_t)clamp255((t[3] * cc + 128) >> 8);
+        }
+        *alpha_pass = alpha_passes(T, out[3]);
+        return;
+    }
     for (m = T->used_tex, i = 0; m; m >>= 1, i++) {
         if (m & 1) {
             const float* tc = tex[i];
