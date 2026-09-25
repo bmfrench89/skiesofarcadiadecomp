@@ -46,6 +46,12 @@ typedef struct SoaPad {
     uint8_t trig[2];
 } SoaPad;
 
+/* An image a mod hands back: RGBA8, rows top to bottom, w * h * 4 bytes. */
+typedef struct SoaImage {
+    uint32_t w, h;
+    const uint8_t* rgba;
+} SoaImage;
+
 typedef struct SoaModApi {
     uint32_t size;    /* sizeof(SoaModApi) as the port built it */
     uint32_t version; /* SOA_MOD_API_VERSION the port speaks */
@@ -98,6 +104,17 @@ typedef struct SoaModApi {
      * change the picture -- a wider view scales p[0] -- but what is there to
      * draw is still the game's choice: it culls against its own frustum. */
     int (*projection_filter)(void (*fn)(void* user, float p[6], int orthographic), void* user);
+
+    /* Appended (M3c). Once each time the game's texture is decoded: `hash` is
+     * its source bytes (and palette, for the indexed formats), the key the
+     * port's cache uses, the same from run to run; `rgba` is the decoded base
+     * level, w x h. Return 1 with out->rgba set to replace it with an RGBA8
+     * image of any size (the sampler scales by its size over the game's), 0 to
+     * keep it. The port copies the image before the call returns. Among mods,
+     * the first provider that answers 1 wins. */
+    int (*texture_provider)(int (*fn)(void* user, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h,
+                                      const uint8_t* rgba, SoaImage* out),
+                            void* user);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

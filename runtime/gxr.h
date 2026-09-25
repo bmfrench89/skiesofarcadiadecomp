@@ -47,6 +47,10 @@ void gxr_flush(void);
 void gxr_texture_hazard(uint32_t addr, uint32_t bytes); /* flush if a queued copy writes there */
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
+/* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to
+ * replace the texture with that source hash; the image is copied at once. */
+void gxr_set_texture_provider(int (*fn)(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba,
+                                        const uint8_t** out, uint32_t* out_w, uint32_t* out_h));
 const uint8_t* gxr_screen(int* w, int* h);           /* the last frame copied out (RGBA, EFB_W stride) */
 /* FNV-1a over that frame's pixels, the value SOA_HASH prints as
  * "[gxr] frame <n> <w>x<h> hash <16 hex digits>" once per presented frame.

@@ -1999,3 +1999,35 @@ What there is to draw in the widened margin is still the game's decision --
 it culls against its own frustum -- and a real widescreen mod starts there.
 
 The texture provider, M3c's other half, remains.
+
+
+**M3c, textures: a mod can replace any texture by its content hash, at any
+size.** 2026-09-25, `build/m3c-tex*`. `SoaModApi` gains `texture_provider`,
+appended. Each time `gxr_tev.c` decodes a texture it asks the providers, with
+the texture's source hash -- its bytes, and its palette for the indexed
+formats, the key the cache already uses and the same from run to run -- and
+the decoded base level. The first mod to answer with an RGBA8 image of any
+size replaces it, copied at once, as one level; an entry marked replaced is
+not decoded again for wanting more mip levels, which it would otherwise be on
+every draw. The sampler scales by the level's size over the game's
+(`gxr_tev.c`, `u = s * scale_s * lw / w`), which is what lets a larger image
+sit where the original did.
+
+Through `--replay` over the 23 pinned captures, against unmodded renders:
+
+| provider | hashes matching the manifest | mean difference per pixel, R / G / B (median over captures; worst) |
+|---|---|---|
+| never answers | **23 of 23** | 0 |
+| every texture at twice the size, nearest neighbour | 0 of 23 | 1.41 / 1.32 / 1.33 (worst 3.45 / 3.38 / 3.78) |
+| every texture with green and blue halved | 0 of 23 | 0.17 / 23.85 / 39.60 (worst 2.58 / 114.84 / 114.86) |
+
+Capture 6000 was opened through both: at twice the size every texture is in
+its place, the circuit lines where they were and a little sharper, since a
+doubled image gives the bilinear filter half the blending and the mipmaps
+are gone; tinted, every surface is. That is the check a texture pack needs:
+right place, right scale, and nothing moves when the provider declines.
+
+With that, M3's criteria are met: `mod.dll` with a versioned API, the safe
+point, map loads and scene changes, the pad filter, the projection filter
+and the texture provider, each held by tests that build a DLL against
+`runtime/soa_mod.h`, and CI's Windows leg builds and loads the example.

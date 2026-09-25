@@ -348,7 +348,9 @@ static int next_line(const char** text, char* line)
 /* ---- native mods: mod.dll on SoaModApi (PLAN M3) ------------------------ */
 
 #define CB_MAX 64
-enum { CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_KINDS };
+enum {
+    CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_TEXTURE, CB_KINDS
+};
 
 typedef struct {
     void* fn;
@@ -370,6 +372,8 @@ unsigned gx_frame_count(void);
 int tick_on_safe_point(void (*fn)(CpuState*));
 void si_set_pad_filter(void (*fn)(unsigned frame, void* pad));
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
+void gxr_set_texture_provider(int (*fn)(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba,
+                                        const uint8_t** out, uint32_t* out_w, uint32_t* out_h));
 
 /* RAM, aligned to the width, and for a write not the game's code. */
 static int api_ok(uint32_t addr, uint32_t n, uint32_t align, int write)
@@ -455,6 +459,11 @@ static int api_projection_filter(void (*fn)(void*, float*, int), void* user)
 {
     return api_register(CB_PROJECTION, (void*)fn, user);
 }
+static int api_texture_provider(int (*fn)(void*, uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, SoaImage*),
+                                void* user)
+{
+    return api_register(CB_TEXTURE, (void*)fn, user);
+}
 
 static void api_log(const char* line)
 {
@@ -471,7 +480,32 @@ static const SoaModApi g_api = {
     api_log,
     api_pad_filter,
     api_projection_filter,
+    api_texture_provider,
 };
+
+/* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
+static int mod_texture(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba, const uint8_t** out,
+                       uint32_t* out_w, uint32_t* out_h)
+{
+    int i;
+    for (i = 0; i < g_cb_n[CB_TEXTURE]; i++) {
+        SoaImage img = {0, 0, NULL};
+        int got;
+        g_cur_mod = g_cb[CB_TEXTURE][i].mod;
+        g_cb[CB_TEXTURE][i].calls++;
+        got = ((int (*)(void*, uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, SoaImage*))g_cb[CB_TEXTURE][i].fn)(
+            g_cb[CB_TEXTURE][i].user, hash, fmt, w, h, rgba, &img);
+        if (got && img.rgba && img.w && img.h) {
+            *out = img.rgba;
+            *out_w = img.w;
+            *out_h = img.h;
+            g_cur_mod = -1;
+            return 1;
+        }
+    }
+    g_cur_mod = -1;
+    return 0;
+}
 
 /* Each new projection, from gxr.c: each mod's filter in load order. */
 static void mod_projection(float p[6], int orthographic)
@@ -757,6 +791,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE]) tick_on_safe_point(mod_safe_point);
     if (g_cb_n[CB_PAD_FILTER]) si_set_pad_filter(mod_pad);
     if (g_cb_n[CB_PROJECTION]) gxr_set_projection_filter(mod_projection);
+    if (g_cb_n[CB_TEXTURE]) gxr_set_texture_provider(mod_texture);
     fprintf(stderr, "[mod] SOA_MODS=%s: %d mod(s) loaded, %u patch(es)\n", dir, g_mod_n, g_patch_n);
     return g_mod_n;
 }
@@ -814,9 +849,11 @@ void mod_report(void)
                 for (c = 0; c < g_cb_n[k]; c++)
                     if (g_cb[k][c].mod == m) calls[k] += g_cb[k][c].calls;
             fprintf(stderr, "[mod] %s mod.dll: %u callback(s); called at %llu frame end(s), %llu safe point(s), "
-                            "%llu map load(s), %llu scene change(s), %llu controller read(s), %llu projection(s)\n",
+                            "%llu map load(s), %llu scene change(s), %llu controller read(s), %llu projection(s), "
+                            "%llu texture(s)\n",
                     g_mods[m].dir, g_mods[m].callbacks, calls[CB_FRAME_END], calls[CB_SAFE_POINT],
-                    calls[CB_MAP_LOADED], calls[CB_SCENE_CHANGE], calls[CB_PAD_FILTER], calls[CB_PROJECTION]);
+                    calls[CB_MAP_LOADED], calls[CB_SCENE_CHANGE], calls[CB_PAD_FILTER], calls[CB_PROJECTION],
+                    calls[CB_TEXTURE]);
         }
         for (i = g_mods[m].first; i < g_mods[m].first + g_mods[m].count; i++) {
             const Patch* p = &g_patches[i];

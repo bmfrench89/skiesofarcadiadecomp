@@ -42,6 +42,7 @@ void hle_on_report(void (*fn)(void)) { (void)fn; }
 void si_set_config_extra(const char* x) { (void)x; }
 void si_set_pad_filter(void (*fn)(unsigned, void*)) { (void)fn; }
 void gxr_set_projection_filter(void (*fn)(float p[6], int o)) { (void)fn; }
+void gxr_set_texture_provider(int (*fn)(uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, const uint8_t**, uint32_t*, uint32_t*)) { (void)fn; }
 /* The renderer's phase words and its clock. main.c reads them for the profile
  * it prints at the end of a run; this boot never gets that far, but it still
  * has to link. */

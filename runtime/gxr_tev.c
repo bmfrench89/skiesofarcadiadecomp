@@ -39,7 +39,23 @@ typedef struct {
     int lw[MAX_MIPS], lh[MAX_MIPS], nlevels;
     uint64_t stamp;
     uint64_t hash;
+    int replaced; /* a mod's image stands in for the decode: one level, any size */
 } TexEntry;
+
+/* A mod's texture provider (PLAN-60FPS-MODS M3c), asked once per decode with
+ * the texture's source hash -- its bytes, and its palette for the indexed
+ * formats, the same key the cache uses and stable from run to run -- and the
+ * decoded base level. Returning 1 with a w x h RGBA8 image (any size: the
+ * sampler scales by lw/w) replaces the texture; the image is copied at once.
+ * Registered through a setter, so the renderer still links alone. */
+static int (*g_tex_provider)(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba,
+                             const uint8_t** out, uint32_t* out_w, uint32_t* out_h);
+
+void gxr_set_texture_provider(int (*fn)(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba,
+                                        const uint8_t** out, uint32_t* out_w, uint32_t* out_h))
+{
+    g_tex_provider = fn;
+}
 
 #define TEX_CACHE 256
 static TexEntry g_cache[TEX_CACHE];
@@ -469,6 +485,32 @@ static void decode_texture(TexEntry* e, int nlevels)
     for (; l < MAX_MIPS; l++) e->level[l] = NULL;
 }
 
+/* After a decode, with the entry's hash set: a mod's image replaces it, as one
+ * level of its own size. The decode it replaces was never handed to a draw,
+ * but it goes through the graveyard like any other buffer. */
+static void maybe_replace(TexEntry* e)
+{
+    const uint8_t* img = NULL;
+    uint32_t w = 0, h = 0;
+    uint8_t* copy;
+    int l;
+    e->replaced = 0;
+    if (!g_tex_provider || !e->rgba || !e->level[0]) return;
+    if (!g_tex_provider(e->hash, e->fmt, (uint32_t)e->lw[0], (uint32_t)e->lh[0], e->level[0], &img, &w, &h)) return;
+    if (!img || !w || !h || w > 4096 || h > 4096) return;
+    copy = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!copy) return;
+    memcpy(copy, img, (size_t)w * h * 4);
+    tex_free_later(e->rgba);
+    e->rgba = copy;
+    e->level[0] = copy;
+    e->lw[0] = (int)w;
+    e->lh[0] = (int)h;
+    e->nlevels = 1;
+    for (l = 1; l < MAX_MIPS; l++) e->level[l] = NULL;
+    e->replaced = 1;
+}
+
 static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt, int nlevels)
 {
     int i, victim = 0;
@@ -480,10 +522,14 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         TexEntry* e = &g_cache[i];
         if (e->rgba && e->addr == addr && e->fmt == fmt && e->w == w && e->h == h && e->tlut_off == tlut_off && e->tlut_fmt == tlut_fmt) {
             e->stamp = ++g_stamp;
-            if (e->hash != hsh || e->nlevels < nlevels) { /* rewritten in place, or more levels wanted */
+            /* rewritten in place, or more levels wanted -- which a replaced
+             * texture, one level by design, never is, or it would be decoded
+             * again on every draw */
+            if (e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
                 tex_free_later(e->rgba);
                 TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
                 e->hash = hsh;
+                maybe_replace(e);
             }
             return e;
         }
@@ -519,6 +565,7 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
         TIMED(T_DECODE, decode_texture(e, nlevels));
         e->hash = hsh;
+        maybe_replace(e);
         e->stamp = ++g_stamp;
         return e;
     }

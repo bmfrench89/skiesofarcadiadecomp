@@ -52,6 +52,9 @@ static void (*g_pad)(unsigned, void*);
 void si_set_pad_filter(void (*fn)(unsigned, void*)) { g_pad = fn; }
 static void (*g_proj)(float p[6], int o);
 void gxr_set_projection_filter(void (*fn)(float p[6], int o)) { g_proj = fn; }
+static int (*g_tex)(uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, const uint8_t**, uint32_t*, uint32_t*);
+void gxr_set_texture_provider(int (*fn)(uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, const uint8_t**,
+                                        uint32_t*, uint32_t*)) { g_tex = fn; }
 void fn_8023F704(CpuState* s);
 
 /* mods.exe MODSDIR DOLFILE, then commands on stdin:
@@ -60,7 +63,8 @@ void fn_8023F704(CpuState* s);
  *   report             mod_report()       describe          mod_describe()
  *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88
  *   pad F B            a controller read at frame F with buttons B, through the filter
- *   proj O P0..P5      a new projection (O 1 orthographic), through the filter */
+ *   proj O P0..P5      a new projection (O 1 orthographic), through the filter
+ *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -92,6 +96,19 @@ int main(int argc, char** argv)
             printf("proj");
             for (k = 0; k < 6; k++) printf(" %.4f", p[k]);
             printf(" %s" "\n", g_proj ? "filtered" : "unfiltered");
+        }
+        else if (!strcmp(cmd, "tex")) {
+            unsigned long long hsh;
+            unsigned tw, th;
+            static uint8_t img[64 * 64 * 4];
+            const uint8_t* got = NULL;
+            uint32_t gw = 0, gh = 0;
+            if (scanf("%llx %u %u", &hsh, &tw, &th) != 3 || tw * th > 64 * 64) break;
+            memset(img, 0x11, sizeof img);
+            if (g_tex && g_tex(hsh, 14, tw, th, img, &got, &gw, &gh) && got)
+                printf("tex replaced %ux%u first %02X%02X%02X%02X" "\n", gw, gh, got[0], got[1], got[2], got[3]);
+            else
+                printf("tex kept %s" "\n", g_tex ? "(asked)" : "(no provider)");
         }
         else if (!strcmp(cmd, "get") && scanf("%x", &a) == 1) printf("%08X=%08X\n", a, mem_r32(&s, a));
         else if (!strcmp(cmd, "report")) { fflush(stdout); mod_report(); fflush(stderr); }
@@ -402,6 +419,17 @@ static void sc(void* u, uint32_t f, uint32_t t) { (void)u; snprintf(b, sizeof b,
 /* a wider view: perspective x scaled by 3/4, orthographic (the 2D layer) left alone */
 static void wide(void* u, float p[6], int ortho) { (void)u; if (!ortho) p[0] *= 0.75f; }
 #endif
+#ifdef TEX
+/* textures whose hash ends in TEX become a 2x2 of one colour; the rest stay */
+static const uint8_t k_img[16] = {TEX, 0, 0, 255, TEX, 0, 0, 255, TEX, 0, 0, 255, TEX, 0, 0, 255};
+static int tex(void* u, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba, SoaImage* out)
+{
+    (void)u; (void)fmt; (void)w; (void)h; (void)rgba;
+    if ((hash & 0xFF) != 0x42) return 0;
+    out->w = 2; out->h = 2; out->rgba = k_img;
+    return 1;
+}
+#endif
 #ifdef PADF
 /* from frame 10, START never reaches the game; everything else does */
 static void pf(void* u, uint32_t frame, SoaPad* p) { (void)u; if (frame >= 10) p->buttons &= ~SOA_PAD_START; }
@@ -440,6 +468,9 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
 #endif
 #ifdef PROJ
     api->projection_filter(wide, NULL);
+#endif
+#ifdef TEX
+    api->texture_provider(tex, NULL);
 #endif
     return RC;
 }
@@ -622,3 +653,35 @@ def test_without_a_projection_filter_gxr_c_is_never_handed_one(driver, tmp_path)
     dll(tmp_path, "native")
     out, _ = play(driver, tmp_path, "proj 0 1.5 0 2 0 -1 -0.1")
     assert "proj 1.5000 0.0000 2.0000 0.0000 -1.0000 -0.1000 unfiltered" in out, out
+
+
+@needs_msvc
+def test_a_texture_provider_replaces_by_source_hash(driver, tmp_path):
+    """Asked once per decode with the source hash -- the cache's key, stable
+    from run to run -- it replaces the textures it knows and leaves the rest;
+    the image may be any size."""
+    dll(tmp_path, "pack", "TEX=200")
+    out, err = play(driver, tmp_path, "tex 1234567890ABCD42 8 8 tex 1234567890ABCD43 8 8 report")
+    texs = [line for line in out.splitlines() if line.startswith("tex ")]
+    assert texs == ["tex replaced 2x2 first C80000FF", "tex kept (asked)"], out
+    assert "2 texture(s)" in err, err
+
+
+@needs_msvc
+def test_among_providers_the_first_that_answers_wins(driver, tmp_path):
+    """Mods load in folder order, and the first provider to answer 1 is the
+    one whose image is used; a later one is not asked."""
+    dll(tmp_path, "a-pack", "TEX=100")
+    dll(tmp_path, "b-pack", "TEX=200")
+    out, err = play(driver, tmp_path, "tex 42 4 4 report")
+    assert "tex replaced 2x2 first 640000FF" in out, out
+    assert (
+        "[mod] b-pack mod.dll:" in err and "0 texture(s)" in err.split("[mod] b-pack mod.dll:")[1]
+    ), err
+
+
+@needs_msvc
+def test_without_a_provider_the_renderer_is_never_handed_one(driver, tmp_path):
+    dll(tmp_path, "native")
+    out, _ = play(driver, tmp_path, "tex 42 4 4")
+    assert "tex kept (no provider)" in out, out
