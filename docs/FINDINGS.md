@@ -2735,3 +2735,54 @@ the wrong tile row, a retired image served, a token or a hook that retires
 nothing. The lifetime and queue tests sample a texture inside a copy rather
 than the copy's own, so their draws still take the wait they are there to
 test.
+
+
+**The frame gate, tried off; neighbour fences.** 2026-09-25,
+`build/envab-9000-*.log` (the gate), `build/exeab-9000-*.log` (the fences),
+Dangral window of H1's Part L run.
+
+After copy images, the guest thread's wait is the frame gate: at the next
+frame's first command it drains, for the workers to finish the frame before.
+Turned off (a temporary switch, gone), with the screen copy pruning finished
+copies from the pending list instead and the arena, graveyard and copy-list
+drains left to recycle when they fill: 28.3 and 22.9 fps against 27.4 and
+27.3 with it, the second run's p99 188 ms. The guest ran frames ahead until
+the command ring filled -- 41,169 ring waits in the bad run -- and the
+workers' time at fences doubled (642 -> 1,323 s): a deeper queue lets the
+workers drift further apart, and every filtered copy then waits for the
+furthest behind. The gate stays; one frame in flight is the better shape
+until the fences are cheaper.
+
+Which is the second thing those logs show: the twelve workers spend 540-730 s
+of a run idle at fences, and every copy this game makes fences on all of
+them. A filtered copy's output row y reads EFB rows y-1, y and y+1; with
+workers owning rows `y % n`, rows y-1 and y+1 belong to the writer's two
+neighbours. So a copy that is foreign for its filter alone (full scale, y0 a
+multiple of the worker count) now fences on those two only, on the way in
+and on the way out (`fence_near`); a screen copy's entry fence, a draw
+sampling a copy's image, and a copy over a queued copy's bytes still fence on
+every worker. It is deadlock-free for H14's reason: a fence is never above
+its own command, so the worker furthest behind never waits. Interleaved:
+
+| with the clock out (`SOA_SPEED=4`) | build | fps | p50 | fence time | guest wait |
+|---|---|---|---|---|---|
+| first block | every worker | 32.6 / 32.4 | 28.8 / 28.4 ms | 343 / 350 s | 68.8 / 69.4 s |
+| | neighbours | 33.0 / 36.1 | 28.6 / 26.8 ms | 281 / 232 s | 60.7 / 59.6 s |
+| second block | every worker | 37.2 / 38.8 | 26.1 / 25.4 ms | 194 / 159 s | 59.6 / 56.0 s |
+| | neighbours | 38.7 / 38.3 | 25.4 / 25.5 ms | 148 / 158 s | 55.1 / 55.0 s |
+
+Measured with the clock out because at real time both builds now sit on the
+30 fps cap on a quiet machine (29.8 fps each in a real-time pair), where no
+throughput gain can show; and in blocks, because this machine ran about 15%
+faster in the second block than the first, which is the size of the drift
+H1 warned about. Within each block: +6% and +1% fps (+3.5% pooled), fence
+time -26% and -13%. A small gain, consistently not a loss; the larger effect
+is on a contended machine, where one descheduled worker used to hold all
+eleven others at every copy (a real-time pair's contended run spent 1,009 s
+at fences against 349 s for the neighbour build right after it -- one pair,
+so evidence of the shape, not a number to quote).
+
+Checks: replay 23/23 at 1, 2, 3 and 8 threads with every hash unchanged; the
+overlap test (its stalls hold worker 2 back, whose rows are the taps of
+workers 1 and 3) passes, and four breakages each turn it red -- only the
+previous neighbour asked, only the next, no exit fence, no entry fence.

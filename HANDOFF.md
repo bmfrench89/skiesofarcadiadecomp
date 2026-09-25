@@ -394,13 +394,15 @@ workers to finish everything before that copy. **Copy images** (the plan's
 H14 step 6) took that wait away -- the copy's texture is decoded by the
 workers as they copy, the sampling draw fenced in the pool -- and the Dangral
 base went from about 26 to about 28 fps (+9% pooled over two interleaved
-A/Bs; the median frame 36.4 -> 33.9 ms; FINDINGS "Copy images"). What the
-guest waits for now is the frame gate, the workers finishing the frame
-before, so the pool is the critical path again in the heaviest frames. So
-next: the gate (let the next frame's commands in while the workers finish
-the last, recycling the arena and graveyard by command number instead of a
-drain), H15d (SIMD spans), then H13 (guest-thread speed; `SOA_HOSTPROF=1`
-samples the guest thread too, and the guest idles ~40% here), H16 and H11's
+A/Bs; the median frame 36.4 -> 33.9 ms; FINDINGS "Copy images"). A filtered
+copy now fences on the two neighbouring workers only (+3.5% with the clock
+out; FINDINGS "Neighbour fences"), and turning the one-drain-a-frame gate off
+was tried and was worse (the guest ran frames ahead into the ring). On a
+quiet machine the Dangral base now runs at the cap, 29.8 fps. So 30 fps at 1x
+is there in the heaviest field; what 60 needs is the render ceiling, since
+H17a draws twice as many images: H15d (SIMD spans) for the workers, H13
+(guest-thread speed; the mtfsb translation fix, H13b's cache-call no-ops and
+H13a's psq loads without `ldexp` are written and in test), H16, and H11's
 other half (the guest idle loop still spins on one core). M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for

@@ -834,8 +834,11 @@ typedef struct {
     long long seq;
     /* A fence (H14): no worker starts this command until every other worker
      * has finished every command numbered below it. 0 is none; never above
-     * seq, so the worker furthest behind can always run. */
-    long long fence;
+     * seq, so the worker furthest behind can always run. fence_near is the
+     * same, asked only of the worker's two neighbours -- the workers that own
+     * the rows either side of its own -- which is all a filtered copy reads
+     * (FINDINGS "Neighbour fences"); 0 when fence covers it. */
+    long long fence, fence_near;
     int kind; /* 0 draw, 1 EFB copy, 2 the EFB clear that followed one */
     TevSetup tev;
     PixelCfg px;
@@ -1562,7 +1565,7 @@ static uint64_t g_prepare_hazards; /* draws whose setup read a texture a queued 
  * drain first -- the one full drain a frame. g_ran_floor is a lower bound on
  * ran_min(), so claiming a slot does not read every worker's count every time.
  * g_last_copy is the newest copy of any kind, which a token waits for. */
-static long long g_fence_after, g_ran_floor, g_last_copy = -1;
+static long long g_fence_after, g_fence_after_near, g_ran_floor, g_last_copy = -1;
 static int g_frame_gate;
 static uint64_t g_hazard_hits, g_tokens_waited;
 
@@ -1623,10 +1626,11 @@ static void wait_ran(long long c, int why)
  * command n - QUEUE_CAP: wait until every worker is past that one, and no
  * further. The fence is the larger of what the caller asks and what the last
  * copy left for the command after it, and never above the command itself, so
- * the worker furthest behind can always run the command it is on. */
-static DrawCmd* claim_slot(int kind, long long want)
+ * the worker furthest behind can always run the command it is on; the same
+ * for the neighbours' fence, kept only where it asks more than the other. */
+static DrawCmd* claim_slot(int kind, long long want, long long want_near)
 {
-    long long n = g_published, fence;
+    long long n = g_published, fence, nbr;
     DrawCmd* D;
     if (n - g_ran_floor >= QUEUE_CAP) {
         g_ran_floor = ran_min();
@@ -1644,7 +1648,10 @@ static DrawCmd* claim_slot(int kind, long long want)
         fence = n;
     }
     D->fence = fence;
-    g_fence_after = 0;
+    nbr = want_near > g_fence_after_near ? want_near : g_fence_after_near;
+    if (nbr > n) nbr = n;
+    D->fence_near = nbr > fence ? nbr : 0;
+    g_fence_after = g_fence_after_near = 0;
     return D;
 }
 
@@ -1670,14 +1677,15 @@ static volatile LONG g_fence_sleepers;
  * worker that raises it reads the sleepers after, both interlocked, so a rise
  * in between is either seen here or wakes the wait; the 50 ms bound is the
  * backstop. */
-static void fence_wait(ThreadState* W, int self, long long f)
+static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
 {
-    int j;
+    int j, prev = self > 1 ? self - 1 : g_workers, next = self < g_workers ? self + 1 : 1;
     unsigned spins = 0;
     uint64_t idle0;
     charge(W, &W->busy);
     idle0 = W->idle;
     for (j = 1; j <= g_workers; j++) {
+        long long f = (j == prev || j == next) && nbr > all ? nbr : all;
         if (j == self) continue;
         while (g_ran[j] < f) {
             if (++spins > 4000) {
@@ -1749,7 +1757,7 @@ static DWORD WINAPI worker(LPVOID arg)
             WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
                       mine & QMASK, D->seq, mine, QUEUE_CAP);
         else {
-            if (D->fence > 0 && g_workers > 1) fence_wait(W, id, D->fence);
+            if ((D->fence > 0 || D->fence_near > 0) && g_workers > 1) fence_wait(W, id, D->fence, D->fence_near);
             if (g_stall_n) stall(id, D->kind);
             draw_command(D);
         }
@@ -2333,7 +2341,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    D = claim_slot(0, tex_draw_fence()); /* every worker past the copies whose images it samples */
+    D = claim_slot(0, tex_draw_fence(), 0); /* every worker past the copies whose images it samples */
     D->tev = g_prep;
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
@@ -2837,7 +2845,7 @@ static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
     if (g_frame_gate) drain(W_GATE);
-    D = claim_slot(2, 0); /* after a foreign copy this carries its exit fence */
+    D = claim_slot(2, 0, 0); /* after a foreign copy this carries its exit fence */
     D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
@@ -2858,9 +2866,9 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     int w = (int)(bp[0x4A] & 0x3FF) + 1, h = (int)((bp[0x4A] >> 10) & 0x3FF) + 1;
     int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
     uint8_t f_up, f_mid, f_dn;
-    int filtered, foreign;
+    int filtered, foreign, near_rows;
     uint32_t dest, bytes;
-    long long want;
+    long long want, want_near;
     /* Filtered iff the collapsed kernel is not the exact identity. Asking the
      * weights rather than masking the registers is what makes this right: the
      * mask here was 0x03FFFF against both words, which takes w3 alone for the
@@ -2918,13 +2926,21 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * finished every command before it: every row it reads is final. A copy
      * that reads only its own rows but writes memory an unfinished copy is
      * still writing waits for that one copy instead. */
-    if (foreign || to_screen) {
+    /* A filtered copy that is foreign for its filter alone -- full scale,
+     * its rows the workers' own rows -- reads, for each row it writes, the
+     * row either side, which the writer's two neighbours own: those two are
+     * all its fences need to wait for (FINDINGS "Neighbour fences"). A screen
+     * copy still waits for every worker on the way in, for gxr_presented. */
+    near_rows = !g_legacy && filtered && !half && (g_nthreads <= 1 || (unsigned)y0 % (unsigned)g_nthreads == 0);
+    want_near = 0;
+    if (to_screen || (foreign && !near_rows)) {
         want = g_published;
     } else {
         long long c = bytes ? pending_overlap(dest, bytes) : -1;
         want = c >= 0 ? c + 1 : 0;
+        if (foreign) want_near = g_published;
     }
-    D = claim_slot(1, want);
+    D = claim_slot(1, want, want_near);
     D->s = s;
     D->cp_image = NULL;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
@@ -2982,6 +2998,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * drain back. */
     if (foreign) {
         if (g_legacy) drain(W_COPY_AFTER);
+        else if (near_rows) g_fence_after_near = D->seq + 1;
         else g_fence_after = D->seq + 1;
         if (v & 0x800u) publish_clear(s, bp, v);
     }

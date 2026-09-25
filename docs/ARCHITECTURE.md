@@ -228,6 +228,11 @@ finished the copy). `fence_wait` reads only the other workers' `g_ran`
 counts, and a fence is never above its own command's number, so the
 worker furthest behind can always run: no fence can deadlock. Every screen
 copy is entry-fenced too, so `gxr_presented` still counts whole frames.
+A copy that is foreign for its filter alone -- full scale, its rows the
+workers' own -- reads, for each row it writes, only the row either side,
+which the writer's two neighbours own (worker k's rows are `y % n == k-1`),
+so its entry and exit fences ask those two and no one else (`fence_near`,
+FINDINGS "Neighbour fences"). A screen copy's entry fence stays whole.
 
 What the producer reads of guest memory a queued copy may be writing --
 a texture (`gxr_texture_hazard`), a palette (BP 0x65), vertex arrays, a
