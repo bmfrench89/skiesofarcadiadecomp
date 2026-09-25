@@ -137,7 +137,8 @@ typedef struct {
     uint64_t busy; /* ticks inside draw_command */
     uint64_t idle; /* ticks spinning for the next command */
     uint64_t last; /* when this thread's current stretch began */
-    uint64_t pad[2];
+    uint64_t fence_ticks; /* the part of idle spent at fences (H14) */
+    uint64_t fences;      /* fenced commands this worker waited at */
 } ThreadState;
 static __declspec(align(64)) ThreadState g_ts[MAX_THREADS + 1];
 /* The alignment above only puts the array on a line; what puts each element
@@ -199,10 +200,20 @@ static void stall(int id, int kind)
         }
 }
 
+/* SOA_GXR_DRAIN=1: order EFB copies the way the renderer did before H14 --
+ * a full drain before and after every copy that reads rows other workers own,
+ * and a full drain for every texture read from a queued copy's destination.
+ * The oracle for the fences, and the fallback. */
+static int g_legacy;
+static int g_token_wait; /* SOA_GXR_TOKENWAIT=1: a draw token waits for the copies before it (see gxr_bp_written) */
+
 int gxr_enabled(void)
 {
     if (g_enabled < 0) {
         read_stalls(getenv("SOA_GXR_STALL"));
+        g_legacy = getenv("SOA_GXR_DRAIN") && atoi(getenv("SOA_GXR_DRAIN")) ? 1 : 0;
+        g_token_wait = getenv("SOA_GXR_TOKENWAIT") && atoi(getenv("SOA_GXR_TOKENWAIT")) ? 1 : 0;
+        if (g_legacy) fprintf(stderr, "[gxr] SOA_GXR_DRAIN: copies are drained around, as before H14\n");
         const char* env = getenv("SOA_RENDER");
         const char* snap = getenv("SOA_SNAP");
         g_enabled = env && atoi(env) ? 1 : 0;
@@ -465,6 +476,9 @@ static void read_color(const uint8_t* p, unsigned fmt, Color4* c)
 
 /* Where an attribute's data lives: inline in the stream, or in the array
  * the index selects (CP ARRAY_BASE/ARRAY_STRIDE, GXSetArray). */
+static int g_pending_n; /* copies to memory since the last drain (with the copies below) */
+void gxr_source_hazard(uint32_t addr, uint32_t bytes);
+
 static const uint8_t* attr_data(CpuState* s, const uint32_t* cp, unsigned mode, const uint8_t** p, unsigned array, unsigned direct_size)
 {
     const uint8_t* d;
@@ -479,6 +493,7 @@ static const uint8_t* attr_data(CpuState* s, const uint32_t* cp, unsigned mode, 
     stride = cp[0xB0 + array] & 0xFFu;
     addr = base + idx * stride;
     if ((addr & MEM_MASK) + direct_size > MEM1_SIZE) { g_verts_bad++; return NULL; }
+    if (g_pending_n) gxr_source_hazard(addr, direct_size); /* an array a queued copy may be writing (H14) */
     return mem_ptr(s, addr | 0x80000000u);
 }
 
@@ -813,6 +828,10 @@ typedef struct {
      * run says so instead of rasterizing a command built over the one it
      * wanted. See the queue's declarations for why it cannot happen today. */
     long long seq;
+    /* A fence (H14): no worker starts this command until every other worker
+     * has finished every command numbered below it. 0 is none; never above
+     * seq, so the worker furthest behind can always run. */
+    long long fence;
     int kind; /* 0 draw, 1 EFB copy, 2 the EFB clear that followed one */
     TevSetup tev;
     PixelCfg px;
@@ -1429,9 +1448,21 @@ static void draw_command(const DrawCmd* D)
  *    about where each thread is at the time.
  *
  * Two live commands would share a slot only if they were QUEUE_CAP apart, and
- * queued() >= QUEUE_CAP forces a full drain before the producer can get that
- * far ahead. DrawCmd::seq is the check on that arithmetic rather than a
- * comment about it.
+ * claim_slot waits for every worker to be past command n - QUEUE_CAP before it
+ * builds command n over it -- a wait for that one command, which recycles
+ * nothing. DrawCmd::seq is the check on that arithmetic rather than a comment
+ * about it.
+ *
+ * Since H14 the workers also wait on each other, at fences. A command's fence
+ * F holds each worker until every other worker's count has reached F, which
+ * reads only those counts: the same one-writer, only-rising words, so checking
+ * them one after another proves they all hold. F is never above the command's
+ * own number, and a worker at command c has finished everything below c, so
+ * the worker furthest behind is never held: no fence can deadlock. The
+ * producer, for its part, only ever waits for commands already published.
+ * What it waits for and why is in drain() and wait_ran(); only drain()
+ * recycles, and it runs once a frame, at the next frame's first command (the
+ * frame gate), unless something fills up first.
  *
  * Counted in 64 bits because nothing resets them and a single run is long:
  * build/boot_field.log records 138,619,966 draws in one process, and
@@ -1442,10 +1473,37 @@ static void draw_command(const DrawCmd* D)
  * guest's command stream); the watchdog thread only calls gxr_report, which
  * does not flush. That is what lets the flush read g_published once and treat
  * it as fixed: it is the only writer. */
+/* Why the producer waited (PLAN-60FPS-MODS H14), counted and timed under its
+ * reason so the report can say which of them the wait is. The first group are
+ * full drains, which recycle the arena, the copy list and the texture
+ * graveyard; the second are waits for one command, which recycle nothing. */
+enum {
+    W_EXTERNAL,    /* drain: gxr_flush from outside -- a reset, a replay's end, SOA_FRAMES, a driver */
+    W_ARENA,       /* drain: the vertex arena is full */
+    W_GRAVE,       /* drain: the texture graveyard is full */
+    W_PENDING,     /* drain: the list of copy destinations is full */
+    W_GATE,        /* drain: the next frame's first command, the one full drain a frame */
+    W_COPY_FIRST,  /* drain, SOA_GXR_DRAIN only: before a foreign copy, the frame's first */
+    W_COPY_BEFORE, /* drain, SOA_GXR_DRAIN only: before a later one */
+    W_COPY_AFTER,  /* drain, SOA_GXR_DRAIN only: after one */
+    W_DRAWDONE,    /* drain: GXDrawDone, the CPU may read what was drawn */
+    W_HASHPNG,     /* drain: SOA_HASH or a PNG wants the finished frame */
+    W_RING,        /* wait: the ring would lap a command still queued */
+    W_HAZARD,      /* wait: a texture read from a queued copy's destination (a drain under SOA_GXR_DRAIN) */
+    W_TLUT,        /* wait: a palette loaded from one */
+    W_SRC,         /* wait: vertex arrays, a display list or an indexed XF load read from one */
+    W_HOOK,        /* wait: SOA_PEEK, SOA_POKE or a mod touching one */
+    W_TOKEN,       /* wait: a draw token, which says the copies before it are done */
+    W_COUNT
+};
+static const char* const g_wait_name[W_COUNT] = {
+    "external", "arena", "graveyard", "copy list", "gate", "copy-first", "copy-before", "copy-after",
+    "drawdone", "hash/png", "ring", "hazard", "tlut", "source", "hook", "token"};
+static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read by the report */
+
 static DrawCmd* g_queue;
 static volatile LONGLONG g_published;            /* commands published, ever */
 static volatile LONGLONG g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
-static long long g_drained;                      /* producer only: g_published as of the last drain */
 static uint64_t g_flushes;                       /* producer only: drains, so a nested one can be seen */
 static uint8_t* g_arena;
 static size_t g_arena_used;
@@ -1453,12 +1511,18 @@ static int g_workers; /* worker threads; the main thread (tid 0) only produces *
 /* Where a draw's TEV setup is built, before the slot it will be queued in has
  * been chosen. Only the thread that parses the command stream touches it. */
 static TevSetup g_prep;
-static uint64_t g_prepare_flushes; /* draws whose setup had to wait for a queued copy */
+static uint64_t g_prepare_hazards; /* draws whose setup read a texture a queued copy writes */
 
-/* Commands published since the last drain, which is what the ring's capacity
- * is measured against. Producer only: a worker has no use for it, and
- * g_drained is not published. */
-static long long queued(void) { return g_published - g_drained; }
+/* H14's producer-side state, all producer only. g_fence_after is the fence
+ * the next command published must carry: a copy that read rows other workers
+ * own is not over until every worker has finished it. g_frame_gate says a
+ * screen copy has been published and the next frame's first command must
+ * drain first -- the one full drain a frame. g_ran_floor is a lower bound on
+ * ran_min(), so claiming a slot does not read every worker's count every time.
+ * g_last_copy is the newest copy of any kind, which a token waits for. */
+static long long g_fence_after, g_ran_floor, g_last_copy = -1;
+static int g_frame_gate;
+static uint64_t g_hazard_hits, g_tokens_waited;
 
 /* Workers asleep in WaitOnAddress on g_published (PLAN-60FPS-MODS H11). The
  * producer wakes them only when there are any, so a burst of draws with the
@@ -1473,6 +1537,124 @@ static void publish(void)
     if (g_sleepers) WakeByAddressAll((PVOID)&g_published);
 #endif
 }
+
+/* The oldest command some worker has not finished: every worker has finished
+ * every command below it. With no workers every command ran as it was
+ * published. A stale count is too small, so this can only be too small. */
+static long long ran_min(void)
+{
+    long long m = g_published;
+    int i;
+    for (i = 1; i <= g_workers; i++) {
+        long long r = g_ran[i];
+        if (r < m) m = r;
+    }
+    return m;
+}
+
+/* The producer waits until every worker has finished command c. Nothing is
+ * recycled: this is a wait for one command, not a drain, and what it lets the
+ * producer do next -- reuse that command's slot, or read memory that command
+ * wrote -- names nothing a drain hands out again. */
+static void wait_ran(long long c, int why)
+{
+    unsigned spins = 0;
+    int i, prev;
+    uint64_t t0, t1;
+    if (c >= g_published) {
+        WARN_ONCE("[gxr] a wait for command %lld, which is not published yet (%lld are): nothing to wait for, so no wait\n", c, (long long)g_published);
+        return;
+    }
+    if (ran_min() > c) return;
+    prev = gxr_phase(T_WAIT);
+    t0 = gxr_ticks();
+    for (i = 1; i <= g_workers; i++)
+        while (g_ran[i] <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+    t1 = gxr_ticks();
+    g_wait_n[why]++;
+    if (t1 > t0) g_wait_ticks[why] += t1 - t0;
+    gxr_phase(prev);
+    _ReadWriteBarrier(); /* what the command wrote is read after the wait, not hoisted above it */
+}
+
+/* The one place a slot is taken. Command n goes in slot n & QMASK, which held
+ * command n - QUEUE_CAP: wait until every worker is past that one, and no
+ * further. The fence is the larger of what the caller asks and what the last
+ * copy left for the command after it, and never above the command itself, so
+ * the worker furthest behind can always run the command it is on. */
+static DrawCmd* claim_slot(int kind, long long want)
+{
+    long long n = g_published, fence;
+    DrawCmd* D;
+    if (n - g_ran_floor >= QUEUE_CAP) {
+        g_ran_floor = ran_min();
+        if (n - g_ran_floor >= QUEUE_CAP) {
+            wait_ran(n - QUEUE_CAP, W_RING);
+            g_ran_floor = ran_min();
+        }
+    }
+    D = &g_queue[n & QMASK];
+    D->seq = g_published;
+    D->kind = kind;
+    fence = want > g_fence_after ? want : g_fence_after;
+    if (fence > n) {
+        WARN_ONCE("[gxr] command %lld asked for a fence at %lld, past itself; held to its own number\n", n, fence);
+        fence = n;
+    }
+    D->fence = fence;
+    g_fence_after = 0;
+    return D;
+}
+
+#ifdef _WIN32
+/* Workers parked at a fence in WaitOnAddress on another worker's count. A
+ * worker raising its count wakes them only when there are any, the pattern
+ * H11 gave the idle spin. */
+static volatile LONG g_fence_sleepers;
+
+/* Hold this worker until every other worker has finished every command below
+ * f. Each check reads one count that only its owner writes and that only
+ * rises, so checking them one after another proves they all hold at the end
+ * -- C0's rule: a stale read is too small and only makes a thread wait
+ * longer. A worker waiting here has finished everything below its own
+ * command, and every fence is at most its command's number, so the worker
+ * furthest behind never waits: no fence can deadlock. The time is idle, and
+ * counted apart as fence time.
+ *
+ * A short spin, then a sleep on the count being waited for: Sleep(0) returns
+ * at once when no other thread is ready, so a fence that spun on it cost a
+ * core per waiting worker, 12-13% more CPU over H1's Part L run (FINDINGS
+ * "H14"). The sleeper count goes up before the count is read again and the
+ * worker that raises it reads the sleepers after, both interlocked, so a rise
+ * in between is either seen here or wakes the wait; the 50 ms bound is the
+ * backstop. */
+static void fence_wait(ThreadState* W, int self, long long f)
+{
+    int j;
+    unsigned spins = 0;
+    uint64_t idle0;
+    charge(W, &W->busy);
+    idle0 = W->idle;
+    for (j = 1; j <= g_workers; j++) {
+        if (j == self) continue;
+        while (g_ran[j] < f) {
+            if (++spins > 4000) {
+                LONGLONG seen = g_ran[j];
+                InterlockedIncrement(&g_fence_sleepers);
+                if (g_ran[j] == seen && seen < f) WaitOnAddress((volatile VOID*)&g_ran[j], &seen, sizeof seen, 50);
+                InterlockedDecrement(&g_fence_sleepers);
+                spins = 0;
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+    charge(W, &W->idle);
+    W->fence_ticks += W->idle - idle0;
+    W->fences++;
+    _ReadWriteBarrier(); /* the rows the others wrote are read after the wait */
+}
+#endif
 
 #ifdef _WIN32
 static DWORD WINAPI worker(LPVOID arg)
@@ -1525,6 +1707,7 @@ static DWORD WINAPI worker(LPVOID arg)
             WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
                       mine & QMASK, D->seq, mine, QUEUE_CAP);
         else {
+            if (D->fence > 0 && g_workers > 1) fence_wait(W, id, D->fence);
             if (g_stall_n) stall(id, D->kind);
             draw_command(D);
         }
@@ -1535,6 +1718,7 @@ static DWORD WINAPI worker(LPVOID arg)
         charge(W, &W->busy);
         mine++;
         InterlockedExchange64(&g_ran[id], mine);
+        if (g_fence_sleepers) WakeByAddressAll((PVOID)&g_ran[id]); /* a worker parked at a fence on this count */
     }
 }
 #endif
@@ -1572,25 +1756,6 @@ static void workers_start(void)
 
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
 static int g_started;   /* worker pool created */
-
-/* Why the producer drained (PLAN-60FPS-MODS H14): each drain is counted and
- * timed under its reason, so the report can say which of them the wait is. */
-enum {
-    W_EXTERNAL,    /* gxr_flush from outside: a reset, a replay's end, SOA_FRAMES, a driver */
-    W_RING,        /* the ring would lap a command still queued */
-    W_ARENA,       /* the vertex arena is full */
-    W_GRAVE,       /* the texture graveyard is full */
-    W_COPY_FIRST,  /* before a copy that reads rows other workers own, the frame's first */
-    W_COPY_BEFORE, /* before a later one */
-    W_COPY_AFTER,  /* after one */
-    W_HAZARD,      /* a texture read from a queued copy's destination */
-    W_DRAWDONE,    /* GXDrawDone: the CPU may read what was drawn */
-    W_HASHPNG,     /* SOA_HASH or a PNG wants the finished frame */
-    W_COUNT
-};
-static const char* const g_wait_name[W_COUNT] = {"external", "ring", "arena", "graveyard", "copy-first",
-                                                 "copy-before", "copy-after", "hazard", "drawdone", "hash/png"};
-static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read by the report */
 
 static void drain(int why);
 
@@ -1635,8 +1800,9 @@ static void drain(int why)
         if (t1 > t0) g_wait_ticks[why] += t1 - t0;
     }
     gxr_phase(prev);
-    g_drained = target;
     g_flushes++;
+    g_frame_gate = 0;
+    g_ran_floor = target;
     g_arena_used = 0;
     g_pending_n = 0;
     tex_graveyard_empty();
@@ -1928,37 +2094,27 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
 
-    if (queued() >= QUEUE_CAP) drain(W_RING);
+    /* Every drain on this path comes before tev_prepare: the gate (a screen
+     * copy was the last frame's end), then the arena and the graveyard. */
+    if (g_frame_gate) drain(W_GATE);
     if (g_arena_used + sizeof(Vertex) * count > ARENA_BYTES) drain(W_ARENA);
     if (tex_graveyard_full()) drain(W_GRAVE);
     draw_tripwire(bp, prim);
     /* Nothing of the queue's is claimed until tev_prepare has returned.
-     * Resolving a texture read from a destination a queued copy has not
-     * written yet makes it flush, and a flush takes the vertex arena back to
-     * the start: a vertex pointer taken before the call would name storage
-     * that is about to be handed out again. That is now the whole of the
-     * reason. The other half of it was the slot, and the numbering has
-     * retired that half -- a flush no longer moves the command number, so the
-     * slot this draw goes in is the same either side of one -- but the arena
-     * reset is untouched, so the order still has to hold. The check above has
-     * left room for this draw, and a flush inside the call only ever leaves
-     * more.
-     *
-     * Counting flushes rather than watching the number move is not a
-     * translation: the numbering deliberately does not move across a flush, so
-     * the old test would now always say no, and the counter whose whole job is
-     * to report whether a run took this path would read zero on a run that
-     * took it. */
+     * Under SOA_GXR_DRAIN, resolving a texture read from a destination a
+     * queued copy has not written yet makes it drain, and a drain takes the
+     * vertex arena back to the start: a vertex pointer taken before the call
+     * would name storage about to be handed out again. Since H14 a texture
+     * read waits for that one copy and recycles nothing, but the order is kept
+     * for the drain that is still there to be switched on. */
     {
-        uint64_t flushes = g_flushes;
+        uint64_t hits = g_hazard_hits;
         TIMED(T_PREPARE, tev_prepare(bp, &g_prep));
-        if (g_flushes != flushes) g_prepare_flushes++;
+        if (g_hazard_hits != hits) g_prepare_hazards++;
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    D = &g_queue[g_published & QMASK];
-    D->seq = g_published;
-    D->kind = 0;
+    D = claim_slot(0, 0);
     D->tev = g_prep;
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
@@ -1991,10 +2147,9 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         /* Without workers the rasterizer runs on the producer, so it needs a
          * bucket of its own here or its time would be booked as vertex setup. */
         TIMED(T_RASTER, draw_command(D));
-        /* Run here and drained here, so the numbering still advances and the
+        /* Run here and finished here, so the numbering still advances and the
          * arena is free again. */
         InterlockedIncrement64(&g_published);
-        g_drained = g_published;
         g_arena_used = 0;
     }
 }
@@ -2229,18 +2384,85 @@ static void run_copy_clear(const DrawCmd* D)
     efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
 }
 
-/* Copy destinations still in the queue: a texture decoded from one of
- * them must wait for it. */
-typedef struct { uint32_t addr, bytes; } Pending;
+/* Copies to memory since the last drain: where each wrote, how much, and
+ * which command it is. Anything the producer reads of guest memory -- a
+ * texture, a palette, vertex arrays, a display list, what a hook peeks --
+ * that overlaps one must wait for it; cleared only by a drain. */
+typedef struct {
+    uint32_t addr, bytes;
+    long long cmd;
+} Pending;
 static Pending g_pending[QUEUE_CAP];
 static int g_pending_n;
 
-void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
+/* What a copy to memory writes, in bytes: its tiled size in the texture
+ * format copy_to_texture maps it to, and 0 for a format it does not write. */
+static uint32_t copy_bytes(uint32_t v, int w, int h)
+{
+    unsigned tpf = (v >> 3) & 15, fmt = tpf / 2 + (tpf & 1) * 8, texfmt, tw, th, bpt;
+    int intensity = (v >> 15) & 1, half = (v >> 9) & 1;
+    int ow = half ? w / 2 : w, oh = half ? h / 2 : h;
+    if (intensity) texfmt = fmt <= 3 ? fmt : 99;
+    else switch (fmt) {
+    case 0: texfmt = 0; break;
+    case 1: case 7: case 8: case 9: case 10: texfmt = 1; break;
+    case 2: texfmt = 2; break;
+    case 3: case 11: case 12: texfmt = 3; break;
+    case 4: texfmt = 4; break;
+    case 5: texfmt = 5; break;
+    case 6: texfmt = 6; break;
+    default: texfmt = 99; break;
+    }
+    if (texfmt == 99) return 0;
+    switch (texfmt) {
+    case 0: tw = 8; th = 8; bpt = 32; break;
+    case 1: case 2: tw = 8; th = 4; bpt = 32; break;
+    case 3: case 4: case 5: tw = 4; th = 4; bpt = 32; break;
+    default: tw = 4; th = 4; bpt = 64; break;
+    }
+    return (uint32_t)(((oh + (int)th - 1) / (int)th) * ((ow + (int)tw - 1) / (int)tw)) * bpt;
+}
+
+/* The newest copy that overlaps [addr, addr + bytes) and some worker has not
+ * finished, or -1. The list is in publish order, so the last overlap is the
+ * newest, and every older one is finished once it is. */
+static long long pending_overlap(uint32_t addr, uint32_t bytes)
 {
     int i;
     addr &= MEM_MASK;
-    for (i = 0; i < g_pending_n; i++)
-        if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) { drain(W_HAZARD); return; }
+    for (i = g_pending_n - 1; i >= 0; i--)
+        if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) return g_pending[i].cmd;
+    return -1;
+}
+
+/* A read of guest memory on the producer that a queued copy may be writing:
+ * wait for that copy, and for nothing else. */
+void gxr_ram_hazard(uint32_t addr, uint32_t bytes, int why)
+{
+    long long c;
+    if (!g_pending_n) return;
+    c = pending_overlap(addr, bytes);
+    if (c < 0) return;
+    if (why == W_HAZARD) g_hazard_hits++;
+    if (g_legacy && why == W_HAZARD) { drain(W_HAZARD); return; }
+    wait_ran(c, why);
+}
+
+void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
+{
+    gxr_ram_hazard(addr, bytes, W_HAZARD);
+}
+
+/* For the front end and the hooks (gx.c, main.c, mod.c), which name waits by
+ * what they read rather than by this file's reasons. */
+void gxr_source_hazard(uint32_t addr, uint32_t bytes)
+{
+    gxr_ram_hazard(addr, bytes, W_SRC);
+}
+
+void gxr_hook_hazard(uint32_t addr, uint32_t bytes)
+{
+    gxr_ram_hazard(addr, bytes, W_HOOK);
 }
 
 long gxr_presented(void)
@@ -2370,10 +2592,9 @@ static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uin
 static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
-    if (queued() >= QUEUE_CAP) drain(W_RING);
-    D = &g_queue[g_published & QMASK];
-    D->seq = g_published;
-    D->kind = 2; D->s = s;
+    if (g_frame_gate) drain(W_GATE);
+    D = claim_slot(2, 0); /* after a foreign copy this carries its exit fence */
+    D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
     if (g_workers > 0) {
@@ -2382,7 +2603,6 @@ static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
         t_tid = 1;
         TIMED(T_RASTER, draw_command(D));
         InterlockedIncrement64(&g_published);
-        g_drained = g_published;
         g_arena_used = 0;
     }
 }
@@ -2395,6 +2615,8 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     int to_screen = (v & 0x4000u) != 0, half = (v >> 9) & 1;
     uint8_t f_up, f_mid, f_dn;
     int filtered, foreign;
+    uint32_t dest, bytes;
+    long long want;
     /* Filtered iff the collapsed kernel is not the exact identity. Asking the
      * weights rather than masking the registers is what makes this right: the
      * mask here was 0x03FFFF against both words, which takes w3 alone for the
@@ -2436,66 +2658,85 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * neighbouring workers, and workers advance independently. Without this
      * the frame depends on SOA_THREADS. */
     foreign = copy_is_foreign(half, filtered, y0);
-    if (foreign) {
+    if (g_frame_gate) drain(W_GATE);
+    if (g_legacy && foreign) {
         static unsigned last_frame = ~0u;
         unsigned frame = gx_frame_count();
         drain(frame != last_frame ? W_COPY_FIRST : W_COPY_BEFORE);
         last_frame = frame;
     }
-    if (queued() >= QUEUE_CAP) drain(W_RING);
-    D = &g_queue[g_published & QMASK];
-    D->seq = g_published;
-    D->kind = 1; D->s = s;
+    dest = ((bp[0x4B] & 0x1FFFFFu) << 5) & MEM_MASK;
+    bytes = to_screen ? 0 : copy_bytes(v, w, h);
+    if (bytes && g_pending_n == QUEUE_CAP) drain(W_PENDING);
+    /* The entry fence (H14). A copy that reads rows other workers own -- and
+     * every screen copy, whatever its filter, so that gxr_presented stays a
+     * count of whole frames -- waits in the pool until every worker has
+     * finished every command before it: every row it reads is final. A copy
+     * that reads only its own rows but writes memory an unfinished copy is
+     * still writing waits for that one copy instead. */
+    if (foreign || to_screen) {
+        want = g_published;
+    } else {
+        long long c = bytes ? pending_overlap(dest, bytes) : -1;
+        want = c >= 0 ? c + 1 : 0;
+    }
+    D = claim_slot(1, want);
+    D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
     D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
     if (to_screen) { g_screen_w = w > EFB_W ? EFB_W : w; g_screen_h = h > EFB_H ? EFB_H : h; g_copies_xfb++; }
     else {
-        if (g_pending_n < QUEUE_CAP) {
-            g_pending[g_pending_n].addr = ((bp[0x4B] & 0x1FFFFFu) << 5) & MEM_MASK;
-            g_pending[g_pending_n].bytes = (uint32_t)w * (uint32_t)h * 4u; /* generous */
+        if (bytes) {
+            g_pending[g_pending_n].addr = dest;
+            g_pending[g_pending_n].bytes = bytes;
+            g_pending[g_pending_n].cmd = D->seq;
             g_pending_n++;
         }
         g_copies_tex++;
     }
+    g_last_copy = D->seq;
     if (g_workers > 0) {
         publish();
     } else {
         t_tid = 1;
         TIMED(T_RASTER, draw_command(D));
         InterlockedIncrement64(&g_published);
-        g_drained = g_published;
         g_arena_used = 0;
     }
-    /* A copy that samples rows it does not own is bracketed by two drains, not
-     * one, and the second is the one that is easy to miss.
+    /* A copy that samples rows it does not own has to be over before anything
+     * after it writes those rows, and this is the half that is easy to miss:
+     * workers advance through the queue independently, so the worker that
+     * finishes its share of the copy first would otherwise start on the next
+     * draw -- or on the clear -- and write EFB rows its neighbours are still
+     * reading as filter taps.
      *
-     * The drain before it orders the producer's earlier draws. The drain after
-     * it stops anything *later* from running ahead into the rows the copy is
-     * still sampling: workers advance through the queue independently, so the
-     * worker that finishes its share of the copy first would otherwise start
-     * on the next draw -- or on the clear -- and write EFB rows its neighbours
-     * are still reading as filter taps.
+     * This was measured, not reasoned about (PLAN C3). With only the clear
+     * split out, four captures disagreed with themselves at SOA_THREADS=8 on
+     * one sweep in four -- 1550, 4500, 6000 and 16300, which are four of the
+     * eight captures that copy to a texture. Screen copies hid it: they set the
+     * clear bit, so the clear's own drain happened to serve. Three green sweeps
+     * in a row had already run before the fourth caught it.
      *
-     * This was measured, not reasoned about. With only the clear split out,
-     * four captures disagreed with themselves at SOA_THREADS=8 on one sweep in
-     * four -- 1550, 4500, 6000 and 16300, which are four of the eight captures
-     * that copy to a texture. Screen copies hid it: they set the clear bit, so
-     * the clear's own drain happened to serve as this one. Texture copies do
-     * not, so nothing stopped the next draw. Three green sweeps in a row had
-     * already run before the fourth caught it.
-     *
-     * The clear then goes in its own command rather than riding inside
-     * run_copy, where a worker would have cleared rows its neighbours were
-     * still sampling. A barrier inside a command is the shape PLAN C0 removed
-     * and is not coming back.
-     *
-     * An unfiltered, unscaled copy reads only rows the worker wrote itself, so
-     * it keeps the fused clear and its exact previous behaviour. */
+     * Until H14 a full drain did it, and the producer waited for the whole
+     * frame at every copy. Now the command after the copy carries the exit
+     * fence: no worker starts it until every worker has finished the copy, and
+     * every later command a worker runs comes after that one. The clear goes in
+     * its own command for the same reason, rather than riding inside run_copy
+     * where a worker would clear rows its neighbours were still sampling. An
+     * unfiltered, unscaled copy reads only rows the worker wrote itself, so it
+     * keeps the fused clear and needs neither fence. SOA_GXR_DRAIN=1 puts the
+     * drain back. */
     if (foreign) {
-        drain(W_COPY_AFTER);
+        if (g_legacy) drain(W_COPY_AFTER);
+        else g_fence_after = D->seq + 1;
         if (v & 0x800u) publish_clear(s, bp, v);
     }
+    /* The frame is published: the next frame's first command drains, once.
+     * That recycles the arena, the copy list and the graveyard a frame at a
+     * time, keeps one frame in flight, and lets the guest's frame end run while
+     * the workers finish this one. */
+    if (to_screen && !g_legacy) g_frame_gate = 1;
 
     if (to_screen) {
         char path[512];
@@ -2533,8 +2774,24 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
     if (reg == 0x65) { /* TLUT load (GXLoadTlut): source from 0x64, tmem address and size here */
         uint32_t src = (bp[0x64] & 0x1FFFFFu) << 5;
         uint32_t tmem = (v & 0x3FFu) << 9, bytes = ((v >> 10) & 0x7FFu) << 5;
+        gxr_ram_hazard(src, bytes, W_TLUT); /* the palette may be a queued copy's destination */
         tmem_load_tlut(s, src | 0x80000000u, tmem, bytes);
         return;
+    }
+    /* A draw token (GXSetDrawSync) is answered as it is parsed, as it always
+     * has been -- the port's pipe has no latency to report. Until H14 every
+     * copy before a token was also finished by then, because each was drained
+     * after; now it may not be, and a game that read a copy's memory straight
+     * after its token would see it unfinished. SOA_GXR_TOKENWAIT=1 makes the
+     * token wait for the newest copy, and it is off because of where this
+     * game's tokens sit: at the top of each frame's stream, before the frame's
+     * logic, so waiting there serialized the logic behind the last frame's
+     * drawing and took all of H14's gain (FINDINGS "H14"). GXDrawDone, which is
+     * how a game waits before reading what was drawn, still drains. These are
+     * counted either way. */
+    if ((reg == 0x47 || reg == 0x48) && gxr_enabled() && !g_legacy && g_last_copy >= 0 && ran_min() <= g_last_copy) {
+        g_tokens_waited++;
+        if (g_token_wait) wait_ran(g_last_copy, W_TOKEN);
     }
     if (reg == 0x52 && gxr_enabled()) { /* EFB copy (GXCopyTex / GXCopyDisp) */
         TIMED(T_COPY, enqueue_copy(s, bp, v));
@@ -2610,9 +2867,23 @@ void gxr_report(void)
      * graveyard of 512 this run went, and every texture past that one is one
      * that would have been handed back to the allocator with queued draws
      * still pointing at it. */
-    if (g_prepare_flushes)
-        fprintf(stderr, "[gxr] %llu draws sampled a texture a queued copy had not written yet, and waited for it in the middle of their setup\n",
-                (unsigned long long)g_prepare_flushes);
+    if (g_prepare_hazards)
+        fprintf(stderr, "[gxr] %llu draws sampled a texture a queued copy writes, and waited for that copy in the middle of their setup\n",
+                (unsigned long long)g_prepare_hazards);
+    if (g_tokens_waited)
+        fprintf(stderr, "[gxr] %llu draw tokens came while a copy before them was still running%s\n",
+                (unsigned long long)g_tokens_waited,
+                g_token_wait ? ", and waited for it" : "; SOA_GXR_TOKENWAIT=1 makes them wait");
+    /* The fences (H14): how many commands carried one, and how long the
+     * workers stood at them -- time already inside the idle above. */
+    if (g_workers > 1) {
+        uint64_t n = 0, ticks = 0;
+        int i;
+        for (i = 1; i <= g_workers; i++) { n += g_ts[i].fences; ticks += g_ts[i].fence_ticks; }
+        if (n)
+            fprintf(stderr, "[gxr] fences: %llu fenced commands run; the workers waited %.2fs at them (inside the idle above)\n",
+                    (unsigned long long)(n / (uint64_t)g_workers), gxr_seconds(ticks));
+    }
     if (tex_graveyard_peak())
         fprintf(stderr, "[gxr] %d decoded textures waited to be freed at once, at the most\n", tex_graveyard_peak());
     /* Where the producer's wait went, by reason (H14): seconds and how many. */

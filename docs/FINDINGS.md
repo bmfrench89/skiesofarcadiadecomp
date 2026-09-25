@@ -2293,3 +2293,135 @@ algorithm R off by one, an evicted key left in the index, never hashing again,
 BP 0x66 ignored, a TLUT load forgetting the key. An adversarial review found
 one defect, now fixed: `tools/soak.py` would have raised the new `[gxr]
 textures:` report line as a question in every rendering soak.
+
+
+**H14: the drains around every copy are gone; the win is pacing, not
+throughput.** 2026-09-25, `build/h14-*.log`, `build/h14ab*-*.log`. Every copy
+the game makes is filtered (the deflicker reads three rows), so every copy
+reads rows other workers own, and until now each was bracketed by two full
+drains: the producer -- the guest thread -- stopped until the workers had
+drawn the whole frame so far, twice a copy. Step 0 split the producer's wait
+by reason (the report's new `[gxr] waits:` line). On H1's 3000-frame Part L
+run it was 43.6 s: **copy-first 37.9 s** (the drain before each frame's first
+copy, usually the screen copy -- the whole frame), copy-before 3.8 s,
+copy-after 1.8 s.
+
+What replaced them (ARCHITECTURE sections 3, 6, 9 and "The renderer is
+software"):
+
+- **fences between the workers.** A copy that reads rows other workers own
+  carries an entry fence (no worker starts it until every worker has finished
+  everything before it); the command after it carries an exit fence (no worker
+  starts that until every worker has finished the copy: PLAN C3's race). Every
+  screen copy is entry-fenced, so `gxr_presented` still counts whole frames.
+  A fence reads only the other workers' `g_ran` counts and is never above its
+  own command, so the worker furthest behind always runs;
+- **a wait for one copy, not a drain,** wherever the producer reads guest
+  memory a queued copy may be writing -- a texture, a palette, vertex arrays, a
+  display list, an indexed XF load, a hook's peek, poke or mod access -- found
+  in the list of copy destinations, now with exact extents and command
+  numbers;
+- **the frame gate:** the one full drain a frame, at the next frame's first
+  command, which recycles the arena, the copy list and the graveyard and keeps
+  one frame in flight while the guest's frame end runs against the workers'
+  tail;
+- **`SOA_GXR_DRAIN=1`** puts the old drains back in the same binary, as the
+  oracle and the fallback.
+
+Every pixel is unchanged: replay 23/23 at 1, 2, 3 and 8 threads, `title
+--check` 4/4, `tools/midpoint.py` 5/5 with the same images.
+
+**The token wait, tried and taken out.** A first version made each draw
+token (`GXSetDrawSync`, BP 0x47/0x48) wait for the copies before it, so that a
+game reading a copy's memory after its token would still see it finished. It
+cost the whole gain: the game writes its token at the top of every frame's
+stream, *before* the frame's logic, so the wait there held the logic behind
+the last frame's drawing. On Part L 3000 the wait simply moved from copy-first
+(37 s) to token (38.4 s) and fps did not move (24.6 / 24.4 against the drains'
+24.6 / 24.5). Tokens are now answered as they are parsed, as they always were,
+and counted: 6,602 in that run arrived with a copy still running, two a frame.
+`SOA_GXR_TOKENWAIT=1` puts the wait back. `GXDrawDone`, which is how a game
+waits before reading what was drawn, still drains. Store watchpoints over both
+screen-copy destination pairs (`SOA_WATCH=0x8035D4E0,0x96000` and
+`0x804024E0,0x96000`, frames 2700-3000) saw no CPU store at all; a CPU *read*
+of a copy after its token cannot be watched, and the copies land in the XFB
+pair, which on the console only the video interface reads.
+
+**Measured, interleaved, one binary (N the fences, D `SOA_GXR_DRAIN=1`),** the
+final build, in one session:
+
+| run | fps | p50 | p95 | p99 | producer wait a frame | VI | CPU |
+|---|---|---|---|---|---|---|---|
+| Part L 3000, D | 24.6 / 24.5 | 36.9 / 36.6 ms | 54.9 / 54.6 | 60.0 / 60.8 | 14.2 / 14.2 ms | 52.1 / 51.9 Hz | 612 / 603 s |
+| Part L 3000, N | **27.0 / 27.0** | **33.4 / 33.4 ms** | 53.6 / 53.3 | 57.6 / 57.2 | **2.6 / 2.7 ms** | **57.3 / 57.2 Hz** | 629 / 621 s |
+| Dangral window (3000-9000), D | 18.7 | 53.6 ms | 58.5 | 65.7 | 36.9 ms | 44.4 Hz | 2,894 s |
+| Dangral window, N | 18.9 | 52.6 ms | 57.1 | 63.4 | 21.9 ms | 45.9 Hz | 3,003 s |
+| Part L 3000, `SOA_SPEED=4`, D | 37.9 / 38.4 | 23.5 / 23.2 ms | 47.7 / 48.3 | 50.5 / 51.3 | 14.6 / 14.4 ms | | |
+| Part L 3000, `SOA_SPEED=4`, N | 38.0 / 37.5 | 24.0 / 24.1 ms | 48.5 / 49.7 | 51.0 / 52.9 | 12.8 / 13.1 ms | | |
+
+(The `SOA_SPEED=4` rows are from the build before fence parking, below; an
+earlier session of the fences gave 27.2 / 26.9 and 19.0 / 18.9 against the
+drains' 24.6 / 24.4 and 18.7 / 18.4, so the table is not one lucky pair. The
+wait and VI columns divide whole-run figures by the frames counted, so they
+compare arms, not scenes.)
+
+Read together:
+
+- **At real speed the port runs 10% faster where it is not raster-bound**
+  (Part L 3000: 24.55 → 27.0 fps, the median frame 36.8 → 33.4 ms), and the
+  reason is the retrace: the guest no longer sits in long drains, so the
+  retraces it waits on arrive on time (VI 52 → 57 Hz). That is H9's late
+  retrace, recovered from the other side.
+- **With the clock out there is no throughput gain** (`SOA_SPEED=4`: 38.0 /
+  37.5 against 37.9 / 38.4): the wait moves from the copies to the gate. H14
+  removes serialization the pacing felt, not work.
+- **In the Dangral base, which is raster-bound, it is about 1%** (18.7 → 18.9 fps)
+  and 2-6 ms off the slow frames. The workers are busy about 85% of every
+  frame there, so the producer's saved time turns into waiting: the wait left
+  is almost all **hazard, 128 s over 12,670 reads** of the frame's two copied
+  textures, which wait for everything drawn before their copy. Copy images
+  (the plan's Step 6: the copy decodes its own texture and the sampling draw
+  waits at a fence in the pool instead of stalling the guest) would remove
+  that wait, but in a raster-bound scene the workers are the critical path, so
+  it waits for H15, the pixel path, which is what the Dangral base needs.
+
+**The plan's done line, restated.** H14 asked for producer wait per drawn
+frame "down to the level of the copies alone" and predicted ~45 ms falling to
+~30. Neither can happen while the scene is raster-bound: a producer with 22 ms
+of work a frame and workers with 44 ms must wait the difference somewhere, and
+it now waits at the copies' hazard and the gate instead of around every copy.
+What H14 can be judged on, and meets: no copy drains (the waits line has no
+copy-first, copy-before or copy-after), every hash unchanged over the replay,
+the overlap test green with its nine breakages red, and the paced fps up where
+the port is not raster-bound.
+
+**CPU.** The first build's fences spun -- `YieldProcessor`, then `Sleep(0)`,
+which returns at once when no other thread is ready -- and cost 12-13% more
+CPU than the drains (Part L 3000: 679 / 689 s against 598 / 615 s; the 9000
+run 3,240 / 3,274 s against 2,868 / 2,907 s), past the plan's 10% line. A
+fence now parks in `WaitOnAddress` on the count it waits for after 4,000
+spins, as H11's idle workers do, and a worker raising its count wakes parked
+waiters only when there are any. The final build's cost is 3-4% (629 / 621 s
+against 612 / 603 s, for 10% more frames; 3,003 s against 2,894 s), and its
+frame rates are the first build's.
+
+**Tests.** `tools/tests/test_gxr_overlap.py` (20) drives filtered copies, a
+full-screen draw over their taps, a texture, a palette and indexed vertex
+colours read from copy destinations, a copy written twice to one place, a
+screen copy with a clear, draw tokens and a `GXDrawDone`, over frames that
+differ, at 1, 2, 3 and 8 threads, with `SOA_GXR_STALL=<worker>:<kind>:<us>`
+holding one worker back before its draws, copies or clears so that an
+ordering race becomes a certain failure. It demands the one-worker run's
+copied memory, screen, EFB, decoded textures and post-`GXDrawDone` CPU reads,
+and that the paths were taken (fences, each kind of wait, the gate, no copy
+drains). It passed against the old drains, and removing either drain by hand
+turned 10-12 of its runs red before any of H14 existed. Nine deliberate
+breakages of the new code -- no entry fence, no exit fence, an entry fence one
+short, waiting on the oldest overlapping copy rather than the newest, no
+palette wait, no source wait, no hazard wait, no token wait under
+`SOA_GXR_TOKENWAIT=1`, no gate -- each turn it red. `test_gxr_lifetimes.py`
+now runs its driver under both protocols, so the drain inside a draw's setup
+(the use-after-free it was written for) keeps its test while the switch
+exists. Lines and points are still drawn by one worker across every row, a
+race with other workers' triangles that predates H14 and that no capture
+reaches (no capture draws a line); making them row-owned is left for later.

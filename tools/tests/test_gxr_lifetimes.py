@@ -194,8 +194,12 @@ needs_msvc = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="module")
-def output(tmp_path_factory):
+# Both protocols (H14): by default the green quad's setup waits for the one
+# copy it samples; under SOA_GXR_DRAIN=1 it drains inside tev_prepare, the
+# path whose use-after-free this file was written for, which keeps its test
+# for as long as the switch exists.
+@pytest.fixture(scope="module", params=["", "1"], ids=["fenced", "drained"])
+def output(tmp_path_factory, request):
     if toolchain.cl_path() is None:
         pytest.skip("no MSVC")
     out = tmp_path_factory.mktemp("lifetimes")
@@ -218,6 +222,8 @@ def output(tmp_path_factory):
     for name in list(env):
         if name.startswith("SOA_"):
             env.pop(name)
+    if request.param:
+        env["SOA_GXR_DRAIN"] = request.param
     run = subprocess.run(
         [str(exe)], capture_output=True, text=True, env=env, cwd=out, timeout=300, check=False
     )
@@ -259,5 +265,5 @@ def test_the_report_states_both_lifetime_facts(output):
     frame whose hash moves between two builds of the renderer is a frame where
     one of these two lines is non-zero, and a run that prints neither took
     neither path."""
-    assert output.count("waited for it in the middle of their setup") == 1, output
+    assert output.count("in the middle of their setup") == 1, output
     assert re.search(r"\[gxr\] \d+ decoded textures waited to be freed at once", output), output

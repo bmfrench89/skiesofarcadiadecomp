@@ -135,7 +135,9 @@ Still on the guest thread, `gxr_draw_inner`:
   fog, the viewport and the scissor, so a later register write cannot
   change a queued draw;
 - the vertices go into a shared arena and the `DrawCmd` into slot
-  `g_published & QMASK` of a 4,096-entry ring;
+  `g_published & QMASK` of a 4,096-entry ring, claimed in `claim_slot`,
+  which waits (without draining) for every worker to be past the command
+  that slot last held, and stamps the command's fence (section 9);
 - `publish` increments `g_published` (`InterlockedIncrement64`) and, if any
   worker has gone to sleep on it, wakes them with `WakeByAddressAll`.
 
@@ -209,9 +211,28 @@ order behind the draws it is copying. `run_copy` then calls:
 
 and then `efb_clear` if the copy asked for a clear.
 
-A texture decoded from an address a queued copy has not written yet is a
-hazard, caught by `gxr_texture_hazard` from the texture cache: it flushes
-rather than sample stale bytes.
+A copy that reads rows other workers own -- a filtered one, which is every
+copy the game makes, or a half-scale one -- needs every earlier command
+finished on every row it reads, and nothing later written to those rows
+until every worker has read them (PLAN C3's race). Until H14 two full
+drains around each such copy did that, and the producer waited for the
+whole frame at every copy. Now the workers order themselves with
+**fences**: the copy carries an entry fence (no worker starts it until
+every other worker has finished everything before it), and the command
+after it an exit fence (no worker starts that until every worker has
+finished the copy). `fence_wait` reads only the other workers' `g_ran`
+counts, and a fence is never above its own command's number, so the
+worker furthest behind can always run: no fence can deadlock. Every screen
+copy is entry-fenced too, so `gxr_presented` still counts whole frames.
+
+What the producer reads of guest memory a queued copy may be writing --
+a texture (`gxr_texture_hazard`), a palette (BP 0x65), vertex arrays, a
+display list or an indexed XF load (`gxr_source_hazard`), a hook's peek,
+poke or mod access (`gxr_hook_hazard`) -- waits for the newest copy that
+overlaps it, found in the list of copy destinations with their exact
+extents and command numbers, and for nothing else. A draw token (BP
+0x47/0x48) waits for the newest copy, so a game that reads a copy after
+its token still sees it finished. `SOA_GXR_DRAIN=1` restores the drains.
 
 ### 10. Out to the window
 
@@ -231,7 +252,11 @@ Back in `runtime/gx.c` · `load_bp`, a copy to the display buffer also calls
 `SOA_FRAMES`, `SOA_SNAP`, `SOA_PAD` scripts, and the frame numbers in a
 `SOA_PAD_RECORD` recording. `frame_end` is also where a requested FIFO
 capture is written (`.fifo`, `.regs` and a full `.ram` image), and where
-`SOA_FRAMES` stops the run after flushing the queue.
+`SOA_FRAMES` stops the run after flushing the queue. Since H14 the frame
+end runs while the workers may still be drawing the frame: its screen
+copy is published but not waited for, and the next frame's first command
+drains (the *frame gate*, the one full drain a frame). A frame being
+captured is drained before its hook runs, so its `.ram` holds every copy.
 
 `SOA_HASH=1` prints one FNV-1a hash per presented frame from `enqueue_copy`,
 after a `gxr_flush` so the hash describes the finished frame. That is the
@@ -266,9 +291,9 @@ What is kept, and the rules the live path (H16, H17a) inherits:
   before) come to about 10.5 MB, allocated only when pair mode is first
   switched on;
 - **outside the vertex arena, the queue and the texture graveyard.** A drain
-  recycles those in the middle of a frame, and the game drains from inside
-  draws, so nothing a drain touches holds pair state (a test pins that
-  `gxr_flush` names none of it);
+  recycles those -- at the frame gate, and in the middle of a frame whenever
+  the arena or the graveyard fills -- so nothing a drain touches holds pair
+  state (a test pins that `drain()` names none of it);
 - **owned by the producer.** It claims, records and lerps before `publish`,
   so no worker ever sees a command whose positions are half replaced;
 - **rotated only at the screen copy** (`enqueue_copy` with `to_screen`),
@@ -495,7 +520,8 @@ does not qualify and waits for byte-order-aware accessors.
 
 There is no GPU backend, no SDL, no Vulkan and no shader compiler. The
 GameCube's pipeline is implemented in C in `gxr.c` and `gxr_tev.c`, and the
-final image reaches the screen as a `StretchDIBits` of a BGRA buffer.
+final image reaches the screen through a DXGI flip-model swap chain
+(section 10).
 
 The parallelism is one rule: **worker *i* owns rows where
 `y % nthreads == i - 1`**, in `raster_triangle`'s row test and in `my_row`
@@ -505,16 +531,27 @@ output does not depend on the thread count — which is checkable, and is
 checked, by replaying all 23 captures at 1, 2, 3 and 8 threads and comparing
 hashes.
 
-The producer (the guest thread) and the workers meet at one word.
-`gxr_flush` waits for every `g_ran[i]` to reach `g_published`, and only then
-recycles producer-private state — the vertex arena, the copy hazard list,
-the texture graveyard — so what a flush writes and what a running worker
-reads are disjoint sets. Flushes are forced by the queue filling, by a
-`GXDrawDone`, by a copy that reads rows other workers own (drained before
-and after: a half-scale or filtered copy, which is every copy the game
-makes, or one that starts on another worker's row), by a
-texture that a queued copy has not written yet, and before a frame is hashed
-or written to PNG.
+The producer (the guest thread) and the workers meet at one word, and
+since H14 wait for each other in three ways, each named in the report's
+`[gxr] waits:` line:
+
+- **a drain** (`drain(why)`, which `gxr_flush` calls) waits for every
+  `g_ran[i]` to reach `g_published` and only then recycles
+  producer-private state — the vertex arena, the copy list, the texture
+  graveyard — so what a drain writes and what a running worker reads are
+  disjoint sets. It runs once a frame, at the next frame's first command
+  (the gate); for a `GXDrawDone`; before a frame is hashed or written to
+  PNG; and when the arena, the graveyard or the copy list fills;
+- **a wait for one command** (`wait_ran`) holds the producer until every
+  worker has finished that command and recycles nothing: to reuse a ring
+  slot, to read memory a queued copy writes, at a draw token;
+- **a fence** holds a worker at a command until every other worker has
+  finished the commands before it (section 9). Only copies that read rows
+  other workers own, the command after each, and screen copies carry one.
+
+`SOA_GXR_DRAIN=1` puts back the drains around every such copy, as the
+oracle and the fallback, and `SOA_GXR_STALL` holds a worker back to turn a
+race into a certain failure (`tools/tests/test_gxr_overlap.py`).
 
 One measured surprise, which changes what "the renderer is slow" would even
 mean: over a 3,000-frame profiled run (PLAN A4), the eight rasterizer
@@ -552,7 +589,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 834 tests, none of which needs a disc (anything that
+- `tools/tests/` — 842 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

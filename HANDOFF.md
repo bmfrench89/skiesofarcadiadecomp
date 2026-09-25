@@ -63,13 +63,19 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   falls from 3.9 ms a frame to 0.21, and the cache holds 1,024. The saved
   time is throughput only with the clock out (+3.2%); at real speed the run
   waits at the drains instead, which is H14's to remove.
+- **The drains around every copy are gone (H14).** The workers fence each
+  other instead, the producer waits only for the one copy it reads, and one
+  drain a frame recycles. Paced play is 10% faster where the port is not
+  raster-bound (Part L 3000: 27 fps), because retraces now arrive on time; the
+  Dangral base is raster-bound and gains 1%, which is H15's to change.
+  `SOA_GXR_DRAIN=1` is the fallback if a scene draws wrong.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
 
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 834 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 842 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -101,7 +107,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 834 |
+| Python tests | 842 |
 | Self-test cases | 75 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -373,12 +379,12 @@ the 23 pinned captures under `--replay`, which loads mods) and its texture
 provider (any texture replaced by content hash, at any size), and **H10** (the
 offline midpoint: right in all five pairs, by `tools/midpoint.py` and by eye;
 positions only, so colour and texture animation steps at 30 Hz, slightly).
-**H12** is done too (texture hashing once an epoch; FINDINGS "H12"). Next, in
-the plan's order: H11's other half (the guest idle loop still spins on one
-core), then H14 (the drains around every filtered copy -- H12 showed that a
-faster producer only waits longer at them), H15 (the pixel path), H13 and
-H16, which are what 60 images a second at 1x needs before H17a turns
-interpolation on. M4 (`call_guest`) is done, and M5,
+**H12** and **H14** are done too (texture hashing once an epoch; fences
+instead of drains around copies; FINDINGS "H12", "H14"). Next, in the plan's
+order: H15 (the pixel path -- the Dangral base is raster-bound, workers busy
+85% of a frame, so nothing on the producer side moves it now), H11's other
+half (the guest idle loop still spins on one core), H13 and H16, which are
+what 60 images a second at 1x needs before H17a turns interpolation on. M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

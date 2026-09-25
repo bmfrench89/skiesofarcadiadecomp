@@ -45,7 +45,14 @@ void gxr_draw_every_frame(void); /* a window is open: do not skip the frames SOA
 void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);
-void gxr_texture_hazard(uint32_t addr, uint32_t bytes); /* flush if a queued copy writes there */
+/* Wait for any queued copy that writes guest memory in [addr, addr + bytes)
+ * (PLAN-60FPS-MODS H14): before the producer reads what a copy may be writing.
+ * One copy's wait, not a drain, and nothing is recycled. Texture lookups, the
+ * front end's sources (vertex arrays, display lists, indexed XF) and the
+ * frame-end hooks (SOA_PEEK, SOA_POKE, mods) each have their own reason. */
+void gxr_texture_hazard(uint32_t addr, uint32_t bytes);
+void gxr_source_hazard(uint32_t addr, uint32_t bytes);
+void gxr_hook_hazard(uint32_t addr, uint32_t bytes);
 /* Frame pairs (PLAN-60FPS-MODS H10): RECORD keeps each draw's key and
  * positions as frame F's and makes them the frame before at the screen copy;
  * LERP moves each draw matched in the frame before to (1-t)*F + t*F+1 and

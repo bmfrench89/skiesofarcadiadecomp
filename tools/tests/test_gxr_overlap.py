@@ -71,6 +71,8 @@ static void xf_f(CpuState* s, unsigned addr, unsigned n, const float* f)
 #define FRAMES 6
 #define A_BASE 0x00400000u /* frame f's first copy at A_BASE + f * SLOT */
 #define B_BASE 0x00600000u
+#define C_BASE 0x00700000u
+#define D_BASE 0x00800000u
 #define SLOT 0x10000u      /* 128 x 96 RGBA8 is 48 KB */
 #define C4_TEX 0x00300000u
 #define XFB 0x00100000u
@@ -144,9 +146,22 @@ static void screen_copy(CpuState* s)
     bp_w(s, 0x52, 0x004803u); /* to the screen, and clear */
 }
 
+static uint64_t fnv(uint64_t h, const uint8_t* p, size_t n)
+{
+    while (n--) { h ^= *p++; h *= 1099511628211ull; }
+    return h;
+}
+
+/* What the CPU reads of the fourth copy: after GXDrawDone, which a game
+ * waits on before it reads what was drawn and which must find it finished;
+ * and after a draw token, which finds it finished only with
+ * SOA_GXR_TOKENWAIT=1 (H14 answers tokens as they are parsed). */
+static uint64_t g_done = 1469598103934665603ull, g_cpu = 1469598103934665603ull;
+
 static void frame(CpuState* s, int f)
 {
-    uint32_t a = A_BASE + (uint32_t)f * SLOT, b = B_BASE + (uint32_t)f * SLOT;
+    uint32_t a = A_BASE + (uint32_t)f * SLOT, b = B_BASE + (uint32_t)f * SLOT, c = C_BASE + (uint32_t)f * SLOT;
+    uint32_t d = D_BASE + (uint32_t)f * SLOT;
     int i;
     untextured(s);
     for (i = 0; i < 24; i++) {
@@ -158,28 +173,41 @@ static void frame(CpuState* s, int f)
     quad(s, 0, 0, W, H, colour(99, f));               /* writes every row the copy just read */
     for (i = 0; i < 8; i++) quad(s, (float)(i * 16), (float)(i * 11), (float)(i * 16 + 30), (float)(i * 11 + 20), colour(i + 200, f));
     copy_tex(s, b);
+    quad(s, 8, 8, W - 8, H - 8, colour(77, f));
+    copy_tex(s, c); /* a third, so each kind of read below has a copy of its own to wait for */
+    /* Each read below waits for the newest unfinished copy it overlaps, so
+     * each comes while its own copy is that one: the palette the second, the
+     * vertex colours the third, the texture the first destination's second
+     * copy -- a read that waited for its older copy would see the old bytes. */
     bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u); /* GXInvalidateTexAll */
-    textured(s, a, 6, W, H, 0, 0, W / 2, H / 2);        /* samples the first copy */
-    quad(s, 0, 0, W / 2, H / 2, 0xFFFFFFFFu);
     bp_w(s, 0x64, (b >> 5) & 0x1FFFFFu); bp_w(s, 0x65, 0x000400u); /* a palette from inside the second copy */
     textured(s, C4_TEX, 8, 8, 8, W / 2, 0, W / 2, H / 2);
     quad(s, W / 2, 0, W, H / 2, 0xFFFFFFFFu);
-    untextured(s);                                   /* colours indexed from inside the second copy */
-    cp_w(s, 0x50, 0x4200); cp_w(s, 0xA2, (b + 256) & 0x1FFFFFFFu); cp_w(s, 0xB2, 4);
+    untextured(s);                                   /* colours indexed from inside the third copy */
+    cp_w(s, 0x50, 0x4200); cp_w(s, 0xA2, (c + 256) & 0x1FFFFFFFu); cp_w(s, 0xB2, 4);
     gp8(s, 0x80); gp16(s, 4);
     gpf(s, 0); gpf(s, H / 2); gpf(s, 50); gp8(s, 0);
     gpf(s, W); gpf(s, H / 2); gpf(s, 50); gp8(s, 5);
     gpf(s, W); gpf(s, H); gpf(s, 50); gp8(s, 9);
     gpf(s, 0); gpf(s, H); gpf(s, 50); gp8(s, 14);
     cp_w(s, 0x50, 0x2200);
+    quad(s, 16, 16, 48, 48, colour(55, f));
+    copy_tex(s, a); /* the first destination again */
+    bp_w(s, 0x66, 0x001000u); bp_w(s, 0x66, 0x001100u);
+    textured(s, a, 6, W, H, 0, 0, W / 2, H / 2);     /* samples it: must be this copy, not the first */
+    quad(s, 0, 0, W / 2, H / 2, 0xFFFFFFFFu);
+    untextured(s);
+    quad(s, 40, 30, 90, 70, colour(66, f));
+    copy_tex(s, d); /* read by nothing but the CPU, after the token */
     screen_copy(s);
+    bp_w(s, 0x48, (uint32_t)f); /* a draw token */
+    g_cpu = fnv(g_cpu, s->mem + d, W * H * 4);
+    if (f == 3) {
+        bp_w(s, 0x45, 0x000002u); /* GXDrawDone */
+        g_done = fnv(g_done, s->mem + d, W * H * 4);
+    }
 }
 
-static uint64_t fnv(uint64_t h, const uint8_t* p, size_t n)
-{
-    while (n--) { h ^= *p++; h *= 1099511628211ull; }
-    return h;
-}
 
 int main(int argc, char** argv)
 {
@@ -205,6 +233,11 @@ int main(int argc, char** argv)
     h = 1469598103934665603ull;
     for (f = 0; f < FRAMES; f++) h = fnv(h, s.mem + B_BASE + (uint32_t)f * SLOT, W * H * 4);
     printf("[overlap] second copies %016llx\n", (unsigned long long)h);
+    h = 1469598103934665603ull;
+    for (f = 0; f < FRAMES; f++) h = fnv(h, s.mem + C_BASE + (uint32_t)f * SLOT, W * H * 4);
+    printf("[overlap] third copies %016llx\n", (unsigned long long)h);
+    printf("[overlap] token reads %016llx\n", (unsigned long long)g_cpu);
+    printf("[overlap] drawdone reads %016llx\n", (unsigned long long)g_done);
     printf("[overlap] screen %016llx\n", (unsigned long long)gxr_screen_hash());
     printf("[overlap] efb %016llx\n", (unsigned long long)fnv(1469598103934665603ull, &g_efb[0][0][0], sizeof g_efb));
     h = 1469598103934665603ull;
@@ -218,7 +251,9 @@ int main(int argc, char** argv)
 }
 """
 
-# (threads, SOA_GXR_STALL, SOA_HASH): the one-worker run first, as the oracle.
+# (threads, SOA_GXR_STALL, SOA_HASH, other environment): the one-worker run
+# first, as the oracle -- its SOA_HASH drains at every screen copy, so its
+# reads after the token are of finished copies.
 RUNS = [
     ("1", "", "1"),
     ("1", "", ""),
@@ -234,8 +269,21 @@ RUNS = [
     ("8", "2:1:20000", ""),
     ("3", "2:2:20000", ""),
     ("8", "2:1:20000", "1"),
+    ("3", "", "", "SOA_GXR_TOKENWAIT=1"),
+    ("8", "2:1:20000", "", "SOA_GXR_TOKENWAIT=1"),
+    ("8", "2:1:20000", "", "SOA_GXR_DRAIN=1"),
+    ("3", "2:0:300", "", "SOA_GXR_DRAIN=1"),
 ]
-FINAL = ("first copies", "second copies", "screen", "efb", "decodes")
+RUNS = [r if len(r) == 4 else (*r, "") for r in RUNS]
+FINAL = (
+    "first copies",
+    "second copies",
+    "third copies",
+    "drawdone reads",
+    "screen",
+    "efb",
+    "decodes",
+)
 
 
 @pytest.fixture(scope="module")
@@ -260,8 +308,11 @@ def runs(tmp_path_factory):
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     results = {}
-    for threads, stall, hashed in RUNS:
+    for threads, stall, hashed, other in RUNS:
         extra = {"SOA_THREADS": threads}
+        if other:
+            k, v = other.split("=")
+            extra[k] = v
         if stall:
             extra["SOA_GXR_STALL"] = stall
         if hashed:
@@ -271,8 +322,10 @@ def runs(tmp_path_factory):
         )
         text = run.stdout + run.stderr
         assert run.returncode == 0, f"{threads} {stall}: exit {run.returncode}\n{text}"
-        results[(threads, stall, hashed)] = {
-            "final": {k: re.search(rf"\[overlap\] {k} (\w+)", text)[1] for k in FINAL},
+        results[(threads, stall, hashed, other)] = {
+            "final": {
+                k: re.search(rf"\[overlap\] {k} (\w+)", text)[1] for k in (*FINAL, "token reads")
+            },
             "frames": re.findall(r"\[gxr\] frame \d+ \d+x\d+ hash (\w+)", text),
             "text": text,
         }
@@ -287,7 +340,7 @@ needs_msvc = pytest.mark.skipif(
 @needs_msvc
 def test_the_frames_differ_and_the_second_pass_repeats_the_first(runs):
     """A test whose frames were all alike would pass whatever the order."""
-    frames = runs[("1", "", "1")]["frames"]
+    frames = runs[("1", "", "1", "")]["frames"]
     assert len(frames) == 12, frames
     assert len(set(frames[:6])) == 6, frames
     assert frames[:6] == frames[6:], frames
@@ -295,16 +348,51 @@ def test_the_frames_differ_and_the_second_pass_repeats_the_first(runs):
 
 @needs_msvc
 @pytest.mark.parametrize(
-    "key", [r for r in RUNS if r != ("1", "", "1")], ids=lambda r: "-".join(x or "_" for x in r)
+    "key",
+    [r for r in RUNS if r != ("1", "", "1", "")],
+    ids=lambda r: "-".join((x or "_").replace("SOA_GXR_", "") for x in r),
 )
 def test_every_order_leaves_what_one_worker_leaves(runs, key):
-    """Copied memory, the screen, the EFB and every decoded texture, against
-    the one-worker run; and with SOA_HASH, every frame's hash."""
-    want, got = runs[("1", "", "1")], runs[key]
-    for k in FINAL:
+    """Copied memory, the screen, the EFB, every decoded texture and what the
+    CPU read after GXDrawDone, against the one-worker run; with SOA_HASH,
+    every frame's hash; and where a token waits, or the copies drain, what
+    the CPU read after each token."""
+    want, got = runs[("1", "", "1", "")], runs[key]
+    ordered = key[2] or key[3] in ("SOA_GXR_TOKENWAIT=1", "SOA_GXR_DRAIN=1")
+    for k in (*FINAL, "token reads") if ordered else FINAL:
         assert got["final"][k] == want["final"][k], f"{key}: {k} differs\n{got['text'][-3000:]}"
     if key[2]:
         assert got["frames"] == want["frames"], key
+
+
+def waits(text: str) -> dict:
+    m = re.search(r"\[gxr\] waits: (.*?); \d+ drains", text)
+    return {w: int(n) for w, n in re.findall(r"([\w/ -]+?) [\d.]+s \((\d+)\)", m[1])} if m else {}
+
+
+@needs_msvc
+def test_the_copies_were_fenced_not_drained(runs):
+    """What makes the runs above a test of H14 and not of the old drains: at two
+    or more workers the copies were fenced, no copy was drained around, the
+    producer's reads of copy destinations waited for their copy, and the frame
+    gate did the one drain a frame."""
+    for (threads, stall, hashed, other), res in runs.items():
+        w = {k.strip(): n for k, n in waits(res["text"]).items()}
+        if other == "SOA_GXR_DRAIN=1":  # the drains are back, and nothing of H14 runs
+            assert w.get("copy-after", 0) >= 12 * 5 and not w.get("gate"), w
+            continue
+        assert not {"copy-first", "copy-before", "copy-after"} & set(w), (threads, stall, w)
+        if threads != "1":
+            m = re.search(r"\[gxr\] fences: (\d+) fenced commands", res["text"])
+            assert m and int(m[1]) >= 12 * 4, (threads, stall, res["text"][-2000:])
+        if not hashed:  # 12 frames, less the two a GXDrawDone ended with a drain
+            assert w.get("gate", 0) >= 8, (threads, stall, w)
+        if stall == "2:1:20000":
+            # A token waits only under SOA_GXR_TOKENWAIT, and with SOA_HASH the
+            # screen copy has drained before it, so it finds every copy done.
+            tok = other == "SOA_GXR_TOKENWAIT=1" and not hashed
+            want = ("hazard", "tlut", "source") + (("token",) if tok else ())
+            assert all(w.get(k, 0) for k in want), (threads, hashed, w)
 
 
 @needs_msvc

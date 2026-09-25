@@ -833,6 +833,7 @@ static void peek_at_frame(CpuState* s, unsigned frame)
             k->done = 1;
             continue;
         }
+        gxr_hook_hazard(k->ea, 4); /* the frame may still be copying there (H14) */
         fprintf(stderr, "[peek] frame %u: %08X = %08X (retrace %u)\n", frame, k->ea, mem_r32(s, k->ea),
                 mem_r32(s, VI_RETRACE_COUNT));
     }
@@ -905,6 +906,7 @@ void poke_at_frame(CpuState* s, unsigned frame)
                     frame, g_pokes[i].ea);
             continue;
         }
+        gxr_hook_hazard(g_pokes[i].ea, 4); /* the frame may still be copying there (H14) */
         fprintf(stderr, "[poke] frame %u: %08X <- %08X (was %08X)\n", frame, g_pokes[i].ea,
                 g_pokes[i].value, mem_r32(s, g_pokes[i].ea));
         mem_w32(s, g_pokes[i].ea, g_pokes[i].value);

@@ -212,6 +212,8 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WATCH_FROM=N` | start `SOA_WATCH` at the game's frame `N`: earlier stores are neither printed nor counted against its 201 lines. Every `[watch]` line ends with the frame it happened in |
 | `SOA_GXR_DEBUG=N` / `SOA_GXR_DRAWS=N` / `SOA_GXR_PIXEL=x,y` | renderer forensics in `--replay`: triangles from draw N on, stop after N draws, narrate one pixel |
 | `SOA_TEXVERIFY=1` | hash every texture on every lookup, as before PLAN-60FPS-MODS H12, and count the textures whose bytes changed inside one texture epoch: a rewrite with no texture-cache invalidate (BP 0x66), EFB copy or frame end since the last hash, which the renderer would otherwise draw from its old decode. The report's `[gxr] textures:` line gives the count, and the first eight are named |
+| `SOA_GXR_DRAIN=1` | order EFB copies the way the renderer did before PLAN-60FPS-MODS H14: a full drain before and after every copy that reads rows other workers own (every copy the game makes), and for every texture read from a queued copy. The fallback if a scene draws wrong with H14's fences, and the oracle they are tested against |
+| `SOA_GXR_TOKENWAIT=1` | make a draw token (`GXSetDrawSync`) wait for the copies before it. Off, a token is answered as it is parsed, as it always has been, and one that arrives while a copy is still running is counted in the report; on, a game that reads a copy's memory right after its token sees it finished, at the cost of H14's gain (this game's tokens sit at the top of each frame) |
 | `SOA_GXR_STALL=w:k:us[,...]` | a test knob: rasterizer worker `w` waits `us` microseconds before every command of kind `k` (0 a draw, 1 a copy, 2 a clear), which turns an ordering race between the workers into a certain failure (`tools/tests/test_gxr_overlap.py`). The run says it is a test |
 | `SOA_GXR_LIGHTS=N` / `SOA_GXR_NOTEX=1` / `SOA_CULLFLIP=1` | more renderer forensics: dump the lighting setup of the first N draws, draw every texture flat grey, reverse the winding the rasterizer culls by |
 | `SOA_NOAX=1` / `SOA_AX_VERBOSE=1` / `SOA_ARAM_VERBOSE=1` | audio forensics: skip the AX mixer entirely, one line per voice command, one line per ARAM DMA |
@@ -222,7 +224,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 834 tests; any that need a dump skip themselves
+python -m pytest                     # 842 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

@@ -55,6 +55,7 @@ void gxr_set_projection_filter(void (*fn)(float p[6], int o)) { g_proj = fn; }
 static int (*g_tex)(uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, const uint8_t**, uint32_t*, uint32_t*);
 void gxr_set_texture_provider(int (*fn)(uint64_t, uint32_t, uint32_t, uint32_t, const uint8_t*, const uint8_t**,
                                         uint32_t*, uint32_t*)) { g_tex = fn; }
+void gxr_hook_hazard(uint32_t a, uint32_t b) { (void)a; (void)b; }
 void fn_8023F704(CpuState* s);
 
 /* The game's side of call_guest: one function at 0x80003100 that adds r3

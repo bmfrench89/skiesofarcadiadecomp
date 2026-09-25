@@ -262,7 +262,8 @@ def test_what_the_game_really_programs_stays_silent(output):
         if ln.startswith("[gxr]")
         and not any(line in ln for _, line in CONDITIONS)
         and not re.match(
-            r"\[gxr\] (time|producer|workers|rasterizing|\d+ triangles|\d+ copies asked|waits:)", ln
+            r"\[gxr\] (time|producer|workers|rasterizing|\d+ triangles|\d+ copies asked|waits:|fences:|\d+ draw tokens came)",
+            ln,
         )
     ]
     assert not strays, "\n".join(strays)

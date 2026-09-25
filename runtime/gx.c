@@ -148,6 +148,10 @@ static const char* dump_dir(void)
 static void frame_end(CpuState* s)
 {
     char path[256];
+    /* A frame being captured is finished first, so its hook and its .ram see
+     * every copy it made, as they did before H14 let a frame end with the
+     * workers still drawing it. */
+    if (frame_wanted(g_frame)) gxr_flush();
     /* Before the capture below, so a frame that is both poked and dumped is
      * dumped with the poke already in it. */
     if (g_frame_hook) g_frame_hook(s, g_frame);
@@ -253,6 +257,7 @@ void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);
 void tex_epoch_advance(void);
+void gxr_source_hazard(uint32_t addr, uint32_t bytes); /* gxr.c: wait for a queued copy writing there */
 
 static void load_bp(CpuState* s, uint32_t v)
 {
@@ -337,6 +342,7 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             /* count comes out of the command stream, so 4 * count can
              * overflow and wrap the sum back under the limit. Subtract. */
             if (count <= MEM1_SIZE / 4 && (src & MEM_MASK) <= MEM1_SIZE - 4 * count) {
+                gxr_source_hazard(src, 4 * count); /* a queued copy may be writing it (H14) */
                 for (i = 0; i < count; i++)
                     if (addr + i < 0x1100) g_xf[addr + i] = mem_r32(s, (src | 0x80000000u) + 4 * i);
             }
@@ -351,6 +357,7 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             /* size is the guest's, and the same wrap applies to it. */
             if (!in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
                 size_t done;
+                gxr_source_hazard(addr, size); /* a queued copy may be writing it (H14) */
                 g_list_addr = addr; /* the draws inside say which list they came through (gx_draw_list) */
                 g_in_list = 1;
                 done = parse(s, mem_ptr(s, addr), size, 1);

@@ -315,9 +315,7 @@ def test_the_stream_reached_the_flush_paths_it_is_here_to_test(runs):
     a queue test quietly stops working. gxr_report says whether the path was
     taken."""
     for threads, text in runs.items():
-        m = re.search(
-            r"\[gxr\] (\d+) draws sampled a texture a queued copy had not written yet", text
-        )
+        m = re.search(r"\[gxr\] (\d+) draws sampled a texture a queued copy writes", text)
         assert m, f"SOA_THREADS={threads} never flushed from inside tev_prepare:\n{text}"
         assert int(m.group(1)) >= 40, text
 

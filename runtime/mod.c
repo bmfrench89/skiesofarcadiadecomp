@@ -382,8 +382,11 @@ void si_set_pad_filter(void (*fn)(unsigned frame, void* pad));
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 void gxr_set_texture_provider(int (*fn)(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba,
                                         const uint8_t** out, uint32_t* out_w, uint32_t* out_h));
+void gxr_hook_hazard(uint32_t addr, uint32_t bytes);
 
-/* RAM, aligned to the width, and for a write not the game's code. */
+/* RAM, aligned to the width, and for a write not the game's code. A mod runs
+ * at a frame end or the safe point with the frame's copies possibly still
+ * running (PLAN-60FPS-MODS H14), so an access that overlaps one waits for it. */
 static int api_ok(uint32_t addr, uint32_t n, uint32_t align, int write)
 {
     int i;
@@ -393,6 +396,7 @@ static int api_ok(uint32_t addr, uint32_t n, uint32_t align, int write)
     if (write)
         for (i = 0; i < 7; i++)
             if (g_text[i][1] > g_text[i][0] && addr < g_text[i][1] && addr + n > g_text[i][0]) return 0;
+    gxr_hook_hazard(addr, n);
     return 1;
 }
 
@@ -977,6 +981,7 @@ void mod_frame(CpuState* s, unsigned frame)
         if (p->has_scene && scene != p->scene) continue;
         if (p->has_state && state != p->state) continue;
         if (p->has_map && (number != p->map_number || letter != p->map_letter)) continue;
+        gxr_hook_hazard(p->ea, 4);
         mem_w32(s, p->ea, p->value);
         if (!p->applied) p->first_frame = frame;
         p->applied++;
