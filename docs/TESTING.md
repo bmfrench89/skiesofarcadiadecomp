@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-869 passed in 169.33s
+878 passed in 173.02s
 ```
 
-869 tests in 51 files, none of which reads the disc. They cover the Python
+878 tests in 51 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -49,7 +49,7 @@ its own and run it, some of the C as well:
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
-| `test_guard.py` | 23 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
+| `test_guard.py` | 32 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content; and T0: what mods, packs and saves would carry, the pack, dump, blob, photo and out folders, and in a mod folder a file that is not text or a table over 64 rows |
 | `test_emit.py` | 22 | the emitter; the last cases compile the emitted C with MSVC and run it |
 | `test_gxr_overlap.py` | 21 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
@@ -101,10 +101,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `869 passed` |
-| no capstone — **what CI installs** | `850 passed, 1 skipped` |
-| no MSVC | `615 passed, 254 skipped` |
-| neither — **the Ubuntu CI leg** | `596 passed, 255 skipped` |
+| everything (MSVC + capstone) | `878 passed` |
+| no capstone — **what CI installs** | `859 passed, 1 skipped` |
+| no MSVC | `624 passed, 254 skipped` |
+| neither — **the Ubuntu CI leg** | `605 passed, 255 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -152,11 +152,13 @@ local version can disagree about a line nobody touched.
 guard: 161 tracked files, no game data
 ```
 
-Refuses game data in the tree: 28 forbidden extensions (`.rvz`, `.iso`, `.dol`,
-`.tpl`, `.dsp`, `.bin`, `.map`, … — `.bin` is deliberate, the only `.bin` files
-in this project's world are `boot.bin`, `bi2.bin` and `fst.bin`), eleven
+Refuses game data in the tree: 41 forbidden extensions (`.rvz`, `.iso`, `.dol`,
+`.tpl`, `.dsp`, `.bin`, `.map`, `.gci`, … — `.bin` is deliberate, the only `.bin` files
+in this project's world are `boot.bin`, `bi2.bin` and `fst.bin`), sixteen
 directory names that must never be tracked (`extracted/`, `gen/`, `build/`,
-`vendor/`, `scratch/`, …), and any tracked file over 2 MiB. It lists `git
+`vendor/`, `scratch/`, `packs/`, `photos/`, …), any tracked file over 2 MiB, and,
+in a folder holding a `mod.ini`, any file that is not text or a table of more
+than 64 rows (T0: a mod here is its edits, never the game's data). It lists `git
 ls-files`, so it sees what would actually be committed rather than what is
 lying around. CI runs the same script, then scans **every blob in the whole
 history** for the same suffixes, because a file deleted in a later commit is
@@ -984,7 +986,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 254 of the 869 skip without a C compiler; they build one runtime file and run it.
+² 254 of the 878 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -995,8 +997,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 596 passed, 255 skipped |
-| **Tests** | windows | the same three — 850 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 605 passed, 255 skipped |
+| **Tests** | windows | the same three — 859 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

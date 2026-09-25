@@ -54,6 +54,16 @@ FORBIDDEN_SUFFIXES = {
     ".ram",
     ".wav",
     ".png",
+    # What mods, packs and saves would carry (2026-09-25, PLAN-GAMEPLAY-MODS
+    # T0): a memory-card save exported whole, texture-pack images, the game's
+    # table and archive data, and audio in the formats a music pack would use.
+    ".gci",
+    ".dds",
+    ".dat",
+    ".ogg",
+    ".flac",
+    ".mp3",
+    ".opus",
 }
 
 # Directories that hold extracted or vendored material.
@@ -69,7 +79,22 @@ FORBIDDEN_DIRS = {
     "build",
     "dist",
     "scratch",
+    # Where packs, dumps, host blobs, photos and tool output go (T0): texture
+    # packs and dumps are the game's images, a host blob is a save's mod data,
+    # and a photo is a capture with a 24 MB RAM image.
+    "packs",
+    "dumps",
+    "blobs",
+    "photos",
+    "out",
 }
+
+# A mod in this repository is text (PLAN-GAMEPLAY-MODS.md, rule 3): its edits,
+# keyed by entry, and its wholly new entries, with every binary built on the
+# player's machine from their own disc. So in a folder holding a mod.ini a file
+# that is not UTF-8 text is refused, whatever its name says it is, and a table
+# longer than this is a column of the game's own data rather than edits to it.
+MOD_TABLE_ROWS = 64
 
 # A tracked text file this large is almost certainly not source.
 MAX_TRACKED_BYTES = 2 * 1024 * 1024
@@ -143,6 +168,42 @@ HISTORY_EXEMPT = frozenset(
         ("f6983ef64432fdf045405243cd5c53f4f414ade8", "scratch/gx/lis.py"),
     }
 )
+
+
+def content_problems(root: Path, files: list[str]) -> list[str]:
+    """The content check (T0): in every folder holding a tracked mod.ini, a
+    file that is not text -- a dump, whatever it is named -- and a table of
+    more than MOD_TABLE_ROWS rows. Rows are the lines of a .tsv or .csv that
+    are neither blank nor comments, less the first, which is the header."""
+    mods = {Path(rel).parent for rel in files if Path(rel).name.lower() == "mod.ini"}
+    problems = []
+    for rel in files:
+        path = Path(rel)
+        if not any(folder == path.parent or folder in path.parents for folder in mods):
+            continue
+        if not (root / path).exists():
+            continue
+        data = (root / path).read_bytes()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
+        if text is None or "\0" in text:
+            problems.append(
+                f"{rel}: not text, in a mod folder -- a mod here is text, and its binaries are "
+                "built from the player's own disc (PLAN-GAMEPLAY-MODS.md rule 3)"
+            )
+            continue
+        if path.suffix.lower() in (".tsv", ".csv"):
+            rows = [
+                ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
+            ]
+            if len(rows) - 1 > MOD_TABLE_ROWS:
+                problems.append(
+                    f"{rel}: {len(rows) - 1} rows, over {MOD_TABLE_ROWS} -- a mod holds its edits and new "
+                    "entries, not a whole column of the game's table (rule 3)"
+                )
+    return problems
 
 
 def history_blobs(root: Path) -> list[tuple[str, str, str]]:
@@ -242,6 +303,8 @@ def main() -> int:
             size = (ROOT / path).stat().st_size
             if size > MAX_TRACKED_BYTES:
                 problems.append(f"{rel}: {size:,} bytes exceeds the {MAX_TRACKED_BYTES:,} limit")
+
+    problems += content_problems(ROOT, files)
 
     if problems:
         print("GAME DATA GUARD FAILED\n", file=sys.stderr)
