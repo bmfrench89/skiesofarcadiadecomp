@@ -41,6 +41,8 @@ const char* settings_recorded(char* out, size_t cap) { (void)cap; out[0] = 0; re
 int seed_init(char* e, size_t cap) { if (cap) e[0] = 0; return 0; }
 void settings_record_as(const char* k, const char* v) { (void)k; (void)v; }
 void settings_check_mods(int (*loaded)(const char* id)) { (void)loaded; }
+void si_set_motor_strength(int percent) { (void)percent; }
+void si_motor_stop(void) {}
 void seed_report(void) {}
 void hle_frame_mark(void) {}
 void hle_frametime_restart(unsigned frame) { (void)frame; }

@@ -114,7 +114,7 @@ $env:SOA_SELFTEST = '1'
 gen\soa.exe extracted
 ```
 
-That runs 79 checks over the translated C library, the device models, the card
+That runs 80 checks over the translated C library, the device models, the card
 and SRAM, the AX mixer and the software renderer — including the 12
 hand-decompiled functions the port runs natively, compared against their
 recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
@@ -161,7 +161,7 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b` and `autotext`, each standing for the switch below. A key
+`encounters_hold_b`, `autotext` and `rumble`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys and
 `autotext`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys and `autotext` are read by the mods
@@ -204,6 +204,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
 | `SOA_THREADS=n` | rasterizer worker threads, default three quarters of the logical CPUs (12 of 16), which was fastest in the heaviest field scene measured (FINDINGS "H15c") |
 | `SOA_NOSOUND=1` | no audio device |
+| `SOA_RUMBLE=0..100` | how hard the pad rumbles when the game asks (PADControlMotor), as a share of full; default 100, 0 is off. The motor turns only with a window open and no `SOA_PAD` script or `SOA_PAD_FILE` replay driving the input, and stops when the window loses focus or closes and at the end of a run (PLAN-GAMEPLAY-MODS M18) |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with no video frame and print a report (default 20 headless, off when a window is open; 0 disables) |
 | `SOA_POKE=f:a=v[,f:a=v]` | store the 32-bit value `v` at guest address `a` at the end of frame `f`, once, printing what was there before. The one way to answer "what does the game do if this variable says that" without a recompile. Fires on the first frame at or after `f`, so a skipped frame number does not silently lose the poke. Up to 256 items, which is 85 field warps at three words each; a mistyped item stops parsing and says so rather than driving a run that looks like it ignored you. The field's own map identity is `0x80311AC4` (map number), `0x80311AC8` (map letter in the top byte) and `0x80311AEC` (field state, 8 is the steady update). A warp is the destination's script name, e.g. `ME103A.SCT`, as three words at `0x80305CF0`, then 15 in `0x80311AEC`: the game's own warp, no button; also set `0x8030E420` (`sys[15]`, where the party came from) to 0 so the map takes its default entrance, and do not poke the map words (`HANDOFF.md` has the command). Numbers are decimal or `0x` hex and must fit 32 bits; a sign, a space or a leading zero is refused rather than read some other way |

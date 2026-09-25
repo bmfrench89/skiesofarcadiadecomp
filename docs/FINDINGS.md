@@ -3223,3 +3223,32 @@ state 8 or with no window; none over the person's own A; none when off,
 `0` or a value it does not take -- and, from the shipped source, the guard
 removed presses on a page the game turns itself, and the test switch
 presses in a choice.
+
+
+**M18: rumble.** 2026-09-25. The game drives the pad's motor through
+PADControlMotor, which writes `0x00400300 | cmd` to a channel's SI OUTBUF
+(1 rumble, 0 stop, 2 stop hard); the port used to store the word and do
+nothing. `si.c` now passes a change of channel 0's two command bits to a
+sink `window.c` sets -- `XInputSetState` on port 1's pad, both motors -- at
+the strength `SOA_RUMBLE` gives (0-100, default 100). The motor turns only
+when a person could be holding the pad: a window is open, no `SOA_PAD`
+script or `SOA_PAD_FILE` replay drives the input, and the strength is not 0;
+every other change sends speed 0. It is stopped on every way out that the
+port controls: focus lost (`WM_ACTIVATEAPP`), the window closed, the
+report, and `atexit` for the `exit()`s that skip the report. A crash with
+the motor on is the one case left: the pad may buzz until XInput's own
+timeout or until it is unplugged. The report says how often the game asked
+and how often the motor turned. `rumble` is a setting and is not recorded:
+it changes nothing the game does.
+
+Checks: the self test's new case drives `si_write` as PADControlMotor
+would, with a counting sink: rumble turns the motor at full strength, a
+repeated write calls nothing, stop and stop hard send 0, strength 50 half
+speed, channels 1-3 nothing, and strength 0, no window or a pad script
+never turn it; `si_motor_stop` sends 0 once while on and nothing while off.
+The spec's mutation -- a gate that ignores the strength -- cannot fail here,
+because the speed is the strength's share of full and is 0 at 0; a gate
+that ignores the window (the mutation used, tried) fails the no-window
+line. `test_padrec.py` is unchanged: the sink is a setter. Whether the pad
+rumbles in a battle with the game's Vibration option on, and not with it
+off, is the owner's check (session A).

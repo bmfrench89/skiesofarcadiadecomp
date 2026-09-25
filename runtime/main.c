@@ -44,6 +44,8 @@ const char* settings_recorded(char* out, size_t cap);
 int seed_init(char* in_effect, size_t cap); /* seed.c */
 void settings_record_as(const char* key, const char* value);
 void settings_check_mods(int (*loaded)(const char* id));
+void si_set_motor_strength(int percent); /* si.c, M18 */
+void si_motor_stop(void);
 int mod_loaded(const char* id); /* mod.c */
 void seed_report(void);
 /* Set while gx.c is inside the command-stream parse. The sampler reads it
@@ -1191,6 +1193,13 @@ int main(int argc, char** argv)
         int modded = mods && *mods && mod_load(&s, mods, dol, dol_size);
         size_t n;
         char seed[16];
+        const char* rumble = getenv("SOA_RUMBLE");
+        /* The rumble motor (M18): how hard, and stopped on every way out --
+         * the report covers each path through hle_report, atexit the exit()s
+         * that skip it; window.c stops it on focus loss and close. */
+        si_set_motor_strength(rumble && *rumble ? atoi(rumble) : 100);
+        hle_on_report(si_motor_stop);
+        atexit(si_motor_stop);
         if (seed_init(seed, sizeof seed)) hle_on_report(seed_report);
         settings_record_as("seed", seed);
         settings_check_mods(mod_loaded);

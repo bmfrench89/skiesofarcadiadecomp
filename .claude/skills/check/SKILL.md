@@ -357,7 +357,7 @@ gen\soa.exe extracted
 [selftest] 0 failure(s)
 ```
 
-**0.09 s, 90 lines, 79 cases** — the cheapest real check in the project and the
+**0.16 s, 91 lines, 80 cases** — the cheapest real check in the project and the
 one to run after every `--link`. It calls the recompiled library, the device
 models, the AX mixer and the software renderer directly, outside the game's
 control flow, so a wrong answer is a bug with a two-line repro. Every case

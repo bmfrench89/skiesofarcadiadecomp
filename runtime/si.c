@@ -858,6 +858,56 @@ int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out)
     }
 }
 
+/* ---- the rumble motor (PLAN-GAMEPLAY-MODS M18) -------------------------
+ * PADControlMotor writes 0x00400300 | cmd to a channel's OUTBUF: cmd 1
+ * rumbles, 0 stops, 2 stops hard. A change of channel 0's two command bits
+ * goes to the sink window.c sets (XInputSetState on port 1's pad), at the
+ * strength SOA_RUMBLE gives -- but the motor turns only when a person could
+ * be holding the pad: a window is open, no SOA_PAD script or SOA_PAD_FILE
+ * replay drives the input, and the strength is not 0. Every other change
+ * sends speed 0, and so does si_motor_stop, which window.c and main.c call
+ * on the ways out: focus lost, the window closed, the report, exit. The
+ * sink is a setter so that si.c still links alone (test_padrec.py). */
+static void (*g_motor_sink)(unsigned speed);
+static int g_motor_window, g_motor_strength = 100, g_motor_on;
+static uint32_t g_motor_cmd;
+static unsigned long long g_motor_asked, g_motor_turned;
+
+void si_set_motor_sink(void (*fn)(unsigned speed)) { g_motor_sink = fn; }
+void si_set_motor_window(int open) { g_motor_window = open; }
+void si_set_motor_strength(int percent) { g_motor_strength = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
+
+static void motor_send(unsigned speed)
+{
+    if (!g_motor_sink) return;
+    g_motor_sink(speed);
+    if (speed && !g_motor_on) g_motor_turned++;
+    g_motor_on = speed != 0;
+}
+
+static int motor_scripted(void)
+{
+    const char* script = getenv("SOA_PAD");
+    const char* file = getenv("SOA_PAD_FILE");
+    return (script && *script) || (file && *file);
+}
+
+static void motor_command(uint32_t w)
+{
+    uint32_t cmd = w & 3u;
+    if (cmd == g_motor_cmd) return;
+    g_motor_cmd = cmd;
+    if (cmd == 1) g_motor_asked++;
+    motor_send(cmd == 1 && g_motor_window && g_motor_strength > 0 && !motor_scripted()
+                   ? (unsigned)g_motor_strength * 65535u / 100u
+                   : 0);
+}
+
+void si_motor_stop(void)
+{
+    if (g_motor_on) motor_send(0);
+}
+
 int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 {
     uint32_t w = (uint32_t)v;
@@ -870,7 +920,8 @@ int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
         return 1;
     }
     switch (ea - SI_BASE) {
-    case 0x00: case 0x0C: case 0x18: case 0x24: g_outbuf[(ea - SI_BASE) / 12] = w; return 1;
+    case 0x00: g_outbuf[0] = w; motor_command(w); return 1;
+    case 0x0C: case 0x18: case 0x24: g_outbuf[(ea - SI_BASE) / 12] = w; return 1;
     case 0x30: g_poll = w; return 1;
     case 0x34: {
         /* TCINT and RDSTINT are write-one-to-clear; the masks and the
@@ -901,6 +952,9 @@ void si_report(void)
     unsigned frames = g_pad_seen ? g_pad_frame + 1 : 0;
     fprintf(stderr, "[si] %llu direct transfers, %llu polls, %llu input reads; poll reg %08X\n",
             (unsigned long long)g_transfers, (unsigned long long)g_polls, (unsigned long long)g_reads, g_poll);
+    if (g_motor_asked)
+        fprintf(stderr, "[si] rumble: the game asked %llu time(s), the motor turned %llu\n", g_motor_asked,
+                g_motor_turned);
     if (g_rec) {
         char totals[128];
         if (g_pad_seen && !pad_same(&g_rec_last, &PAD_NEUTRAL)) {

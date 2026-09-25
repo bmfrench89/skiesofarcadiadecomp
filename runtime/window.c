@@ -215,9 +215,25 @@ static void dxgi_present(int w, int h)
     note_present();
 }
 
+void si_set_motor_sink(void (*fn)(unsigned speed));
+void si_set_motor_window(int open);
+void si_motor_stop(void);
+
+/* The rumble motor's sink (si.c, M18): both of port 1's motors at the speed
+ * si.c asks for. A pad that is not there refuses the call, which is fine. */
+static void motor(unsigned speed)
+{
+    XINPUT_VIBRATION v;
+    v.wLeftMotorSpeed = v.wRightMotorSpeed = (WORD)speed;
+    XInputSetState(0, &v);
+}
+
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
+    case WM_ACTIVATEAPP:
+        if (!w) si_motor_stop(); /* the person looked away: nothing buzzes on the desk */
+        return DefWindowProc(h, m, w, l);
     case WM_CLOSE:
     case WM_DESTROY:
         g_open = 0;
@@ -334,6 +350,8 @@ static unsigned __stdcall ui_thread(void* arg)
                 g_interval == 1 ? ", not a multiple of 30: each frame takes the next refresh" : "");
     }
     g_open = 1;
+    si_set_motor_sink(motor);
+    si_set_motor_window(1);
     if (g_dxgi)
         fprintf(stderr, "[window] open at %dx, presenting with a DXGI flip-model swap chain, each frame held %u "
                         "refresh(es)\n", g_scale, g_interval);
@@ -344,6 +362,8 @@ static unsigned __stdcall ui_thread(void* arg)
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
                 g_open = 0;
+                si_set_motor_window(0);
+                si_motor_stop();
                 fprintf(stderr, "[window] closed\n");
                 hle_report();
                 /* Closing the window is how a recording session ends, and

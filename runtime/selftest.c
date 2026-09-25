@@ -1833,6 +1833,101 @@ static int encounter_selftest(CpuState* s, char* got, size_t cap)
     return check("encounter multiplier as the game has it", got, bad ? "agreement" : got);
 }
 
+/* The rumble motor (PLAN-GAMEPLAY-MODS M18): what si.c hands the sink for
+ * each OUTBUF write PADControlMotor would make, through si_write as the game
+ * makes it. A counting sink stands in for XInput. */
+int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+void si_set_motor_sink(void (*fn)(unsigned speed));
+void si_set_motor_window(int open);
+void si_set_motor_strength(int percent);
+void si_motor_stop(void);
+
+static unsigned g_sink_calls, g_sink_speed;
+static void count_sink(unsigned speed)
+{
+    g_sink_calls++;
+    g_sink_speed = speed;
+}
+
+/* One OUTBUF write; the calls it made, and the last speed. */
+static unsigned motor_write(CpuState* s, unsigned chan, unsigned cmd, unsigned* speed)
+{
+    unsigned before = g_sink_calls;
+    g_sink_speed = 0xDEAD;
+    si_write(s, 0xCC006400u + 12u * chan, 4, 0x00400300u | cmd);
+    *speed = g_sink_speed;
+    return g_sink_calls - before;
+}
+
+static int motor_selftest(CpuState* s, char* got, size_t cap)
+{
+    char pad_was[256] = "";
+    const char* was = getenv("SOA_PAD");
+    unsigned n, v, c, bad = 0;
+#define WANT(cond, what) do { if (!bad && !(cond)) { bad = 1; snprintf(got, cap, "%s (calls %u, speed %u)", what, n, v); } } while (0)
+    if (was) snprintf(pad_was, sizeof pad_was, "%s", was);
+#ifdef _WIN32
+    _putenv_s("SOA_PAD", "");
+#endif
+    si_set_motor_sink(count_sink);
+    si_set_motor_window(1);
+    si_set_motor_strength(100);
+    n = motor_write(s, 0, 0, &v);             /* the state it starts in: no call */
+    WANT(n == 0, "a stop while stopped called the sink");
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 1 && v == 65535, "rumble did not turn the motor at full strength");
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 0, "the same bits again called the sink");
+    n = motor_write(s, 0, 0, &v);
+    WANT(n == 1 && v == 0, "stop did not send speed 0");
+    n = motor_write(s, 0, 1, &v);
+    n = motor_write(s, 0, 2, &v);
+    WANT(n == 1 && v == 0, "stop hard did not send speed 0");
+    for (c = 1; c < 4; c++) {
+        n = motor_write(s, c, 1, &v) + motor_write(s, c, 0, &v);
+        WANT(n == 0, "a channel other than 0 called the sink");
+    }
+    n = motor_write(s, 0, 1, &v);
+    {
+        unsigned before = g_sink_calls;
+        si_motor_stop();
+        n = g_sink_calls - before;
+        v = g_sink_speed;
+        WANT(n == 1 && v == 0, "si_motor_stop while on did not send one speed 0");
+        before = g_sink_calls;
+        si_motor_stop();
+        n = g_sink_calls - before;
+        WANT(n == 0, "si_motor_stop while off called the sink");
+    }
+    motor_write(s, 0, 0, &v);
+    si_set_motor_strength(50);
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 1 && v == 32767, "strength 50 did not give half speed");
+    motor_write(s, 0, 0, &v);
+    si_set_motor_strength(0);
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 1 && v == 0, "strength 0 turned the motor");
+    motor_write(s, 0, 0, &v);
+    si_set_motor_strength(100);
+    si_set_motor_window(0);
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 1 && v == 0, "with no window the motor turned");
+    motor_write(s, 0, 0, &v);
+    si_set_motor_window(1);
+#ifdef _WIN32
+    _putenv_s("SOA_PAD", "100:a");
+    n = motor_write(s, 0, 1, &v);
+    WANT(n == 1 && v == 0, "with a pad script driving the input the motor turned");
+    motor_write(s, 0, 0, &v);
+    _putenv_s("SOA_PAD", pad_was);
+#endif
+#undef WANT
+    si_set_motor_window(0);
+    si_set_motor_sink(NULL);
+    if (!bad) snprintf(got, cap, "on, off, off hard, full and half strength; nothing for channels 1-3, strength 0, no window or a script");
+    return check("rumble motor from OUTBUF", got, bad ? "agreement" : got);
+}
+
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
  * dispatched like any translated call, with every register set to a pattern
  * first. The length comes back in r3, and every register -- r1, r2, r13, the
@@ -1990,6 +2085,7 @@ int selftest(CpuState* s)
     failures += psq_selftest(s, got, sizeof got);
     failures += seed_selftest(s, got, sizeof got);
     failures += encounter_selftest(s, got, sizeof got);
+    failures += motor_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

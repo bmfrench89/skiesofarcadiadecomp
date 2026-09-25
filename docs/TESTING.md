@@ -336,7 +336,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (79 cases)
+## 3. The self test (80 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -369,7 +369,7 @@ cannot open nodisc/sys/fst.bin
 
 That is the reason none of section 3 runs in CI.
 
-The 79 cases, in the order they print:
+The 80 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -384,7 +384,8 @@ The 79 cases, in the order they print:
 | 76 | Paired-single loads and stores against the general formula | 1 |
 | 77 | The race seed at OSGetTick | 1 |
 | 78 | The encounter multiplier as the game works it out | 1 |
-| 79 | A mod's call into the game: every register as it was | 1 |
+| 79 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
+| 80 | A mod's call into the game: every register as it was | 1 |
 
 ### The memory card (26)
 
@@ -557,6 +558,17 @@ party's accessories, and writes it back after a hold of B; this runs the
 game's own `fn_801EF7E0` on five parties set up in memory and needs the byte
 the mod's reckoning gives (FINDINGS "P1a"). Claiming the first character's
 accessory wins fails it: the game gives 05.
+
+### The rumble motor (1)
+
+```
+[selftest] rumble motor from OUTBUF     ok    got "on, off, off hard, full and half strength; nothing for channels 1-3, strength 0, no window or a script"
+```
+
+`si.c` hands a change of channel 0's motor bits to the sink `window.c` sets
+(M18); a counting sink stands in for XInput, and the writes go through
+`si_write` as the game's PADControlMotor makes them. A gate that ignores
+the window fails it (FINDINGS "M18").
 
 ---
 
