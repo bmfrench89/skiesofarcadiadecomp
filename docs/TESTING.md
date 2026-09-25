@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-744 passed in 94.15s
+750 passed in 104.33s
 ```
 
-744 tests in 43 files, none of which reads the disc. They cover the Python
+750 tests in 44 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -77,6 +77,7 @@ its own and run it, some of the C as well:
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
+| `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
@@ -93,10 +94,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `744 passed` |
-| no capstone — **what CI installs** | `725 passed, 1 skipped` |
-| no MSVC | `589 passed, 155 skipped` |
-| neither — **the Ubuntu CI leg** | `570 passed, 156 skipped` |
+| everything (MSVC + capstone) | `750 passed` |
+| no capstone — **what CI installs** | `731 passed, 1 skipped` |
+| no MSVC | `590 passed, 160 skipped` |
+| neither — **the Ubuntu CI leg** | `571 passed, 161 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -280,7 +281,7 @@ times left as `<t>`:
 
 ```
 7,144 functions, <n> switch tables (<t>s)
-19 functions bound to HLE, 1 runtime hooks, 1 savepoints
+20 functions bound to HLE, 1 runtime hooks, 1 savepoints
 emitted 7,144 functions into 18 files, 55.7 MB of C (<t>s)
 
 instruction coverage: 100.000%  (696,171 translated, 0 not)
@@ -318,7 +319,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (73 cases)
+## 3. The self test (74 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -351,7 +352,7 @@ cannot open nodisc/sys/fst.bin
 
 That is the reason none of section 3 runs in CI.
 
-The 73 cases, in the order they print:
+The 74 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -361,6 +362,7 @@ The 73 cases, in the order they print:
 | 38–70 | The AX mixer | 33 |
 | 71–72 | The software renderer, through the real GX pipe | 2 |
 | 73 | Decompiled against recompiled | 1 |
+| 74 | `VIGetRetraceCount`, native against its twin | 1 |
 
 ### The memory card (26)
 
@@ -493,6 +495,20 @@ that is right on its own but wrong at the boundary:
   and the magnitudes are allowed to differ; the guest only ever tests the sign.
   This is the one twin whose C needs a host-order guard, and getting it
   backwards is exactly the defect that was found by running it.
+
+### `VIGetRetraceCount` against its twin (1)
+
+```
+[selftest] VIGetRetraceCount native vs twin ok    got "the count at 0x80347A64 over 200 rounds and four call sites"
+```
+
+`runtime/tick.c` answers `VIGetRetraceCount` (PLAN-60FPS-MODS M2) so the main
+loop has a safe point and a tick the port can let go. It must be the original
+-- the retrace count at 0x80347A64 -- everywhere but the frame end's spin once
+unlocked. This runs it against the recompiled translation over 200 random
+counts and four call sites, the top of the loop among them, where it adds only
+a pass over the callbacks. The spin, and the callbacks, are `test_tick.py`'s.
+Answering the count plus one at one call site fails it at round 2.
 
 ---
 
@@ -939,7 +955,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 155 of the 744 skip without a C compiler; they build one runtime file and run it.
+² 160 of the 750 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -950,8 +966,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 570 passed, 156 skipped |
-| **Tests** | windows | the same three — 725 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 571 passed, 161 skipped |
+| **Tests** | windows | the same three — 731 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

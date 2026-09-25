@@ -170,6 +170,7 @@ def build(tmp_path):
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "main.c"),
             str(ROOT / "runtime" / "mod.c"),
+            str(ROOT / "runtime" / "tick.c"),
             str(tmp_path / "stubs.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),

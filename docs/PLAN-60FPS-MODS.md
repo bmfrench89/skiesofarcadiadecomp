@@ -468,7 +468,7 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 - With mods unset, the contract holds.
 - Parser tests cover each refusal, with no disc needed.
 
-**M2. A safe point and tick control** — *a day plus one full retranslation (`--compile --optimize --link`).*
+**M2. A safe point and tick control** — *done 2026-09-24: `runtime/tick.c` answers `VIGetRetraceCount`; `SOA_UNCAP=N` now unlocks the tick instead of zeroing 0x8034768C. Safe points = presented frames less the one frame shown before the loop starts; unlocked, 253 of 255 title frames took one field (59.5 a guest second). Self-test case 74. FINDINGS "M2".*
 - Bind 0x8023F704 (`VIGetRetraceCount`) natively. It returns the word at 0x80347A64, as the original does.
 - When `lr` is 0x801DCB88, it first runs the safe-point callbacks.
 - When `lr` is 0x801DC49C and the unlock is on, it returns the word at 0x8034768C plus 1, so the spin exits.

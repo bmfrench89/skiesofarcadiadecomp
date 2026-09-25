@@ -1616,6 +1616,36 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
     return failures;
 }
 
+/* VIGetRetraceCount is answered by runtime/tick.c (PLAN M2), which must be the
+ * original -- `lwz r3,-27836(r13)` -- wherever it is not the main loop's safe
+ * point or an unlocked spin. Those two call sites are held by test_tick.py;
+ * this holds the rest to the recompiled twin, over random counts and call
+ * sites, including the top of the loop, where it only adds a callback pass. */
+void recomp_fn_8023F704(CpuState* s);
+void fn_8023F704(CpuState* s);
+
+static int tick_selftest(CpuState* s, char* got, size_t cap)
+{
+    static const uint32_t sites[] = {0, 0x801DCB88u, 0x80001000u, 0x8023F708u};
+    int round, bad = 0;
+    for (round = 0; round < 200 && !bad; round++) {
+        uint32_t count = rnd(), lr = sites[round % 4], twin, native;
+        mem_w32(s, 0x80347A64u, count);
+        run_twin(s, recomp_fn_8023F704);
+        twin = s->gpr[3];
+        s->gpr[13] = SDA_BASE;
+        s->lr = lr;
+        fn_8023F704(s);
+        native = s->gpr[3];
+        if (twin != native || native != count) {
+            bad = 1;
+            snprintf(got, cap, "round %d, lr %08X: twin %08X, native %08X, count %08X", round, lr, twin, native, count);
+        }
+    }
+    if (!bad) snprintf(got, cap, "the count at 0x80347A64 over %d rounds and four call sites", round);
+    return check("VIGetRetraceCount native vs twin", got, bad ? "agreement" : got);
+}
+
 int selftest(CpuState* s)
 {
     char got[256];
@@ -1733,6 +1763,7 @@ int selftest(CpuState* s)
     failures += ax_selftest(s, got, sizeof got);
     failures += render_selftest(s, got, sizeof got);
     failures += decomp_selftest(s, got, sizeof got);
+    failures += tick_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

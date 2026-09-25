@@ -836,12 +836,13 @@ static void peek_at_frame(CpuState* s, unsigned frame)
     }
 }
 
-/* SOA_UNCAP=1 zeroes the frame-start field count (0x8034768C, stored at
- * 0x801DCB88) at every frame end, so the game's frame end no longer waits for
- * a second field before presenting: the cap is the immediate `cmpli r0,1` at
- * 0x801DC4A4, and the logic runs once per frame, so this runs the whole game
- * up to twice as fast (FINDINGS "H2"). For measuring the ceiling only -- it is
- * not 60 fps -- and PLAN-60FPS-MODS M2 replaces it for play.
+/* SOA_UNCAP=N lets the frame end's spin go after one field instead of two:
+ * tick.c's VIGetRetraceCount answers the frame's start plus one at the spin's
+ * call site (the cap is the immediate `cmpli r0,1` at 0x801DC4A4). The logic
+ * runs once per frame, so this runs the whole game up to twice as fast
+ * (FINDINGS "H2") -- a measurement, or a battle speed-up, never 60 fps. H3
+ * first did it by zeroing the stored start (0x8034768C) every frame; M2's
+ * answer at the call site leaves that word as the game wrote it.
  *
  * SOA_UNCAP=N starts at frame N, and 1 is from the start. A start frame is
  * what makes it usable at all: a disc load runs on the wall clock, so uncapped
@@ -851,7 +852,7 @@ static void peek_at_frame(CpuState* s, unsigned frame)
  * The [frametime] record restarts at the same frame, so the percentiles are
  * the uncapped stretch's. SOA_FRAMETIME_FROM=N restarts it at N without
  * uncapping, which is how a capped run measures the same stretch. */
-#define FRAME_START_FIELDS 0x8034768Cu
+void tick_unlock_from(unsigned frame); /* tick.c */
 static uint32_t g_uncap_from;     /* 0 = off */
 static uint32_t g_frametime_from; /* 0 = the uncap's frame, or the whole run */
 static int g_uncap_read;
@@ -875,9 +876,10 @@ static void uncap_parse(void)
     g_uncap_from = frame_switch("SOA_UNCAP", "the cap stays on");
     g_frametime_from = frame_switch("SOA_FRAMETIME_FROM", "[frametime] covers the whole run");
     if (g_uncap_from)
-        fprintf(stderr, "[uncap] from frame %u, 0x8034768C is zeroed every frame, so frames need one field, "
-                        "not two -- the game runs up to twice as fast; for measurement, not play\n", g_uncap_from);
+        fprintf(stderr, "[uncap] from frame %u, the frame end's spin is let go after one field, not two -- "
+                        "the game runs up to twice as fast; not 60 fps\n", g_uncap_from);
     if (!g_frametime_from) g_frametime_from = g_uncap_from;
+    tick_unlock_from(g_uncap_from);
 }
 
 void hle_frame_mark(void);
@@ -916,7 +918,6 @@ void poke_at_frame(CpuState* s, unsigned frame)
             hle_frametime_restart(frame);
         }
     }
-    if (g_uncap_from && frame >= g_uncap_from) mem_w32(s, FRAME_START_FIELDS, 0);
 }
 
 #define ARENA_HI 0x81700000u

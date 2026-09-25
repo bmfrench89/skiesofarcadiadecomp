@@ -27,3 +27,4 @@
 0x8025F120  strcpy                # src/sdk/msl/strcpy.c
 0x8025EF88  strcmp                # src/sdk/msl/strcmp.c
 0x8025ED74  strstr                # src/sdk/msl/strstr.c
+0x8023F704  VIGetRetraceCount     # runtime/tick.c: the main loop's safe point, and SOA_UNCAP's tick (PLAN M2)

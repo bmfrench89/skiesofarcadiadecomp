@@ -78,15 +78,36 @@ def test_the_five_adapters_outside_this_file_are_still_a_known_hole():
     which OSSaveContext memcpys a five-kilobyte CpuState about fifteen
     thousand times a run, all of it charged to SelectThread. Those files are
     not A4's to edit; this records the hole rather than letting it be
-    forgotten."""
+    forgotten.
+
+    A binding added since, anywhere in runtime/, has to store its address
+    first and so is not part of the hole: tick.c's VIGetRetraceCount (M2)
+    does. What this counts is the adapters that do not."""
     bound = [
         line.split()[0]
         for line in HLE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     here = {f"0x{addr}".lower() for addr, _ in adapters()}
+    first_statement = {}
+    for path in (ROOT / "runtime").glob("*.c"):
+        if path == SWAP:
+            continue
+        for addr, stmt in re.findall(
+            r"^void fn_([0-9A-F]{8})\(CpuState\* s\)\s*\{\s*([^;]*;)",
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        ):
+            first_statement[f"0x{addr}".lower()] = stmt.strip()
     elsewhere = [a for a in bound if a.lower() not in here]
-    assert len(elsewhere) == 7, (
-        f"config/hle.txt now binds {len(elsewhere)} adapters outside runtime/decomp_swap.c "
-        f"({', '.join(elsewhere)}); each one is invisible to the sampler until it stores s->pc too"
+    hole = [
+        a
+        for a in elsewhere
+        if first_statement.get(a.lower()) != f"s->pc = {a[:2]}{a[2:].upper()}u;"
+    ]
+    assert len(hole) == 7, (
+        f"{len(hole)} adapters bound in config/hle.txt, outside runtime/decomp_swap.c, do not store "
+        f"their own address into s->pc first ({', '.join(hole)}); each one is invisible to the "
+        "sampler until it does"
     )
+    assert "0x8023F704" in elsewhere and "0x8023F704" not in hole

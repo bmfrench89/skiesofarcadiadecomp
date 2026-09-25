@@ -39,7 +39,7 @@ opening to reaching the whole game by jumping, and every step is in
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 744 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 750 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -71,8 +71,8 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 744 |
-| Self-test cases | 73 |
+| Python tests | 750 |
+| Self-test cases | 74 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 
@@ -328,11 +328,17 @@ evidence is. Done by 2026-09-24: **H1** (drawing every frame runs 18-22 fps),
 **S4a** (`SOA_PEEK`), **H2** (the logic is per frame, so 60 fps is
 interpolation), **H4/H5** (every 3D draw matches its predecessor), **H6** (a
 pinned benchmark set, 85.4 ns a fragment), **S2** (guard suffixes), **S1**
-(`soak.py check`), and in flight at the time of writing **H3** (`SOA_UNCAP=N`,
-`[frametime]`), **S3** (the encounter accelerator, `SOA_FRAMES_DIR`) and **M1**
-(`runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`). Next in the plan's order:
-**H8**, which needs the owner at a window for fifteen minutes, then M2 (the
-safe point and tick control). The list below still stands beside it.
+(`soak.py check`), **H3** (`[frametime]`; the guest could run the opening at
+50 images a second and a battle at 104, the renderer draws them at 19 and 48,
+and 8 workers burn 8.4-8.9 cores at any load), **S3** (the encounter
+accelerator fights only where the story allows), **M1** (`SOA_MODS`, data
+patches; `mods/encounters-off` stops random battles) and **M2** (`tick.c`: a
+safe point at the top of the main loop, and `SOA_UNCAP=N` lets the frame end's
+spin go after one field). Next: **H11** (idle workers sleep instead of
+spinning -- the eight cores H3 measured; the edit is drafted and dry-run),
+then **M3** (native `mod.dll` on a versioned API). **H8** needs the owner at a
+window for fifteen minutes whenever convenient. The list below still stands
+beside it.
 
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's

@@ -1836,3 +1836,34 @@ read the frame after each poke. Judged by `soak.py check`:
 
 Both slices' criteria are met; the accelerator fights where the story allows
 and nowhere else.
+
+
+**M2: a safe point at the top of the loop, and a tick the port can let go.**
+2026-09-24, `build/m2-*.log`. `config/hle.txt` now binds 0x8023F704,
+`VIGetRetraceCount` (`lwz r3,-27836(r13); blr`), to `runtime/tick.c`, which
+tells its callers apart by `lr`: at 0x801DCB88, the top of the main loop, it
+first runs the safe-point callbacks; at 0x801DC49C, the frame end's spin, once
+unlocked, it answers the frame's start plus one so the spin leaves after the
+one field `fn_801C6248(0)` waits for. Everywhere else it is the original, which
+self-test case 74 holds against the recompiled twin over 200 random counts and
+four call sites (answering the count plus one at one site fails it at round
+2). `SOA_UNCAP=N` now unlocks this tick instead of zeroing 0x8034768C, so the
+word the game stored is left as it wrote it.
+
+- **Safe points equal presented frames, less one**: 1,999 over the title
+  scenario's 2,000 frames, 1,499 over 1,500, 4,999 over 5,000. The constant
+  one is the first frame, presented before the loop's first pass through its
+  top; a leak would grow with the run.
+- **Unlocked from frame 1, the title runs a frame a field**: peeks of the
+  frame counter 0x803475C0 over frames 1000-1255 step one field on 253 of 255
+  frames and two on the other 2 -- 59.5 frames a guest second -- and the
+  counter equals the port's frame on every one. 1.12 retraces a frame over the
+  run, against 2.09 capped.
+- **The audio is as it was**: the same AX opcodes, no abandoned lists, and
+  output near 30,000 samples a wall second both capped and unlocked. The
+  music keeps real time while the frames double.
+- **The same ceiling as H3's mechanism**: the uncapped battle in snapshot mode
+  (`a101b`, frames 3700-5000) ran 58.7 a second, p50 16.7 ms, against H3's
+  58.4, with 1.80 retraces a frame over the whole run in both.
+- With the tick locked: the self test's 74 cases, `title --check` 4/4 and the
+  replay 23/23 at 1, 2, 3 and 8 threads all pass.

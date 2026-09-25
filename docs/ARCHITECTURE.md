@@ -32,7 +32,8 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(19 entries today, 12 of them decompiled routines).
+(20 entries today: 12 decompiled routines, and `VIGetRetraceCount`, which
+`tick.c` answers so the main loop has a safe point).
 
 **Threads in the process.** One guest CPU thread, which owns every device
 model and parses the graphics command stream; that thread's guest threads
@@ -333,6 +334,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `ax.c` | device model | The AX mixer: the command list, parameter blocks, voices, resampling, the buses, and the census the report prints. Reached through `dsp.c`'s mailbox rather than through registers of its own, because that is how the console reaches it too | Wrong or missing sound, and the game never notices — it writes a command list and reads buses back, so an error here is silent outside the report |
 | `window.c` | host plumbing | The Win32 window on its own thread, and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
+| `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
 | `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
 | `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, and all 12 decompiled functions against their recompiled twins over 200 random rounds | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
 
@@ -370,7 +372,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 19 entries and **none of them is a GX function**: every
+`config/hle.txt` has 20 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 
@@ -487,7 +489,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 744 tests, none of which needs a disc (anything that
+- `tools/tests/` — 750 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

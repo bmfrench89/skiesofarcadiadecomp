@@ -6,12 +6,14 @@ frame hook now marks the wall clock once a frame, and the report prints the
 median, 95th and 99th percentile and worst frame beside the process's CPU
 seconds, which is what H11's thread work is judged against.
 
-SOA_UNCAP=N zeroes the frame-start field count at 0x8034768C from the same
-hook, from frame N on, so the frame end stops waiting for a second field. A
-start frame is what lets a frame-keyed pad script reach the scene first: a
-disc load runs on the wall clock, and uncapped from boot the title would not
-be where START lands. SOA_FRAMETIME_FROM=N starts the record at N without
-uncapping, so a capped run can measure the same stretch.
+SOA_UNCAP=N lets the frame end's spin go after one field, from frame N on:
+runtime/tick.c's VIGetRetraceCount answers the frame's start plus one at the
+spin's call site (M2; H3 first did it by zeroing 0x8034768C, and
+test_tick.py holds the mechanism). A start frame is what lets a frame-keyed
+pad script reach the scene first: a disc load runs on the wall clock, and
+uncapped from boot the title would not be where START lands.
+SOA_FRAMETIME_FROM=N starts the record at N without uncapping, so a capped
+run can measure the same stretch.
 
 What a test without a disc can hold is that the switches are read at
 startup and say what they do; that the game then runs up to twice as fast is
@@ -50,11 +52,11 @@ def boot(exe, tmp_path, **env_set):
 @needs_msvc
 @pytest.mark.parametrize("value", ["1", "3300"])
 def test_the_uncap_says_so_at_startup(tmp_path, value):
-    """Before the disc is read, naming the frame it starts at and the word it
-    writes, so a run that was uncapped cannot be mistaken afterwards for one
+    """Before the disc is read, naming the frame it starts at and what it
+    does, so a run that was uncapped cannot be mistaken afterwards for one
     that was not."""
     out = boot(build(tmp_path), tmp_path, SOA_UNCAP=value)
-    assert f"[uncap] from frame {value}, 0x8034768C is zeroed every frame" in out, out
+    assert f"[uncap] from frame {value}, the frame end's spin is let go after one field" in out, out
 
 
 @needs_msvc
@@ -71,7 +73,7 @@ def test_a_value_that_is_not_a_frame_is_refused_out_loud(tmp_path, bad):
     capped game and says nothing. The same parser as SOA_POKE's frames."""
     out = boot(build(tmp_path), tmp_path, SOA_UNCAP=bad)
     assert f"SOA_UNCAP={bad} is not a frame number; the cap stays on" in out, out
-    assert "zeroed every frame" not in out, out
+    assert "is let go" not in out, out
 
 
 @needs_msvc
