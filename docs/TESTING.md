@@ -34,17 +34,17 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-887 passed in 171.05s
+891 passed in 164.58s
 ```
 
-887 tests in 51 files, none of which reads the disc. They cover the Python
+891 tests in 51 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
 | File | Tests | What a failure means |
 |---|---|---|
 | `test_scenario.py` | 91 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
-| `test_mods.py` | 83 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording, a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else |
+| `test_mods.py` | 87 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording, a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else |
 | `test_cardformat.py` | 77 | the memory-card formatter: does the image it writes say what the mount reads? |
 | `test_guard.py` | 41 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named, and in a mod folder a file that is not text |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
@@ -101,10 +101,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `887 passed` |
-| no capstone — **what CI installs** | `868 passed, 1 skipped` |
-| no MSVC | `633 passed, 254 skipped` |
-| neither — **the Ubuntu CI leg** | `614 passed, 255 skipped` |
+| everything (MSVC + capstone) | `891 passed` |
+| no capstone — **what CI installs** | `872 passed, 1 skipped` |
+| no MSVC | `633 passed, 258 skipped` |
+| neither — **the Ubuntu CI leg** | `614 passed, 259 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -987,7 +987,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 254 of the 887 skip without a C compiler; they build one runtime file and run it.
+² 258 of the 891 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -998,8 +998,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 614 passed, 255 skipped |
-| **Tests** | windows | the same three — 868 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 614 passed, 259 skipped |
+| **Tests** | windows | the same three — 872 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

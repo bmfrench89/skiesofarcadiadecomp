@@ -152,8 +152,7 @@ def fake_dol() -> bytes:
     return bytes(head) + bytes(range(256)) * 17
 
 
-@pytest.fixture(scope="module")
-def driver(tmp_path_factory):
+def build_driver(tmp_path_factory, *defines: str):
     from soa import toolchain
 
     if toolchain.cl_path() is None:
@@ -164,6 +163,7 @@ def driver(tmp_path_factory):
     proc = toolchain.cl(
         [
             *toolchain.CFLAGS,
+            *[f"/D{d}" for d in defines],
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "mod.c"),
@@ -178,6 +178,11 @@ def driver(tmp_path_factory):
     dol = out / "fake.dol"
     dol.write_bytes(fake_dol())
     return exe, dol
+
+
+@pytest.fixture(scope="module")
+def driver(tmp_path_factory):
+    return build_driver(tmp_path_factory)
 
 
 SHA = hashlib.sha1(fake_dol()).hexdigest()
@@ -968,3 +973,28 @@ def test_the_shipped_mods_are_manifest_2():
                 keys[key.strip()] = value.strip()
         assert keys.get("manifest") == "2" and keys.get("id") == Path(folder).name, (folder, keys)
         assert keys.get("version") and keys.get("api") == "1", (folder, keys)
+
+
+@pytest.fixture(scope="module")
+def driver_api2(tmp_path_factory):
+    """The same loader built to speak mod API 2, which no port does yet: the
+    only way to show that a manifest's `api` is a minimum, since at API 1 a
+    minimum and an exact match accept the same files."""
+    return build_driver(tmp_path_factory, "MOD_API=2")
+
+
+@needs_msvc
+@pytest.mark.parametrize("need, loads", [("1", True), ("2", True), ("3", False)])
+def test_api_is_the_least_the_mod_needs(driver_api2, tmp_path, need, loads):
+    mod(tmp_path, "m", ini=V2.replace("api = 1", f"api = {need}"))
+    out, err = play(driver_api2, tmp_path)
+    assert ("loaded 1" in out) == loads, err
+    if not loads:
+        assert "api = 3, and this port speaks api 2" in err, err
+
+
+@needs_msvc
+def test_a_manifest_2_without_api_is_told_what_is_missing(driver, tmp_path):
+    mod(tmp_path, "m", ini=V2.replace("api = 1\n", ""))
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "no `api = `" in err and "no `api = 1`" not in err, err

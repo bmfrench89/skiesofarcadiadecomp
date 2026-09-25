@@ -907,7 +907,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     for (i = 0; !w.failed && m.id[0] && i < g_mod_n; i++)
         if (!strcmp(g_mods[i].id, m.id)) refuse(&w, "its id, %s, is already the mod's in folder %s", m.id, g_mods[i].dir);
     if (!w.failed && !m.name[0]) refuse(&w, "no `name = `%s%s", "", "");
-    if (!w.failed && !have_api) refuse(&w, "no `api = 1`%s%s", "", "");
+    if (!w.failed && !have_api) refuse(&w, "no `api = %s`%s", manifest == 2 ? "" : "1", "");
     if (!w.failed && !m.hash) refuse(&w, "no `dol_sha1 = ` naming the DOL it was made for%s%s", "", "");
     if (w.failed) { free(ini); return; }
 

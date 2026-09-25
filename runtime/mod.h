@@ -3,9 +3,16 @@
 #define SOA_MOD_H
 
 #include "cpu.h"
+#include "soa_mod.h"
 #include <stddef.h>
 
-#define MOD_API 1
+/* The mod API this port speaks: soa_mod.h's version, one constant, so the
+ * manifest check and the DLL handshake cannot drift apart. Overridable only
+ * so a test can build a port that speaks a later one and show that a
+ * manifest's `api` is a minimum (test_mods.py). */
+#ifndef MOD_API
+#define MOD_API ((int)SOA_MOD_API_VERSION)
+#endif
 
 /* Load every mod under `dir` (a folder of mod folders), checking each against
  * the DOL the port booted. A mod with any fault is refused whole, out loud.
