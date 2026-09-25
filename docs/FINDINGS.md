@@ -1792,3 +1792,47 @@ rasterises one frame in a hundred and leaves the guest idle in `SelectThread`
 (`gxr.c:1414`), so the workers cost a core each whether they draw or not. On the
 handheld this was measured on, that is the battery and the fan at a title
 screen. It is H11's whole case, and these CPU seconds are its baseline.
+
+
+**S3 and M1: the encounter accelerator fights where the story allows, and a
+mod turns encounters off.** 2026-09-24, `build/s3-*.log`, `build/s3/`. Three
+jobs on soakG's exact recipe (walk-mix seed 33, 33,500 frames,
+`SOA_STRICT=1`, traced), each with its own card copy and its own snapshot
+directory (`SOA_FRAMES_DIR`, snapshots every 100 frames), plus the
+accelerator -- `soak.py --pokes --encounter-every 600`, 50 pokes of the step
+counter 0x80346D28 to 100000 from frame 3200 -- and `--peeks`, the counter
+read the frame after each poke. Judged by `soak.py check`:
+
+| job | landing | battles | game over | peeks >= 100000 | verdict |
+|---|---|---|---|---|---|
+| `card-saved`, accelerated | `a101b` | **0** | -- | 50 of 50 | pass |
+| part G, accelerated | `a116a` | **5** (4420, 9801, 12880, 15557, 20107) | 21040 | 49 of 50 | pass |
+| part G, accelerated, `SOA_MODS=mods` | `a116a` | **0** | -- | 0 of 50 (all 0 or 1) | pass |
+| soakG (2026-09-23, unaccelerated) | `a116a` | 3 | 20792 | -- | pass |
+
+- **The negative control holds, and it is not an accelerator that did
+  nothing.** On `card-saved`, where flag 1025 closes `a101b`'s encounters,
+  every peek read the counter at 100000 or more and no battle came: the gate
+  runs before the counter is read, as `docs/research/soak.md` said it would.
+- **Part G fought more**: 5 battles against 3 with the same presses. Fewer
+  than 50 pokes might suggest, because a battle fought by random input is
+  long -- the first ran from about frame 4420 to the field's return at 9201.
+  The one peek under 100000, frame 9801, is the battle itself: the check dates
+  the second battle to that very peek line, and a battle resets the counter.
+- **Every return to the field shows it.** Four battles came back to `a116a`
+  and each return's snapshots include a lit one (single black frames at 9600
+  and 12700 are the transition); the fifth ended in the game over. The
+  frames were opened: the Gargantua prison's corridor after the battle at
+  12880, and a battle with the wheel on Focus at 10500 -- the random wheel
+  reaches past Attack.
+- **M1's encounters-off mod** (`mods/encounters-off`, one line:
+  `every_frame 0x80346d28 = 0 when scene=6`) loaded against the real DOL's
+  SHA-1, applied 32,039 times from frame 368, and the same accelerated job
+  fought nothing, its peeks at 0 or 1. The peek difference between the two
+  part-G jobs is what shows this check could have failed.
+- A new question, not a failure: `[gxr] LINEPTWIDTH (BP 22 00060D) asks for
+  lines 2.17 pixels wide; lines are drawn one pixel wide` at frame 18380, in a
+  battle on `a116a`.
+
+Both slices' criteria are met; the accelerator fights where the story allows
+and nowhere else.

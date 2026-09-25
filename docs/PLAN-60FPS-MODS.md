@@ -451,7 +451,7 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 - **A guard on every function.** Its overhead is unmeasured; measure it before adopting it.
 - **Rendering at 60 ticks.** When the tick is unlocked, rendering must either keep up with every frame (Track H) or skip every other frame.
 
-**M1. The mod runtime, data patches only** — *loader done 2026-09-24 (`runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`, 42 parser tests); the two acceptance runs are next. The map condition reads the committed map 0x80311AC0, not 0x80311AC4, the picker's working copy (FINDINGS "131e renders").*
+**M1. The mod runtime, data patches only** — *done 2026-09-24: `runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`, 42 parser tests; accelerated part G fought 5 without the mod and 0 with it, peeks 100000+ against 0-1. FINDINGS "S3 and M1". The map condition reads the committed map 0x80311AC0, not 0x80311AC4, the picker's working copy (FINDINGS "131e renders").*
 - `runtime/mod.c` with `SOA_MODS`.
 - A `mod.ini` per mod: name, API version, and the required DOL SHA-1.
 - A patch-list format: `addr = value`, with a `when` condition on scene, map or state, and a trigger of `every_frame`, `on_map_load` or `once`.
@@ -781,7 +781,7 @@ It adds the new invariants (tripwire lines and setup assertions) and writes `sum
 - `test_guard` covers the new suffixes and the CI regex.
 - Every copy of the test count is updated.
 
-**S3. Dungeon soaks with the accelerator** — *tooling done 2026-09-24 (`soak.py --warp/--encounter-every/--pokes/--peeks`, `check --expect-reach/--frames`, and `SOA_FRAMES_DIR` so a job's snapshots are its own); the two runs are next.*
+**S3. Dungeon soaks with the accelerator** — *done 2026-09-24: `soak.py --warp/--encounter-every/--pokes/--peeks`, `check --expect-reach/--frames`, `SOA_FRAMES_DIR`. `card-saved` accelerated fought 0 with every peek at 100000+; part G fought 5 against soakG's 3; every return to the field was lit. FINDINGS "S3 and M1".*
 - Add `--warp NNNx` and `--encounter-every K`, which re-pokes 0x80346D28=100000 every K frames. At K=600 that is 50 pokes per 30k frames.
 - A test asserts that 0x803473D4 appears nowhere in the generated pokes.
 - Every job is judged by S1's checker, setup assertions included.
