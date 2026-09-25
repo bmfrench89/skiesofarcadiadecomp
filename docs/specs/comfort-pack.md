@@ -1094,7 +1094,10 @@ mod-id line and the DLL build; prerequisites P6 (recorded settings) and P6b, bot
   - The contract holds; `SOA_MODS` unset changes nothing.
 
 **P11. Dialogue auto-advance** — *hours; none (DLL) and `--link` for its settings line; prerequisites
-P6, P1a (now.md N6, auto-advance only; its spike is done, b911380).*
+P6, P1a (now.md N6, auto-advance only; its spike is done, b911380). Landed as 664f005: with the
+mod, presses at 3132, 6472, 6567 and 6955, the choice up at 3139 and resting at 6 through 5999, and
+a002b at 7336; without mods, no presses, the choice at 6007 and no a002b; with press-in-choice, presses
+in the boxes at 3185, 3805 and 3913 and a002b at 3949, so both mutations fail as specified.*
 - Files: `mods/autotext/{mod.c,mod.ini}`, `runtime/settings.c`, `tools/tests/test_mods.py`, README.md.
 - What: 3.5.
 - *Done:*
@@ -1171,7 +1174,8 @@ part-G card at 116a, comes first.*
     recomputed for it in the check's output.
   - The contract holds with `SOA_ENCOUNTERS_TEST` unset.
 
-**M18. Rumble** — *hours; `--link`; prerequisites P6 (the report-hook table). **Owner.***
+**M18. Rumble** — *hours; `--link`; prerequisites P6 (the report-hook table). **Owner.** Landed as
+3d08479, but for the owner's check.*
 - Files: `runtime/si.c`, `runtime/window.c`, `runtime/main.c`, `runtime/settings.c`, `runtime/selftest.c`,
   `tools/tests/test_padrec.py` (stubs unchanged: the sink is a setter), README.md.
 - What: 3.7.
@@ -1184,7 +1188,9 @@ part-G card at 116a, comes first.*
     - with strength 0, with the window flag off, or with scripted input, no write gives a nonzero call;
     - `si_motor_stop()` while on gives one zero-speed call.
 
-    Mutation: a gate that ignores strength fails the strength-0 line.
+    Mutation: a gate that ignores the window flag fails the no-window line. (The draft's "a gate that
+    ignores strength" could not fail: the speed is strength × 65535/100, which is already 0 at strength
+    0. Corrected at 3d08479.)
   - `python -m pytest tools/tests/test_padrec.py` unchanged.
   - **Owner:** the pad rumbles in a battle with the game's Vibration option on, and not with it off.
   - The contract holds.

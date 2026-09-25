@@ -104,7 +104,9 @@ and P6b have landed, and so have T0c and a manifest 2 follow-up, taken in betwee
 
 **Landed after dc0cc98:** **P1a** (090eea6), with its accessory case as a self-test case
 (specs/comfort-pack.md P1a), and the A5 and B3 edits (1a09d4a). **In flight at 1a09d4a:** P11 in its
-live checks, M18 written, and I2 being built in a separate worktree.
+live checks, M18 written, and I2 being built in a separate worktree. Since then P11 (664f005), M18
+(3d08479, but for the owner's check) and I2 (12077d1, but for the owner's prune) have landed; CH1, then
+P11b and H19a, are next.
 
 ### A2. H13 is closed as "done enough"
 
@@ -374,11 +376,11 @@ cost least.
 | 1 | **C5a** confirm the recorded-display-list chain, `SOA_GX_DLLOG` ([specs/gpu-backend.md](specs/gpu-backend.md) §6). **Done, 750cef0:** the chain is confirmed (FINDINGS "Recorded display lists (C5a)") | hours | `--link` (gx.c, a log only) | — | — |
 | 2 | **P6b** P6's three additions: the `[seed] pin:` line, 640- and 1024-byte config buffers with a "cut at" line, `test_seed.py`'s log check (comfort 3.3 and its P6b slice). **Done, 79c9ad8** (FINDINGS "P6, followed up") | hours | `--link` | P6 (24d9235) | — |
 | 3 | **P1a** encounter slider and hold-B with restore; per-mod write counts; `--link` builds `mods/*/mod.c`; `encounters-off` moved to `examples/`. **Done, 090eea6** | a day | none for the DLL, `--link` for the rest | P6b | — |
-| 4 | **P11** dialogue auto-advance | hours | none, `--link` for its key | P1a | — |
+| 4 | **P11** dialogue auto-advance. **Done, 664f005** | hours | none, `--link` for its key | P1a | — |
 | 5 | **T0c** (gap) card images under any name. **Done, 012164a**, wider than specified: saves under any name too, every suffix in a name, and history read for content | hours | none | — | — |
-| 6 | **I2** (gap) one copy on disk: the tools read the image; `--prune-loose` | hours to a day | none | — | **Owner** runs the prune in session A |
+| 6 | **I2** (gap) one copy on disk: the tools read the image; `--prune-loose`. **Done, 12077d1**, but for the owner's prune | hours to a day | none | — | **Owner** runs the prune in session A |
 | 7 | **P1b** the encounter contrast (long runs at `SOA_SPEED=3`) | a day to several days | `--link` | P1a; a card and walk in a rate-20 zone where the step counter counts (Q-I5: `card-saved`'s a101b spot is zone 0, and the counter stayed 0) | — |
-| 8 | **M18** rumble | hours | `--link` | P6 | **Owner** (A) |
+| 8 | **M18** rumble. **Done, 3d08479**, but for the owner's check | hours | `--link` | P6 | **Owner** (A) |
 | 9 | **CH1** chords and host buttons (the chord arms log "not built yet") | a day | `--link` | — | **Owner** (A) |
 | 10 | **P11b** hold-to-skip | hours | none | P11, CH1 | — |
 | 11 | **H19a** fullscreen, DPI, resize, letterbox, `present_interval` in `picture.c` | a day to several days | `--link` | D-2 (defaults otherwise) | **Owner** (A) |

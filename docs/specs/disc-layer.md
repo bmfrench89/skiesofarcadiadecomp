@@ -545,7 +545,7 @@ Order: **I2, then I1, then I3.** [../PLAN-NEXT.md](../PLAN-NEXT.md) places I2 as
 
 ---
 
-**I2. One copy on disk: the loose files go, the tools read the image** — *hours to a day, none.*
+**I2. One copy on disk: the loose files go, the tools read the image** — *hours to a day, none. Landed as 12077d1 but for the owner's prune (session A). On the owner's data, the dry run found 5,552 deletable files and 0 kept (1,418,037,369 bytes), leaving 1,463,288,602 B. `validate_assets` through `disc.iso` matches FINDINGS §2 (3,633 AKLZ containers, 2,126,196,876 decoded bytes, 0 failures). Where it differs from the text below: `open_data` returns `Disc | LooseTree`; `--prune-loose` refuses a dump argument and exits 1 when anything is kept; the fixture is 1.2 MB.*
 - *Prerequisites:* none. Lands first; touches no runtime file.
 - *Files:* `tools/extract.py`, `tools/soa/disc.py` (`open_data`, `read_path`, a loose-tree reader), `tools/soa/discfixture.py` (new: the ISO writer of §3.12), `tools/sct.py`, `tools/validate_assets.py`, `tools/audio_check.py`; `tools/tests/test_extract.py` (new); `README.md`, `CONTRIBUTING.md`, `docs/TESTING.md`, `.claude/skills/check/SKILL.md` (test counts).
 - *What:* §3.5's tools half: `disc.iso` + `sys/` by default, `--files`, `--prune-loose [--dry-run]`, `--iso` accepted; the three tools read through the image when a loose file is absent; the fixture builder.

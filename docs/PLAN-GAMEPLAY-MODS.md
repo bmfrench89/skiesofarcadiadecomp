@@ -463,7 +463,7 @@ The first idea list was comfort and community features, the second gameplay and 
 - The handover test: A held across the handover does not confirm.
 - **Owner:** two pads, one battle.
 
-**P11. Dialogue auto-advance and hold-to-skip** — *hours; M3b is done. The spike is done (b911380, FINDINGS "P11's spike"): the window's state word is `0x80346E64`, the task is at `0x80346E4C`, and `0x80346E60` below is the wrong word (the draw stores 0 back to it every frame). Re-specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.5 as P11 (auto-advance) and P11b (hold-to-skip, after CH1).*
+**P11. Dialogue auto-advance and hold-to-skip** — *hours; M3b is done. The spike is done (b911380, FINDINGS "P11's spike"): the window's state word is `0x80346E64`, the task is at `0x80346E4C`, and `0x80346E60` below is the wrong word (the draw stores 0 back to it every frame). Re-specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.5 as P11 (auto-advance) and P11b (hold-to-skip, after CH1). P11 done (664f005).*
 - A `pad_filter` mod finds the message window through `0x80346E60`. A page is complete when window+56 ≥ window+54; then it sends one A.
 - It leaves choice boxes alone (a spike finds SELECT's marker; `0x8030E468` is also set for plain messages) and respects window flag 0x1000.
 - Hold-to-skip sends A on every complete page while a chord is held.
