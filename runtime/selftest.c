@@ -1646,6 +1646,41 @@ static int tick_selftest(CpuState* s, char* got, size_t cap)
     return check("VIGetRetraceCount native vs twin", got, bad ? "agreement" : got);
 }
 
+/* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
+ * dispatched like any translated call, with every register set to a pattern
+ * first. The length comes back in r3, and every register -- r1, r2, r13, the
+ * non-volatile ones, LR, CTR, CR and the GQRs -- is as it was. */
+int mod_call_guest(CpuState* s, uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
+                   uint32_t n_floats, uint32_t* r3, double* f1, char* why, size_t cap);
+
+static int call_guest_selftest(CpuState* s, char* got, size_t cap)
+{
+    static CpuState before;
+    const uint32_t STR = SCRATCH + 0x1800;
+    uint32_t arg = STR, r3 = 0;
+    double f1 = 0.0;
+    char why[160];
+    int i, ok, same;
+    put_string(s, STR, "skies of arcadia");
+    for (i = 0; i < 32; i++) s->gpr[i] = 0xA5000000u + (uint32_t)i;
+    s->gpr[1] = STACK_TOP - 0x400;
+    s->gpr[2] = SDA2_BASE;
+    s->gpr[13] = SDA_BASE;
+    for (i = 0; i < 32; i++) { s->fpr[i].ps0 = i + 0.5; s->fpr[i].ps1 = -(double)i; }
+    for (i = 0; i < 8; i++) s->gqr[i] = 0x00070007u * (uint32_t)(i + 1);
+    s->lr = 0x801DCB88u; s->ctr = 77; s->cr = 0x24000000u; s->xer = 0x20000000u;
+    memcpy(&before, s, sizeof before);
+    ok = mod_call_guest(s, 0x8025F1D8u, &arg, 1, NULL, 0, &r3, &f1, why, cap < sizeof why ? cap : sizeof why);
+    same = !memcmp(s->gpr, before.gpr, sizeof s->gpr) && !memcmp(s->fpr, before.fpr, sizeof s->fpr) &&
+           !memcmp(s->gqr, before.gqr, sizeof s->gqr) && s->lr == before.lr && s->ctr == before.ctr &&
+           s->cr == before.cr && s->xer == before.xer && s->msr == before.msr && s->fpscr == before.fpscr;
+    if (!ok) snprintf(got, cap, "refused: %s", why);
+    else if (r3 != 16) snprintf(got, cap, "strlen gave %u", r3);
+    else if (!same) snprintf(got, cap, "a register came back changed");
+    else snprintf(got, cap, "strlen 16, every register as it was");
+    return check("a mod's call into the game", got, "strlen 16, every register as it was");
+}
+
 int selftest(CpuState* s)
 {
     char got[256];
@@ -1764,6 +1799,7 @@ int selftest(CpuState* s)
     failures += render_selftest(s, got, sizeof got);
     failures += decomp_selftest(s, got, sizeof got);
     failures += tick_selftest(s, got, sizeof got);
+    failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

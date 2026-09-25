@@ -1165,6 +1165,7 @@ int main(int argc, char** argv)
      * otherwise overwrite what a mod's init wrote and hand its reads zeros
      * (the review of 2026-09-25). A recording then names them, and the report
      * says what each applied. */
+    mod_note_dol(dol, dol_size); /* for call_guest's checks, the self test's among them */
     {
         const char* mods = getenv("SOA_MODS");
         if (mods && *mods && mod_load(&s, mods, dol, dol_size)) {

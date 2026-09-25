@@ -253,13 +253,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-776 passed in 112.58s
+780 passed in 109.84s
 ```
 
-776 tests in 45 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `757 passed, 1 skipped` without
+780 tests in 45 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `761 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `592 passed, 184 skipped` without MSVC.
+module-level skip), `592 passed, 188 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
@@ -349,10 +349,11 @@ gen\soa.exe extracted
 [selftest] render triangle rows         ok    got "complete, 53301 px"
 [selftest] decompiled vs recompiled     ok    got "12 functions agree over 200 rounds"
 [selftest] VIGetRetraceCount native vs twin ok    got "the count at 0x80347A64 over 200 rounds and four call sites"
+[selftest] a mod's call into the game   ok    got "strlen 16, every register as it was"
 [selftest] 0 failure(s)
 ```
 
-**0.11 s, 79 lines, 74 cases** — the cheapest real check in the project and the
+**0.11 s, 80 lines, 75 cases** — the cheapest real check in the project and the
 one to run after every `--link`. It calls the recompiled library, the device
 models, the AX mixer and the software renderer directly, outside the game's
 control flow, so a wrong answer is a bug with a two-line repro. Every case

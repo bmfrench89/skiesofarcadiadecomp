@@ -485,6 +485,9 @@ static void api_log(const char* line)
             line ? line : "");
 }
 
+static int api_call_guest(uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
+                          uint32_t n_floats, uint32_t* r3, double* f1);
+
 static const SoaModApi g_api = {
     sizeof(SoaModApi), SOA_MOD_API_VERSION,
     api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
@@ -495,6 +498,7 @@ static const SoaModApi g_api = {
     api_pad_filter,
     api_projection_filter,
     api_texture_provider,
+    api_call_guest,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
@@ -552,6 +556,106 @@ static void mod_pad(unsigned frame, void* pad)
     g_cur_mod = -1;
 }
 
+/* ---- calling the game from a mod (PLAN M4) ------------------------------ */
+
+int dispatch_known(uint32_t addr); /* gen/dispatch.c */
+int irq_in_handler(void);
+
+typedef struct {
+    uint32_t gpr[32];
+    Fpr fpr[32];
+    uint32_t cr, xer, lr, ctr, fpscr, msr, pc;
+    uint32_t gqr[8];
+} GuestRegs;
+
+static int g_at_safe_point; /* set while a safe-point, scene or map callback runs */
+
+/* The DOL's code sections, so a patch, an API write and a call can be checked
+ * against them; main.c notes them whether or not any mod loads, since the self
+ * test calls through mod_call_guest too. */
+void mod_note_dol(const uint8_t* dol, size_t dol_size)
+{
+    int i;
+    if (dol_size < 0x100) return;
+    for (i = 0; i < 7; i++) {
+        g_text[i][0] = be32p(dol + 0x48 + i * 4);
+        g_text[i][1] = g_text[i][0] + be32p(dol + 0x90 + i * 4);
+    }
+}
+
+/* Call the game's function at `addr` as irq.c calls an interrupt handler:
+ * every register saved, the arguments in r3..r10 and f1..f8, the function
+ * dispatched, r3 and f1 taken, every register put back -- so the frame the
+ * game is about to run never sees the call. Refused, with the reason in
+ * `why`: an address that is not a function of this program (dispatching one
+ * would trap and end the run), more than eight of either kind, or r2 and r13
+ * not the game's small-data bases. A GQR the callee leaves changed is put back
+ * and reported in `why` on success. The callee may sleep the thread; the call
+ * returns when it runs again. */
+int mod_call_guest(CpuState* s, uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
+                   uint32_t n_floats, uint32_t* r3, double* f1, char* why, size_t cap)
+{
+    GuestRegs saved;
+    uint32_t i;
+    int gqr_moved;
+    why[0] = '\0';
+    if (n_ints > 8 || n_floats > 8) {
+        snprintf(why, cap, "%u int and %u float arguments, and 8 of each is the most", n_ints, n_floats);
+        return 0;
+    }
+    if (!dispatch_known(addr)) {
+        snprintf(why, cap, "%08X is not the start of a function in this program", addr);
+        return 0;
+    }
+    if (s->gpr[2] != 0x80350000u || s->gpr[13] != 0x8034E720u) {
+        snprintf(why, cap, "r2 %08X and r13 %08X are not the game's 80350000 and 8034E720", s->gpr[2], s->gpr[13]);
+        return 0;
+    }
+    memcpy(saved.gpr, s->gpr, sizeof saved.gpr);
+    memcpy(saved.fpr, s->fpr, sizeof saved.fpr);
+    memcpy(saved.gqr, s->gqr, sizeof saved.gqr);
+    saved.cr = s->cr; saved.xer = s->xer; saved.lr = s->lr; saved.ctr = s->ctr;
+    saved.fpscr = s->fpscr; saved.msr = s->msr; saved.pc = s->pc;
+    for (i = 0; i < n_ints; i++) s->gpr[3 + i] = ints[i];
+    for (i = 0; i < n_floats; i++) s->fpr[1 + i].ps0 = s->fpr[1 + i].ps1 = floats[i];
+    dispatch(s, addr);
+    if (r3) *r3 = s->gpr[3];
+    if (f1) *f1 = s->fpr[1].ps0;
+    gqr_moved = memcmp(saved.gqr, s->gqr, sizeof saved.gqr) != 0;
+    memcpy(s->gpr, saved.gpr, sizeof saved.gpr);
+    memcpy(s->fpr, saved.fpr, sizeof saved.fpr);
+    memcpy(s->gqr, saved.gqr, sizeof saved.gqr);
+    s->cr = saved.cr; s->xer = saved.xer; s->lr = saved.lr; s->ctr = saved.ctr;
+    s->fpscr = saved.fpscr; s->msr = saved.msr; s->pc = saved.pc;
+    if (gqr_moved) snprintf(why, cap, "%08X left a GQR changed; it is put back", addr);
+    return 1;
+}
+
+/* The API's call_guest: mod_call_guest, from a safe-point callback only and
+ * never inside an interrupt handler -- the frame end runs inside the XFB
+ * copy, the filters inside the renderer and the pad read, and none of those
+ * is a point where the game's code may run. */
+static int api_call_guest(uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
+                          uint32_t n_floats, uint32_t* r3, double* f1)
+{
+    char why[160];
+    const char* dir = g_cur_mod >= 0 && g_cur_mod < g_mod_n ? g_mods[g_cur_mod].dir : g_cur_dir;
+    int ok;
+    if (!g_at_safe_point) {
+        fprintf(stderr, "[mod] %s: call_guest(%08X) refused: only a safe-point, scene or map callback may call the "
+                        "game\n", dir, addr);
+        return 0;
+    }
+    if (irq_in_handler()) {
+        fprintf(stderr, "[mod] %s: call_guest(%08X) refused: inside an interrupt handler\n", dir, addr);
+        return 0;
+    }
+    ok = mod_call_guest(g_s, addr, ints, n_ints, floats, n_floats, r3, f1, why, sizeof why);
+    if (!ok) fprintf(stderr, "[mod] %s: call_guest(%08X) refused: %s\n", dir, addr, why);
+    else if (why[0]) fprintf(stderr, "[mod] %s: call_guest: %s\n", dir, why);
+    return ok;
+}
+
 /* The top of the main loop (tick.c): the safe point, then what it derives --
  * a scene change, and a map loaded, which is the field running (state 8)
  * after a load state (3 or 5) was seen: every story warp, name warp and
@@ -561,6 +665,7 @@ static void mod_safe_point(CpuState* s)
 {
     uint32_t scene = mem_r32(s, SCENE_ID), state = mem_r32(s, FIELD_STATE);
     int i;
+    g_at_safe_point = 1;
     for (i = 0; i < g_cb_n[CB_SAFE_POINT]; i++) {
         g_cur_mod = g_cb[CB_SAFE_POINT][i].mod;
         g_cb[CB_SAFE_POINT][i].calls++;
@@ -587,6 +692,7 @@ static void mod_safe_point(CpuState* s)
             ((void (*)(void*, uint32_t))g_cb[CB_MAP_LOADED][i].fn)(g_cb[CB_MAP_LOADED][i].user, map);
         }
     }
+    g_at_safe_point = 0;
     g_cur_mod = -1;
 }
 
@@ -814,11 +920,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     qsort(names, (size_t)n, sizeof names[0], cmp_name);
     sha1_hex(dol, dol_size, sha);
     g_s = s;
-    if (dol_size >= 0x100)
-        for (i = 0; i < 7; i++) {
-            g_text[i][0] = be32p(dol + 0x48 + i * 4);
-            g_text[i][1] = g_text[i][0] + be32p(dol + 0x90 + i * 4);
-        }
+    mod_note_dol(dol, dol_size);
     for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
     /* The recording's line: every mod by folder and hash while they fit, 24
      * bytes kept back so the rest can still be named -- as a count and one

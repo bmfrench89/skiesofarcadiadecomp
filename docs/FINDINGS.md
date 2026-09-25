@@ -2077,3 +2077,34 @@ file, booted and ran 300 frames. With a `soa.ini` that turned on everything --
 file reached the run: no `[settings]`, `[mod]` or `[uncap]` line, no
 recording written. With no file, nothing changes. The owner's own check --
 turning an enhancement on and off without a terminal -- is still the owner's to make.
+
+
+**M4: a mod can call the game's own functions, at the safe point.**
+2026-09-25. `SoaModApi` gains `call_guest(addr, ints, n, floats, n, &r3,
+&f1)`, appended. It runs the function as `irq.c` runs an interrupt handler --
+every register saved, up to eight ints in r3-r10 and eight floats in f1-f8,
+the function dispatched, r3 and f1 taken, every register put back -- so the
+frame the game is about to run never sees the call; a GQR the callee left
+changed is put back and reported. It is allowed only inside an
+`on_safe_point`, `on_map_loaded` or `on_scene_change` callback, never in a
+handler, and only at the start of a function this program holds: the
+recompiler now emits `dispatch_known(addr)` from the same list as `dispatch`,
+because dispatching any other address is a trap that ends the run. r2 and r13
+must be the game's small-data bases.
+
+- **Self-test case 75** calls `strlen`'s entry through the same code with every
+  register set to a pattern first: the length comes back, and r1, r2, r13, the
+  non-volatile registers, LR, CTR, CR and the GQRs are as they were. Leaving
+  the general registers unrestored fails it.
+- **Refusals** (`test_mods.py`): from `soa_mod_init`, from a frame end (inside
+  the XFB copy), inside an interrupt handler, at an address inside a function
+  rather than at its start, and with r2 and r13 not the game's -- each with a
+  line saying which.
+- **Old DLLs still load:** `examples/mods/map-log` built against the header
+  as it stood before M4 (`git show 3a26618:runtime/soa_mod.h`, no
+  `call_guest`) loaded on this port and logged its map load, because it
+  checks the table reaches the last member it uses.
+
+With M1-M5 the mod framework the plan asked for is in: data patches, a safe
+point and tick, native DLLs on a versioned API with filters for input, the
+view and textures, calls into the game, and a settings file.

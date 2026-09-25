@@ -124,6 +124,20 @@ typedef struct SoaModApi {
     int (*texture_provider)(int (*fn)(void* user, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h,
                                       const uint8_t* rgba, SoaImage* out),
                             void* user);
+
+    /* Appended (M4). Call the game's function at `addr` -- from inside an
+     * on_safe_point, on_map_loaded or on_scene_change callback and nowhere
+     * else. Up to 8 ints go in r3..r10 and up to 8 floats in f1..f8; the
+     * results are r3 and f1 (either pointer may be NULL). Every register
+     * comes back as it was, so the frame the game is about to run never sees
+     * the call. Returns 1, or 0 with a log line when refused: outside a
+     * safe point, inside an interrupt handler, `addr` not the start of a
+     * function in this program (the list the port was translated with), or
+     * more than 8 of either. The function may sleep the game's thread
+     * (OSSleepThread and the like), which is legal between frames: the call
+     * returns when that thread runs again. */
+    int (*call_guest)(uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
+                      uint32_t n_floats, uint32_t* r3, double* f1);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

@@ -282,6 +282,13 @@ class Emitter:
         lines.append("    default: guest_trap(s, addr); return;")
         lines.append("    }")
         lines.append("}")
+        # The same list, as a question: a native caller that takes an address
+        # from outside (runtime/mod.c's call_guest) asks before dispatching,
+        # since an unknown address is a trap that ends the run.
+        lines += ["", "int dispatch_known(uint32_t addr)", "{", "    switch (addr) {"]
+        for a in sorted(self.functions):
+            lines.append(f"    case {u32(a)}:")
+        lines += ["        return 1;", "    default:", "        return 0;", "    }", "}"]
         return "\n".join(lines) + "\n"
 
     # ------------------------------------------------------------ helpers

@@ -57,6 +57,20 @@ void gxr_set_texture_provider(int (*fn)(uint64_t, uint32_t, uint32_t, uint32_t, 
                                         uint32_t*, uint32_t*)) { g_tex = fn; }
 void fn_8023F704(CpuState* s);
 
+/* The game's side of call_guest: one function at 0x80003100 that adds r3
+ * and r4 and, being careless, clobbers r14, f14 and GQR 3. */
+static int g_irq;
+int irq_in_handler(void) { return g_irq; }
+int dispatch_known(uint32_t a) { return a == 0x80003100u; }
+void dispatch(CpuState* s, uint32_t a)
+{
+    if (a != 0x80003100u) { printf("dispatch of %08X\n", a); return; }
+    s->gpr[3] += s->gpr[4];
+    s->gpr[14] = 0xDEADDEADu;
+    s->fpr[14].ps0 = -1.0;
+    s->gqr[3] = 0x12341234u;
+}
+
 /* mods.exe MODSDIR DOLFILE, then commands on stdin:
  *   set ADDR VALUE     store a word       setb ADDR VALUE   store a byte
  *   frame              one frame end      get ADDR          print a word
@@ -64,7 +78,8 @@ void fn_8023F704(CpuState* s);
  *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88
  *   pad F B            a controller read at frame F with buttons B, through the filter
  *   proj O P0..P5      a new projection (O 1 orthographic), through the filter
- *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider */
+ *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider
+ *   game               the game's registers at a safe point: r2, r13 its, r14 a mark */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -97,6 +112,9 @@ int main(int argc, char** argv)
             for (k = 0; k < 6; k++) printf(" %.4f", p[k]);
             printf(" %s" "\n", g_proj ? "filtered" : "unfiltered");
         }
+        else if (!strcmp(cmd, "irq")) g_irq = 1;
+        else if (!strcmp(cmd, "game")) { s.gpr[2] = 0x80350000u; s.gpr[13] = 0x8034E720u; s.gpr[14] = 0x14141414u; }
+        else if (!strcmp(cmd, "regs")) printf("r14 %08X gqr3 %08X f14 %.1f\n", s.gpr[14], s.gqr[3], s.fpr[14].ps0);
         else if (!strcmp(cmd, "tex")) {
             unsigned long long hsh;
             unsigned tw, th;
@@ -448,6 +466,27 @@ static void late(void* u)
     A->log(b);
 }
 #endif
+#ifdef CALL
+static void callsp(void* u)
+{
+    uint32_t two[2] = {40, 2}, r = 0;
+    int ok;
+    (void)u;
+    ok = A->call_guest(0x80003100u, two, 2, NULL, 0, &r, NULL);
+    snprintf(b, sizeof b, "call at safe point %d -> %u", ok, r);
+    A->log(b);
+    ok = A->call_guest(0x80003104u, two, 2, NULL, 0, &r, NULL);
+    snprintf(b, sizeof b, "call mid-function %d", ok);
+    A->log(b);
+}
+static void callfe(void* u)
+{
+    uint32_t two[2] = {1, 1}, r = 0;
+    (void)u;
+    snprintf(b, sizeof b, "call at frame end %d", A->call_guest(0x80003100u, two, 2, NULL, 0, &r, NULL));
+    A->log(b);
+}
+#endif
 #ifdef PADF
 /* from frame 10, START never reaches the game; everything else does */
 static void pf(void* u, uint32_t frame, SoaPad* p) { (void)u; if (frame >= 10) p->buttons &= ~SOA_PAD_START; }
@@ -483,6 +522,15 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
     api->on_scene_change(sc, NULL);
 #ifdef PADF
     api->pad_filter(pf, NULL);
+#endif
+#ifdef CALL
+    {
+        uint32_t two[2] = {2, 3}, r = 0;
+        snprintf(b, sizeof b, "call in init %d", api->call_guest(0x80003100u, two, 2, NULL, 0, &r, NULL));
+        api->log(b);
+    }
+    api->on_safe_point(callsp, NULL);
+    api->on_frame_end(callfe, NULL);
 #endif
 #ifdef LATE
     api->on_frame_end(late, NULL);
@@ -765,3 +813,51 @@ def test_an_image_too_large_is_refused_and_the_next_provider_asked(driver, tmp_p
     out, err = play(driver, tmp_path, "tex 42 4 4")
     assert "a 5000x5000 image is refused, 4096 on a side is the most" in err, err
     assert "tex replaced 2x2 first C80000FF" in out, out
+
+
+# --------------------------------------------------------------------------
+# M4: calling the game from a mod
+# --------------------------------------------------------------------------
+
+
+@needs_msvc
+def test_call_guest_runs_at_a_safe_point_and_puts_every_register_back(driver, tmp_path):
+    """From a safe-point callback the game's function runs with the
+    arguments in r3 and r4 and its answer comes back; what it clobbered --
+    r14, f14, a GQR -- is put back, and the GQR is reported."""
+    dll(tmp_path, "caller", "CALL")
+    out, err = play(driver, tmp_path, "game safe regs")
+    assert "[mod] caller: call at safe point 1 -> 42" in err, err
+    assert "left a GQR changed; it is put back" in err, err
+    assert "r14 14141414 gqr3 00000000 f14 0.0" in out, out
+
+
+@needs_msvc
+def test_call_guest_is_refused_everywhere_else(driver, tmp_path):
+    """In soa_mod_init, at a frame end (inside the XFB copy), and at an
+    address that is not the start of a function -- which dispatched would
+    trap and end the run."""
+    dll(tmp_path, "caller", "CALL")
+    out, err = play(driver, tmp_path, "game frame safe")
+    assert "[mod] caller: call in init 0" in err, err
+    assert "[mod] caller: call at frame end 0" in err, err
+    assert "only a safe-point, scene or map callback may call the game" in err, err
+    assert "[mod] caller: call mid-function 0" in err, err
+    assert "80003104 is not the start of a function in this program" in err, err
+    assert "dispatch of" not in out, out
+
+
+@needs_msvc
+def test_call_guest_refuses_when_r2_and_r13_are_not_the_games(driver, tmp_path):
+    dll(tmp_path, "caller", "CALL")
+    _, err = play(driver, tmp_path, "safe")
+    assert "call at safe point 0" in err and "are not the game's 80350000 and 8034E720" in err, err
+
+
+@needs_msvc
+def test_call_guest_is_refused_inside_an_interrupt_handler(driver, tmp_path):
+    """A safe point reached while a handler runs is not a point where the
+    game's code may be called: the handler owns the registers."""
+    dll(tmp_path, "caller", "CALL")
+    _, err = play(driver, tmp_path, "game irq safe")
+    assert "call at safe point 0" in err and "refused: inside an interrupt handler" in err, err

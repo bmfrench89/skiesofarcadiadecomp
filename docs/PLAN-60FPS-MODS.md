@@ -506,7 +506,7 @@ The core of native PC mods, right after the loader and the safe point.
 - The DLL mods and their versions are recorded in the `pad_config` header.
 - With mods unset, the contract holds.
 
-**M4. Calling guest code from a mod** — *a day, `--link`.*
+**M4. Calling guest code from a mod** — *done 2026-09-25: `call_guest`, at a safe point only, every register put back; `dispatch_known` from the recompiler guards the address; self-test case 75; a DLL built against M3's header still loads. FINDINGS "M4".*
 Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only, following the `irq.c:276-291` pattern.
 - It asserts r2 = 0x80350000 and r13 = 0x8034E720, and that the GQRs are unchanged.
 - It refuses to run inside an interrupt handler.
