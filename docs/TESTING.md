@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-819 passed in 113.34s
+834 passed in 125.59s
 ```
 
-819 tests in 48 files, none of which reads the disc. They cover the Python
+834 tests in 49 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -63,6 +63,7 @@ its own and run it, some of the C as well:
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
 | `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
 | `test_gxr_pair.py` | 15 | H10's in-between image, on the renderer built alone: synthetic frames captured through the real capture path and replayed as pairs. A triangle moved by 2d lands at d pixel for pixel; perspective and depth motion give the view-space midpoint; t=0 and t=1 give the two frames; an unmatched draw comes from F+1; copies to texture are skipped with their clears kept; equal keys pair in stream order; the pairs written are fifopair's; and `gxr_flush` never touches the pair state |
+| `test_gxr_overlap.py` | 15 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB and decoded textures the one-worker run leaves, over frames that differ -- and removing either drain around a filtered copy by hand turns 10-12 of its runs red |
 | `test_aklz.py` | 14 | the AKLZ container decoder, on hand-built streams |
 | `test_formats.py` | 14 | the disc's format parsers, on synthesised fixtures |
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
@@ -98,10 +99,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `819 passed` |
-| no capstone — **what CI installs** | `800 passed, 1 skipped` |
-| no MSVC | `613 passed, 206 skipped` |
-| neither — **the Ubuntu CI leg** | `594 passed, 207 skipped` |
+| everything (MSVC + capstone) | `834 passed` |
+| no capstone — **what CI installs** | `815 passed, 1 skipped` |
+| no MSVC | `613 passed, 221 skipped` |
+| neither — **the Ubuntu CI leg** | `594 passed, 222 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -981,7 +982,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 206 of the 819 skip without a C compiler; they build one runtime file and run it.
+² 221 of the 834 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -992,8 +993,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 207 skipped |
-| **Tests** | windows | the same three — 800 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 222 skipped |
+| **Tests** | windows | the same three — 815 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

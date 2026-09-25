@@ -607,10 +607,12 @@ def _body(name: str) -> str:
 def test_the_drain_never_touches_the_pair_state():
     """The frames' records live outside the arena, the queue and the graveyard
     because a drain recycles those mid-frame (ARCHITECTURE section 12). A
-    gxr_flush that reset or read them would lose a frame's records to any
-    flush -- and the game flushes from inside draws."""
-    body = _body("void gxr_flush(void)\n{")
-    assert not re.search(r"\bg_pair|\bpair_", body), "gxr_flush reaches the pair state"
+    drain that reset or read them would lose a frame's records to any flush --
+    and the game flushes from inside draws. gxr_flush is one call to drain(),
+    so drain's body is the one read."""
+    assert "drain(W_EXTERNAL);" in _body("void gxr_flush(void)\n{")
+    body = _body("static void drain(int why)\n{")
+    assert not re.search(r"\bg_pair|\bpair_", body), "the drain reaches the pair state"
 
 
 def test_draws_are_claimed_in_one_place():

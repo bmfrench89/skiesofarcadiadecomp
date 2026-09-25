@@ -164,9 +164,45 @@ static int g_debug_lights;
 static unsigned g_draw_limit, g_draw_no;
 static int g_hash; /* SOA_HASH set to anything: hash every frame the port presents */
 
+/* A test knob (PLAN-60FPS-MODS H14): SOA_GXR_STALL=<worker>:<kind>:<us>[,...]
+ * makes that worker wait that many microseconds before every command of that
+ * kind -- 0 a draw, 1 a copy, 2 a clear -- which turns an ordering race
+ * between the workers into a certain failure. Read once, before any worker
+ * exists, and off it costs a worker one untaken branch a command. */
+typedef struct {
+    int worker, kind, us;
+} Stall;
+static Stall g_stall[16];
+static int g_stall_n;
+
+static void read_stalls(const char* p)
+{
+    while (p && *p && g_stall_n < 16) {
+        Stall st;
+        int used = 0;
+        if (sscanf(p, "%d:%d:%d%n", &st.worker, &st.kind, &st.us, &used) != 3 || used <= 0) break;
+        g_stall[g_stall_n++] = st;
+        p += used;
+        if (*p != ',') break;
+        p++;
+    }
+    if (g_stall_n) fprintf(stderr, "[gxr] SOA_GXR_STALL: %d stall%s in force; this run is a test\n", g_stall_n, g_stall_n == 1 ? "" : "s");
+}
+
+static void stall(int id, int kind)
+{
+    int i;
+    for (i = 0; i < g_stall_n; i++)
+        if (g_stall[i].worker == id && g_stall[i].kind == kind) {
+            double end = gxr_clock() + g_stall[i].us * 1e-6;
+            while (gxr_clock() < end) YieldProcessor();
+        }
+}
+
 int gxr_enabled(void)
 {
     if (g_enabled < 0) {
+        read_stalls(getenv("SOA_GXR_STALL"));
         const char* env = getenv("SOA_RENDER");
         const char* snap = getenv("SOA_SNAP");
         g_enabled = env && atoi(env) ? 1 : 0;
@@ -1488,8 +1524,10 @@ static DWORD WINAPI worker(LPVOID arg)
         if (D->seq != mine)
             WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
                       mine & QMASK, D->seq, mine, QUEUE_CAP);
-        else
+        else {
+            if (g_stall_n) stall(id, D->kind);
             draw_command(D);
+        }
         /* The two readings bracketing the command are inside what they
          * measure, so a command this worker owns no rows of is charged their
          * cost -- about 14 ns against a command that does nothing. The report
@@ -1535,17 +1573,43 @@ static void workers_start(void)
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
 static int g_started;   /* worker pool created */
 
-/* Wait for every queued draw to finish, then recycle the queue.
- *
- * Nothing below the wait is written that a worker reads: the numbering is left
+/* Why the producer drained (PLAN-60FPS-MODS H14): each drain is counted and
+ * timed under its reason, so the report can say which of them the wait is. */
+enum {
+    W_EXTERNAL,    /* gxr_flush from outside: a reset, a replay's end, SOA_FRAMES, a driver */
+    W_RING,        /* the ring would lap a command still queued */
+    W_ARENA,       /* the vertex arena is full */
+    W_GRAVE,       /* the texture graveyard is full */
+    W_COPY_FIRST,  /* before a copy that reads rows other workers own, the frame's first */
+    W_COPY_BEFORE, /* before a later one */
+    W_COPY_AFTER,  /* after one */
+    W_HAZARD,      /* a texture read from a queued copy's destination */
+    W_DRAWDONE,    /* GXDrawDone: the CPU may read what was drawn */
+    W_HASHPNG,     /* SOA_HASH or a PNG wants the finished frame */
+    W_COUNT
+};
+static const char* const g_wait_name[W_COUNT] = {"external", "ring", "arena", "graveyard", "copy-first",
+                                                 "copy-before", "copy-after", "hazard", "drawdone", "hash/png"};
+static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read by the report */
+
+static void drain(int why);
+
+/* Wait for every queued draw to finish, then recycle the queue. */
+void gxr_flush(void)
+{
+    drain(W_EXTERNAL);
+}
+
+/* Nothing below the wait is written that a worker reads: the numbering is left
  * where it is and only producer-private storage is handed out again. A worker
  * that has reached g_published cannot run anything else, because the thread
  * inside this function is the only one that publishes. */
-void gxr_flush(void)
+static void drain(int why)
 {
     long long target;
     unsigned spins = 0;
     int i, prev;
+    uint64_t t0;
     if (!g_queue) return;
     /* Read once: this thread is the only writer, so the target cannot move. */
     target = g_published;
@@ -1555,6 +1619,7 @@ void gxr_flush(void)
      * number that says whether the guest thread or the rasterizer is the one
      * holding the run up. */
     prev = gxr_phase(T_WAIT);
+    t0 = gxr_ticks();
     /* Backing off matters here for the reason it does in the worker's own
      * spin, which this copies: at SOA_THREADS near the core count the producer
      * and the workers compete for the same cores, and a bare YieldProcessor()
@@ -1564,6 +1629,11 @@ void gxr_flush(void)
      * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
         while (g_ran[i] < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+    {
+        uint64_t t1 = gxr_ticks();
+        g_wait_n[why]++;
+        if (t1 > t0) g_wait_ticks[why] += t1 - t0;
+    }
     gxr_phase(prev);
     g_drained = target;
     g_flushes++;
@@ -1858,7 +1928,9 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
 
-    if (queued() >= QUEUE_CAP || g_arena_used + sizeof(Vertex) * count > ARENA_BYTES || tex_graveyard_full()) gxr_flush();
+    if (queued() >= QUEUE_CAP) drain(W_RING);
+    if (g_arena_used + sizeof(Vertex) * count > ARENA_BYTES) drain(W_ARENA);
+    if (tex_graveyard_full()) drain(W_GRAVE);
     draw_tripwire(bp, prim);
     /* Nothing of the queue's is claimed until tev_prepare has returned.
      * Resolving a texture read from a destination a queued copy has not
@@ -1994,7 +2066,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
     if (g_debug && g_copies_tex < 16)
         fprintf(stderr, "[gxr] copy to texture: dest %08X %dx%d from (%d,%d) fmt %u intensity %d half %d -> texfmt %u" "\n",
                 dest, w, h, x0, y0, fmt, intensity, half, texfmt);
-    if (texfmt == 99) { g_copies_tex++; return; }
+    if (texfmt == 99) return;
 
     switch (texfmt) {
     case 0: tw = 8; th = 8; bpt = 32; break;
@@ -2059,7 +2131,6 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
             }
         }
     }
-    g_copies_tex++;
 }
 
 static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
@@ -2169,7 +2240,7 @@ void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
     int i;
     addr &= MEM_MASK;
     for (i = 0; i < g_pending_n; i++)
-        if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) { gxr_flush(); return; }
+        if (addr < g_pending[i].addr + g_pending[i].bytes && addr + bytes > g_pending[i].addr) { drain(W_HAZARD); return; }
 }
 
 long gxr_presented(void)
@@ -2299,7 +2370,7 @@ static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uin
 static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
-    if (queued() >= QUEUE_CAP) gxr_flush();
+    if (queued() >= QUEUE_CAP) drain(W_RING);
     D = &g_queue[g_published & QMASK];
     D->seq = g_published;
     D->kind = 2; D->s = s;
@@ -2365,8 +2436,13 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * neighbouring workers, and workers advance independently. Without this
      * the frame depends on SOA_THREADS. */
     foreign = copy_is_foreign(half, filtered, y0);
-    if (foreign) gxr_flush();
-    if (queued() >= QUEUE_CAP) gxr_flush();
+    if (foreign) {
+        static unsigned last_frame = ~0u;
+        unsigned frame = gx_frame_count();
+        drain(frame != last_frame ? W_COPY_FIRST : W_COPY_BEFORE);
+        last_frame = frame;
+    }
+    if (queued() >= QUEUE_CAP) drain(W_RING);
     D = &g_queue[g_published & QMASK];
     D->seq = g_published;
     D->kind = 1; D->s = s;
@@ -2417,7 +2493,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * An unfiltered, unscaled copy reads only rows the worker wrote itself, so
      * it keeps the fused clear and its exact previous behaviour. */
     if (foreign) {
-        gxr_flush();
+        drain(W_COPY_AFTER);
         if (v & 0x800u) publish_clear(s, bp, v);
     }
 
@@ -2431,7 +2507,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
          * for the rows of this copy every other worker owns. The hash is taken
          * from the same buffer the PNG is written from and at the same point,
          * so it does not depend on whether a PNG is being written. */
-        if (want || g_hash) gxr_flush();
+        if (want || g_hash) drain(W_HASHPNG);
         if (want) TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h));
         /* One line per presented frame, for a tool to diff between runs:
          * "[gxr] frame <n> <w>x<h> hash <16 hex digits>". Note that SOA_SNAP
@@ -2464,7 +2540,7 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
         TIMED(T_COPY, enqueue_copy(s, bp, v));
         return;
     }
-    if (reg == 0x45 && (v & 2) && gxr_enabled()) gxr_flush(); /* GXDrawDone: the CPU may read results now */
+    if (reg == 0x45 && (v & 2) && gxr_enabled()) drain(W_DRAWDONE); /* GXDrawDone: the CPU may read results now */
 }
 
 /* Defined in gxr_tev.c. A diagnostic for the report below rather than part of
@@ -2539,5 +2615,19 @@ void gxr_report(void)
                 (unsigned long long)g_prepare_flushes);
     if (tex_graveyard_peak())
         fprintf(stderr, "[gxr] %d decoded textures waited to be freed at once, at the most\n", tex_graveyard_peak());
+    /* Where the producer's wait went, by reason (H14): seconds and how many. */
+    {
+        int i, any = 0;
+        uint64_t n = 0;
+        for (i = 0; i < W_COUNT; i++) n += g_wait_n[i];
+        if (n) {
+            fprintf(stderr, "[gxr] waits:");
+            for (i = 0; i < W_COUNT; i++)
+                if (g_wait_n[i])
+                    fprintf(stderr, "%s %s %.2fs (%llu)", any++ ? "," : "", g_wait_name[i], gxr_seconds(g_wait_ticks[i]),
+                            (unsigned long long)g_wait_n[i]);
+            fprintf(stderr, "; %llu drains\n", (unsigned long long)n);
+        }
+    }
     tex_report();
 }

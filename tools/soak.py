@@ -294,7 +294,7 @@ RE_BP_MASK = re.compile(r"^\[gxr\] BP_MASK ")
 # worker count, SOA_HASH's frame hashes. Every other [gxr] line is a
 # WARN_ONCE, a tripwire or a complaint, and is raised as a question.
 RE_GXR_ROUTINE = re.compile(
-    r"^\[gxr\] (?:wrote |rasterizing on |producer over |workers: |time: |textures: |\d+ triangles, "
+    r"^\[gxr\] (?:wrote |rasterizing on |producer over |workers: |time: |textures: |waits: |\d+ triangles, "
     r"|\d+ decoded textures waited |\d+ draws sampled a texture |frame \d+ \d+x\d+ hash )"
 )
 RE_CARD = re.compile(r"^\[exi\] memory card (.+?)(?: \(\d+ bytes\)|: new blank card)$")
