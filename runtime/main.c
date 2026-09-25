@@ -61,6 +61,9 @@ void si_set_path_root(const char* root);
 void aram_set_data_dir(const char* dir);
 void tick_set_hold(int (*held)(void)); /* tick.c; M19's pause */
 int clock_pause_requested(void);
+void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]));
+int si_read_pad(unsigned port, void* out);
+int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
 
 static void on_chord(int chord, unsigned frame)
 {
@@ -1261,6 +1264,8 @@ int main(int argc, char** argv)
         si_set_motor_strength(rumble && *rumble ? atoi(rumble) : 100);
         si_set_chord_handler(on_chord);
         tick_set_hold(clock_pause_requested);
+        si_set_pad2_source(window_pad2); /* P10a: port 2 for mods */
+        mod_set_pad_reader(si_read_pad);
         mod_set_host_buttons(si_host_buttons);
         hle_on_report(si_motor_stop);
         atexit(si_motor_stop);

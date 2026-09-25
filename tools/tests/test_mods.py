@@ -63,6 +63,16 @@ void fn_8023F704(CpuState* s);
 /* si.c's host buttons (CH1), as the stub the "host" command sets. */
 static uint32_t g_host_now;
 static uint32_t host_stub(void) { return g_host_now; }
+/* si.c's pad 2 (P10a), as the stub the "pad2" command sets: connected, buttons. */
+static int g_pad2_there;
+static unsigned g_pad2_buttons;
+static int pad_stub(unsigned port, void* out)
+{
+    uint8_t* p = (uint8_t*)out;
+    if (port != 2 || !g_pad2_there) return 0;
+    p[0] = (uint8_t)g_pad2_buttons; p[1] = (uint8_t)(g_pad2_buttons >> 8);
+    return 1;
+}
 
 /* The game's side of call_guest: one function at 0x80003100 that adds r3
  * and r4 and, being careless, clobbers r14, f14 and GQR 3. */
@@ -99,6 +109,7 @@ int main(int argc, char** argv)
     (void)argc;
     s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
     mod_set_host_buttons(host_stub);
+    mod_set_pad_reader(pad_stub);
     printf("loaded %d\n", mod_load(&s, argv[1], dol, n));
     while (scanf("%63s", cmd) == 1) {
         if (!strcmp(cmd, "set") && scanf("%x %x", &a, &v) == 2) mem_w32(&s, a, v);
@@ -122,6 +133,7 @@ int main(int argc, char** argv)
         }
         else if (!strcmp(cmd, "irq")) g_irq = 1;
         else if (!strcmp(cmd, "host") && scanf("%x", &v) == 1) g_host_now = v;
+        else if (!strcmp(cmd, "pad2") && scanf("%x", &v) == 1) { g_pad2_there = 1; g_pad2_buttons = v; }
         else if (!strcmp(cmd, "game")) { s.gpr[2] = 0x80350000u; s.gpr[13] = 0x8034E720u; s.gpr[14] = 0x14141414u; }
         else if (!strcmp(cmd, "regs")) printf("r14 %08X gqr3 %08X f14 %.1f\n", s.gpr[14], s.gqr[3], s.fpr[14].ps0);
         else if (!strcmp(cmd, "tex")) {
@@ -509,6 +521,17 @@ static void callfe(void* u)
     A->log(b);
 }
 #endif
+#ifdef READPAD
+/* pad 2 at each frame end; ports 1 and 3 must say nothing is there */
+static void padfe(void* u)
+{
+    SoaPad p;
+    int one = A->read_pad(1, &p), three = A->read_pad(3, &p), two = A->read_pad(2, &p);
+    (void)u;
+    snprintf(b, sizeof b, "read_pad 1:%d 3:%d 2:%d %04X", one, three, two, p.buttons);
+    A->log(b);
+}
+#endif
 #ifdef HOST
 /* the host buttons at each frame end, when the port's table has them */
 static void hostfe(void* u) { (void)u; snprintf(b, sizeof b, "host %X", A->host_buttons()); A->log(b); }
@@ -563,6 +586,9 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
 #endif
 #ifdef HOST
     if (api->size >= SOA_MOD_HAS(host_buttons)) api->on_frame_end(hostfe, NULL);
+#endif
+#ifdef READPAD
+    if (api->size >= SOA_MOD_HAS(read_pad)) api->on_frame_end(padfe, NULL);
 #endif
 #ifdef PROJ
     api->projection_filter(wide, NULL);
@@ -1494,3 +1520,51 @@ if __name__ == "__main__":
         print(f"[p11b-check] {'FAIL' if found else 'ok'}")
         sys.exit(1 if found else 0)
     sys.exit("usage: python tools/tests/test_mods.py p11b <log>")
+
+
+@needs_msvc
+def test_read_pad_gives_port_2_and_nothing_else(driver, tmp_path):
+    """read_pad (P10a) is si.c's port 2 through the setter main.c calls: here
+    the driver's stub. Ports 1 and 3 answer 0; with nothing on port 2, 2 does."""
+    dll(tmp_path, "padmod", "READPAD")
+    _, err = play(driver, tmp_path, "frame pad2 1100 frame")
+    got = [ln.split(": ", 1)[1] for ln in err.splitlines() if "padmod: read_pad" in ln]
+    assert got == ["read_pad 1:0 3:0 2:0 0000", "read_pad 1:0 3:0 2:1 1100"], err
+
+
+@needs_msvc
+def test_a_mod_built_before_read_pad_still_loads(driver, tmp_path):
+    """map-log built against soa_mod.h without the read_pad append loads."""
+    from soa import toolchain
+
+    header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
+    start = header.index("    /* Appended (P10a).")
+    end = header.index("int (*read_pad)(uint32_t port, SoaPad* out);", start) + len(
+        "int (*read_pad)(uint32_t port, SoaPad* out);\n"
+    )
+    old = header[:start] + header[end:]
+    assert "(*read_pad)" not in old and "(*host_buttons)" in old
+    inc = tmp_path / "old-include"
+    inc.mkdir()
+    (inc / "soa_mod.h").write_text(old, encoding="utf-8")
+    d = tmp_path / "mods" / "map-log"
+    d.mkdir(parents=True)
+    ini = (ROOT / "examples" / "mods" / "map-log" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    proc = toolchain.cl(
+        [
+            *toolchain.CFLAGS,
+            "/LD",
+            "/I",
+            str(inc),
+            str(ROOT / "examples" / "mods" / "map-log" / "mod.c"),
+            "/Fo" + str(d) + os.sep,
+            "/Fe" + str(d / "mod.dll"),
+        ],
+        cwd=d,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    out, err = play(driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe")
+    assert "loaded 1" in out and "[mod] map-log: map-log loaded" in err, (out, err)

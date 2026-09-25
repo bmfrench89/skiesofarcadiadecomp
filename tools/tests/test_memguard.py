@@ -86,6 +86,9 @@ int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; ret
 void si_set_path_root(const char* root) { (void)root; }
 void aram_set_data_dir(const char* dir) { (void)dir; }
 int clock_pause_requested(void) { return 0; }
+void si_set_pad2_source(int (*fn)(uint16_t*, uint8_t*, uint8_t*, uint8_t*)) { (void)fn; }
+int si_read_pad(unsigned port, void* out) { (void)port; (void)out; return 0; }
+int window_pad2(uint16_t* b, uint8_t* s, uint8_t* c, uint8_t* t) { (void)b; (void)s; (void)c; (void)t; return 0; }
 void gx_set_frame_limit(unsigned f) { (void)f; }
 void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)) { (void)fn; }
 unsigned gx_frame_count(void) { return 0; }

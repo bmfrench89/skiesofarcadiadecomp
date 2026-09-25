@@ -32,6 +32,7 @@ void mod_report(void);
 /* The DOL's code sections, noted whether or not a mod loads (main.c). */
 void mod_note_dol(const uint8_t* dol, size_t dol_size);
 void mod_set_host_buttons(uint32_t (*fn)(void)); /* CH1: si.c's host buttons, for the API */
+void mod_set_pad_reader(int (*fn)(unsigned port, void* out)); /* P10a: si.c's pad 2, for the API */
 
 /* Call the game's function at `addr` with every register put back after
  * (M4); 0 with the reason in `why` when refused. The API's call_guest adds

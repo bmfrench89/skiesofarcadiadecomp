@@ -533,6 +533,22 @@ static uint32_t api_host_buttons(void)
     return g_host_fn ? g_host_fn() : 0;
 }
 
+/* Pad 2 (P10a): si.c's, through a setter main.c calls, like the host buttons. */
+static int (*g_pad_reader)(unsigned port, void* out);
+
+void mod_set_pad_reader(int (*fn)(unsigned port, void* out))
+{
+    g_pad_reader = fn;
+}
+
+static int api_read_pad(uint32_t port, SoaPad* out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    out->stick[0] = out->stick[1] = out->cstick[0] = out->cstick[1] = 128;
+    return port == 2 && g_pad_reader ? g_pad_reader(port, out) : 0;
+}
+
 static const SoaModApi g_api = {
     sizeof(SoaModApi), SOA_MOD_API_VERSION,
     api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
@@ -545,6 +561,7 @@ static const SoaModApi g_api = {
     api_texture_provider,
     api_call_guest,
     api_host_buttons,
+    api_read_pad,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */

@@ -150,6 +150,12 @@ typedef struct SoaModApi {
      * mod, which never reach the game. 0 while a recording replays, which is
      * the whole input. Not in recordings yet (the event track's). */
     uint32_t (*host_buttons)(void);
+
+    /* Appended (P10a). A second controller, read for mods and never seen by
+     * the game: port 2 only for now. Fills *out and returns 1 when something
+     * is connected there, 0 otherwise. Meaningful inside pad_filter, which
+     * runs at each of the game's controller reads. Not in recordings yet. */
+    int (*read_pad)(uint32_t port, SoaPad* out);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

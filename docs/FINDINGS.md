@@ -3465,3 +3465,21 @@ and says why; the game's own 32,768th save would meet the same. The export
 name, `<maker>-<game>-<name>.gci`, follows Dolphin's naming as remembered,
 unchecked against its source. Importing a Dolphin save and loading it, and
 loading a port save in Dolphin, are the owner's checks (session B).
+
+
+**P10a: a second pad, for mods.** 2026-09-25. The groundwork for couch
+co-op (P10b's mod): port 2 is read, and the game never sees it. `window.c`
+takes the next connected XInput pad after port 1's, probed once a second
+while there is none; in checks, `SOA_PAD2` is a script in `SOA_PAD`'s
+grammar -- si.c's parser now works on a struct, so both scripts use it,
+with its refusals. Mods read it with `read_pad(2, &pad)`, appended to
+`SoaModApi` (1 when something is there), through setters so si.c and mod.c
+still link alone. `g_present` stays `{1,0,0,0}`: a direct SI transfer on
+channel 1 still ends in no reply, so the game's controller count does not
+change. Pad 2 is not in recordings yet (the event track's). Checks:
+`test_padrec.py` (SOA_PAD2's presses, holds and repeats; its refusals, named
+as SOA_PAD2's; a press in either script never reaching the other port; and
+channel 1 answering nothing with SOA_PAD2 set -- which marking channel 1
+present, tried, fails); `test_mods.py` (`read_pad(2)` as si.c gives it,
+ports 1 and 3 nothing, and map-log built against the header before the
+append still loads).

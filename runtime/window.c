@@ -787,6 +787,57 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
     return 1;
 }
 
+/* Port 2 (P10a): the next connected XInput pad after port 1's, probed once a
+ * second while there is none, and kept until it goes -- read for mods only
+ * (si.c's si_read_pad), never shown to the game. Its sticks and triggers as
+ * window_pad maps port 1's. */
+static int g_pad2_slot = -1;
+static ULONGLONG g_pad2_probe_at;
+
+int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2])
+{
+    XINPUT_STATE xs;
+    const XINPUT_GAMEPAD* g;
+    uint16_t b = 0;
+    if (!g_open) return 0;
+    memset(&xs, 0, sizeof xs);
+    if (g_pad2_slot >= 0 && (g_pad2_slot == g_pad_slot || XInputGetState((DWORD)g_pad2_slot, &xs) != ERROR_SUCCESS)) {
+        g_pad2_slot = -1;
+        g_pad2_probe_at = GetTickCount64() + 1000;
+    }
+    if (g_pad2_slot < 0) {
+        DWORD slot;
+        if (GetTickCount64() < g_pad2_probe_at) return 0;
+        for (slot = 0; slot < XUSER_MAX_COUNT && g_pad2_slot < 0; slot++)
+            if ((int)slot != g_pad_slot && XInputGetState(slot, &xs) == ERROR_SUCCESS) g_pad2_slot = (int)slot;
+        if (g_pad2_slot < 0) {
+            g_pad2_probe_at = GetTickCount64() + 1000;
+            return 0;
+        }
+    }
+    g = &xs.Gamepad;
+    if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
+    if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;
+    if (g->wButtons & XINPUT_GAMEPAD_X) b |= 0x0400;
+    if (g->wButtons & XINPUT_GAMEPAD_Y) b |= 0x0800;
+    if (g->wButtons & XINPUT_GAMEPAD_START) b |= 0x1000;
+    if (g->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) b |= 0x0010;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) b |= 0x0008;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) b |= 0x0004;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) b |= 0x0001;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) b |= 0x0002;
+    if (g->bLeftTrigger > 30) b |= 0x0040;
+    if (g->bRightTrigger > 30) b |= 0x0020;
+    *buttons = b;
+    stick[0] = (uint8_t)(128 + g->sThumbLX / 258);
+    stick[1] = (uint8_t)(128 + g->sThumbLY / 258);
+    cstick[0] = (uint8_t)(128 + g->sThumbRX / 258);
+    cstick[1] = (uint8_t)(128 + g->sThumbRY / 258);
+    trig[0] = g->bLeftTrigger;
+    trig[1] = g->bRightTrigger;
+    return 1;
+}
+
 /* The host buttons (CH1): LB, View and the stick clicks of the pad port 1
  * follows, as window_pad last read it, and Tab as LB while the window has
  * the focus. None is mapped to a GameCube button, and si.c keeps them out
@@ -810,5 +861,6 @@ void window_start(void) {}
 int window_open(void) { return 0; }
 int window_host(uint16_t* host) { (void)host; return 0; }
 int window_toggle_fullscreen(void) { return 0; }
+int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 #endif

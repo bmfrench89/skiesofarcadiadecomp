@@ -234,6 +234,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
 | `SOA_SNAP=n` | write `build/frames/NNNN.png` every n frames; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
+| `SOA_PAD2=frame:buttons,...` | a script for controller port 2 in `SOA_PAD`'s grammar, for checks: port 2 is read by mods (`read_pad` in `runtime/soa_mod.h`, for couch co-op) and never by the game, which still sees one controller. In play, port 2 is the next connected XInput pad after port 1's (P10a) |
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `+` combines (`1800:a+sup`), `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames; `lb`, `view`, `ls` and `rs` are the host buttons, which never reach the game (`1700:view+lb` is the fullscreen chord) |
 | `SOA_PAD_RECORD=path` | write down every controller input the port reads, keyed by frame, one line per change; play in the window, then replay it. An existing file is never overwritten — the run records to `path.1` instead |
 | `SOA_PAD_FILE=path` | replay a recording instead of live or scripted input (it becomes the whole input; `SOA_PAD` is then ignored). **Replay in the configuration you recorded in**: the recording is keyed by frame, the game runs on guest time, and the two only keep step while frames arrive at the same rate, so `SOA_SPEED`, `SOA_RENDER`, the window, the thread count and the memory card all have to match. The run says what it was recorded with and how far it has drifted |
@@ -291,7 +292,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1055 tests; any that need a dump skip themselves
+python -m pytest                     # 1062 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

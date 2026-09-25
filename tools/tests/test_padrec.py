@@ -49,6 +49,7 @@ int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 void si_set_config_extra(const char* extra);
 void si_set_path_root(const char* root);
+int si_read_pad(unsigned port, void* out);
 void si_set_chord_handler(void (*fn)(int chord, unsigned frame));
 uint32_t si_host_buttons(void);
 
@@ -94,6 +95,7 @@ int main(int argc, char** argv)
     unsigned reads = argc > 4 ? (unsigned)strtoul(argv[4], NULL, 10) : 2u;
     uint64_t hi = 0, lo = 0, was_hi = ~0ull, was_lo = ~0ull;
     uint32_t was_host = 0;
+    uint16_t was_pad2 = 0xFFFF;
     unsigned f, k;
     si_set_chord_handler(chord);
     g_live = argc > 1 && strcmp(argv[1], "record") == 0;
@@ -120,6 +122,16 @@ int main(int argc, char** argv)
             was_host = si_host_buttons();
             printf("host %u %X\n", f, (unsigned)was_host);
         }
+        if (getenv("SOA_PAD2")) { /* port 2, for mods only (P10a) */
+            uint8_t p2[8];
+            uint16_t b2;
+            int there = si_read_pad(2, p2);
+            b2 = there ? (uint16_t)(p2[0] | p2[1] << 8) : 0xFFFE;
+            if (b2 != was_pad2) {
+                was_pad2 = b2;
+                printf("pad2 %u %04X\n", f, (unsigned)b2);
+            }
+        }
         si_read(NULL, 0xCC006404u, 4, &hi);
         si_read(NULL, 0xCC006408u, 4, &lo);
         if (hi != was_hi || lo != was_lo) {
@@ -127,6 +139,13 @@ int main(int argc, char** argv)
             was_hi = hi;
             was_lo = lo;
         }
+    }
+    if (getenv("DRIVER_CHAN1")) {
+        /* a direct transfer on channel 1, as the SDK probes a port: nobody there */
+        uint64_t sr = 0;
+        si_write(NULL, 0xCC006434u, 4, (1u << 1) | 1u);
+        si_read(NULL, 0xCC006438u, 4, &sr);
+        printf("chan1 norep %u\n", (unsigned)((sr >> 19) & 1u));
     }
     si_report();
     return 0;
@@ -481,3 +500,56 @@ def test_a_card_under_the_root_is_named_relative_to_it(driver, tmp_path):
         last=5,
     )
     assert f" card={card}:" in elsewhere.read_text(), elsewhere.read_text()
+
+
+# --------------------------------------------------------------------------
+# port 2 (P10a): for mods, never for the game
+# --------------------------------------------------------------------------
+
+
+def pad2_lines(out: str) -> list[str]:
+    return [ln for ln in out.splitlines() if ln.startswith("pad2 ")]
+
+
+@needs_msvc
+def test_soa_pad2_parses_with_soa_pad_s_grammar(driver, tmp_path):
+    out, err = run(driver, tmp_path, "script", {"SOA_PAD2": "5:a+b#20,40:start"}, last=60)
+    assert pad2_lines(out) == [
+        "pad2 0 0000",
+        "pad2 5 0300",
+        "pad2 25 0000",
+        "pad2 40 1000",
+        "pad2 50 0000",
+    ], out
+    assert "scripted controller events for port 2 (SOA_PAD2)" in err, err
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "script, said",
+    [
+        ("5:strat", 'SOA_PAD2="5:strat" parsed no events'),
+        ("5:a,6:bad", "SOA_PAD2 not understood from"),
+    ],
+)
+def test_soa_pad2_refuses_what_soa_pad_refuses(driver, tmp_path, script, said):
+    _, err = run(driver, tmp_path, "script", {"SOA_PAD2": script}, last=10)
+    assert said in err, err
+
+
+@needs_msvc
+def test_the_two_scripts_do_not_touch(driver, tmp_path):
+    """A press in SOA_PAD reaches port 1 and not port 2, and one in SOA_PAD2
+    reaches port 2 and not the game."""
+    out, _ = run(driver, tmp_path, "script", {"SOA_PAD": "5:a", "SOA_PAD2": "10:b"}, last=30)
+    assert pad2_lines(out) == ["pad2 0 0000", "pad2 10 0200", "pad2 20 0000"], out
+    alone, _ = run(driver, tmp_path, "script", {"SOA_PAD": "5:a"}, last=30)
+    assert reports(out) == reports(alone), (out, alone)
+
+
+@needs_msvc
+def test_with_soa_pad2_the_game_still_sees_one_controller(driver, tmp_path):
+    """Pad 2 is read for mods and never answers an SI transfer: a direct
+    transfer on channel 1 still ends in no reply."""
+    out, _ = run(driver, tmp_path, "script", {"SOA_PAD2": "5:a", "DRIVER_CHAN1": "1"}, last=10)
+    assert "chan1 norep 1" in out, out

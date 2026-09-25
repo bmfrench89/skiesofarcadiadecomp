@@ -89,8 +89,15 @@ static int g_present[4] = {1, 0, 0, 0};
 /* ---- scripted controller ------------------------------------------------ */
 
 typedef struct { unsigned frame, every, hold; uint16_t buttons; uint8_t stick[2]; uint8_t host; } PadEvent;
-static PadEvent g_script[1024]; /* "F:buttons" once at frame F; "@N" again every N frames; "#H" held H frames */
-static int g_script_n = -1;
+/* "F:buttons" once at frame F; "@N" again every N frames; "#H" held H frames.
+ * One parser, two scripts (P10a): SOA_PAD drives port 1, SOA_PAD2 port 2,
+ * which only mods read. */
+typedef struct {
+    PadEvent ev[1024];
+    int n; /* -1 until parsed */
+    const char* env;
+} PadScript;
+static PadScript g_scr1 = {{{0}}, -1, "SOA_PAD"}, g_scr2 = {{{0}}, -1, "SOA_PAD2"};
 #define HOLD_FRAMES 10
 
 static uint16_t button_named(const char* name, size_t len)
@@ -111,12 +118,12 @@ static uint8_t host_named(const char* name, size_t len)
     return 0;
 }
 
-static void script_init(void)
+static void script_init(PadScript* sc)
 {
-    const char* env = getenv("SOA_PAD");
+    const char* env = getenv(sc->env);
     const char* p = env;
-    g_script_n = 0;
-    while (p && *p && g_script_n < (int)(sizeof g_script / sizeof g_script[0])) {
+    sc->n = 0;
+    while (p && *p && sc->n < (int)(sizeof sc->ev / sizeof sc->ev[0])) {
         /* An item this cannot read ends the parse *at the item*, so the line
          * below names it. Each of these used to be accepted as an event that
          * pressed nothing, counted and silent: "START" or "strat" (unknown
@@ -160,25 +167,25 @@ static void script_init(void)
             p = end;
         }
         if (bad || !named || (*p && *p != ',')) { p = item; break; }
-        g_script[g_script_n].frame = frame;
-        g_script[g_script_n].every = every;
-        g_script[g_script_n].hold = hold;
-        g_script[g_script_n].buttons = buttons;
-        g_script[g_script_n].stick[0] = stick[0];
-        g_script[g_script_n].stick[1] = stick[1];
-        g_script[g_script_n].host = host;
-        g_script_n++;
+        sc->ev[sc->n].frame = frame;
+        sc->ev[sc->n].every = every;
+        sc->ev[sc->n].hold = hold;
+        sc->ev[sc->n].buttons = buttons;
+        sc->ev[sc->n].stick[0] = stick[0];
+        sc->ev[sc->n].stick[1] = stick[1];
+        sc->ev[sc->n].host = host;
+        sc->n++;
         if (*p == ',') p++;
     }
     /* A script that parsed as nothing used to print nothing, which looks
      * exactly like the game ignoring the input. Say what was understood, and
      * where the parse gave up if it did not reach the end. */
-    if (g_script_n) {
-        fprintf(stderr, "[si] %d scripted controller events\n", g_script_n);
-        if (p && *p) fprintf(stderr, "[si] SOA_PAD not understood from \"%s\" on; that part is ignored\n", p);
+    if (sc->n) {
+        fprintf(stderr, "[si] %d scripted controller events%s\n", sc->n, sc == &g_scr2 ? " for port 2 (SOA_PAD2)" : "");
+        if (p && *p) fprintf(stderr, "[si] %s not understood from \"%s\" on; that part is ignored\n", sc->env, p);
     } else if (env && *env) {
-        fprintf(stderr, "[si] SOA_PAD=\"%s\" parsed no events, so nothing will be pressed "
-                        "(expected frame:buttons,... e.g. 1700:start)\n", env);
+        fprintf(stderr, "[si] %s=\"%s\" parsed no events, so nothing will be pressed "
+                        "(expected frame:buttons,... e.g. 1700:start)\n", sc->env, env);
     }
 }
 
@@ -186,27 +193,32 @@ uint64_t irq_retrace_count(void);
 
 unsigned gx_frame_count(void);
 
-static uint16_t script_now(uint8_t stick[2], uint8_t* host)
+static uint16_t script_state(PadScript* sc, uint8_t stick[2], uint8_t* host)
 {
     uint64_t frame = gx_frame_count(); /* the game's frames, not fields: deterministic against its logic */
     uint16_t b = 0;
     int i;
     stick[0] = stick[1] = 128;
     *host = 0;
-    if (g_script_n < 0) script_init();
-    for (i = 0; i < g_script_n; i++) {
+    if (sc->n < 0) script_init(sc);
+    for (i = 0; i < sc->n; i++) {
         uint64_t rel;
-        if (frame < g_script[i].frame) continue;
-        rel = frame - g_script[i].frame;
-        if (g_script[i].every) rel %= g_script[i].every;
-        if (rel < g_script[i].hold) {
-            b |= g_script[i].buttons;
-            *host |= g_script[i].host;
-            if (g_script[i].stick[0] != 128) stick[0] = g_script[i].stick[0];
-            if (g_script[i].stick[1] != 128) stick[1] = g_script[i].stick[1];
+        if (frame < sc->ev[i].frame) continue;
+        rel = frame - sc->ev[i].frame;
+        if (sc->ev[i].every) rel %= sc->ev[i].every;
+        if (rel < sc->ev[i].hold) {
+            b |= sc->ev[i].buttons;
+            *host |= sc->ev[i].host;
+            if (sc->ev[i].stick[0] != 128) stick[0] = sc->ev[i].stick[0];
+            if (sc->ev[i].stick[1] != 128) stick[1] = sc->ev[i].stick[1];
         }
     }
     return b;
+}
+
+static uint16_t script_now(uint8_t stick[2], uint8_t* host)
+{
+    return script_state(&g_scr1, stick, host);
 }
 
 static uint16_t buttons_now(uint8_t stick[2])
@@ -788,6 +800,37 @@ static void (*g_pad_filter)(unsigned frame, void* pad);
 void si_set_pad_filter(void (*fn)(unsigned frame, void* pad))
 {
     g_pad_filter = fn;
+}
+
+/* ---- port 2 (P10a) ---------------------------------------------------------
+ * A second pad for mods -- couch co-op -- and never for the game: g_present
+ * stays {1,0,0,0}, so an SI transfer on channel 1 still finds nothing there.
+ * The window's next connected XInput pad after port 1's (a source main.c
+ * sets), or SOA_PAD2's script in checks. Not recorded yet: that is the event
+ * track's, and one change here now that si.c reads it. */
+static int (*g_pad2_source)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
+
+void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]))
+{
+    g_pad2_source = fn;
+}
+
+/* Port `port`'s state as a PadState (SoaPad's layout): 1 when something is
+ * there, 0 otherwise. Port 2 only; port 1 is the pad filter's own. */
+int si_read_pad(unsigned port, void* out)
+{
+    PadState* st = (PadState*)out;
+    uint8_t host;
+    if (port != 2) return 0;
+    *st = PAD_NEUTRAL;
+    if (g_pad2_source && g_pad2_source(&st->buttons, st->stick, st->cstick, st->trig)) {
+        st->buttons &= BTN_ALL;
+        return 1;
+    }
+    if (g_scr2.n < 0) script_init(&g_scr2);
+    if (g_scr2.n <= 0) return 0;
+    st->buttons = script_state(&g_scr2, st->stick, &host);
+    return 1;
 }
 
 /* ---- host buttons and chords (CH1) --------------------------------------
