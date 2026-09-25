@@ -200,6 +200,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_MEMPOKE=a,b` | store a word at each guest address before the game boots and read it back; an address past the console's 24 MB, e.g. `0x81800000`, is how to fire the out-of-range tripwire on purpose (needs no disc) |
 | `SOA_STRICT=1` | stop at the first hardware access outside the modelled range, with a guest backtrace (almost always a garbage pointer); without it the first twenty are reported and the run goes on |
 | `SOA_HASH=1` | print an FNV-1a hash of every frame the port presents (what `tools/scenario.py replay` compares) |
+| `--replay A B` | render two consecutive captures, A to `A.png` and B to `B.png`, then the image halfway between them to `B.mid.png`: every draw of B matched in A has its positions interpolated, the rest are drawn as B draws them (PLAN-60FPS-MODS H10). `SOA_PAIR_T=t` (0 to 1, default 0.5) picks another point, `SOA_PAIR_LIST=file` writes the matched pairs, and `python tools/midpoint.py` runs every check on the five pairs in `build/perfset` |
 | `SOA_MMIO=1` | log the first few accesses of every hardware register as they happen |
 | `SOA_SELFTEST=1` | run the library and device checks instead of the game |
 | `SOA_PROFILE=n` | `0` turns off the end-of-run sampling profile (one fewer thread); `n>1` shows n rows |
@@ -219,7 +220,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 780 tests; any that need a dump skip themselves
+python -m pytest                     # 813 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

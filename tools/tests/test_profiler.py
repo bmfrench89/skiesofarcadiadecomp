@@ -98,6 +98,7 @@ void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }
 int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
+int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }
 void gxr_enable(int on) { (void)on; }
 void gxr_set_output(const char* p) { (void)p; }
 void watch_init(void) {}

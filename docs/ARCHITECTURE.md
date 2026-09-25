@@ -131,7 +131,14 @@ Still on the guest thread, `gxr_draw_inner`:
   change a queued draw;
 - the vertices go into a shared arena and the `DrawCmd` into slot
   `g_published & QMASK` of a 4,096-entry ring;
-- `InterlockedIncrement64(&g_published)` publishes it.
+- `publish` increments `g_published` (`InterlockedIncrement64`) and, if any
+  worker has gone to sleep on it, wakes them with `WakeByAddressAll`.
+
+In a pair replay (section 12) two more calls sit on this path, both on the
+producer and both before `publish`: `pair_claim` keys the draw before its
+vertices are transformed, and `pair_positions` records them -- or moves
+them to the point between two frames -- after. With pair mode off each is
+one untaken branch.
 
 Commands are *numbered*, never re-indexed. `g_published` has one writer (the
 producer) and `g_ran[i]` one writer (worker `i`), and none of them is ever
@@ -140,8 +147,9 @@ With no workers the producer runs the command itself on the spot.
 
 ### 7. Workers rasterize it
 
-`runtime/gxr.c` · `worker` spins on one shared word (`mine >= g_published`),
-backing off to `Sleep(0)` every 4,000 spins, then runs `draw_command`.
+`runtime/gxr.c` · `worker` spins on one shared word (`mine >= g_published`)
+and after 4,000 spins parks in `WaitOnAddress` on it, for at most 50 ms at a
+time (PLAN-60FPS-MODS H11), then runs `draw_command`.
 
 `draw_command` expands quads, triangles, strips and fans into
 `emit_triangle`, which clips against the near, `w` and far planes
@@ -203,9 +211,13 @@ rather than sample stale bytes.
 ### 10. Out to the window
 
 `runtime/window.c` · `ui_thread` polls `gxr_presented()` and, when it moves,
-calls `present`, which converts RGBA to BGRA into `g_bgra` and invalidates
-the client area. `wndproc`'s `WM_PAINT` puts it on screen with
-`StretchDIBits` at `SOA_SCALE` (default 2).
+calls `present`, which converts RGBA to BGRA into `g_bgra`. `dxgi_present`
+scales that by whole pixels into a flip-model swap chain's back buffer, at
+`SOA_SCALE` (default 2), and presents it held for `g_interval` refreshes:
+two at 60 Hz, four at 120, one where the display's rate is not a multiple
+of 30 (H8). With `SOA_PRESENTER=gdi`, or if DXGI cannot start, `present`
+invalidates the client area instead and `wndproc`'s `WM_PAINT` puts the
+frame on screen with `StretchDIBits`.
 
 ### 11. End of frame
 
@@ -220,6 +232,49 @@ capture is written (`.fifo`, `.regs` and a full `.ram` image), and where
 after a `gxr_flush` so the hash describes the finished frame. That is the
 value `config/fifo_manifest.tsv` pins for all 23 captures, and that
 `python tools/scenario.py replay` re-checks at `SOA_THREADS` 1, 2, 3 and 8.
+
+### 12. The in-between image and the vertex history (H10)
+
+`soa.exe --replay F F+1` (`runtime/gx.c` · `gx_replay_pair`) renders three
+passes: F with `GXR_PAIR_RECORD`, F+1 as it is, and F+1 again with
+`GXR_PAIR_LERP`, to `F.png`, `F+1.png` and `F+1.mid.png`. On the draw path
+(section 6) `pair_claim` keys each draw as `tools/fifopair.py` does -- its
+display list, the arrays its vertex layout indexes, the textures its stages
+sample, its primitive, vertex count and TEV setup, but not the TEV colour
+registers, so a fade stays one draw -- and numbers it in stream order.
+RECORD files the draw under its key; LERP takes the oldest unmatched draw of
+F with the same key. After the transform, `pair_positions` keeps the
+clip-space x, y, z and w of RECORD's vertices, or replaces LERP's with
+(1-t)·F + t·F+1. Colours and texture coordinates stay F+1's. A draw with no
+match, or whose projection kind changed between the frames, is drawn as F+1
+draws it. In the LERP pass a copy to texture is skipped, since it would
+write what F+1's own frame reads next, but a clear the copy carries is
+kept, because the draws after it expect the EFB it leaves.
+
+What is kept, and the rules the live path (H16, H17a) inherits:
+
+- **per frame**, a 32-byte record per keyed draw (`PairRec`), an
+  open-addressed key table (`PairSlot`, 32,768 slots) and 16 bytes of
+  position per vertex, for at most 16,384 draws and 262,144 vertices. The
+  busiest frame measured, the cutscene's, has 4,280 and 27,676. A frame past
+  either limit is counted in the report, not fatal. Two frames (current and
+  before) come to about 10.5 MB, allocated only when pair mode is first
+  switched on;
+- **outside the vertex arena, the queue and the texture graveyard.** A drain
+  recycles those in the middle of a frame, and the game drains from inside
+  draws, so nothing a drain touches holds pair state (a test pins that
+  `gxr_flush` names none of it);
+- **owned by the producer.** It claims, records and lerps before `publish`,
+  so no worker ever sees a command whose positions are half replaced;
+- **rotated only at the screen copy** (`enqueue_copy` with `to_screen`),
+  which is what makes "the frame before" mean the frame last presented.
+
+Two things the live version needs that the offline one does not. The
+in-between command has to be built next to the real one, and so needs a
+second EFB: `g_efb` and `g_efb_z` are single globals, which blending, clears
+and copies all write. And both frames' commands have to be built before
+either is rasterized. Built that way, no texture has to be kept alive for a
+second frame, because the in-between image samples what F+1 samples.
 
 ---
 
@@ -450,7 +505,9 @@ The producer (the guest thread) and the workers meet at one word.
 recycles producer-private state — the vertex arena, the copy hazard list,
 the texture graveyard — so what a flush writes and what a running worker
 reads are disjoint sets. Flushes are forced by the queue filling, by a
-`GXDrawDone`, by a half-scale copy (it reads rows other workers own), by a
+`GXDrawDone`, by a copy that reads rows other workers own (drained before
+and after: a half-scale or filtered copy, which is every copy the game
+makes, or one that starts on another worker's row), by a
 texture that a queued copy has not written yet, and before a frame is hashed
 or written to PNG.
 
@@ -490,7 +547,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 780 tests, none of which needs a disc (anything that
+- `tools/tests/` — 813 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

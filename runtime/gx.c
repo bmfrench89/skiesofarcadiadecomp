@@ -32,6 +32,11 @@
 static uint32_t g_cp[0x100];
 static uint32_t g_xf[0x1100]; /* 0x000-0xFFF matrix memory, 0x1000-0x10FF registers */
 static uint32_t g_bp[0x100];
+/* Set while the parser is inside a display list: the list's address as the
+ * call gave it. Part of a draw's identity across frames (H10, and
+ * tools/fifopair.py's "dl" key field). */
+static uint32_t g_list_addr;
+static int g_in_list;
 static uint16_t g_cp_mmio[0x40]; /* the CP's own MMIO registers, by half-word index */
 static uint16_t g_pe_mmio[8];
 static uint32_t g_pi_fifo[3];
@@ -344,7 +349,11 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
             g_dl_calls++;
             /* size is the guest's, and the same wrap applies to it. */
             if (!in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
-                size_t done = parse(s, mem_ptr(s, addr), size, 1);
+                size_t done;
+                g_list_addr = addr; /* the draws inside say which list they came through (gx_draw_list) */
+                g_in_list = 1;
+                done = parse(s, mem_ptr(s, addr), size, 1);
+                g_in_list = 0;
                 if (done != size) {
                     static int warned;
                     if (!warned++) fprintf(stderr, "[gx] display list at %08X: %zu of %u bytes parsed\n", addr, done, size);
@@ -507,12 +516,22 @@ const uint32_t* gx_cp_regs(void) { return g_cp; }
 const uint32_t* gx_xf_regs(void) { return g_xf; }
 const uint32_t* gx_bp_regs(void) { return g_bp; }
 
-int gx_replay(CpuState* s, const char* base)
+/* 1, with the list's address, when the draw being parsed came through a
+ * display list; 0 for a draw in the stream itself. */
+int gx_draw_list(uint32_t* addr)
+{
+    *addr = g_in_list ? g_list_addr : 0;
+    return g_in_list;
+}
+
+/* A capture's register images, its end-of-frame RAM (unless with_ram is 0)
+ * and its command stream, loaded as gx_replay has always loaded them. */
+static int load_capture(CpuState* s, const char* base, int with_ram, uint8_t** fifo_out, size_t* len_out)
 {
     char path[512];
     FILE* f;
     uint8_t* fifo;
-    size_t len, done;
+    size_t len;
 
     snprintf(path, sizeof path, "%s.regs", base);
     f = fopen(path, "rb");
@@ -522,11 +541,13 @@ int gx_replay(CpuState* s, const char* base)
     }
     fclose(f);
 
-    snprintf(path, sizeof path, "%s.ram", base);
-    f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
-    if (fread(s->mem, 1, MEM1_SIZE, f) != MEM1_SIZE) { fprintf(stderr, "[gx] short RAM file\n"); fclose(f); return 1; }
-    fclose(f);
+    if (with_ram) {
+        snprintf(path, sizeof path, "%s.ram", base);
+        f = fopen(path, "rb");
+        if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
+        if (fread(s->mem, 1, MEM1_SIZE, f) != MEM1_SIZE) { fprintf(stderr, "[gx] short RAM file\n"); fclose(f); return 1; }
+        fclose(f);
+    }
 
     snprintf(path, sizeof path, "%s.fifo", base);
     f = fopen(path, "rb");
@@ -535,14 +556,102 @@ int gx_replay(CpuState* s, const char* base)
     len = (size_t)ftell(f);
     fseek(f, 0, SEEK_SET);
     fifo = (uint8_t*)malloc(len ? len : 1);
-    if (fread(fifo, 1, len, f) != len) { fprintf(stderr, "[gx] short FIFO file\n"); fclose(f); return 1; }
+    if (fread(fifo, 1, len, f) != len) { fprintf(stderr, "[gx] short FIFO file\n"); fclose(f); free(fifo); return 1; }
     fclose(f);
+    *fifo_out = fifo;
+    *len_out = len;
+    return 0;
+}
 
+int gx_replay(CpuState* s, const char* base)
+{
+    uint8_t* fifo;
+    size_t len, done;
+    if (load_capture(s, base, 1, &fifo, &len)) return 1;
     gxr_reset_efb();
     done = parse(s, fifo, len, 0);
     gxr_flush();
     fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);
     gx_report();
     free(fifo);
+    return 0;
+}
+
+/* gxr.c's side of a pair replay, declared here as gx.c declares the rest of
+ * what it calls there. */
+#define GXR_PAIR_RECORD 1u
+#define GXR_PAIR_LERP 2u
+int gxr_pair_mode(unsigned flags, float t);
+unsigned long long gxr_pair_rotations(void);
+void gxr_pair_list(void* file);
+void gxr_pair_report(void);
+void gxr_set_output(const char* png_path);
+
+/* The image between two consecutive captures (PLAN-60FPS-MODS H10), in three
+ * passes: A recorded (to A.png), B as it is (to B.png, the check that the
+ * pair machinery changes nothing), then B again with every draw matched in A
+ * moved to (1-t)*A + t*B (to B.mid.png). SOA_PAIR_T is t, 0.5 unless set;
+ * SOA_PAIR_LIST names a file for the matched pairs, fifopair's numbering.
+ * Nothing is captured and no frame hook runs between the passes. */
+int gx_replay_pair(CpuState* s, const char* a, const char* b)
+{
+    uint8_t* fifo;
+    size_t len, done;
+    char png[1024];
+    const char* t_env = getenv("SOA_PAIR_T");
+    const char* list = getenv("SOA_PAIR_LIST");
+    const char* draws = getenv("SOA_GXR_DRAWS");
+    float t = 0.5f;
+    FILE* lf = NULL;
+    unsigned long long rot;
+    int pass;
+    g_dump_checked = 1;
+    g_dump_list = NULL;
+    g_frame_hook = NULL;
+    fprintf(stderr, "[pair] a pair replay: no capture is written and no frame hook runs between the passes\n");
+    if (t_env && *t_env) {
+        char* end;
+        double d = strtod(t_env, &end);
+        if (*end || d < 0.0 || d > 1.0) {
+            fprintf(stderr, "[pair] SOA_PAIR_T=%s is not a number from 0 to 1\n", t_env);
+            return 1;
+        }
+        t = (float)d;
+    }
+    if (draws && *draws) {
+        fprintf(stderr, "[pair] SOA_GXR_DRAWS stops a pass part way, and a pair needs every draw of both\n");
+        return 1;
+    }
+    if (list && *list) {
+        lf = fopen(list, "w");
+        if (!lf) { fprintf(stderr, "[pair] cannot write %s\n", list); return 1; }
+        gxr_pair_list(lf);
+    }
+    for (pass = 1; pass <= 3; pass++) {
+        const char* base = pass == 1 ? a : b;
+        unsigned flags = pass == 1 ? GXR_PAIR_RECORD : (pass == 3 ? GXR_PAIR_LERP : 0u);
+        fprintf(stderr, "[pair] pass %d: %s %s\n", pass, pass == 1 ? "record" : (pass == 2 ? "as it is" : "between"), base);
+        if (!gxr_pair_mode(flags, t)) { fprintf(stderr, "[pair] cannot set pair mode\n"); return 1; }
+        snprintf(png, sizeof png, pass == 3 ? "%s.mid.png" : "%s.png", base);
+        gxr_set_output(png);
+        /* pass 3 keeps pass 2's RAM: both start from B's end-of-frame image */
+        if (load_capture(s, base, pass != 3, &fifo, &len)) return 1;
+        rot = gxr_pair_rotations();
+        gxr_reset_efb();
+        done = parse(s, fifo, len, 0);
+        gxr_flush();
+        free(fifo);
+        fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);
+        if (pass == 1 && gxr_pair_rotations() != rot + 1) {
+            fprintf(stderr, "[pair] %s holds %llu screen copies, not one: a pair is two captures of one frame each\n",
+                    a, gxr_pair_rotations() - rot);
+            return 1;
+        }
+    }
+    gxr_pair_mode(0, t);
+    gxr_pair_list(NULL);
+    if (lf) fclose(lf);
+    gxr_pair_report();
+    gx_report();
     return 0;
 }

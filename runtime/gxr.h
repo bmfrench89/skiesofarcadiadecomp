@@ -26,6 +26,7 @@ typedef struct {
 const uint32_t* gx_cp_regs(void);
 const uint32_t* gx_xf_regs(void);
 const uint32_t* gx_bp_regs(void);
+int gx_draw_list(uint32_t* addr); /* the draw came through a display list, and which */
 /* Frames presented so far, counted from 0: what SOA_FRAMES, SOA_SNAP and
  * SOA_PAD all count. SOA_FRAMES=N therefore runs the frames numbered 0..N-1
  * and stops before presenting frame N -- SOA_SNAP=N SOA_FRAMES=N writes
@@ -45,6 +46,16 @@ void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);
 void gxr_texture_hazard(uint32_t addr, uint32_t bytes); /* flush if a queued copy writes there */
+/* Frame pairs (PLAN-60FPS-MODS H10): RECORD keeps each draw's key and
+ * positions as frame F's and makes them the frame before at the screen copy;
+ * LERP moves each draw matched in the frame before to (1-t)*F + t*F+1 and
+ * skips copies to texture. 0 turns it off. Returns 0 when refused. */
+#define GXR_PAIR_RECORD 1u
+#define GXR_PAIR_LERP 2u
+int gxr_pair_mode(unsigned flags, float t);
+unsigned long long gxr_pair_rotations(void);
+void gxr_pair_list(void* file); /* a FILE*: "F-index F+1-index" per match, fifopair's numbering */
+void gxr_pair_report(void);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

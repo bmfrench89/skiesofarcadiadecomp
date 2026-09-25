@@ -16,7 +16,7 @@ Windows 11, 16 logical CPUs, Python 3.14.0, VS 2022 Build Tools (MSVC
 |---|---|---|
 | Did I break the tooling? | [1. No disc needed](#1-the-checks-that-need-no-disc) | 1 min |
 | Does it build? | [2. The build](#2-the-build) | minutes |
-| Is the runtime still sane? | [3. The self test](#3-the-self-test-73-cases) | 0.1 s |
+| Is the runtime still sane? | [3. The self test](#3-the-self-test-75-cases) | 0.1 s |
 | Does the game still run? | [4. The scenarios](#4-the-scenario-library) | 71 s to 26 min |
 | Does it still draw the same pixels? | [5. The frame hashes](#5-the-frame-hash-corpus) | 18 s |
 | Do the decompiled units still match? | [6. The match check](#6-the-decompilation-check) | 4 s |
@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-780 passed in 109.84s
+813 passed in 114.41s
 ```
 
-780 tests in 45 files, none of which reads the disc. They cover the Python
+813 tests in 47 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -55,12 +55,14 @@ its own and run it, some of the C as well:
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_padrec.py` | 18 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
+| `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
 | `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
+| `test_gxr_pair.py` | 15 | H10's in-between image, on the renderer built alone: synthetic frames captured through the real capture path and replayed as pairs. A triangle moved by 2d lands at d pixel for pixel; perspective and depth motion give the view-space midpoint; t=0 and t=1 give the two frames; an unmatched draw comes from F+1; copies to texture are skipped with their clears kept; equal keys pair in stream order; the pairs written are fifopair's; and `gxr_flush` never touches the pair state |
 | `test_aklz.py` | 14 | the AKLZ container decoder, on hand-built streams |
 | `test_formats.py` | 14 | the disc's format parsers, on synthesised fixtures |
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
@@ -95,10 +97,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `780 passed` |
-| no capstone — **what CI installs** | `761 passed, 1 skipped` |
-| no MSVC | `592 passed, 188 skipped` |
-| neither — **the Ubuntu CI leg** | `573 passed, 189 skipped` |
+| everything (MSVC + capstone) | `813 passed` |
+| no capstone — **what CI installs** | `794 passed, 1 skipped` |
+| no MSVC | `613 passed, 200 skipped` |
+| neither — **the Ubuntu CI leg** | `594 passed, 201 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -813,6 +815,27 @@ than being quietly ignored.
 measurement, and `SOA_SNAP` skips rasterizing the frames it is not writing, so
 most of the hashes would be of a frame nothing drew.
 
+### The in-between image (H10)
+
+```
+python tools/midpoint.py            # the five pairs in build/perfset, 8 threads
+```
+
+About three minutes. Each pair's captures are checked against
+`config/perfset_manifest.tsv`, copied to a scratch directory and replayed one
+`soa.exe` at a time with `--replay F F+1`. Every pair must pass seven checks:
+pass 2 is F+1 exactly as a single replay draws it; the pairs the renderer
+wrote are `fifopair.match`'s, as many as H4 counted; the images are the same
+at one thread; F paired with itself is F; t=1 is F+1; and a copy of F+1 with
+one texture address changed loses the same pairs in both implementations.
+The last line reads `midpoint: 5 of 5 pairs pass`, and anything else exits 1.
+
+It pins no hash. The in-between image has no reference but the eye, so the
+images land in `build/midpoint/<scene>/` -- `F.png`, `mid.png`, `F1.png`,
+`t0.png` and `diff.png`, magenta where the in-between image differs from F+1 --
+and a change to the lerp means opening them. The synthetic side, where the
+right answer is known exactly, is `tools/tests/test_gxr_pair.py` in section 1.
+
 ---
 
 ## 6. The decompilation check
@@ -957,7 +980,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 188 of the 780 skip without a C compiler; they build one runtime file and run it.
+² 200 of the 813 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -968,8 +991,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 573 passed, 189 skipped |
-| **Tests** | windows | the same three — 761 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 201 skipped |
+| **Tests** | windows | the same three — 794 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

@@ -28,6 +28,7 @@ void threads_init(CpuState* s);
 void dvd_init(const char* path);
 int selftest(CpuState* s);
 int gx_replay(CpuState* s, const char* base);
+int gx_replay_pair(CpuState* s, const char* a, const char* b); /* H10: A, B and B.mid.png */
 void gxr_enable(int on);
 void gxr_set_output(const char* png_path);
 void watch_init(void);
@@ -1061,6 +1062,8 @@ static void usage(void)
     fprintf(stderr,
             "soa.exe [extracted-dir]             run the game (default directory: extracted)\n"
             "soa.exe --replay build/fifo/0000    render one captured frame to <base>.png\n"
+            "soa.exe --replay A B                render consecutive captures A and B, and the image\n"
+            "                                    between them to B.mid.png (SOA_PAIR_T, SOA_PAIR_LIST)\n"
             "\n"
             "Environment (PowerShell: $env:SOA_RENDER='1'):\n"
             "  SOA_RENDER=1     draw the game; a window opens unless SOA_SNAP or SOA_PAD is set\n"
@@ -1093,6 +1096,11 @@ int main(int argc, char** argv)
         if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "-?") == 0) {
             usage();
             return 0;
+        }
+        if (replay && argc > 4) {
+            fprintf(stderr, "--replay takes one capture, or two consecutive ones\n");
+            usage();
+            return 1;
         }
         if (!replay || argc < 3) {
             fprintf(stderr, "%s: %s\n", argv[1],
@@ -1184,12 +1192,13 @@ int main(int argc, char** argv)
     threads_init(&s);
     if (getenv("SOA_SELFTEST")) return selftest(&s) ? 7 : 0;
     if (argc > 2 && strcmp(argv[1], "--replay") == 0) {
-        /* Render one captured frame (see gx.c frame capture) to <base>.png. */
+        /* Render one captured frame (see gx.c frame capture) to <base>.png,
+         * or a consecutive pair and the image between them (H10). */
         char png[1024];
         snprintf(png, sizeof png, "%s.png", argv[2]);
         gxr_enable(1);
         gxr_set_output(png);
-        return gx_replay(&s, argv[2]);
+        return argc > 3 ? gx_replay_pair(&s, argv[2], argv[3]) : gx_replay(&s, argv[2]);
     }
     {
         /* A window when rendering for a person: SOA_RENDER is set and neither

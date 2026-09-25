@@ -2139,3 +2139,72 @@ if the panel has it) for the presenter to pace 30 frames a second evenly,
 then run the `window` scenario for H8's session and say whether it looks
 smoother than `SOA_PRESENTER=gdi`. Until then H8's pacing target is unmet
 for a reason outside the port.
+
+
+**H10: the in-between image is right in all five pairs, offline.** 2026-09-25.
+`soa.exe --replay F F+1` renders F recording each draw, F+1 as it is, and F+1
+again with every matched draw's clip-space positions moved halfway
+(ARCHITECTURE section 12). `python tools/midpoint.py` judged the five H4 pairs
+in `build/perfset` at 8 threads (and again at 1), on scratch copies checked
+against `config/perfset_manifest.tsv`:
+
+| scene | matched | from F+1 | copies skipped | px differing: mid vs F+1 | mid vs F | t=0 vs F |
+|---|---|---|---|---|---|---|
+| field, Dangral base (5000/5001) | 1144 / 1147 | 3 | 2 | 22,240 | 38,283 | 30,379 |
+| battle, `a101b` alarm (4000/4001) | 1390 / 1393 | 3 | 0 | 7,933 | 249,666 | 249,235 |
+| ship battle, `550a` (6000/6001) | 1514 / 1665 | 151 | 0 | 583 | 13,646 | 13,264 |
+| cutscene, the opening (4500/4501) | 4146 / 4280 | 134 | 2 | 20,332 | 32,262 | 26,162 |
+| sky, world map `099l` (4000/4001) | 765 / 765 | 0 | 0 | 9,382 | 9,295 | 468 |
+
+Every check passed in every pair: pass 2 is F+1 exactly as a single replay
+draws it; the pairs the renderer wrote are `fifopair.match`'s, the same count
+H4 measured; the images are identical at 1 and 8 threads; F paired with itself
+gives F and t=1 gives F+1; and a copy of F+1 with one texture address changed
+loses the same pair in both implementations. None was demoted (no draw changed
+between 2D and 3D) and none exceeded capacity. `tools/midpoint.py` first
+exempted the field and the cutscene from the t=1 and (F, F) checks, on the
+guess that a draw there samples a copy made later in its frame. Both came out
+exact, so the exemption was taken out and the checks are required everywhere.
+
+**How the images were checked.** For each scene F, the in-between image, F+1
+and a difference image (magenta where the in-between image differs from F+1)
+were opened, and crops of the moving parts were scaled 2-3x side by side:
+Vyse's idle animation (field), a crewman's helmet and shoulder (cutscene), the
+middle character with its selection ring and swinging blade (battle), and the
+ship (sky). In each the 3D sits between its two positions with no cracks, gaps
+or stretched triangles. The 2D layer holds still -- the HUDs, the compass, the
+dialogue text and the ship battle's menus are unchanged against F+1 -- and
+every unmatched draw, in every pair, is 2D (fifopair: 151 in the ship battle
+covering 21,888 px, 134 in the cutscene, 3 in the field and in the battle),
+drawn from F+1 as the rule says. No midpoint hash is pinned: the eye is the only reference an
+in-between image has (CLAUDE.md, "the first bless").
+
+**The large displacements are not motion.** The report's "largest
+displacement" (1,324 px in the field, 97.5 px in the cutscene) and its "draws
+over 32 px" (10 and 147) come entirely from vertices projected far off
+screen -- (35763, 20470) in the field, y near -44,900 in the cutscene -- where
+a vertex close to the eye plane swings thousands of pixels for a tiny change in
+w. Those draws cover no pixels in either frame. The lerp is in clip space, so
+they come to no harm. The largest real motion on screen is about 16 px
+(battle).
+
+**What positions-only costs.** The t=0 image has F's positions with F+1's
+colours and texture coordinates, so its difference from F is exactly what
+interpolating positions alone leaves at 30 Hz. In the battle nearly all of it
+is the alarm's lighting pulse, 1-8 levels over 249,000 pixels, which cannot be
+seen. In the field it is the save point's scrolling light beams, the
+rain/ground sparkle and Vyse's vertex shading (1,363 pixels off by 33 or more).
+In the cutscene it is the dialogue line fading in and the lamps' glow (1,831).
+Those animations will step at 30 Hz inside a 60 Hz image: visible at most as a
+slight texture judder, and not a reason to grow the record before H16. H17a's
+headless run, on more scenes, says whether texture coordinates should join the
+positions.
+
+What the midpoint also confirmed: the synthetic test
+(`tools/tests/test_gxr_pair.py`) captures frames through the real capture path
+and shows a triangle moved by 2d landing at d pixel for pixel. It shows the
+same under perspective at constant depth. A vertex moving in depth lands at the
+view-space midpoint (screen x 368), not the screen-space one (384). Four
+deliberate breakages of the lerp and the copy rule (weights swapped, w not
+lerped, the clear dropped, copies not skipped) each fail the test written for
+them.

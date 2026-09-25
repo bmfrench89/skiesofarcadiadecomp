@@ -271,7 +271,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - Headless: `title --check`, replay 23/23 and `SOA_HASH` lines are unchanged.
 - FINDINGS states how the lock interacts with D4, and what happened at another refresh rate if the display offers one.
 
-**H10. A midpoint image, offline, and the vertex-retention design** — *several days.*
+**H10. A midpoint image, offline, and the vertex-retention design** — *done 2026-09-25: `--replay F F+1` writes `F+1.mid.png`; all five pairs pass `tools/midpoint.py` and were judged by eye, with no artifacts. Positions only: colour and texture animation steps at 30 Hz, slight at worst. Retention is ARCHITECTURE section 12. FINDINGS "H10".*
 - `--replay` of a pair renders the midpoint to a PNG: matched vertices are interpolated, unmatched draws come from F+1, and copies to texture are skipped.
 - The vertex retention it builds, meaning what is kept across the drain and on which thread, is written into ARCHITECTURE.md. It is the layout H16 and H17a must use.
 
@@ -371,8 +371,8 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 **H17a. Interpolation, headless, off by default** — *several days, `--link`.*
 `SOA_INTERP=1` does the following:
 - keeps frame N's vertices across the drain, in H10's layout;
-- pins textures for two frames;
-- uses a second EFB, or saves and restores it;
+- needs no texture kept alive for a second frame: each in-between command is built alongside the real one and samples what F+1 samples (ARCHITECTURE section 12);
+- uses a second EFB, since `g_efb` and `g_efb_z` are single globals that blending, clears and copies all write;
 - has the in-between pass skip copies to texture, `g_frames_presented`, the frame counter and the hash;
 - headless, writes the in-between PNGs.
 

@@ -55,13 +55,17 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   title costs 1.2 cores instead of 8.8 (H11).
 - **A paced presenter (H8)** is built; the owner's display runs at 85 Hz, where
   30 fps cannot be paced evenly.
+- **The in-between image works, offline (H10).** `--replay F F+1` renders the
+  frame halfway between two captures. All five H4 pairs pass
+  `tools/midpoint.py`'s seven checks and were judged by eye with no artifacts;
+  the vertex history the live path must use is ARCHITECTURE section 12.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
 
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 780 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 813 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -93,7 +97,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 780 |
+| Python tests | 813 |
 | Self-test cases | 75 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -362,8 +366,13 @@ interleaved) and **M3a** (native `mod.dll` mods on `runtime/soa_mod.h`;
 `examples/mods/map-log` is the template), **M3b** (`pad_filter`: a mod decides
 what the game reads) and **M3c**'s projection filter (a wider view, checked on
 the 23 pinned captures under `--replay`, which loads mods) and its texture
-provider (any texture replaced by content hash, at any size). Next: H11's other half (the guest idle loop still spins on one core), then
-the renderer track toward 60 fps (H10 first, the offline midpoint). M4 (`call_guest`) is done, and M5,
+provider (any texture replaced by content hash, at any size), and **H10** (the
+offline midpoint: right in all five pairs, by `tools/midpoint.py` and by eye;
+positions only, so colour and texture animation steps at 30 Hz, slightly).
+Next, in the plan's order: H11's other half (the guest idle loop still spins
+on one core) and H12 (texture hashing), which are cheap; then H14 (the drains
+around every filtered copy), H15 (the pixel path), H13 and H16, which are what
+60 images a second at 1x needs before H17a turns interpolation on. M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

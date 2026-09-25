@@ -1572,6 +1572,264 @@ void gxr_flush(void)
     tex_graveyard_empty();
 }
 
+/* ---- frame pairs (PLAN-60FPS-MODS H10) ----------------------------------
+ *
+ * The in-between image of two consecutive frames, offline: `--replay F F+1`
+ * renders F recording each draw's key and its vertices' clip-space positions,
+ * renders F+1 as it is, then renders F+1 again with every draw matched to one
+ * of F moved to the point between -- (1-t)*F + t*F+1 of each x, y, z, w -- and
+ * everything else drawn as F+1 draws it. The match is tools/fifopair.py's
+ * exactly (FINDINGS "H4"): the key is a draw's display list, the arrays its
+ * vertex layout indexes, the textures its stages sample, its primitive, its
+ * vertex count and its TEV setup (not the TEV colour and konst registers, so a
+ * fade stays one draw); within a key, the oldest unmatched draw of F.
+ *
+ * What is kept is ARCHITECTURE section 12, the layout the live path (H16,
+ * H17a) inherits: per frame, a 32-byte record per keyed draw, an open-addressed
+ * key table, and 16 bytes of position per vertex -- outside the vertex arena,
+ * the queue and the texture graveyard, owned by the producer thread, rotated
+ * only at the screen copy, and never touched by a drain. Nothing is allocated
+ * unless pair mode is switched on, and with it off the draw path adds one
+ * untaken branch. Colours and texture coordinates are F+1's: positions only. */
+#define PAIR_DRAWS 16384u
+#define PAIR_SLOTS 32768u /* a power of two */
+#define PAIR_VERTS 262144u
+#define PAIR_NONE 0xFFFFFFFFu
+
+typedef struct {
+    uint64_t key;
+    uint32_t count, off, next, idx; /* idx: its number among the frame's draws, as fifopair numbers them */
+    uint8_t prim, ortho;
+} PairRec;
+
+typedef struct {
+    uint64_t key;
+    uint32_t count, head, tail; /* count 0: an empty slot; head: the oldest record not yet matched */
+} PairSlot;
+
+typedef struct {
+    PairRec* rec;
+    uint32_t nrec;
+    PairSlot* slot;
+    float (*pos)[4];
+    uint32_t npos;
+} PairFrame;
+
+typedef struct {
+    uint32_t cur_off, prev_off;
+} PairClaim;
+
+static PairFrame g_pair[2];
+static int g_pair_cur;
+static unsigned g_pair_flags;
+static float g_pair_t = 0.5f;
+static FILE* g_pair_list;
+static uint32_t g_pair_ndraw; /* keyed draws so far in this frame */
+static unsigned long long g_pair_rotations, g_pair_matched, g_pair_unmatched, g_pair_demoted, g_pair_over;
+static unsigned long long g_pair_verts, g_pair_skipped, g_pair_kept, g_pair_over32;
+static double g_pair_maxdisp;
+static uint32_t g_pair_peak_draws, g_pair_peak_verts;
+static uint64_t g_pair_list_hash = 1469598103934665603ull;
+
+static uint64_t pair_mix(uint64_t h, uint32_t w)
+{
+    h ^= w;
+    h *= 0x9E3779B97F4A7C15ull;
+    return h ^ (h >> 29);
+}
+
+static uint64_t pair_key(const uint32_t* cp, const uint32_t* bp, unsigned prim, unsigned count)
+{
+    uint64_t h = 0x243F6A8885A308D3ull;
+    uint32_t list_addr, n = 0;
+    unsigned i, st, stages = ((bp[0x00] >> 10) & 15) + 1;
+    int in_list = gx_draw_list(&list_addr);
+    h = pair_mix(h, (uint32_t)in_list);
+    h = pair_mix(h, in_list ? list_addr : 0);
+    for (i = 0; i < 12; i++) { /* arrays: pos, nrm, clr0, clr1, tex0-7, as fifo.vertex_layout orders them */
+        unsigned mode = i < 4 ? (cp[0x50] >> (9 + 2 * i)) & 3 : (cp[0x60] >> (2 * (i - 4))) & 3;
+        if (mode < 2) continue;
+        h = pair_mix(pair_mix(h, i), cp[0xA0 + i] & 0x1FFFFFFFu);
+        n++;
+    }
+    h = pair_mix(h, n);
+    for (n = 0, st = 0; st < stages; st++) { /* textures: each enabled stage's image address */
+        uint32_t tref = (bp[0x28 + st / 2] >> (12 * (st & 1))) & 0xFFF, m, rb;
+        if (!((tref >> 6) & 1)) continue;
+        m = tref & 7;
+        rb = m < 4 ? m : 0x20 + (m - 4);
+        h = pair_mix(h, (bp[0x94 + rb] & 0x1FFFFFu) << 5);
+        n++;
+    }
+    h = pair_mix(h, n);
+    h = pair_mix(pair_mix(h, prim), count);
+    h = pair_mix(h, bp[0x00] & 0x73C7Fu); /* tev: as fifopair.tev_hash */
+    for (st = 0; st < stages; st++) {
+        h = pair_mix(h, (bp[0x28 + st / 2] >> (12 * (st & 1))) & 0xFFF);
+        h = pair_mix(h, bp[0xC0 + 2 * st] & 0xFFFFFFu);
+        h = pair_mix(h, bp[0xC1 + 2 * st] & 0xFFFFFFu);
+    }
+    for (i = 0xF6; i < 0xFE; i++) h = pair_mix(h, bp[i] & 0xFFFFFFu);
+    return pair_mix(h, bp[0xF3] & 0xFFFFFFu);
+}
+
+/* The slot for (key, count), or where it would go; NULL when the table is full. */
+static PairSlot* pair_slot(PairFrame* F, uint64_t key, uint32_t count)
+{
+    uint32_t i, n;
+    for (i = (uint32_t)(key ^ (key >> 32)) & (PAIR_SLOTS - 1), n = 0; n < PAIR_SLOTS; i = (i + 1) & (PAIR_SLOTS - 1), n++) {
+        PairSlot* sl = &F->slot[i];
+        if (sl->count == 0 || (sl->key == key && sl->count == count)) return sl;
+    }
+    return NULL;
+}
+
+static void pair_reset(PairFrame* F)
+{
+    F->nrec = 0;
+    F->npos = 0;
+    memset(F->slot, 0, sizeof(PairSlot) * PAIR_SLOTS);
+}
+
+/* RECORD: note this draw as frame F's. LERP: find its match in the frame
+ * before, oldest first within the key, and say where that frame's positions
+ * are. A match whose projection kind differs (a 2D draw that was 3D, or the
+ * other way) is written to the list, consumed and demoted: F+1 draws it. */
+static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ortho)
+{
+    PairClaim c = {PAIR_NONE, PAIR_NONE};
+    uint32_t idx = g_pair_ndraw++;
+    if (g_pair_flags & GXR_PAIR_LERP) {
+        PairFrame* P = &g_pair[g_pair_cur ^ 1];
+        PairSlot* sl = pair_slot(P, key, count);
+        if (sl && sl->count && sl->head != PAIR_NONE) {
+            PairRec* r = &P->rec[sl->head];
+            sl->head = r->next;
+            if (g_pair_list) fprintf(g_pair_list, "%u %u\n", r->idx, idx);
+            g_pair_list_hash = pair_mix(pair_mix(g_pair_list_hash, r->idx), idx);
+            if (r->ortho != (uint8_t)ortho) {
+                g_pair_demoted++;
+            } else {
+                c.prev_off = r->off;
+                g_pair_matched++;
+            }
+        } else {
+            g_pair_unmatched++;
+        }
+    }
+    if (g_pair_flags & GXR_PAIR_RECORD) {
+        PairFrame* C = &g_pair[g_pair_cur];
+        PairSlot* sl = C->nrec < PAIR_DRAWS && C->npos + count <= PAIR_VERTS ? pair_slot(C, key, count) : NULL;
+        if (!sl) {
+            g_pair_over++;
+        } else {
+            uint32_t r = C->nrec++;
+            C->rec[r].key = key;
+            C->rec[r].count = count;
+            C->rec[r].off = C->npos;
+            C->rec[r].next = PAIR_NONE;
+            C->rec[r].idx = idx;
+            C->rec[r].prim = (uint8_t)prim;
+            C->rec[r].ortho = (uint8_t)ortho;
+            if (!sl->count) {
+                sl->key = key;
+                sl->count = count;
+                sl->head = sl->tail = r;
+            } else {
+                C->rec[sl->tail].next = r;
+                sl->tail = r;
+            }
+            c.cur_off = C->npos;
+            C->npos += count;
+        }
+    }
+    return c;
+}
+
+/* After a draw's vertices are transformed and before it is published: keep
+ * them as this frame's, or move them to the point between the frame before
+ * and this one. Only x, y, z, w -- colours and texture coordinates stay F+1's. */
+static void pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairClaim c)
+{
+    unsigned i;
+    if (c.cur_off != PAIR_NONE) {
+        float (*d)[4] = g_pair[g_pair_cur].pos + c.cur_off;
+        for (i = 0; i < count; i++) {
+            d[i][0] = v[i].x;
+            d[i][1] = v[i].y;
+            d[i][2] = v[i].z;
+            d[i][3] = v[i].w;
+        }
+    }
+    if (c.prev_off != PAIR_NONE) {
+        float (*p)[4] = g_pair[g_pair_cur ^ 1].pos + c.prev_off;
+        float t = g_pair_t, u = 1.0f - g_pair_t;
+        double worst = 0.0;
+        for (i = 0; i < count; i++) {
+            if (p[i][3] > 0.0f && v[i].w > 0.0f) {
+                double dx = ((double)v[i].x / v[i].w - (double)p[i][0] / p[i][3]) * rc->wd;
+                double dy = ((double)v[i].y / v[i].w - (double)p[i][1] / p[i][3]) * rc->ht;
+                double d = sqrt(dx * dx + dy * dy);
+                if (d > worst) worst = d;
+            }
+            v[i].x = u * p[i][0] + t * v[i].x;
+            v[i].y = u * p[i][1] + t * v[i].y;
+            v[i].z = u * p[i][2] + t * v[i].z;
+            v[i].w = u * p[i][3] + t * v[i].w;
+        }
+        g_pair_verts += count;
+        if (worst > g_pair_maxdisp) g_pair_maxdisp = worst;
+        if (worst > 32.0) g_pair_over32++;
+    }
+}
+
+/* The screen copy ends a frame: what was recorded becomes the frame before. */
+static void pair_rotate(void)
+{
+    PairFrame* C = &g_pair[g_pair_cur];
+    if (C->nrec > g_pair_peak_draws) g_pair_peak_draws = C->nrec;
+    if (C->npos > g_pair_peak_verts) g_pair_peak_verts = C->npos;
+    g_pair_cur ^= 1;
+    pair_reset(&g_pair[g_pair_cur]);
+    g_pair_ndraw = 0;
+    g_pair_rotations++;
+}
+
+int gxr_pair_mode(unsigned flags, float t)
+{
+    int i;
+    if ((flags & GXR_PAIR_RECORD) && (flags & GXR_PAIR_LERP)) return 0; /* H17a's second span makes this legal */
+    if (flags && !g_pair[0].rec) {
+        for (i = 0; i < 2; i++) {
+            g_pair[i].rec = (PairRec*)malloc(sizeof(PairRec) * PAIR_DRAWS);
+            g_pair[i].slot = (PairSlot*)malloc(sizeof(PairSlot) * PAIR_SLOTS);
+            g_pair[i].pos = (float (*)[4])malloc(sizeof(float) * 4 * PAIR_VERTS);
+            if (!g_pair[i].rec || !g_pair[i].slot || !g_pair[i].pos) return 0;
+            pair_reset(&g_pair[i]);
+        }
+    }
+    g_pair_flags = flags;
+    g_pair_t = t;
+    g_pair_ndraw = 0;
+    return 1;
+}
+
+unsigned long long gxr_pair_rotations(void) { return g_pair_rotations; }
+
+void gxr_pair_list(void* file) { g_pair_list = (FILE*)file; }
+
+void gxr_pair_report(void)
+{
+    fprintf(stderr,
+            "[pair] midpoint at t=%.2f: %llu of %llu draws matched (%llu vertices interpolated), %llu drawn from F+1, "
+            "%llu demoted (projection type differs), %llu copies to texture skipped (%llu clears kept), %llu over "
+            "capacity; largest displacement %.1f px, %llu matched draws with a vertex over 32 px; peak %u draws / "
+            "%u vertices a frame; pairs %016llx\n",
+            (double)g_pair_t, g_pair_matched, g_pair_matched + g_pair_unmatched + g_pair_demoted, g_pair_verts,
+            g_pair_unmatched, g_pair_demoted, g_pair_skipped, g_pair_kept, g_pair_over, g_pair_maxdisp,
+            g_pair_over32, g_pair_peak_draws, g_pair_peak_verts, (unsigned long long)g_pair_list_hash);
+}
+
 static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
 
 void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize)
@@ -1587,6 +1845,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     const uint8_t* p = verts;
     Vertex* v;
     DrawCmd* D;
+    PairClaim pc = {PAIR_NONE, PAIR_NONE};
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
     ++g_draw_no;
@@ -1645,11 +1904,13 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         }
     }
     D->prim = prim; D->count = count; D->v = v;
+    if (g_pair_flags) pc = pair_claim(pair_key(gx_cp_regs(), bp, prim, count), prim, count, (int)(xf[0x1026] & 1));
     for (i = 0; i < count; i++) {
         VertexIn in;
         p = decode_vertex(s, p, vat, &in);
         transform(s, &in, &v[i]);
     }
+    if (g_pair_flags) pair_positions(&D->rc, v, count, pc);
     if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
     if (g_workers > 0) {
         publish(); /* the workers pick it up */
@@ -2032,6 +2293,29 @@ static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uin
                   f0, f1, (unsigned)*up + *mid + *dn);
 }
 
+/* A clear of its own (kind 2), for a copy whose clear cannot ride inside it:
+ * a foreign copy after its second drain, or H10's in-between pass, which
+ * skips the copy and keeps the clear. */
+static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
+{
+    DrawCmd* D;
+    if (queued() >= QUEUE_CAP) gxr_flush();
+    D = &g_queue[g_published & QMASK];
+    D->seq = g_published;
+    D->kind = 2; D->s = s;
+    D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
+    D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
+    if (g_workers > 0) {
+        publish();
+    } else {
+        t_tid = 1;
+        TIMED(T_RASTER, draw_command(D));
+        InterlockedIncrement64(&g_published);
+        g_drained = g_published;
+        g_arena_used = 0;
+    }
+}
+
 static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
@@ -2062,6 +2346,17 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
                   bp[0x4E], (double)(bp[0x4E] & 0xFFFFFFu) / 256.0);
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
+    /* H10's in-between pass: a copy to a texture would write what F+1's own
+     * frame reads next, so it is skipped -- but its clear is kept, since the
+     * draws after it expect the EFB it leaves. The screen copy runs as ever. */
+    if ((g_pair_flags & GXR_PAIR_LERP) && !to_screen) {
+        g_pair_skipped++;
+        if (v & 0x800u) {
+            publish_clear(s, bp, v);
+            g_pair_kept++;
+        }
+        return;
+    }
     /* Both of these read EFB rows this worker does not own. my_row is strided
      * -- y % nthreads == tid-1 -- and the plain copy is safe only because the
      * row it reads is the row it wrote: the rasterizer partitions by absolute
@@ -2123,22 +2418,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * it keeps the fused clear and its exact previous behaviour. */
     if (foreign) {
         gxr_flush();
-        if (v & 0x800u) {
-            D = &g_queue[g_published & QMASK];
-            D->seq = g_published;
-            D->kind = 2; D->s = s;
-            D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
-            D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
-            if (g_workers > 0) {
-                publish();
-            } else {
-                t_tid = 1;
-                TIMED(T_RASTER, draw_command(D));
-                InterlockedIncrement64(&g_published);
-                g_drained = g_published;
-                g_arena_used = 0;
-            }
-        }
+        if (v & 0x800u) publish_clear(s, bp, v);
     }
 
     if (to_screen) {
@@ -2160,6 +2440,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         if (g_hash)
             fprintf(stderr, "[gxr] frame %u %dx%d hash %016llx\n", frame, g_screen_w, g_screen_h,
                     (unsigned long long)gxr_screen_hash());
+        if (g_pair_flags & GXR_PAIR_RECORD) pair_rotate(); /* H10: this frame becomes the one before */
     }
 }
 
