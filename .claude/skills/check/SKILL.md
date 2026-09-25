@@ -164,7 +164,7 @@ python tools/citest/compile_runtime.py
 ...
 ok   window.c
 
-compiled 22/22 runtime translation units
+compiled 26/26 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 

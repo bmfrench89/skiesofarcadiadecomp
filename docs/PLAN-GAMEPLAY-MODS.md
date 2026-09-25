@@ -65,7 +65,7 @@ Sizes are evenings, as in PLAN.md: **hours**, **a day**, **several days**, **wee
 **State of the framework when this was revised** (0515868; re-read PLAN-60FPS-MODS.md for the current state, because its status lines move with every commit):
 - **Done:** M1 (the patch loader), M2 (the safe point and tick), M3 (`mod.dll` on `SoaModApi` v1, `pad_filter`, renderer filters including a texture provider and a projection filter) and M4 (`call_guest`).
 - **M5 (settings, `runtime/settings.c`)** is done but for your check.
-- **Track H:** H1–H6, H10, H11's workers, H12, H14 and H15a/b are done, H7 is not needed, and H15c is under way.
+- **Track H:** H1–H6, H10, H11's workers, H12, H14 and H15a-c are done, H7 is not needed, and the renderer paused at 574c683; see [PLAN-NEXT.md](PLAN-NEXT.md) A.
   - **H8's presenter is built** (DXGI flip model). `SOA_PRESENTER=gdi`, or a DXGI start that fails, keeps the GDI path (`runtime/window.c:327-329`). It waits on you: the display at 60 or 120 Hz, then one windowed session.
 - Every slice here names the M and H items it needs.
 
@@ -289,7 +289,7 @@ The first idea list was comfort and community features, the second gameplay and 
 **Not picked now:**
 - **Archipelago and a GPU renderer.** Each is XL.
   - Archipelago waits on N9 and X2 here (section H).
-  - The GPU renderer waits on nothing in this plan. It is parked until H15d's numbers, and then it is your decision (PLAN-60FPS-MODS.md, PLAN.md).
+  - The GPU renderer waits on nothing in this plan. It has a spike and a decision gate (`docs/specs/gpu-backend.md`; PLAN-NEXT M5, G1).
 - **Voice acting.** It is content, not code; the voice framework comes with X8's text hook and X5's mixer.
 - **More than 80 items per category.** The placeholders cover the first mods.
 - **RetroAchievements.** Whether RA would accept a recompiled port is open, and the set looks PAL-only [I: the page returned 403]. Its conditions are leads, not addresses, for this US build.
@@ -342,7 +342,7 @@ The first idea list was comfort and community features, the second gameplay and 
 - **Comparing settings across separate runs,** even with P6's seed and one pad script, waits on K6 (rule 7). All three equal would not be a pass there: a mod that does nothing gives it.
 - The contract holds.
 
-**P3. `.gci` import and export** — *hours.*
+**P3. `.gci` import and export** — *hours. Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.11 as P3.*
 - `cardformat.py export CARD SLOT out.gci` and `import CARD in.gci`: a 0x40-byte directory entry plus blocks.
 - It refuses a wrong game code, a full card and a corrupt file.
 - Export warns when the save's map has no op 138 and the save carries no X2 fallback. Such a save may trap in Dolphin (section F's M7a amendment).
@@ -364,7 +364,7 @@ The first idea list was comfort and community features, the second gameplay and 
 - Quick resume lands on the saved map (map loads in the log).
 - Off, `title --check` passes (the contract).
 
-**P5. Picture options** — *hours each.*
+**P5. Picture options** — *hours each. Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.13 as P5a and P5b.*
 - Gamma, colour-blind simulation or correction, a CRT look, a flash limiter (Xbox guideline 118 thresholds) and a sharp-bilinear scaler, applied in `present()` after `g_screen`.
 - Deflicker off skips the copy filter in the display copy only.
 
@@ -441,7 +441,7 @@ The first idea list was comfort and community features, the second gameplay and 
 
 *Done:* each reproduces its FINDINGS recipe, with the frames opened.
 
-**P10. Couch co-op battles, and online through Parsec** — *hours to several days, after M5; M3b is done.* **Owner.**
+**P10. Couch co-op battles, and online through Parsec** — *hours to several days, after M5; M3b is done. Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.12 as P10a and P10b.* **Owner.**
 - **How it works.**
   - A `pad_filter` mod reads whose turn it is (`0x80347330`), gated on scene 7 and phase 1. When a co-op member's command wheel is open, it passes pad 2's input to port 1.
   - The mod reads pad 2 itself, through XInput on its configured slot, because the runtime reads slot 0 only (`window.c:433`). In checks, pad 2 is a test script the mod reads from an environment variable instead.
@@ -629,7 +629,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 ### Track T — Tooling for content
 
-**T0. The guard and the content check** — *hours.*
+**T0. The guard and the content check** — *hours. Done 2026-09-25 (1c7b780, 4041dfc): 43 suffixes, 18 directories, the signature check; T0c (012164a) added card images and saves under any name and read history for content. The enemy-table check is T5's, in its Done list since 012164a.*
 - **Suffixes:** `.gci`, `.dds`, `.dat`, `.ogg`, `.flac`, `.mp3` and `.opus`.
 - **Directories:** the pack, blob, photo and `out` directories.
 - **A content check** that refuses dump headers in a mod folder. The full-column enemy-table refusal moved to T5 (4041dfc): a row count was only a guess at "a whole column", and would refuse data-driven mods.
@@ -637,7 +637,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 *Done:* `test_guard` refuses each suffix and directory, and a mutation test proves the content check fails on a dump.
 
-**T1. The virtual disc** — *several days, `--link`* (beyond-gamecube.md §4, content-systems.md §8).
+**T1. The virtual disc** — *several days, `--link`* (beyond-gamecube.md §4, content-systems.md §8). *Specified in [specs/disc-layer.md](specs/disc-layer.md) 3.8 as I6 (replace, add, alias), I7 (deltas) and I8 (per-map swaps), on I1's seam.*
 - **Where:** in `main.c`, as a pass of its own after `sys/fst.bin` is read (`:1143-1149`) and before its size bound (`:1163`). Read the enabled mods' file lists from `SOA_MODS` without running any mod's init, parse `sys/fst.bin`, and rebuild it.
   - The rebuilt size goes through the existing bound: the FST copy is the one boot write into the image that carries its own bound (`:1153-1158`).
   - `fst_addr` (`:1169`), and with it arena hi and `0x80000038`, then follow the new size. Set `fst_max` to the new size rather than `boot+0x42C` (`:1168`; content-systems.md §8 step 5), so `0x8000003C` agrees. Nothing in the game reads it.
@@ -1252,7 +1252,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 | Milestone | Slices | What a player gets | Rough size |
 |---|---|---|---|
-| **1. Comfort pack** | P1, P6, P11, P10, P3, P5, T0; from section F: M18 rumble, H19 fullscreen, M19 the clock, gamepad chords (without the overlay withholding until M8), the first-run amendment | Encounter slider (a `soa.ini` line until M16), dialogue auto-advance, couch co-op, rumble, fullscreen, a clock that survives sleep, `.gci` saves, picture options, a pinned seed (reproducible battles wait on K6) | about 3 weeks |
+| **1. Comfort pack** | P1, P6, P11, P10, P3, P5, T0; from section F: M18 rumble, H19 fullscreen, M19 the clock, gamepad chords (without the overlay withholding until M8), the first-run amendment (specified in `docs/specs/comfort-pack.md`, which adds P6b, CH1, M5b, P10a, P11b, T0c and M11a) | Encounter slider (a `soa.ini` line until M16), dialogue auto-advance, couch co-op, rumble, fullscreen, a clock that survives sleep, `.gci` saves, picture options, a pinned seed (reproducible battles wait on K6) | about 3 weeks |
 | **2. The gameplay core** | T9, T1, R0, batch A (R1 + X2 incl. N11's NG+ sites), T2, K1, K6, K12; from F: manifest v2, M16 options, M3d's in-game fault stop, the event track (settings lines first; hotkey and overlay lines once M8 lands) | Nothing visible yet; every later mod stands on it | 4–5 weeks |
 | **3. First gameplay mods** | R3, R4, R5, T3 + K8, T5, R6, P7 + K7, K2, K11 | Difficulty presets, boosts, battle information, rebalances, the Captain's Log | 3 weeks |
 | **4. New ways to play** | T4, P9, N10, N11, R8, P12 + K9, P4 | Arena and boss rush, New Game+ and challenges, auto-battle, fast travel, fast boot, the developer rooms | 4–5 weeks |
@@ -1263,12 +1263,12 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 **Unscheduled, any time an evening is short:** K3, K5, K10, P8, P13 (its measurement), P14, T7, T12, R7, R9, X9.
 
 **Decision points.**
-- **After milestone 1.** Go to 2 (gameplay), or to M9/M10 (textures, widescreen) first. I recommend 2.
+- **After milestone 1.** PLAN-NEXT's order follows milestone 1 with C5, H17, the disc layer, portability and the GPU spike; milestone 2 follows the gate.
 - **After K6.** If battles are not repeatable with all three reseeds pinned, R10 compares distributions over many runs, P6 keeps only its milestone-1 check (every reseed counted and pinned), the two-run comparisons of R0's log (R1's against the old build, R4's against an off run) wait on D4, and D4 moves up.
 - **After T4.** If a script cannot round-trip, that script alone is edited as a binary delta against the player's own file (T1's deltas), recorded as an exception. It is never a whole-file override: that would ship the game's dialogue (rule 3), and the guard and T13 refuse its `.sct` suffix. If T1 decided against deltas, that script stays closed to mods until the assembler round-trips it.
 - **Before milestone 7.** Art. Without an artist, milestone 6's remixed and procedural content is the ceiling, and it is a high one.
 
-**The first three slices:**
+**The first three slices:** *P6 and T0 are done. P1 is comfort-pack P1a, done (090eea6), and P1b; P11 is comfort-pack P11.*
 1. **P1 with P6** (hours each). P1 ships as a `mod.dll` reading `SOA_ENCOUNTERS`; its `soa.ini` line and P6's pin are relinks.
 2. **P11** (hours; M3b is done), dialogue auto-advance.
 3. **T0** (hours), the guard's new suffixes and the content check.
@@ -1322,7 +1322,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
     - A setting changed mid-run from a hotkey (turbo, once M11 exists) is applied at its recorded frame: the replay's log has an applied-event line carrying that frame (a same-run check, rule 7).
     - Deleting that event line is the mutation: the applied line is then absent, and the log shows the setting unchanged after that frame.
     - No check compares two replays frame for frame, because a pad replay is a live run.
-- **M18. Rumble** — *hours.*
+- **M18. Rumble** — *hours. Specified as comfort-pack M18 ([specs/comfort-pack.md](specs/comfort-pack.md) 3.7).*
   - The game drives the motor through `PADControlMotor`, writing SI OUTBUF bits 0–1. The port stores them in `g_outbuf` and never acts on them (`si.c:869`, checked here).
   - Map channel 0's change to `XInputSetState` on the XInput slot that port 1's input is read from: slot 0 today (`window.c:433`), the first connected slot after the M8 amendment. Stop the motor on pause, focus loss and exit. Keep it off headless and in replays.
   - A strength setting (an M5 key, 0 = off) scales the speed; the game only sends on or off.
@@ -1333,13 +1333,13 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
     - with the strength at 0, headless (no window), and while `SOA_PAD` or `SOA_PAD_FILE` drives input, no write gives a nonzero call;
     - pause, focus loss and exit each give a zero-speed call while the motor is on.
   - That the game keeps those bits off while its own Rumble option is off is the game's behaviour, and already true today. It is why the port needs no gate for that option; it is not this Done.
-- **M19. A clock that survives sleep and speed changes** — *several days.*
+- **M19. A clock that survives sleep and speed changes** — *several days. Specified as comfort-pack M19 (3.10).*
   - Game time follows `timespec_get(TIME_UTC)` (`hle.c`, checked here): not monotonic, and it keeps running through sleep.
   - Changing speed mid-run would jump it.
   - Base it on `QueryPerformanceCounter`, re-anchor on every speed change, treat any wall jump over about 250 ms as paused time, cap the audio catch-up, and pause at the safe point.
   - A test knob, `SOA_STALL=<frame>:<seconds>`, new with M19: at that frame the game thread sleeps once for that many seconds, which is how a suspend looks to it. It is not `SOA_GXR_STALL` (`gxr.c:168`), which only holds a rasterizer worker back by microseconds.
   - *Done:* with `SOA_STALL=600:30`, game time advances by under about 1 s across the stall. The mutation keeps the knob and drops the jump rule: the same stall then advances game time by about 30 s [I].
-- **M5 amendment: a first run without a terminal** — *hours.*
+- **M5 amendment: a first run without a terminal** — *hours. Specified as comfort-pack M5b (3.9).*
   - Resolve every path against `soa.ini`'s folder: the card path is relative (`exi.c:90`, checked here), so a launch from `gen\` makes a fresh blank card.
   - Default to a rendered window when `soa.ini` exists, and hide the console.
   - A setting, off by default, that ignores the gamepad and mutes audio while the window is unfocused, so a launcher or Armoury Crate in front no longer drives the game. Today only the keyboard waits for focus (`window.c:404`); the pad is read whatever has it (`:433`), on purpose (`:389-392`), so the default stays as it is.
@@ -1348,7 +1348,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Today it sits in step 4 of "After the first two weeks" (§C), behind step 3's pacing work (H9, H17a, H17b, H18a–e).
   - Here it gates the chords' overlay withholding, the event track's hotkey and overlay lines, P7, P9, P12, R5, T11's placement mode and N10. The proposal is to take it right after M5.
   - Its Done warps and saves from the menu, which are M7b's and M7a's actions: either they move with it, or that part of its Done waits for them.
-- **M8 amendment: every action from the gamepad** — *hours to a day.*
+- **M8 amendment: every action from the gamepad** — *hours to a day. Specified as comfort-pack CH1 (3.6).*
   - Chords on buttons the game never sees (LB, View, the stick clicks), detected in `window.c`/`si.c`, because `pad_filter` gets only the 12 GameCube buttons. The chords land in milestone 1, ahead of M8.
   - Once M8's overlay exists: while it is open, withhold the d-pad, A and B from the game before they are recorded.
   - Use the first connected XInput slot, not always slot 0. Remapping and presets go in M5.
@@ -1398,12 +1398,12 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
     - :503 should say what FINDINGS "M3c" records: an identity projection filter matches 23 of 23 captures under `--replay`, and a wider view matches only the four orthographic boot frames.
 
 **For Track H (frame pacing and speed):**
-- **H19. Fullscreen and a window that fits a 7–8 inch screen** — *hours first, then several days.*
+- **H19. Fullscreen and a window that fits a 7–8 inch screen** — *hours first, then several days. Specified as comfort-pack H19a (3.8).*
   - Today the window is a fixed 1280×960, not resizable and not DPI-aware.
   - First: per-monitor DPI awareness, a resizable window, borderless fullscreen (Alt+Enter, F11 or a chord), letterboxing, a hidden cursor.
   - Then: fullscreen keys in M5, P5's sharp-bilinear filter, H9 rows for 144 Hz and VRR panels, and M10's aspect as a parameter (16:9 or 16:10).
   - *Done:* replay 23/23 and `title --check`, with no `SOA_HASH` comparison between live runs (rule 7); **Owner** confirms on the device.
-- **H20. A power line in every run report** — *hours.* AC or battery, the battery percentage, the power plan's name, and mWh used on battery. Energy per drawn frame feeds the GPU-backend decision.
+- **H20. A power line in every run report** — *hours. A gap filler in PLAN-NEXT M1; its Done is written first.* AC or battery, the battery percentage, the power plan's name, and mWh used on battery. Energy per drawn frame feeds the GPU-backend decision.
 - **H8** already falls back to GDI: `SOA_PRESENTER=gdi` selects it, and it takes over when DXGI cannot start (`window.c:327-329`, FINDINGS "H8"). The proposal is only that the path stays when H8 closes, and that **H15d** puts SIMD behind an x64 guard with a scalar path, so Linux and ARM stay possible.
 - **Done lines in Track H that compare two live runs (rule 7).** Two unmodded title runs differ on 22 of 40 hashes (FINDINGS "M3c"), so each of these fails with no defect:
   - **H9 (:270-271).** Drop "and `SOA_HASH` lines are unchanged" (:271). Headless runs keep today's path by construction (:263), and replay 23/23 plus `title --check` already cover it. Replace :270's "The audio report is unchanged" with the one-run audio-rate check in section F's M11 entry.
@@ -1476,7 +1476,7 @@ Other sections cite these as Q1–Q11. A G with a number (G3–G7) is always a p
 
 ## H. Not in this plan
 
-- **A GPU renderer, higher internal resolution and VR.** PLAN.md parks the GPU backend until H15d's numbers, and then it is the owner's decision (PLAN-60FPS-MODS.md).
+- **A GPU renderer, higher internal resolution and VR.** The GPU backend is a spike and gate in `docs/specs/gpu-backend.md` (PLAN-NEXT M5), and then it is the owner's decision.
 - **60 fps and widescreen.** They are PLAN-60FPS-MODS.md's Tracks H and M.
 - **Archipelago and lockstep online co-op.**
   - Archipelago waits on N9 (a randomizer's logic is Archipelago's world definition) and X2 (the received-items index lives in the save).

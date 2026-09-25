@@ -14,7 +14,7 @@ are independent; inside a track, order matters.
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 20 bindings in `config/hle.txt` |
 | Python tests | 957 in 52 files (287 need MSVC and skip without it) |
-| Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
+| Native code compiled by CI | all 26 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
 | `field/` files any saved run has opened | 347 of 1,862 stems in `extracted/field`, 242 of them root maps (every warpable map was warped to; the 15 world-map warps share the files of the story stage the game picks) -- 21 and 5 before 2026-09-22; only with `SOA_TRACE` on |
@@ -51,13 +51,10 @@ person's shell history. What is still unchecked is the game itself: no saved
 run's counters, no sample, and no captured frame is compared with anything
 until someone runs the A2 sweep.
 
-**The next phase has its own plan: [PLAN-60FPS-MODS.md](PLAN-60FPS-MODS.md)** --
-60 frames a second, then native PC mods, in four tracks (H frame pacing and
-speed, M mods, F4+ targeted decompilation, S soak and regression), sliced
-evening by evening. Its central finding: the 30 fps cap is a constant
-(0x801DC4A4) and all game logic runs once per frame, so 60 fps is renderer
-interpolation with the logic kept at 30. Its first three slices are H1, S4a
-and H2. C4 is absorbed into its H15.
+**What is next, in order: [PLAN-NEXT.md](PLAN-NEXT.md).** The slices' text
+lives in [PLAN-60FPS-MODS.md](PLAN-60FPS-MODS.md) (H, M, F4+, S),
+[PLAN-GAMEPLAY-MODS.md](PLAN-GAMEPLAY-MODS.md) (P, K, T, R, N, X) and
+`docs/specs/`.
 
 **Start here:** the cheap, well-specified items are gone. Done and run: A1,
 A2, A3, A4, B2, B3, B4, C0, C2, C3, D1, D3, E1, F1, F2, F3, G1 and G2. Half-done
@@ -78,7 +75,7 @@ confident statements in the history are wrong and it lists them.
 **A1. Compile the runtime in CI, then the render self-tests** — *built.*
 **Built.** The `native` job in `.github/workflows/ci.yml` runs three steps on
 windows-latest, each of which fails loudly rather than skipping when there is
-no `cl.exe`: `tools/citest/compile_runtime.py` compiles all 22 `runtime/*.c`
+no `cl.exe`: `tools/citest/compile_runtime.py` compiles all 26 `runtime/*.c`
 with `/c` and the flags in `tools/soa/toolchain.py`, plus nine warnings
 promoted to errors (C4013 first: nothing links here, so an implicit
 declaration is the only sign a rename left a caller behind);
@@ -531,6 +528,12 @@ prize is specialising the fragment body per draw.
 zero; the specialisation reaches 1.5x on the heaviest captures, or it lands
 on A2 and nowhere else — a wrong body neither crashes nor diffs.
 
+**C5a-C5c. Recorded display lists** — *proposed 2026-09-25 in
+`docs/specs/gpu-backend.md` §6, re-reading FINDINGS H4's zero-size calls;
+scheduled in PLAN-NEXT M1 (C5a) and M2 (C5b, C5c). C5a done 2026-09-25
+(750cef0): the chain is confirmed, and the port runs the lists at recording
+(FINDINGS "Recorded display lists (C5a)").*
+
 ---
 
 ## Track D — Reach
@@ -896,6 +899,10 @@ purpose.
 None of this moves the port; all of it decides whether anyone else can run
 it.
 
+G3-G7 are proposed in PLAN-GAMEPLAY-MODS.md section F. G5's DOL line is
+disc-layer I3's stale-link guard, and G4's compiler half is portability
+L3a/L3b.
+
 **G1. A LICENSE, and the first-hour traps** — *done (2026-09-18).*
 **Done.** `LICENSE` (MIT) and `NOTICE` exist and `README.md:31-34` links both,
 the PowerShell trap is documented at `README.md:63-87` with the working form,
@@ -956,6 +963,8 @@ port is 5-11% short of a cap C4 covers several times over, and it would
 replace the one piece of this port that is a trustworthy reference. The
 undesigned part is `copy_to_texture` writing tiled bytes into MEM1 every
 frame, which needs readback or guest-write tracking that does not exist.
+*Reopened 2026-09-25 as a three-to-four-week spike ending in the owner's
+decision: `docs/specs/gpu-backend.md`, PLAN-NEXT M5 and gate G1.*
 
 **The reference interpreter (slice 3.7).** Narrower than this file used to
 claim: decode is cross-checked against capstone (19 tests in

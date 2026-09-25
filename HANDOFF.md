@@ -392,12 +392,14 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## What I would do next
 
-**The plan of record for the next phase is `docs/PLAN-60FPS-MODS.md`** (written
-2026-09-24): 60 fps by renderer interpolation, then a native mod framework
-(data patches, a safe point, `mod.dll` with a versioned API), targeted
-decompilation only where a mod needs it, and a soak programme with checked
-invariants. Each slice's line there says whether it is done and where its
-evidence is. Done by 2026-09-24: **H1** (drawing every frame runs 18-22 fps),
+**What is next, in order, is `docs/PLAN-NEXT.md`** (2026-09-25).
+PLAN-60FPS-MODS.md and PLAN-GAMEPLAY-MODS.md keep the slices.
+`docs/PLAN-60FPS-MODS.md` (written 2026-09-24) holds 60 fps by renderer
+interpolation, then a native mod framework (data patches, a safe point,
+`mod.dll` with a versioned API), targeted decompilation only where a mod
+needs it, and a soak programme with checked invariants. Each slice's line
+there says whether it is done and where its evidence is. Done by
+2026-09-24: **H1** (drawing every frame runs 18-22 fps),
 **S4a** (`SOA_PEEK`), **H2** (the logic is per frame, so 60 fps is
 interpolation), **H4/H5** (every 3D draw matches its predecessor), **H6** (a
 pinned benchmark set, 85.4 ns a fragment), **S2** (guard suffixes), **S1**
@@ -513,7 +515,7 @@ each overturning the last, and what is left is cosmetic and well documented.
   equals the file length, that is what happened. `tools/guard.py` is one of the
   few LF files, so do not assume either way.
 - **The renderer links on its own, and that is load-bearing.**
-  `tools/citest/render_check.py` and four `test_gxr_*` modules build `gx.c`,
+  `tools/citest/render_check.py` and nine `test_gxr_*` modules build `gx.c`,
   `gxr.c`, `gxr_tev.c` and `png.c` with two stubs and no `main.c`. A call added
   from `gx.c` into `main.c` compiles cleanly and breaks 29 tests at the link
   step, which the compile-only CI job cannot see. Hang new per-frame work off

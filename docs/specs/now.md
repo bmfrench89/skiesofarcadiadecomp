@@ -1,5 +1,11 @@
 # Now: the first slices after the pivot
 
+*Superseded 2026-09-25 by `docs/PLAN-NEXT.md`. N1-N4 landed (cb469d6;
+3949028, b071949; 1c7b780, 4041dfc; c8274db). N5's P6 landed as 24d9235 and
+its remainder, comfort-pack P6b, as 79c9ad8; its P1 is comfort-pack P1a,
+landed as 090eea6, and P1b. N6 is comfort-pack P11 (spike b911380), with
+hold-to-skip as P11b.*
+
 *2026-09-25, from `main` at 574c683. The implementation session's plan for the
 hours before the planning session's reviewed specs land. Those specs --
 `docs/specs/comfort-pack.md`, `disc-layer.md`, `portability.md`,

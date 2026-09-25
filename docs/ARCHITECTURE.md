@@ -22,7 +22,7 @@ store swaps as it goes (`mem_r32`, `mem_w32`). A call the recompiler can
 resolve is a direct C call; anything else goes through the generated
 `dispatch(s, addr)` switch (`tools/soa/recomp/emit.py`, `dispatch_c`).
 
-**The runtime** — `runtime/`, 22 C files compiled with MSVC at `/std:c17
+**The runtime** — `runtime/`, 26 C files compiled with MSVC at `/std:c17
 /fp:strict`. This is the console: the memory window, the device models the
 guest programs through memory-mapped registers, the software graphics
 pipeline, the AX mixer, the window, and the diagnostics that make a wrong

@@ -24,6 +24,7 @@ favorable target:
 - **[docs/SPEC.md](docs/SPEC.md)** — architecture and technical decisions
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — work slices, milestones, current status
 - **[docs/PLAN.md](docs/PLAN.md)** — what to pick up next, and how to know when it is done
+- **[docs/PLAN-NEXT.md](docs/PLAN-NEXT.md)** — the order: what comes next across all the plans
 - **[docs/FINDINGS.md](docs/FINDINGS.md)** — disc analysis evidence base
 - **[docs/PROGRESS.md](docs/PROGRESS.md)** — what got built, in order
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — clean machine to running game, and the rules

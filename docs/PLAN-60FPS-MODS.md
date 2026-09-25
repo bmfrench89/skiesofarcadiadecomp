@@ -6,11 +6,13 @@ docs/FINDINGS.md, and move a slice here to done the way docs/PLAN.md does. -->
 
 # Next phase: 60 fps, then native mods
 
+**Order:** `docs/PLAN-NEXT.md` says what is next across all plans; this file keeps the H, M, F4+ and S slices.
+
 **For the owner.** This phase has two goals. The first is a game that shows 60 images a second at its normal speed. The second is native PC mods: declarative data patches and compiled mod DLLs that load at run time, are off by default, and move no pinned hash while off. The most important finding is that the 30 fps cap is a constant. It is the immediate `cmpli r0,1` at 0x801DC4A4, re-checked in the disassembly. Every piece of game logic we can see advances once per frame: fades, script WAITs and the frame counter. The game reads no clock that could scale it. Removing the cap therefore does not give 60 fps; it runs the whole game at double speed. So 60 fps has to come from the renderer: the logic stays at 30, and the port builds an in-between image from two consecutive frames' draws. Uncapping is still useful as a 2× mode, and a battle speed-up (M11) is the obvious use. You are needed for five things:
 - a handful of windowed sessions: the paced presenter (H8), vblank locking on your monitor (H9), live interpolation (H17b), the settings file (M5), the overlay (M8) and widescreen (M10, M14). The first is about 15 minutes.
 - setting up Task Scheduler and lending two nights to the overnight runner (S6);
 - noting the handheld's power mode, and whether it was plugged in, on every measured run;
-- one decision: whether to reopen the GPU backend once the pixel-path work (H15d) reports how far it lands from 61 ns per fragment;
+- one decision: the GPU backend, taken at PLAN-NEXT's gate G1 after a three-to-four-week spike (`docs/specs/gpu-backend.md`);
 - one headless card rebuild on your machine (S7a).
 
 Sizes are in evenings, as in PLAN.md: **hours**, **a day**, **several days**, **week-plus**. **Owner** marks a slice that needs a window on the owner's screen or a person playing. **[V]** means the research quotes the instruction, file:line or log line. **[I]** means it is inferred. *Checked here* means the source was re-read while writing this plan. The new tracks are **H** (speed and frame pacing), **M** (mods), **F4–F7** (Track F continued) and **S** (soak and regression).
@@ -61,7 +63,7 @@ Sizes are in evenings, as in PLAN.md: **hours**, **a day**, **several days**, **
 8. **Only for a mod that must change logic inside a function:** the guest-C dialect and a link-level check (F4, F5), then that function (F6, F7).
 
 **Not in this phase:**
-- **Higher internal resolution.** 2× or 3× at 60 fps needs 6–22× today's pixel throughput. That means a GPU backend, which PLAN parks under "Not worth doing, or not yet". Reopen it on H15's numbers.
+- **Higher internal resolution.** 2× or 3× at 60 fps needs 6–22× today's pixel throughput. That means a GPU backend, reopened 2026-09-25 as a spike with a decision gate (`docs/specs/gpu-backend.md`; PLAN-NEXT M5, G1).
 - **Logic at 60 ticks.** Every per-tick constant in the game would have to be halved.
 - **Gecko or Action Replay codes that patch instructions.** Writing into `.text` does nothing to translated code. Data-write codes still work.
 - **Host save states.**
@@ -245,7 +247,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - H4's analyser, keyed on tags, reaches at least 90% of pixels matched in every scene. If it does not, FINDINGS says so and route (c) is re-decided against H5's verdict.
 - With tags off, 23/23 and `title --check`.
 
-**H8. A paced presenter** — *presenter built 2026-09-25 (DXGI flip model, sync interval from the display's rate, present histogram and VI drift in the report; `SOA_PRESENTER=gdi` for the old path). The owner's display runs at 85 Hz, where 30 fps cannot be paced evenly, and the guest's VI ran 51.3 Hz in the opening. **Owner:** set 60 or 120 Hz, then the windowed session and the verdict. FINDINGS "H8".*
+**H8. A paced presenter** — *presenter built 2026-09-25 (DXGI flip model, sync interval from the display's rate, present histogram and VI drift in the report; `SOA_PRESENTER=gdi` for the old path). The owner's display runs at 85 Hz, where 30 fps cannot be paced evenly, and the guest's VI ran 51.3 Hz in the opening. **Owner:** set 60 or 120 Hz, then the windowed session and the verdict. Batched into PLAN-NEXT's owner session A; the display's rate is decision G4. FINDINGS "H8".*
 - A DXGI flip-model swap chain with vsync, presented on an event instead of the 8 ms poll.
 - A double-buffered screen.
 - Each real frame is held for exactly two refreshes.
@@ -258,7 +260,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - 23/23 unchanged, because the presenter sits after `g_screen`.
 - The owner's verdict on whether it looks smoother.
 
-**H9. Lock the guest's VI to vblank, and handle monitors that are not 60 Hz** — *several days, `--link`. **Owner:** one windowed session.*
+**H9. Lock the guest's VI to vblank, and handle monitors that are not 60 Hz** — *several days, `--link`. **Owner:** one windowed session. Deferred 2026-09-25: reopens if owner session A or D shows judder at 60 or 120 Hz. Its Done lines on the audio report and the `SOA_HASH` lines are to be restated first (PLAN-GAMEPLAY-MODS F).*
 - In a window at `SOA_SPEED=1`, deliver the guest retrace from the presenter's vblank instead of the wall clock.
 - Headless runs, `SOA_SPEED` other than 1, and D4's deterministic clock keep today's path, so no scenario, soak or hash can change.
 - **At a refresh rate that is a whole multiple of 60:** hold each image for proportionally more refreshes.
@@ -280,7 +282,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - A synthetic test shows that a triangle moved by 2d between frames lands at d in the midpoint.
 - `scenario.py replay` is 23/23 unchanged.
 
-**H11. Stop spinning when idle** — *workers done 2026-09-25: an idle worker waits on `g_published` (`WaitOnAddress`); the title costs 1.2 cores instead of 8.8, a drawn Part L run a third less CPU, at the same fps measured interleaved. The guest idle loop's half remains. FINDINGS "H11".*
+**H11. Stop spinning when idle** — *workers done 2026-09-25: an idle worker waits on `g_published` (`WaitOnAddress`); the title costs 1.2 cores instead of 8.8, a drawn Part L run a third less CPU, at the same fps measured interleaved. The guest idle loop's half remains, unscheduled: it reopens when H20's power line shows its cost on battery, or with M19, which rewrites the clock that loop would sleep against. FINDINGS "H11".*
 About ten host threads stay busy while the game waits. The guest idle hook should sleep until the next device deadline. The workers should block on an event instead of calling `YieldProcessor` and `Sleep(0)`.
 
 *Done:*
@@ -319,7 +321,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 - Replay 23/23 and `title --check`.
 - Guest ms per frame before and after.
 
-**H13c. The FIFO parse on its own thread** — *several days, `--link`.*
+**H13c. The FIFO parse on its own thread** — *several days, `--link`. Not started; closed with H13 as done enough, and reopened only under H13's condition (PLAN-NEXT A2).*
 - Move the parse, 0.3–3.2 ms a frame, off the guest thread.
 - Drain the parser at the XFB copy (BP 0x52, from 0x801DC484) and at draw sync (token 0xB00B, 801DC488). `frame_end` and the frame hook must still run before the spin.
 
@@ -350,17 +352,17 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 *Done:* replay 23/23, and ns per fragment before and after.
 
-**H15c. Specialise the fragment function per draw** — *several days. Three stages done 2026-09-25: the one-stage TEV shapes most pixels use and the source-alpha blend run directly, the pixel loop visits only the attributes a draw uses, and the per-fragment helpers are inlined -- about 59 -> 46 ns a fragment at one thread, every hash unchanged, a differential test against the general path. With the worker count at three quarters of the CPUs, the Dangral base runs at about 27 fps (H1: 17.7). The sampler is next. FINDINGS "H15c".*
+**H15c. Specialise the fragment function per draw** — *several days. Three stages done 2026-09-25: the one-stage TEV shapes most pixels use and the source-alpha blend run directly, the pixel loop visits only the attributes a draw uses, and the per-fragment helpers are inlined -- about 59 -> 46 ns a fragment at one thread, every hash unchanged, a differential test against the general path. With the worker count at three quarters of the CPUs, the Dangral base runs at about 27 fps (H1: 17.7). Done 2026-09-25: the sampler stage was subsumed (see FINDINGS "H15c").*
 
 *Done:* C4's criterion of 1.5× on the heaviest captures, replay 23/23, and ns per fragment.
 
-**H15d. SIMD spans** — *several days to week-plus. First step done 2026-09-25: the per-pixel counters out of thread-local storage and the bilinear blend in SSE4.1 integer SIMD, bit for bit the scalar loop's (a differential test); -7% ns a fragment at one thread, every hash unchanged; at 8 threads no difference (72.0 against 71.7, interleaved, on a busy machine). The field captures meet 61 ns at 8 threads on a quiet machine; the ship and sky are 1.3-1.6x short. Paused 2026-09-25 while the owner weighs a GPU backend, and deferred to that decision with H16 and H18. FINDINGS "H15d's starting point", "H15d, first step", "H15d paused".*
+**H15d. SIMD spans** — *several days to week-plus. First step done 2026-09-25: the per-pixel counters out of thread-local storage and the bilinear blend in SSE4.1 integer SIMD, bit for bit the scalar loop's (a differential test); -7% ns a fragment at one thread, every hash unchanged; at 8 threads no difference (72.0 against 71.7, interleaved, on a busy machine). The field captures meet 61 ns at 8 threads on a quiet machine; the ship and sky are 1.3-1.6x short. Paused 2026-09-25 while the owner weighs a GPU backend, and deferred to the GPU gate (PLAN-NEXT G1) with H16; it returns under PLAN-NEXT A3's condition. FINDINGS "H15d's starting point", "H15d, first step", "H15d paused".*
 
 *Done:*
 - At most 61 ns per fragment at 8 threads on the field captures, and on the sky and ship captures, which need about 2.9×.
 - If either falls short, write down the gap. That number is the owner's GPU-backend decision.
 
-**H16. Vertex setup onto the workers** — *a day to several days, `--link`. After H10. Deferred 2026-09-25 to the GPU-backend decision, with H15d's rest and H18: the producer is not the bottleneck now (FINDINGS "Copy images"), and a GPU backend changes where vertex setup runs.*
+**H16. Vertex setup onto the workers** — *a day to several days, `--link`. After H10. Deferred 2026-09-25 to the GPU-backend decision, with H15d's rest (H18 follows H17b instead): the producer is not the bottleneck now (FINDINGS "Copy images"), and a GPU backend changes where vertex setup runs. It returns under PLAN-NEXT A3's condition.*
 Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's retention layout.
 
 *Done:*
@@ -368,7 +370,7 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - Replay 23/23 at 1, 2, 3 and 8 threads.
 - H10's synthetic midpoint test still passes.
 
-**H17a. Interpolation, headless, off by default** — *several days, `--link`. Not blocked by the GPU decision: it builds a second stream of draw commands, which a GPU backend would draw as well. Ordered after milestone 1 of `docs/PLAN-GAMEPLAY-MODS.md` (the reorder of 2026-09-25, `docs/research/android-and-native.md` section 7; `docs/specs/now.md`). Its Done lines are to be restated as same-run checks (PLAN-GAMEPLAY-MODS.md section F).*
+**H17a. Interpolation, headless, off by default** — *several days, `--link`. Not blocked by the GPU decision: it builds a second stream of draw commands, which a GPU backend would draw as well. Ordered after the comfort pack and C5b (PLAN-NEXT M2). Commands reach their EFB through `DrawCmd.efb`, set in `claim_slot` (specs/gpu-backend.md 3.1). Its Done lines below were restated 2026-09-25 as PLAN-GAMEPLAY-MODS F's same-run checks.*
 `SOA_INTERP=1` does the following:
 - keeps frame N's vertices across the drain, in H10's layout;
 - needs no texture kept alive for a second frame: each in-between command is built alongside the real one and samples what F+1 samples (ARCHITECTURE section 12);
@@ -377,10 +379,10 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - headless, writes the in-between PNGs.
 
 *Done:*
-- **Off:** 23/23, `title --check`, and `SOA_HASH` lines identical to before.
-- **On, headless:** the real frames' `SOA_HASH` lines are still identical, which proves the in-between pass does not touch them. The in-between PNGs from a field, a battle, a ship battle and a cutscene are opened.
+- **Off:** replay 23/23 and `title --check`, with no `SOA_HASH` comparison.
+- **On, headless:** a same-run contrast. In one `SOA_INTERP=1` run, each real frame's `g_screen` is hashed before and after its in-between pass, and the two must be equal; a mutation that lets the in-between pass write `g_screen` must make them differ. The in-between PNGs from a field, a battle, a ship battle and a cutscene are opened.
 
-**H17b. Interpolation, live** — *several days, `--link`. **Owner:** judges it in a window.*
+**H17b. Interpolation, live** — *several days, `--link`. **Owner:** judges it in a window. Owner session D (PLAN-NEXT); needs the display at 60 or 120 Hz (G4).*
 - H8's presenter shows the in-between image at the first refresh.
 - A cut detector repeats the frame when the match share falls below H4's threshold.
 - Interpolate only when the previous pair finished in budget; otherwise repeat the frame.
@@ -392,7 +394,7 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - Off: 23/23 and `title --check`.
 - The owner's list of visible artifacts is filed as H18's input.
 
-**H18. The tail, one artifact class per slice** — *a day to several days each.*
+**H18. The tail, one artifact class per slice** — *a day to several days each. Follows H17b wherever H17 goes: its fixes are on the guest thread, so the GPU gate does not hold it. Only the classes on the owner's H17b list are built (PLAN-NEXT M2).*
 Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b** reordered alpha, **H18c** UI and HUD, **H18d** camera cuts the detector misses, and **H18e** texture copies that the in-between image samples from N+1.
 
 *Done, for each:* a fix or a documented fallback to repeating the frame for that class, with before-and-after in-between PNGs opened. Off: 23/23.
@@ -517,7 +519,7 @@ Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only,
 - A call made from the frame end or from a handler is refused with a message.
 - A DLL built against M3's API still loads.
 
-**M5. User-facing settings** — *done 2026-09-25 but for the owner's check: `soa.ini` beside the exe (`runtime/settings.c`), the environment wins, unknown keys named, the checks run with `SOA_SETTINGS=0`; a file turning everything on leaves `title --check` 4/4. **Owner:** turn one on and off without a terminal. FINDINGS "M5".*
+**M5. User-facing settings** — *done 2026-09-25 but for the owner's check: `soa.ini` beside the exe (`runtime/settings.c`), the environment wins, unknown keys named, the checks run with `SOA_SETTINGS=0`; a file turning everything on leaves `title --check` 4/4. **Owner:** turn one on and off without a terminal. Batched into owner session A (PLAN-NEXT). FINDINGS "M5".*
 - A settings file beside the exe holds every switch a player would use: mods, the presenter, `SOA_INTERP`, widescreen, the texture pack, and the battle speed-up. It is edited by hand or from M8's settings page; a separate launcher is built only if the owner wants one.
 - Environment variables override the file.
 - Scenario runs, the self test and `nightly.py` ignore the file, so a player's settings can never move a check.
@@ -564,7 +566,7 @@ Actions are queued to the safe point, and an environment variable drives them fo
 - Each action reproduces its FINDINGS recipe in a headless run, and its frames are opened.
 - The contract holds.
 
-**M8. Overlay and hotkeys** — *a day to several days, `--link`. **Owner:** one windowed session.*
+**M8. Overlay and hotkeys** — *a day to several days, `--link`. **Owner:** one windowed session. Scheduled with M7a/b as the first slices after the GPU gate (PLAN-NEXT, after M5), per PLAN-GAMEPLAY-MODS F.*
 - The overlay is drawn in `window.c`'s `present()` after the RGBA to BGRA conversion, and never into `g_screen`.
 - The UI thread only posts requests to a queue, which is drained at the safe point.
 - While the menu is open, the keyboard stops reaching the pad.
@@ -598,13 +600,13 @@ Actions are queued to the safe point, and an environment variable drives them fo
 - The problems at the screen edges are listed; pop-in from the game's CPU culling is expected, and M14 addresses it.
 - With it off, 23/23. The switch is in the settings file.
 
-**M11. Battle speed-up** — *hours, `--link`. After M2 and H13.*
-The tick unlock applies only while 0x803475CC is 7 (battle). Rendering either draws every frame, or skips the draw and the present on alternate frames, reusing the skip at `gxr.c:1534`.
+**M11. Battle speed-up** — *Split 2026-09-25: M11a (turbo up to 2×) is in the comfort pack (`docs/specs/comfort-pack.md`); M11b (past 2×) waits for M19 and S9.*
+The tick unlock applies only while 0x803475CC is 7 (battle). Rendering either draws every frame, or skips the draw and the present on alternate frames, with a skip in `gxr_draw_inner`; copies are not skipped, so the skip is specified only if M11a's measurement asks for it (comfort-pack 3.14).
 
 *Done:*
 - Peeks of 0x803475C0, which carry the retrace count, show one frame per field in battle and one per two fields outside it: about 60 and 30 per second. If the guest cannot finish a battle frame in one field, FINDINGS gives the shortfall.
 - The battle returns to the field normally.
-- The audio report is unchanged.
+- In the unlocked run, the AI DMA delivers about 32,000 samples a wall second, counted from the `SOA_WAV` file's byte count over the run's wall seconds, within a tolerance fixed before the run; a `SOA_SPEED=2` run (the mutation) falls outside it. Dropped blocks are checked against a fixed limit only when the `[audio]` line has an output device (PLAN-GAMEPLAY-MODS F, M11 entry).
 - The contract holds. The switch is in the settings file.
 
 **M12. Research spikes** — *hours each, no rebuild after S4a.*
@@ -718,7 +720,7 @@ It is small and fully understood, calls undecompiled SDK functions, and reads r1
   - `[gxr] BP_MASK 080000 was in force…` appears in the three part-G logs, and not in soakD's battle.
   - Game over wasted 38–50% of each part-G soak.
   - The random A presses saved to the card over and over: 1,933,312 bytes in bsoak404.
-- **[V] What replays from a seed.** The RNG is reseeded from `OSGetTick` on every map load, so a soak replays its input, not its encounters.
+- **[V] What replays from a seed.** The RNG is reseeded from `OSGetTick` on every map load and twice at every battle start (0x8000A1D0, 0x8000A1D8; P6, 24d9235), so a soak replays its input, not its encounters.
 - **[V] The accelerator.**
   - The step counter 0x80346D28 is read after every gate: flag 1025, the zone and the movement tests.
   - Poking it to 100000 therefore only shortens the wait. That the zone rate still applies is inferred [I].
@@ -845,6 +847,8 @@ Use the fixed recipe: from `card-saved`, with `sys[15]=0` and a 600-frame gap. R
 ---
 
 ## C. Recommended sequence
+
+*Superseded for order on 2026-09-25 by `docs/PLAN-NEXT.md`. The ordering rules below still hold.*
 
 **Ordering rules this sequence keeps.**
 - S4a comes before H2 (a read tagged with a frame) and before M1 (the peek check).
