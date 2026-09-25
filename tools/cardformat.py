@@ -5,6 +5,8 @@
     python tools/cardformat.py write --damage dir           # one repairable error
     python tools/cardformat.py show build/cards/slotA.raw
     python tools/cardformat.py verify build/cards/slotA.raw  # --verify PATH works too
+    python tools/cardformat.py export CARD (--index N | --name NAME) [OUT.gci]
+    python tools/cardformat.py import CARD IN.gci [--out NEW.raw | --in-place] [--replace]
 
 The game has never written a byte to the card because it has never mounted
 one. runtime/exi.c hands it a blank image -- 0xFF, the way erased flash reads
@@ -90,6 +92,32 @@ and __CARDWritePage (0x8024555C) programs 128 bytes per command -- so an
 8192-byte block is 64 commands, each with its own completion interrupt, not one
 big one.
 
+ONE SAVE AT A TIME: .gci. A .gci is one file off a card the way Dolphin's
+memory-card manager moves one: the file's 64-byte directory entry as it sat
+on the card, then its blocks in chain order, 8192 bytes each, and nothing
+else; Dolphin checks the file's size against the entry's length at 0x38.
+`export` writes one from the newer directory and table copies, the ones the
+mount makes current. `import` puts one on a card the way CARDCreate and
+__CARDAllocBlock would (recalled from the SDK, not read out of this DOL): the
+first free entry, blocks handed out from the table's last-allocated + 1 and
+wrapping to 5, the entry's own fields kept (time, permission, copy count) and
+only its start block at 0x36 rewritten. The new directory and table go into
+the copy current_slot() picks, with the other copy's check code + 1, and the
+other copy -- the newer one, the card as it was before -- is left byte for
+byte as it was. That is the card library's own alternation, and verify()
+cannot tell a wrong slot from a right one, so the tests look at the slots.
+
+`import` writes a new image (--out, by default CARD's name with -imported);
+--in-place rewrites CARD itself, after copying it to CARD.bak-YYYYMMDD-HHMMSS,
+and refuses while soa.exe is running, because runtime/exi.c keeps the card
+open and writes through. Either way it refuses, writing nothing, a save of
+another game or maker, a file that is not 0x40 + 8192 x n bytes or whose size
+disagrees with its entry, a 0-block file, a card without the blocks or
+without a free entry, a name already on the card (--replace deletes that file
+first, in the same update), and a card that does not verify READY before it
+starts. Both exit 2 on a refusal; `import` exits 1 when what it wrote would
+not mount READY or does not read back as the file it imported.
+
 WHERE THE OUTPUT GOES: build/cards/, gitignored, and a directory guard.py
 forbids outright -- a card image is game data the moment the game writes to it.
 Both this tool's default path and runtime/exi.c's g_card_path are relative, so
@@ -98,6 +126,8 @@ give SOA_CARD an absolute path when they do not.
 """
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -311,15 +341,30 @@ def id_block(
     return bytes(block)
 
 
+def seal_directory(block: bytearray, check_code: int) -> None:
+    """Stamp a directory block's check code at 8186 and bring the pair at
+    8188/8190 up to date over everything before it."""
+    block[8186:8188] = (check_code & 0xFFFF).to_bytes(2, "big")
+    total, inverse = checksum(block[:CHECK_BYTES])
+    block[8188:8190] = total.to_bytes(2, "big")
+    block[8190:8192] = inverse.to_bytes(2, "big")
+
+
+def seal_table(block: bytearray, check_code: int) -> None:
+    """Stamp a table block's check code at 4 and bring the pair at 0/2 up to
+    date over everything after it."""
+    block[4:6] = (check_code & 0xFFFF).to_bytes(2, "big")
+    total, inverse = checksum(block[4:BLOCK_BYTES])
+    block[0:2] = total.to_bytes(2, "big")
+    block[2:4] = inverse.to_bytes(2, "big")
+
+
 def directory_block(check_code: int) -> bytes:
     """Block 1 or 2 as 0x802496F4-0x80249734 writes it: 0xFF, so all 127
     entries read as free, with the check code at 8186 and the pair at
     8188/8190 over everything before them."""
     block = bytearray(b"\xff" * BLOCK_BYTES)
-    block[8186:8188] = (check_code & 0xFFFF).to_bytes(2, "big")
-    total, inverse = checksum(block[:CHECK_BYTES])
-    block[8188:8190] = total.to_bytes(2, "big")
-    block[8190:8192] = inverse.to_bytes(2, "big")
+    seal_directory(block, check_code)
     return bytes(block)
 
 
@@ -328,12 +373,9 @@ def fat_block(check_code: int, geom: Geometry) -> bytes:
     0xFF: a zero entry is a free block, and the checksum covers everything
     after the pair itself."""
     block = bytearray(BLOCK_BYTES)
-    block[4:6] = (check_code & 0xFFFF).to_bytes(2, "big")
     block[6:8] = geom.free_blocks.to_bytes(2, "big")
     block[8:10] = FAT_LAST_ALLOCATED.to_bytes(2, "big")
-    total, inverse = checksum(block[4:])
-    block[0:2] = total.to_bytes(2, "big")
-    block[2:4] = inverse.to_bytes(2, "big")
+    seal_table(block, check_code)
     return bytes(block)
 
 
@@ -524,6 +566,11 @@ class CardImage:
         """The allocation table the mount ends up using: the newer copy."""
         block = self.block(self.tables[self.current_table ^ 1].block)
         return [_u16(block, 2 * i) for i in range(self.geom.blocks)]
+
+    def entry_bytes(self, index: int) -> bytes:
+        """Entry `index`'s 64 bytes as the newer directory copy holds them."""
+        block = self.block(self.directories[self.current_directory ^ 1].block)
+        return block[index * ENTRY_BYTES : (index + 1) * ENTRY_BYTES]
 
     def entries(self) -> list[DirEntry]:
         """Every directory entry in use, out of the newer copy."""
@@ -1001,6 +1048,339 @@ def report(verdict: Verdict, image: CardImage, encode: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# .gci: one file off a card, the way Dolphin imports and exports it
+# ---------------------------------------------------------------------------
+
+GCI_BLOCK = 8192  # Dolphin's BLOCK_SIZE: a .gci's blocks, whatever the card's sectors
+GAME_CODE = b"GEAE"  # the only game `import` takes a save of
+MAKER_CODE = b"8P"
+ENTRY_START = 0x36  # the file's first block: the one field an import rewrites
+ENTRY_LENGTH = 0x38  # its length in blocks, which Dolphin checks the file size against
+SOA_PROCESS = "soa.exe"  # what --in-place asks tasklist about
+_UNSAFE_IN_FILE_NAMES = frozenset('"*/:<>?\\|')
+
+
+@dataclass(frozen=True)
+class Gci:
+    """A directory entry as it sat on the card, and its blocks in chain order."""
+
+    entry: bytes
+    data: bytes
+
+    @property
+    def blocks(self) -> int:
+        return _u16(self.entry, ENTRY_LENGTH)
+
+    @property
+    def label(self) -> str:
+        return f"{_text(self.entry[0:4])} {_text(self.entry[4:6])} {_text(self.entry[8:40])}"
+
+    def block(self, n: int) -> bytes:
+        return self.data[n * GCI_BLOCK : (n + 1) * GCI_BLOCK]
+
+    def to_bytes(self) -> bytes:
+        return self.entry + self.data
+
+
+def parse_gci(raw: bytes, what: str = "the .gci") -> Gci:
+    """A .gci the way Dolphin's GCIFile reads one: the 0x40-byte entry, then
+    8192 bytes a block, and a size that agrees with the entry's length."""
+    if len(raw) < ENTRY_BYTES or (len(raw) - ENTRY_BYTES) % GCI_BLOCK:
+        raise CardFormatError(
+            f"{what} is {len(raw)} bytes, not 0x40 + 8192 x n: not a .gci "
+            "(a .gcs or a .sav carries another header in front)"
+        )
+    entry, data = bytes(raw[:ENTRY_BYTES]), bytes(raw[ENTRY_BYTES:])
+    claimed, held = _u16(entry, ENTRY_LENGTH), len(data) // GCI_BLOCK
+    if claimed == 0:
+        raise CardFormatError(f"{what}'s entry says 0 blocks; a file on a card is at least one")
+    if claimed != held:
+        raise CardFormatError(
+            f"{what}'s entry says {claimed} blocks at 0x38, but the file holds {held}"
+        )
+    return Gci(entry, data)
+
+
+def gci_file_name(entry: bytes) -> str:
+    """The name a Dolphin GCI folder gives a file: maker, game code and file
+    name joined by hyphens, e.g. `8P-GEAE-SA_LEGENDS.000.gci`.
+
+    UNCHECKED: this is DEntry::GCI_FileName and Common::EscapeFileName as
+    recalled, not as read -- no Dolphin source was at hand when it was
+    written. Check both before relying on the name. The escaping follows the
+    same recollection: `__` becomes `__5f____5f__`, and a control character,
+    0x7F or one of "*/:<>?\\| becomes `__xx__`. Bytes from 0x80 up are
+    escaped the same way here, which Dolphin (a signed char) does not do, so
+    that the name is always one Windows can create.
+    """
+    name = entry[8:40].split(b"\0", 1)[0]
+    text = (entry[4:6] + b"-" + entry[0:4] + b"-" + name).decode("latin-1") + ".gci"
+    text = text.replace("__", "__5f____5f__")
+    return "".join(
+        f"__{ord(c):02x}__" if ord(c) < 0x20 or ord(c) >= 0x7F or c in _UNSAFE_IN_FILE_NAMES else c
+        for c in text
+    )
+
+
+def _file_name(entry: bytes) -> bytes:
+    """The 32-byte name as __CARDCompareFileName compares it: up to its NUL."""
+    return entry[8:40].split(b"\0", 1)[0]
+
+
+def _need_gci_geometry(geom: Geometry) -> None:
+    if geom.sector_size != GCI_BLOCK:
+        raise CardFormatError(
+            f"a .gci holds 8192-byte blocks and this card's are {geom.sector_size} bytes"
+        )
+
+
+def _need_ready(image: CardImage, verdict: Verdict, doing: str) -> None:
+    """Refuse a card the mount would not call READY. A card with one damaged
+    block is one the game repairs, but which directory copy it then keeps is
+    not what the check codes say, so neither command guesses."""
+    if verdict.result == 0:
+        return
+    first = verdict.first_failure
+    raise CardFormatError(
+        f"{image.path} does not verify: the mount would return {verdict.result} "
+        f"({RESULT_NAMES.get(verdict.result, '?')})"
+        + (f", first failure {first.name}" if first is not None else "")
+        + f"; nothing was {doing}, and `verify` says why"
+        + (
+            ". One damaged block is repaired by the game the next time it mounts the card"
+            if verdict.repairable
+            else ""
+        )
+    )
+
+
+def find_entry(image: CardImage, index: int | None = None, name: str | None = None) -> DirEntry:
+    """The file `--index` or `--name` means, out of the newer directory."""
+    entries = image.entries()
+    if index is not None:
+        if not 0 <= index < DIR_ENTRIES:
+            raise CardFormatError(f"entry {index} is not one of 0..{DIR_ENTRIES - 1}")
+        found = [e for e in entries if e.index == index]
+        if not found:
+            raise CardFormatError(f"entry {index} is free; `show` lists the files on the card")
+        return found[0]
+    found = [e for e in entries if e.name == name]
+    if not found:
+        raise CardFormatError(f"no file named {name!r} on the card; `show` lists them")
+    if len(found) > 1:
+        which = ", ".join(str(e.index) for e in found)
+        raise CardFormatError(f"{len(found)} files are named {name!r} (entries {which}); --index")
+    return found[0]
+
+
+def export_gci(image: CardImage, index: int) -> bytes:
+    """Entry `index` from the newer directory, then the blocks along its chain
+    in the newer table."""
+    _need_gci_geometry(image.geom)
+    entry = find_entry(image, index=index)
+    if not entry.chain_ok:
+        raise CardFormatError(
+            f"entry {index}'s chain is {len(entry.chain)} blocks, not the {entry.blocks} "
+            "its entry claims; the card is damaged and nothing was exported"
+        )
+    return image.entry_bytes(index) + b"".join(image.block(b) for b in entry.chain)
+
+
+def allocate(fat: bytearray, count: int, geom: Geometry) -> list[int]:
+    """__CARDAllocBlock, as recalled from the SDK and not read out of this DOL:
+    step from the table's last-allocated block, wrapping from the end of the
+    card to block 5, take each free (zero) block met, link them, and leave
+    the free count down by `count` and last-allocated on the chain's end. A
+    whole lap without finding them is a table that lies about its free count,
+    which the SDK answers with BROKEN."""
+    free = _u16(fat, 6)
+    if free < count:
+        raise CardFormatError(f"not enough free blocks: {count} needed, {free} free")
+    chain: list[int] = []
+    block, lap = _u16(fat, 8), geom.blocks - SYSTEM_BLOCKS
+    while len(chain) < count:
+        lap -= 1
+        if lap < 0:
+            raise CardFormatError(
+                f"the table says {free} blocks are free and a whole pass found {len(chain)}"
+            )
+        block += 1
+        if not FIRST_FILE_BLOCK <= block < geom.blocks:
+            block = FIRST_FILE_BLOCK
+        if _u16(fat, 2 * block) == 0:
+            chain.append(block)
+    for here, after in zip(chain, [*chain[1:], 0xFFFF], strict=True):
+        fat[2 * here : 2 * here + 2] = after.to_bytes(2, "big")
+    fat[6:8] = (free - count).to_bytes(2, "big")
+    fat[8:10] = chain[-1].to_bytes(2, "big")
+    return chain
+
+
+@dataclass(frozen=True)
+class Imported:
+    """What import_gci did: the new image, where the file went, and which
+    system blocks it wrote and which it left alone."""
+
+    data: bytes
+    index: int
+    chain: list[int]
+    replaced: DirEntry | None
+    written: tuple[int, int]  # the directory block and the table block written
+    kept: tuple[int, int]  # their twins, left byte for byte as they were
+    codes: tuple[int, int]  # the check codes written into them
+
+
+def import_gci(
+    image: CardImage,
+    gci: Gci,
+    replace: bool = False,
+    encode: int = ENCODE_ANSI,
+    flash_id: bytes = CARD_FLASH_ID,
+) -> Imported:
+    """Put one file on a card, in memory, the way the card library would.
+
+    Every refusal comes before anything is changed. The directory and table
+    are each built from the newer copy and written into the copy that
+    current_slot() picks -- the one CARDVerifyDir and CARDVerifyFat make
+    current, and so the one __CARDUpdateDir and __CARDUpdateFatBlock write
+    next -- with the newer copy's check code + 1, wrapping as the SDK's s16
+    increment wraps. The newer copy is not touched: it becomes the backup.
+
+    At 0x7FFF + 1 = 0x8000 the mount's plain signed subtraction then calls
+    the copy just written the older one, as it would after the game's own
+    32768th update; the command line's read-back says so when it happens.
+    """
+    geom = image.geom
+    _need_gci_geometry(geom)
+    _need_ready(image, verify(image, encode, flash_id), "imported")
+    if gci.entry[0:4] != GAME_CODE or gci.entry[4:6] != MAKER_CODE:
+        raise CardFormatError(
+            f"{gci.label} is a save of game {_text(gci.entry[0:4])!r} from maker "
+            f"{_text(gci.entry[4:6])!r}; only GEAE 8P, this game's, is imported"
+        )
+
+    dir_slot, fat_slot = current_slot(image.directories), current_slot(image.tables)
+    newer_dir, newer_fat = image.directories[dir_slot ^ 1], image.tables[fat_slot ^ 1]
+    directory = bytearray(image.block(newer_dir.block))
+    fat = bytearray(image.block(newer_fat.block))
+
+    replaced = None
+    for old in image.entries():
+        raw = image.entry_bytes(old.index)
+        if raw[0:6] != gci.entry[0:6] or _file_name(raw) != _file_name(gci.entry):
+            continue
+        if not replace:
+            raise CardFormatError(
+                f"entry {old.index} is already {gci.label}; --replace deletes it first"
+            )
+        if not old.chain_ok:
+            raise CardFormatError(
+                f"entry {old.index}'s chain is {len(old.chain)} blocks, not the "
+                f"{old.blocks} it claims, so freeing it would miscount; nothing was imported"
+            )
+        # CARDDelete: __CARDFreeBlock zeroes the chain and adds it back to the
+        # free count, and the entry is erased to 0xFF -- here in the same
+        # update as the import, so the pair still alternates once.
+        for block in old.chain:
+            fat[2 * block : 2 * block + 2] = bytes(2)
+        fat[6:8] = (_u16(fat, 6) + len(old.chain)).to_bytes(2, "big")
+        start = old.index * ENTRY_BYTES
+        directory[start : start + ENTRY_BYTES] = b"\xff" * ENTRY_BYTES
+        replaced = old
+        break
+
+    index = next((i for i in range(DIR_ENTRIES) if directory[i * ENTRY_BYTES] == 0xFF), None)
+    if index is None:
+        raise CardFormatError(
+            f"no free entry: all {DIR_ENTRIES} of the card's directory entries are in use"
+        )
+    if _u16(fat, 6) < gci.blocks:
+        raise CardFormatError(
+            f"not enough free blocks: {gci.label} is {gci.blocks} blocks and the card has "
+            f"{_u16(fat, 6)} free"
+        )
+    chain = allocate(fat, gci.blocks, geom)
+
+    entry = bytearray(gci.entry)
+    entry[ENTRY_START : ENTRY_START + 2] = chain[0].to_bytes(2, "big")
+    directory[index * ENTRY_BYTES : (index + 1) * ENTRY_BYTES] = entry
+    dir_code = (newer_dir.check_code + 1) & 0xFFFF
+    fat_code = (newer_fat.check_code + 1) & 0xFFFF
+    seal_directory(directory, dir_code)
+    seal_table(fat, fat_code)
+
+    out = bytearray(image.data)
+    written = (image.directories[dir_slot].block, image.tables[fat_slot].block)
+    for block, contents in zip(written, (directory, fat), strict=True):
+        out[geom.offset(block) : geom.offset(block) + BLOCK_BYTES] = contents
+    for n, block in enumerate(chain):
+        out[geom.offset(block) : geom.offset(block) + GCI_BLOCK] = gci.block(n)
+    return Imported(
+        data=bytes(out),
+        index=index,
+        chain=chain,
+        replaced=replaced,
+        written=written,
+        kept=(newer_dir.block, newer_fat.block),
+        codes=(dir_code, fat_code),
+    )
+
+
+def soa_running(image_name: str = SOA_PROCESS) -> bool:
+    """Whether a process of that image name is running, by `tasklist`. A
+    tasklist that cannot run is not an answer, so it refuses rather than
+    guessing no."""
+    try:
+        done = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise CardFormatError(
+            f"cannot tell whether {image_name} is running ({e}); "
+            "import with --out into a new image instead"
+        ) from None
+    if done.returncode != 0:
+        raise CardFormatError(
+            f"cannot tell whether {image_name} is running: tasklist exited {done.returncode}; "
+            "import with --out into a new image instead"
+        )
+    # A match is a CSV row led by the quoted image name; the no-match message
+    # is localised, so only the row is looked for.
+    lead = f'"{image_name.lower()}",'
+    return any(line.strip().lower().startswith(lead) for line in done.stdout.splitlines())
+
+
+def backup_card(card: Path, now: datetime | None = None) -> Path:
+    """Copy the card to CARD.bak-YYYYMMDD-HHMMSS, never over an older copy."""
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    backup = card.with_name(f"{card.name}.bak-{stamp}")
+    try:
+        with open(backup, "xb") as f:
+            f.write(card.read_bytes())
+    except FileExistsError:
+        raise CardFormatError(f"{backup} exists already; run it again in a second") from None
+    except OSError as e:
+        raise CardFormatError(f"cannot back the card up to {backup}: {e}") from None
+    return backup
+
+
+def _write_image(path: Path, data: bytes) -> None:
+    """Write through a temporary file, so a failure leaves the old file whole."""
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_bytes(data)
+        os.replace(temp, path)
+    except OSError as e:
+        raise CardFormatError(f"cannot write {path}: {e}") from None
+
+
+# ---------------------------------------------------------------------------
 # command line
 # ---------------------------------------------------------------------------
 
@@ -1086,6 +1466,121 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0 if verdict.accepted else 1
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    geom = geometry_for(args)
+    image = load_image(args.card, geom)
+    _need_gci_geometry(geom)
+    _need_ready(image, verify(image, args.encode, parse_flash_id(args.flash_id)), "exported")
+    entry = find_entry(image, args.index, args.name)
+    data = export_gci(image, entry.index)
+    # No OUT, or a folder: the name a Dolphin GCI folder would give it (see
+    # gci_file_name: recalled, unchecked), beside the card or in the folder.
+    if args.output is None:
+        out = Path(args.card).parent / gci_file_name(data[:ENTRY_BYTES])
+    elif Path(args.output).is_dir():
+        out = Path(args.output) / gci_file_name(data[:ENTRY_BYTES])
+    else:
+        out = Path(args.output)
+    if out.exists() and not args.force:
+        print(f"[cardformat] {out} exists; pass --force to overwrite it")
+        return 2
+    _write_image(out, data)
+    chain = " ".join(str(b) for b in entry.chain)
+    print(
+        f"exported entry {entry.index}, {entry.game} {entry.company} {entry.name}, "
+        f"{entry.blocks} blocks (chain {chain}), to {out}: {len(data)} bytes"
+    )
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    geom = geometry_for(args)
+    card = Path(args.card)
+    if args.in_place and soa_running(SOA_PROCESS):
+        print(
+            f"[cardformat] {SOA_PROCESS} is running. runtime/exi.c keeps the card open and "
+            "writes through, so an import now could be overwritten half-way: close the port, "
+            "or import with --out into a new image"
+        )
+        return 2
+    image = load_image(card, geom)
+    try:
+        gci = parse_gci(Path(args.gci).read_bytes(), str(args.gci))
+    except FileNotFoundError:
+        raise CardFormatError(f"no .gci at {args.gci}") from None
+    if args.in_place:
+        out = card
+    else:
+        out = Path(args.out) if args.out else card.with_name(f"{card.stem}-imported{card.suffix}")
+        if out.resolve() == card.resolve():
+            raise CardFormatError(f"--out is {card} itself; --in-place does that, with a backup")
+        if out.exists() and not args.force:
+            print(f"[cardformat] {out} exists; pass --force to overwrite it")
+            return 2
+    encode, flash_id = args.encode, parse_flash_id(args.flash_id)
+    done = import_gci(image, gci, args.replace, encode, flash_id)
+
+    staged = parse_image(done.data, geom, str(out))
+    staged_verdict = verify(staged, encode, flash_id)
+    if staged_verdict.result != 0:
+        for line in report(staged_verdict, staged, encode):
+            print(line)
+        print(f"[cardformat] the import would leave a card that is not READY; {out} not written")
+        return 1
+    if done.replaced is not None:
+        old = done.replaced
+        print(f"deleted entry {old.index}, {old.name}, and freed its {len(old.chain)} blocks")
+    print(
+        f"imported {gci.label}, {gci.blocks} blocks, as entry {done.index}: chain "
+        + " ".join(str(b) for b in done.chain)
+    )
+    print(
+        f"wrote directory block {done.written[0]} (check code {_s16(done.codes[0])}) and table "
+        f"block {done.written[1]} (check code {_s16(done.codes[1])}), the copies the mount "
+        f"writes next; blocks {done.kept[0]} and {done.kept[1]} keep the card as it was"
+    )
+    if image.file_size != geom.total_bytes:
+        print(f"note: {card} was {image.file_size} bytes; what is written is {geom.total_bytes}")
+    backup = None
+    if args.in_place:
+        backup = backup_card(card)
+        print(f"backed up {card} to {backup}")
+    _write_image(out, done.data)
+    print(f"wrote {out}")
+    print("")
+
+    # Read it back from disk: the mount's checks, the untouched copies, and
+    # the file exported again, which is how the mount's reading of the
+    # directory would see it.
+    after = load_image(out, geom)
+    verdict = verify(after, encode, flash_id)
+    for line in report(verdict, after, encode):
+        print(line)
+    problems = [
+        f"block {block} changed, and it was to be left as it was"
+        for block in done.kept
+        if after.block(block) != image.block(block)
+    ]
+    if verdict.result == 0:
+        expected = bytearray(gci.to_bytes())
+        expected[ENTRY_START : ENTRY_START + 2] = done.chain[0].to_bytes(2, "big")
+        try:
+            reads_back = export_gci(after, done.index) == bytes(expected)
+        except CardFormatError:  # the entry is free, or its chain broken, in that copy
+            reads_back = False
+        if not reads_back:
+            problems.append(
+                f"entry {done.index} does not read back as the file imported: the mount "
+                "reads the other directory copy (a check code across the 0x7FFF wrap?)"
+            )
+    for problem in problems:
+        print(f"[cardformat] {problem}")
+    ok = verdict.result == 0 and not problems
+    if not ok and args.in_place:
+        print(f"[cardformat] the card as it was is in {backup}")
+    return 0 if ok else 1
+
+
 def add_card_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--size",
@@ -1152,6 +1647,39 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("image", nargs="?", default=CARD_PATH)
     add_card_options(p)
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("export", help="write one file off a card as a Dolphin .gci")
+    p.add_argument("card", help="the card image to read")
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--index", type=int, help="the directory entry, as `show` numbers them")
+    which.add_argument("--name", help="the file's name, e.g. SA_LEGENDS.000")
+    p.add_argument(
+        "output",
+        nargs="?",
+        help="the .gci to write, or a folder for it (default: beside the card, named the way "
+        "a Dolphin GCI folder names it)",
+    )
+    p.add_argument("-f", "--force", action="store_true", help="overwrite a file already there")
+    add_card_options(p)
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("import", help="put a Dolphin .gci of this game's on a card")
+    p.add_argument("card", help="the card image to import into")
+    p.add_argument("gci", help="the .gci to import")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument(
+        "--out", help="the new image to write (default: the card's name with -imported)"
+    )
+    where.add_argument(
+        "--in-place",
+        action="store_true",
+        help="rewrite the card itself, after copying it to CARD.bak-YYYYMMDD-HHMMSS; "
+        "refused while soa.exe runs",
+    )
+    p.add_argument("--replace", action="store_true", help="delete a file of the same name first")
+    p.add_argument("-f", "--force", action="store_true", help="overwrite an --out already there")
+    add_card_options(p)
+    p.set_defaults(func=cmd_import)
 
     args = ap.parse_args(argv)
     try:

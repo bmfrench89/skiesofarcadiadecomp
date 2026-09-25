@@ -190,6 +190,31 @@ The checks -- `scenario.py`'s runs and replays, `perfbench.py` and the self
 test -- run with the file off (`SOA_SETTINGS=0`), so a player's settings never
 move one.
 
+### Saves to and from Dolphin
+
+A `.gci` is one save the way Dolphin's memory-card manager imports and exports
+it. `tools/cardformat.py` moves one between a `.gci` and a card image:
+
+```powershell
+python tools/cardformat.py export build\cards\slotA.raw --name SA_LEGENDS.000 save.gci
+python tools/cardformat.py import build\cards\slotA.raw save.gci --out build\cards\new.raw
+python tools/cardformat.py import build\cards\slotA.raw save.gci --in-place --replace
+```
+
+`export` takes the file by `--name` or by `--index` (the entry number `show`
+prints); with no output named it writes beside the card, named the way a
+Dolphin GCI folder names it (recalled from Dolphin, not yet checked against its
+source). `import` writes a new image by default (`--out`, else the card's name
+with `-imported`). `--in-place` rewrites the card itself, first copying it to
+`slotA.raw.bak-YYYYMMDD-HHMMSS`, and refuses while `soa.exe` is running,
+because the port keeps the card open and writes through. It refuses, writing
+nothing, a save of another game, a file that is not a `.gci`, a card without
+the blocks or a free entry for it, a name already on the card (`--replace`
+deletes that file first), and a card that does not verify; then it verifies
+what it wrote and exits 1 unless the game would mount it. A `.gci` is game
+data like the card: the guard refuses the suffix, so keep them outside the
+repository or under `build\`.
+
 ### Useful environment variables
 
 Set these the way your shell sets environment variables: `$env:NAME = 'value'`

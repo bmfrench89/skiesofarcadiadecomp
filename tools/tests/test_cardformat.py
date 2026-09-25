@@ -17,15 +17,20 @@ constants (F003/0000 for an erased directory block, 003F/EFC3 for a fresh
 allocation table) are derived by hand in the comments, so a change to either
 implementation that moved them would have to move them both.
 
-The last section is not about the image at all: it checks that every entry in
+One section is not about the image at all: it checks that every entry in
 config/trace.txt names a real instruction inside a real function, because the
 recompiler drops one that does not without saying so, and most of that file is
 now the card mount and the first write. It reads config/functions.tsv, which is
 metadata the repository carries, not game data.
+
+The last section is `.gci` import and export (P3). Its saves are made up too:
+a GEAE8P entry over random blocks, and cards whose files are laid down here by
+hand rather than by the import under test.
 """
 
 import bisect
 import ctypes
+import random
 import re
 import sys
 from pathlib import Path
@@ -847,3 +852,500 @@ def test_the_signed_shift_is_faithful_but_not_load_bearing(seed):
         return bytes(out)
 
     assert serial(C.CARD_FLASH_ID, seed) == C.scramble(C.CARD_FLASH_ID, seed)
+
+
+# --------------------------------------------------------------------------
+# .gci import and export (P3)
+# --------------------------------------------------------------------------
+#
+# A .gci is the 64-byte directory entry as it sat on the card, then 8192
+# bytes a block. Nothing here is a real save: the entries are shaped like the
+# game's (GEAE 8P SA_LEGENDS.000, 3 blocks, permission 4) and the blocks are
+# random. The cards the refusals are tested against have their files laid
+# down by card_with_files below, not by the import being tested.
+
+SAVE = b"SA_LEGENDS.000"
+
+
+def gci_entry(
+    name: bytes = SAVE, blocks: int = 3, game: bytes = b"GEAE", maker: bytes = b"8P", start=0x40
+) -> bytearray:
+    """The entry a .gci carries. Its start block is whatever the card it came
+    from had, 0x40 here, which an import has to replace; its copy count is 7,
+    which an import has to keep."""
+    entry = bytearray(b"\xff" * C.ENTRY_BYTES)
+    entry[0:4] = game
+    entry[4:6] = maker
+    entry[7] = 2  # bannerFormat
+    entry[8:40] = name.ljust(32, b"\0")
+    entry[40:44] = (0x0EE00000).to_bytes(4, "big")  # modified
+    entry[44:48] = (0x00000060).to_bytes(4, "big")  # iconAddr
+    entry[48:50] = (0x0002).to_bytes(2, "big")
+    entry[50:52] = (0x0003).to_bytes(2, "big")
+    entry[52] = 4  # permission
+    entry[53] = 7  # copyTimes
+    entry[54:56] = start.to_bytes(2, "big")  # startBlock
+    entry[56:58] = blocks.to_bytes(2, "big")  # length, in blocks
+    entry[60:64] = (0x00002000).to_bytes(4, "big")  # commentAddr
+    return entry
+
+
+def synthetic_gci(name: bytes = SAVE, blocks: int = 3, seed: int = 0, **fields) -> bytes:
+    return bytes(gci_entry(name, blocks, **fields)) + random.Random(seed).randbytes(blocks * 8192)
+
+
+def system(image: bytes, index: int, geom: C.Geometry = GEOM) -> bytes:
+    at = geom.offset(index)
+    return bytes(image[at : at + C.BLOCK_BYTES])
+
+
+def sealed_directory(block: bytearray, code: int) -> bytearray:
+    block[8186:8188] = (code & 0xFFFF).to_bytes(2, "big")
+    total, inverse = sdk_checksum(block[: C.CHECK_BYTES])
+    block[8188:8190] = total.to_bytes(2, "big")
+    block[8190:8192] = inverse.to_bytes(2, "big")
+    return block
+
+
+def sealed_table(block: bytearray, code: int) -> bytearray:
+    block[4:6] = (code & 0xFFFF).to_bytes(2, "big")
+    total, inverse = sdk_checksum(block[4:])
+    block[0:2] = total.to_bytes(2, "big")
+    block[2:4] = inverse.to_bytes(2, "big")
+    return block
+
+
+def card_with_files(files, geom: C.Geometry = GEOM, last_allocated: int | None = None):
+    """A formatted card holding `files`, (name, chain) pairs over random
+    blocks: every entry in both directory copies and every chain in both
+    tables, with the free count and last-allocated a save would leave."""
+    image = C.format_image(geom)
+    directory = bytearray(b"\xff" * C.BLOCK_BYTES)
+    table = bytearray(C.BLOCK_BYTES)
+    rng = random.Random(len(files))
+    used = []
+    for index, (name, chain) in enumerate(files):
+        directory[index * 64 : (index + 1) * 64] = gci_entry(name, len(chain), start=chain[0])
+        for here, after in zip(chain, [*chain[1:], 0xFFFF], strict=True):
+            table[2 * here : 2 * here + 2] = after.to_bytes(2, "big")
+            image[geom.offset(here) : geom.offset(here) + 8192] = rng.randbytes(8192)
+        used += chain
+    table[6:8] = (geom.free_blocks - len(used)).to_bytes(2, "big")
+    last = last_allocated if last_allocated is not None else max(used, default=4)
+    table[8:10] = last.to_bytes(2, "big")
+    for index, code in ((1, 0), (2, 1)):
+        image[geom.offset(index) : geom.offset(index) + 8192] = sealed_directory(
+            bytearray(directory), code
+        )
+    for index, code in ((3, 0), (4, 1)):
+        image[geom.offset(index) : geom.offset(index) + 8192] = sealed_table(bytearray(table), code)
+    return image
+
+
+def run(*args) -> int:
+    return C.main([str(a) for a in args])
+
+
+@pytest.fixture
+def card(tmp_path) -> Path:
+    path = tmp_path / "slotA.raw"
+    path.write_bytes(bytes(C.format_image()))
+    return path
+
+
+@pytest.fixture
+def save(tmp_path) -> Path:
+    path = tmp_path / "save.gci"
+    path.write_bytes(synthetic_gci())
+    return path
+
+
+def test_a_synthetic_save_imports_and_the_card_verifies_ready(tmp_path, card, save, capsys):
+    out = tmp_path / "new.raw"
+    assert run("import", card, save, "--out", out) == 0
+    assert "CARDDoMount would return 0 (READY)" in capsys.readouterr().out
+    assert card.read_bytes() == bytes(C.format_image()), "--out must leave the card alone"
+    image = C.load_image(out)
+    assert C.verify(image).result == 0
+    (entry,) = image.entries()
+    assert (entry.game, entry.company, entry.name) == ("GEAE", "8P", "SA_LEGENDS.000")
+    assert entry.chain == [5, 6, 7] and entry.chain_ok
+    assert b"".join(image.block(b) for b in entry.chain) == save.read_bytes()[64:]
+    newest = image.tables[image.current_table ^ 1]
+    assert newest.free_blocks == newest.counted_free == 56 and newest.last_allocated == 7
+
+
+def test_the_default_import_writes_a_new_image_beside_the_card(tmp_path, card, save):
+    assert run("import", card, save) == 0
+    assert C.verify(C.load_image(tmp_path / "slotA-imported.raw")).result == 0
+    assert card.read_bytes() == bytes(C.format_image())
+
+
+def test_an_export_is_the_file_imported_but_for_its_start_block(tmp_path, card, save):
+    """The blocks come back exactly; the entry comes back exactly except the
+    start block at 0x36, which is where this card put the file."""
+    assert run("import", card, save, "--out", tmp_path / "new.raw") == 0
+    out = tmp_path / "back.gci"
+    assert run("export", tmp_path / "new.raw", "--name", "SA_LEGENDS.000", out) == 0
+    sent, back = save.read_bytes(), out.read_bytes()
+    assert len(back) == len(sent) == 64 + 3 * 8192
+    assert back[64:] == sent[64:]
+    assert back[:0x36] == sent[:0x36] and back[0x38:64] == sent[0x38:64]
+    assert back[0x36:0x38] == (5).to_bytes(2, "big") != sent[0x36:0x38]
+    assert run("export", tmp_path / "new.raw", "--index", "0", tmp_path / "i.gci") == 0
+    assert (tmp_path / "i.gci").read_bytes() == back
+
+
+def test_an_export_imports_into_a_second_card_with_the_same_blocks(tmp_path, card, save):
+    """The second card already holds a file, so the chain lands elsewhere
+    and only the blocks can make the two agree."""
+    assert run("import", card, save, "--out", tmp_path / "first.raw") == 0
+    assert run("export", tmp_path / "first.raw", "--index", "0", tmp_path / "moved.gci") == 0
+    second = tmp_path / "second.raw"
+    second.write_bytes(bytes(card_with_files([(b"OTHER.000", [5, 6])])))
+    assert run("import", second, tmp_path / "moved.gci", "--out", tmp_path / "second2.raw") == 0
+    image = C.load_image(tmp_path / "second2.raw")
+    assert C.verify(image).result == 0
+    moved = next(e for e in image.entries() if e.name == "SA_LEGENDS.000")
+    assert moved.chain == [7, 8, 9]
+    assert b"".join(image.block(b) for b in moved.chain) == save.read_bytes()[64:]
+    other = next(e for e in image.entries() if e.name == "OTHER.000")
+    assert other.chain == [5, 6]
+
+
+def test_two_imports_give_two_chains_that_do_not_overlap(tmp_path, card, save):
+    other = tmp_path / "other.gci"
+    other.write_bytes(synthetic_gci(b"SA_LEGENDS.001", blocks=4, seed=1))
+    assert run("import", card, save, "--out", tmp_path / "one.raw") == 0
+    assert run("import", tmp_path / "one.raw", other, "--out", tmp_path / "two.raw") == 0
+    image = C.load_image(tmp_path / "two.raw")
+    assert C.verify(image).result == 0
+    first, second = image.entries()
+    assert first.chain == [5, 6, 7] and second.chain == [8, 9, 10, 11]
+    assert not set(first.chain) & set(second.chain)
+    for entry, gci in ((first, save), (second, other)):
+        assert b"".join(image.block(b) for b in entry.chain) == gci.read_bytes()[64:]
+    assert image.tables[image.current_table ^ 1].free_blocks == 59 - 7
+
+
+# Check codes before the import, (directory slot 0, slot 1) and (table slot 0,
+# slot 1), chosen so that current_slot() picks each slot at least once for each
+# pair, the two pairs disagree once, and the +1 crosses both s16 boundaries.
+SLOT_CODES = {
+    "a fresh card, both pairs pick slot 0": ((0, 1), (0, 1)),
+    "one update on, both pick slot 1": ((2, 1), (2, 1)),
+    "the pairs pick different slots": ((5, 3), (0, 1)),
+    "codes across the s16 wraps": ((0x7FFE, 0x7FFF), (0xFFFF, 0xFFFE)),
+}
+
+
+def restamped(dir_codes, fat_codes) -> bytearray:
+    image = C.format_image()
+    for index, code in zip((1, 2), dir_codes, strict=True):
+        at = GEOM.offset(index)
+        image[at : at + 8192] = sealed_directory(bytearray(system(image, index)), code)
+    for index, code in zip((3, 4), fat_codes, strict=True):
+        at = GEOM.offset(index)
+        image[at : at + 8192] = sealed_table(bytearray(system(image, index)), code)
+    return image
+
+
+@pytest.mark.parametrize("case", list(SLOT_CODES))
+def test_the_import_writes_the_slot_current_slot_picks_and_leaves_the_other(case):
+    """verify() would pass an import that wrote the wrong copy or left the
+    check code alone -- both copies still checksum -- so this looks at the
+    slots. The copy current_slot() picked before the import must now hold
+    the newer copy's contents plus the file, with that copy's check code + 1;
+    the newer copy must be byte for byte what it was."""
+    before = restamped(*SLOT_CODES[case])
+    image = parsed(before)
+    assert C.verify(image).result == 0
+    after = C.import_gci(image, C.parse_gci(synthetic_gci())).data
+    now = parsed(after)
+
+    for label, pair, now_pair in (
+        ("directory", image.directories, now.directories),
+        ("table", image.tables, now.tables),
+    ):
+        pick = C.current_slot(pair)
+        kept = pair[pick ^ 1].block
+        assert system(after, kept) == system(before, kept), (
+            f"{label} block {kept}, the newer copy, was written"
+        )
+        assert now_pair[pick].check_code == (pair[pick ^ 1].check_code + 1) & 0xFFFF, (
+            f"{label} block {pair[pick].block}: check code {now_pair[pick].check_code:#06x}, "
+            f"not {pair[pick ^ 1].check_code:#06x} + 1"
+        )
+
+    pick = C.current_slot(image.directories)
+    newer = image.directories[pick ^ 1]
+    expected = bytearray(system(before, newer.block))
+    expected[0:64] = gci_entry(start=5)
+    sealed_directory(expected, newer.check_code + 1)
+    assert system(after, image.directories[pick].block) == bytes(expected)
+
+    pick = C.current_slot(image.tables)
+    newer = image.tables[pick ^ 1]
+    expected = bytearray(system(before, newer.block))
+    for here, then in ((5, 6), (6, 7), (7, 0xFFFF)):
+        expected[2 * here : 2 * here + 2] = then.to_bytes(2, "big")
+    expected[6:8] = (56).to_bytes(2, "big")
+    expected[8:10] = (7).to_bytes(2, "big")
+    sealed_table(expected, newer.check_code + 1)
+    assert system(after, image.tables[pick].block) == bytes(expected)
+
+
+def test_what_was_written_is_verified_from_disk_and_exits_1_unless_ready(
+    tmp_path, card, save, monkeypatch, capsys
+):
+    """The re-verification reads the file back rather than trusting the
+    bytes it meant to write: here the write breaks both directory copies on
+    the way to disk."""
+    write = C._write_image
+
+    def broken(path, data):
+        data = bytearray(data)
+        for index in (1, 2):
+            data[GEOM.offset(index) + 8188] ^= 0xFF
+        write(path, bytes(data))
+
+    monkeypatch.setattr(C, "_write_image", broken)
+    assert run("import", card, save, "--out", tmp_path / "new.raw") == 1
+    assert "CARDDoMount would return -6 (BROKEN)" in capsys.readouterr().out
+
+
+def test_a_directory_code_crossing_0x7fff_reads_back_as_the_old_directory(tmp_path, save, capsys):
+    """0x7FFF + 1 is 0x8000, -32768 to the mount's signed subtraction, so the
+    copy just written reads as the older one and the mount would show the
+    card without the file -- as it would after the game's own 32768th
+    update. The image is READY; the read-back is what says so."""
+    card = tmp_path / "old.raw"
+    card.write_bytes(bytes(restamped((0x7FFE, 0x7FFF), (0, 1))))
+    assert run("import", card, save, "--out", tmp_path / "new.raw") == 1
+    text = capsys.readouterr().out
+    assert "CARDDoMount would return 0 (READY)" in text
+    assert "entry 0 does not read back as the file imported" in text
+    assert C.load_image(tmp_path / "new.raw").entries() == []
+
+
+def test_blocks_are_handed_out_after_the_last_allocated_one_and_wrap_to_5():
+    """__CARDAllocBlock starts one past the table's last-allocated block, not
+    at the first free one: 10 is free here but 63 goes first, and the search
+    then wraps from the card's end to block 5."""
+    image = parsed(card_with_files([(b"OTHER.000", [5, 6, 7, 8, 9])], last_allocated=62))
+    done = C.import_gci(image, C.parse_gci(synthetic_gci()))
+    assert done.chain == [63, 10, 11]
+    now = parsed(done.data)
+    newest = now.tables[now.current_table ^ 1]
+    assert newest.last_allocated == 11 and newest.free_blocks == 59 - 8
+    assert now.fat[63] == 10 and now.fat[10] == 11 and now.fat[11] == 0xFFFF
+
+
+GCI_REFUSALS = {
+    "another maker": (lambda: synthetic_gci(maker=b"01"), "only GEAE 8P"),
+    "another game": (lambda: synthetic_gci(game=b"GEAJ"), "only GEAE 8P"),
+    "a size that is not 0x40 + 8192 x n": (lambda: synthetic_gci()[:-1], "not 0x40 + 8192 x n"),
+    "shorter than an entry": (lambda: synthetic_gci()[:63], "not 0x40 + 8192 x n"),
+    "a size the entry disagrees with": (
+        lambda: synthetic_gci()[: 64 + 2 * 8192],
+        "says 3 blocks at 0x38, but the file holds 2",
+    ),
+    "zero blocks": (lambda: bytes(gci_entry(blocks=0)), "says 0 blocks"),
+}
+
+
+@pytest.mark.parametrize("case", list(GCI_REFUSALS))
+def test_a_gci_that_cannot_go_on_the_card_is_refused_and_nothing_written(
+    tmp_path, card, capsys, case
+):
+    make, said = GCI_REFUSALS[case]
+    gci = tmp_path / "bad.gci"
+    gci.write_bytes(make())
+    out = tmp_path / "new.raw"
+    assert run("import", card, gci, "--out", out) == 2
+    text = capsys.readouterr().out
+    assert text.startswith("[cardformat] ") and said in text
+    assert not out.exists()
+    assert card.read_bytes() == bytes(C.format_image())
+
+
+def test_a_name_already_on_the_card_is_refused_unless_replace(tmp_path, save, capsys):
+    """--replace deletes the old file first, in the same update: its chain is
+    freed and its entry erased, and the new one is allocated after the old
+    one's last block, as __CARDAllocBlock would."""
+    card = tmp_path / "held.raw"
+    card.write_bytes(bytes(card_with_files([(SAVE, [5, 6, 7])])))
+    out = tmp_path / "new.raw"
+    assert run("import", card, save, "--out", out) == 2
+    assert "entry 0 is already GEAE 8P SA_LEGENDS.000; --replace" in capsys.readouterr().out
+    assert not out.exists()
+
+    assert run("import", card, save, "--out", out, "--replace") == 0
+    assert "deleted entry 0, SA_LEGENDS.000, and freed its 3 blocks" in capsys.readouterr().out
+    image = C.load_image(out)
+    assert C.verify(image).result == 0
+    (entry,) = image.entries()
+    assert entry.chain == [8, 9, 10]
+    assert b"".join(image.block(b) for b in entry.chain) == save.read_bytes()[64:]
+    assert [image.fat[b] for b in (5, 6, 7)] == [0, 0, 0]
+    assert image.tables[image.current_table ^ 1].free_blocks == 56
+
+
+@pytest.mark.parametrize("state", ["one damaged directory copy", "erased flash"])
+def test_a_card_that_does_not_verify_ready_is_refused(tmp_path, save, capsys, state):
+    """A card with one damaged copy is one the game repairs, but not READY:
+    which directory it would keep is not what the check codes say."""
+    image = C.format_image()
+    if state == "erased flash":
+        image = bytearray(blank_image())
+    else:
+        C.damage(image, GEOM, "dir")
+    card = tmp_path / "bad.raw"
+    card.write_bytes(bytes(image))
+    out = tmp_path / "new.raw"
+    assert run("import", card, save, "--out", out) == 2
+    assert "does not verify" in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_not_enough_free_blocks_on_the_runtimes_card(tmp_path, capsys):
+    """59 blocks for files, 57 of them used: a 3-block save does not fit and
+    a 2-block one does, exactly."""
+    files = [(f"FILLER.{n:03d}".encode(), [5 + 3 * n, 6 + 3 * n, 7 + 3 * n]) for n in range(19)]
+    card = tmp_path / "full.raw"
+    card.write_bytes(bytes(card_with_files(files)))
+    image = C.load_image(card)
+    assert GEOM.free_blocks == 59 and C.verify(image).result == 0
+    assert image.tables[0].free_blocks == 2
+
+    gci = tmp_path / "three.gci"
+    gci.write_bytes(synthetic_gci(blocks=3))
+    out = tmp_path / "new.raw"
+    assert run("import", card, gci, "--out", out) == 2
+    text = capsys.readouterr().out
+    assert "not enough free blocks" in text and "is 3 blocks and the card has 2 free" in text
+    assert not out.exists()
+
+    gci.write_bytes(synthetic_gci(blocks=2))
+    assert run("import", card, gci, "--out", out) == 0
+    assert next(e for e in C.load_image(out).entries() if e.name == "SA_LEGENDS.000").chain == [
+        62,
+        63,
+    ]
+
+
+def test_no_free_entry_on_a_16_mbit_card_with_127_files(tmp_path, capsys):
+    """251 blocks for files and 127 used, one each: the blocks are there,
+    the directory entries are not."""
+    big = C.Geometry(16, 0x2000)
+    files = [(f"FILLER.{n:03d}".encode(), [5 + n]) for n in range(127)]
+    card = tmp_path / "big.raw"
+    card.write_bytes(bytes(card_with_files(files, big)))
+    image = C.load_image(card, big)
+    assert big.free_blocks == 251 and C.verify(image).result == 0
+    assert len(image.entries()) == 127 and image.tables[0].free_blocks == 124
+
+    gci = tmp_path / "one.gci"
+    gci.write_bytes(synthetic_gci(blocks=1))
+    out = tmp_path / "new.raw"
+    assert run("import", card, gci, "--out", out, "--size", "16") == 2
+    assert "no free entry: all 127" in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_in_place_backs_the_card_up_before_it_writes(tmp_path, card, save, monkeypatch, capsys):
+    monkeypatch.setattr(C, "soa_running", lambda name: False)
+    before = card.read_bytes()
+    backups_at_write = []
+    write = C._write_image
+
+    def spy(path, data):
+        backups_at_write.append(sorted(p.name for p in tmp_path.glob("slotA.raw.bak-*")))
+        write(path, data)
+
+    monkeypatch.setattr(C, "_write_image", spy)
+    assert run("import", card, save, "--in-place") == 0
+    (backup,) = tmp_path.glob("slotA.raw.bak-*")
+    assert re.fullmatch(r"slotA\.raw\.bak-\d{8}-\d{6}", backup.name)
+    assert backups_at_write == [[backup.name]], "the card was written before its backup"
+    assert backup.read_bytes() == before
+    assert card.read_bytes() != before
+    assert C.verify(C.load_image(card)).result == 0
+    assert f"backed up {card} to {backup}" in capsys.readouterr().out
+
+
+def test_in_place_refuses_while_the_port_is_running(tmp_path, card, save, monkeypatch, capsys):
+    """runtime/exi.c keeps the card open and writes through, so an import
+    under a running port could be overwritten half-way."""
+    asked = []
+
+    def running(name):
+        asked.append(name)
+        return True
+
+    monkeypatch.setattr(C, "soa_running", running)
+    assert run("import", card, save, "--in-place") == 2
+    assert asked == ["soa.exe"]
+    assert "soa.exe is running" in capsys.readouterr().out
+    assert card.read_bytes() == bytes(C.format_image())
+    assert list(tmp_path.glob("*.bak-*")) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="tasklist is Windows'")
+def test_the_process_check_finds_what_runs_and_not_what_does_not():
+    """The real tasklist: the interpreter running this test is running, and
+    a name nothing has is not -- whether or not a soa.exe is up right now."""
+    assert C.soa_running(Path(sys.executable).name)
+    assert not C.soa_running("p3-no-such-process.exe")
+
+
+def test_a_process_check_that_cannot_run_refuses(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError(2, "no tasklist here")
+
+    monkeypatch.setattr(C.subprocess, "run", missing)
+    with pytest.raises(C.CardFormatError, match="cannot tell whether soa.exe is running"):
+        C.soa_running()
+
+
+def test_out_may_not_be_the_card_or_an_existing_file(tmp_path, card, save, capsys):
+    assert run("import", card, save, "--out", card) == 2
+    assert "--in-place does that" in capsys.readouterr().out
+    taken = tmp_path / "taken.raw"
+    taken.write_bytes(b"something")
+    assert run("import", card, save, "--out", taken) == 2
+    assert "--force" in capsys.readouterr().out
+    assert taken.read_bytes() == b"something"
+    assert run("import", card, save, "--out", taken, "--force") == 0
+
+
+def test_the_default_export_name_is_a_dolphin_gci_folders(tmp_path, capsys):
+    """DEntry::GCI_FileName as recalled -- maker, game, file name -- and not
+    checked against Dolphin's source; see gci_file_name."""
+    card = tmp_path / "held.raw"
+    card.write_bytes(bytes(card_with_files([(SAVE, [5, 6, 7])])))
+    assert run("export", card, "--index", "0") == 0
+    assert (tmp_path / "8P-GEAE-SA_LEGENDS.000.gci").stat().st_size == 64 + 3 * 8192
+    folder = tmp_path / "gci"
+    folder.mkdir()
+    assert run("export", card, "--name", "SA_LEGENDS.000", folder) == 0
+    assert (folder / "8P-GEAE-SA_LEGENDS.000.gci").exists()
+    assert run("export", card, "--index", "0", folder) == 2
+    assert "--force" in capsys.readouterr().out
+    assert C.gci_file_name(gci_entry(b"A/B:C__D")) == "8P-GEAE-A__2f__B__3a__C__5f____5f__D.gci"
+
+
+@pytest.mark.parametrize(
+    ("which", "said"),
+    [
+        (["--index", "3"], "entry 3 is free"),
+        (["--index", "127"], "not one of 0..126"),
+        (["--name", "NOPE"], "no file named 'NOPE'"),
+    ],
+)
+def test_export_says_which_file_it_could_not_find(tmp_path, capsys, which, said):
+    card = tmp_path / "held.raw"
+    card.write_bytes(bytes(card_with_files([(SAVE, [5, 6, 7])])))
+    assert run("export", card, *which, tmp_path / "x.gci") == 2
+    assert said in capsys.readouterr().out
+    assert not (tmp_path / "x.gci").exists()
