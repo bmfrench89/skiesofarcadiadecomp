@@ -59,6 +59,8 @@ const char* settings_root(void); /* settings.c, M5b */
 int settings_console_to_log(char* path, size_t cap);
 void si_set_path_root(const char* root);
 void aram_set_data_dir(const char* dir);
+void tick_set_hold(int (*held)(void)); /* tick.c; M19's pause */
+int clock_pause_requested(void);
 
 static void on_chord(int chord, unsigned frame)
 {
@@ -927,10 +929,34 @@ void si_set_config_extra(const char* extra);
 
 void poke_at_frame(CpuState* s, unsigned frame);
 
+/* SOA_STALL=<frame>:<seconds> (M19's check): the guest thread sleeps once, at
+ * that frame's end, the way a host that went to sleep would stop it. The
+ * clock is to count none of it. */
+static void stall_at_frame(unsigned frame)
+{
+    static int parsed, done;
+    static unsigned at, secs;
+    if (!parsed) {
+        const char* v = getenv("SOA_STALL");
+        parsed = 1;
+        if (v && *v && sscanf(v, "%u:%u", &at, &secs) != 2) {
+            fprintf(stderr, "[boot] SOA_STALL=%s is not frame:seconds; ignored\n", v);
+            at = 0;
+        }
+    }
+    if (done || !at || frame < at) return;
+    done = 1;
+    fprintf(stderr, "[boot] frame %u: stalling the guest thread %u s (SOA_STALL)\n", frame, secs);
+#ifdef _WIN32
+    Sleep(secs * 1000u);
+#endif
+}
+
 void poke_at_frame(CpuState* s, unsigned frame)
 {
     int i;
     hle_frame_mark();
+    stall_at_frame(frame);
     peek_at_frame(s, frame);
     if (g_poke_n < 0) poke_parse();
     for (i = 0; i < g_poke_n; i++) {
@@ -1234,6 +1260,7 @@ int main(int argc, char** argv)
          * that skip it; window.c stops it on focus loss and close. */
         si_set_motor_strength(rumble && *rumble ? atoi(rumble) : 100);
         si_set_chord_handler(on_chord);
+        tick_set_hold(clock_pause_requested);
         mod_set_host_buttons(si_host_buttons);
         hle_on_report(si_motor_stop);
         atexit(si_motor_stop);

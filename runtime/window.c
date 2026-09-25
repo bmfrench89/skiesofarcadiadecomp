@@ -95,6 +95,8 @@ static volatile int g_resized;     /* WM_SIZE seen: the swap chain follows at th
 static int g_client_w, g_client_h; /* the client as WM_SIZE last said, 0x0 minimised */
 static ULONGLONG g_mouse_at;       /* the last mouse movement, for hiding the cursor */
 static int g_unfocused_mute;       /* `unfocused = mute` (M5b) */
+static int g_unfocused_pause;      /* `unfocused = pause` (M19) */
+void clock_pause(int on);
 static volatile int g_away;        /* another window is in front */
 void audio_set_muted(int on);
 #define WM_APP_FULLSCREEN (WM_APP + 1)
@@ -325,7 +327,19 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (!w) si_motor_stop(); /* the person looked away: nothing buzzes on the desk */
         g_away = !w;
         if (g_unfocused_mute) audio_set_muted(g_away); /* and, asked, nothing plays or reads the pad */
+        if (g_unfocused_pause) clock_pause(g_away);    /* or the game holds, and its clock with it */
         return DefWindowProc(h, m, w, l);
+    case WM_POWERBROADCAST:
+        /* A sleep the system announces: the game holds and its clock does
+         * not count the time (M19). One it does not announce -- Modern
+         * Standby -- is the clock's gap rule's. */
+        if (w == PBT_APMSUSPEND) {
+            si_motor_stop();
+            clock_pause(1);
+        } else if (w == PBT_APMRESUMEAUTOMATIC || w == PBT_APMRESUMESUSPEND) {
+            clock_pause(0);
+        }
+        return TRUE;
     case WM_CLOSE:
     case WM_DESTROY:
         g_open = 0;
@@ -563,8 +577,9 @@ static unsigned __stdcall ui_thread(void* arg)
         const char* sc = getenv("SOA_SCALER");
         const char* uf = getenv("SOA_UNFOCUSED");
         if (uf && !strcmp(uf, "mute")) g_unfocused_mute = 1;
+        else if (uf && !strcmp(uf, "pause")) g_unfocused_pause = 1;
         else if (uf && *uf && strcmp(uf, "run"))
-            fprintf(stderr, "[window] SOA_UNFOCUSED=%s is not run or mute; run\n", uf);
+            fprintf(stderr, "[window] SOA_UNFOCUSED=%s is not run, mute or pause; run\n", uf);
         RECT cr;
         DEVMODEA dm;
         double hz;

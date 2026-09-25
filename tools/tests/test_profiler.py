@@ -119,6 +119,7 @@ const char* settings_root(void) { return "."; }
 int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; return 0; }
 void si_set_path_root(const char* root) { (void)root; }
 void aram_set_data_dir(const char* dir) { (void)dir; }
+int clock_pause_requested(void) { return 0; }
 void gx_set_frame_limit(unsigned f) { (void)f; }
 void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)) { (void)fn; }
 unsigned gx_frame_count(void) { return 0; }
@@ -334,11 +335,18 @@ void profile_report(void) {}
 int main(void)
 {
     CpuState s;
+    ULONGLONG until;
     memset(&s, 0, sizeof s);
     hle_clock_start();
     Sleep(300);
     guest_timebase_lo(&s);
-    Sleep(1200);
+    /* A guest reads the timebase constantly; one that read nothing for 1.2 s
+     * would be a host stall, which the clock does not count (M19). */
+    until = GetTickCount64() + 1200;
+    while (GetTickCount64() < until) {
+        Sleep(10);
+        guest_timebase_lo(&s);
+    }
     hle_report();
     return 0;
 }
@@ -356,6 +364,7 @@ def clock_run(tmp_path: Path, speed: str) -> str:
             str(tmp_path / "clocks.c"),
             str(ROOT / "runtime" / "hle.c"),
             str(ROOT / "runtime" / "seed.c"),
+            str(ROOT / "runtime" / "clock.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),
         ],

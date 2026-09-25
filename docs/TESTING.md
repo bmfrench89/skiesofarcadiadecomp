@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1017 passed in 189.35s
+1023 passed in 212.50s
 ```
 
-1017 tests in 54 files, none of which reads the disc. They cover the Python
+1023 tests in 55 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -86,6 +86,7 @@ its own and run it, some of the C as well:
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
 | `test_gxr_lifetimes.py` | 6 | the lifetime rules the renderer's queue lives by — the texture use-after-free of 2026-09-17 — under H14's fences and again under `SOA_GXR_DRAIN=1`, where a draw's setup still drains for a queued copy |
+| `test_clock.py` | 6 | `runtime/clock.c`, built alone and fed synthetic host times (M19): steady steps are guest time, a 10 s gap counts as none and bumps the epoch (10 s with the rule off), a host step backwards moves nothing, a speed change is continuous and bumps the epoch, a pause is excluded, and a peek writes nothing |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
@@ -104,10 +105,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1017 passed` |
-| no capstone — **what CI installs** | `998 passed, 1 skipped` |
-| no MSVC | `690 passed, 327 skipped` |
-| neither — **the Ubuntu CI leg** | `671 passed, 328 skipped` |
+| everything (MSVC + capstone) | `1023 passed` |
+| no capstone — **what CI installs** | `1004 passed, 1 skipped` |
+| no MSVC | `690 passed, 333 skipped` |
+| neither — **the Ubuntu CI leg** | `671 passed, 334 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -189,7 +190,7 @@ ok   aram.c
 ...
 ok   window.c
 
-compiled 27/27 runtime translation units
+compiled 28/28 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -338,7 +339,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (81 cases)
+## 3. The self test (82 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -371,7 +372,7 @@ cannot open nodisc/sys/fst.bin
 
 That is the reason none of section 3 runs in CI.
 
-The 81 cases, in the order they print:
+The 82 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -388,7 +389,8 @@ The 81 cases, in the order they print:
 | 78 | The encounter multiplier as the game works it out | 1 |
 | 79 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
 | 80 | `unfocused = mute`: the device gets zeros, then the block again | 1 |
-| 81 | A mod's call into the game: every register as it was | 1 |
+| 81 | The audio DMA across a clock epoch: one block, then the deadline from now | 1 |
+| 82 | A mod's call into the game: every register as it was | 1 |
 
 ### The memory card (26)
 
@@ -583,6 +585,18 @@ the window fails it (FINDINGS "M18").
 would get, through audio_out.c's test sink, are all zero; unmuted, they are
 the block's, left then right. A mute that does not reach those samples
 fails it (FINDINGS "M5b").
+
+### The audio DMA across a clock epoch (1)
+
+```
+[selftest] audio DMA across a clock epoch ok    got "same epoch 4 of 4 polls, new epoch 1 then 0"
+```
+
+A DMA deadline left eight blocks behind, as a host stall would leave it, is
+caught up a block a poll while the clock's epoch holds; after an epoch
+change (M19) the next poll plays one block and starts the deadline again
+from now, so the poll after plays none. Without the resync (tried) it keeps
+catching up: `new epoch 1 then 1`.
 
 ---
 
@@ -1050,7 +1064,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 327 of the 1017 skip without a C compiler; they build one runtime file and run it.
+² 333 of the 1023 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1061,8 +1075,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 671 passed, 328 skipped |
-| **Tests** | windows | the same three — 998 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 671 passed, 334 skipped |
+| **Tests** | windows | the same three — 1004 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

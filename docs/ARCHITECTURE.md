@@ -22,7 +22,7 @@ store swaps as it goes (`mem_r32`, `mem_w32`). A call the recompiler can
 resolve is a direct C call; anything else goes through the generated
 `dispatch(s, addr)` switch (`tools/soa/recomp/emit.py`, `dispatch_c`).
 
-**The runtime** — `runtime/`, 27 C files compiled with MSVC at `/std:c17
+**The runtime** — `runtime/`, 28 C files compiled with MSVC at `/std:c17
 /fp:strict`. This is the console: the memory window, the device models the
 guest programs through memory-mapped registers, the software graphics
 pipeline, the AX mixer, the window, and the diagnostics that make a wrong
@@ -454,6 +454,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
 | `settings.c` | host plumbing | `soa.ini` beside `soa.exe` (M5): the switches a player would set, and the disc, applied where the environment is silent, and the ones that change the game named in a pad recording; off for every check (`SOA_SETTINGS=0`) | A player's file could move a check if a script forgot `SOA_SETTINGS=0`; `test_settings.py` holds that each one sets it |
+| `clock.c` | host plumbing | The guest's clock (M19): the timebase every timer and device deadline counts in, accumulated from the host's monotonic time between reads, with a gap past `SOA_CLOCK_GAP_MS` (250) counted as none, a pause excluded, a speed change continuous, and an epoch dsp.c watches; `hle.c`'s `timebase()` reads it | A host sleep counted as guest time makes every deadline in the gap fire at once and the game's play-time clock jump; `test_clock.py` drives it with synthetic host times |
 | `picture.c` | host plumbing | Where the picture goes in the window -- `picture_layout`, the largest whole multiple of the frame (`integer`) or the largest 4:3 that fits (`fit`), centred with black bars -- and `present_interval`, how many refreshes each frame is held (H19a); pure, built alone by `test_picture.py`, whose Python twin checks a windowed run's `[window]` lines | A layout that disagreed between the two presenters, or with the log, would show as a moved picture only by eye; the twin is what catches it |
 | `seed.c` | host plumbing | The race seed (P6): with `SOA_SEED`, OSGetTick answers its three reseed sites -- a field load, two at a battle start -- with values from the seed, the site and the call count, through `guest_timebase_lo` in `hle.c`, gated on OSGetTick's pc | A pin that leaked to another timebase read would move a device's clock; the pc gate is what stops it, and `test_seed.py` and the self test hold the sites |
 | `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
@@ -627,7 +628,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1017 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1023 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

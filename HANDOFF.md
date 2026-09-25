@@ -94,14 +94,25 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   host profiler now names inlined helpers and samples the guest thread.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
-- **The comfort pack has begun (2026-09-25; `docs/PLAN-GAMEPLAY-MODS.md`
-  milestone 1, specified in `docs/specs/comfort-pack.md`).** Manifest 2 for
-  mods, the guard's T0 and T0c (card images and saves under any name, history
-  read for content), the race seed (P6: `SOA_SEED`, and settings that change
-  the game written into a recording), and the first shipped mod,
-  `mods/encounter-rate` (P1a: `SOA_ENCOUNTERS=off|half|normal|double`, hold
-  B for none; `--link` builds it). `examples/mods/encounters-off` moved out
-  of `mods/` for it.
+- **Most of the comfort pack is in (2026-09-25; `docs/PLAN-GAMEPLAY-MODS.md`
+  milestone 1, specified in `docs/specs/comfort-pack.md`, ordered by
+  `docs/PLAN-NEXT.md`).** Each slice has a FINDINGS entry of its name:
+  manifest 2 for mods; the guard's T0 and T0c (card images and saves under
+  any name, history read for content); the race seed (P6: `SOA_SEED`, and
+  settings that change the game written into a recording); two shipped mods,
+  `mods/encounter-rate` (P1a: `SOA_ENCOUNTERS=off|half|normal|double`, hold B
+  for none) and `mods/autotext` (P11 and P11b: `SOA_AUTOTEXT=on`, hold LB to
+  skip), both built by `--link`; rumble (M18); host buttons and pad chords
+  (CH1: View+LB fullscreen, and port 1 follows the pad to any slot);
+  fullscreen, DPI, a resizable letterboxed window (H19a); a first run by
+  double-click, with `soa.ini` at the repository root, relative paths and
+  defaults under it, and the log in `build\logs\` (M5b); and the tools reading
+  the disc image, so the 1.42 GB of loose files can go (I2:
+  `extract.py --prune-loose`). `examples/mods/encounters-off` moved out of
+  `mods/` for the slider. **Waiting on the owner (session A in PLAN-NEXT):**
+  the pad rumbling in a battle; a pad in slot 1 or 2 playing; F11, Alt+Enter,
+  the chord, resizing and the cursor in a window; a double-click with a real
+  `soa.ini`; `unfocused = mute` on alt-tab; and the prune itself.
 - **Recorded display lists run at recording (C5a).** The game records lists
   every frame and the port parses them as they are recorded, so every list
   called is empty; 28.5% of the opening's draws happen that way. C5b is the
@@ -111,7 +122,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1017 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1023 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -144,8 +155,8 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1017 |
-| Self-test cases | 81 |
+| Python tests | 1023 |
+| Self-test cases | 82 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 

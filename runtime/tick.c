@@ -32,6 +32,11 @@
  *   it is the original, and selftest's twin case holds it to the recompiled
  *   one.
  */
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 #include "cpu.h"
 #include <stdio.h>
 
@@ -74,6 +79,27 @@ int tick_on_safe_point(void (*fn)(CpuState*))
     return 1;
 }
 
+/* While `held` says so, the top of the main loop waits (M19's pause: the
+ * clock does not count the time). A setter, so this file still links alone. */
+static int (*g_held)(void);
+
+void tick_set_hold(int (*held)(void))
+{
+    g_held = held;
+}
+
+static void hold_while_paused(void)
+{
+    while (g_held && g_held()) {
+#ifdef _WIN32
+        Sleep(20);
+#else
+        struct timespec ts = {0, 20000000};
+        nanosleep(&ts, NULL);
+#endif
+    }
+}
+
 /* Let the frame end's spin go after one field, from frame `frame` on; 0
  * locks it again. */
 void tick_unlock_from(unsigned frame)
@@ -88,6 +114,7 @@ void fn_8023F704(CpuState* s)
     if (s->lr == LR_FRAME_START) {
         int i;
         g_safe_points++;
+        hold_while_paused();
         for (i = 0; i < g_safe_n; i++) g_safe[i](s);
     } else if (s->lr == LR_FRAME_END_SPIN && g_unlock_from && gx_frame_count() >= g_unlock_from) {
         g_released++;

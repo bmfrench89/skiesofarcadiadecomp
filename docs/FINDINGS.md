@@ -3393,3 +3393,41 @@ case (muted, the device gets zeros; unmuted, the block's samples), which a
 mute that does not reach the samples (tried) fails. The double-click with
 the owner's own `soa.ini`, and `unfocused = mute` on alt-tab, are the owner's
 checks (session A).
+
+
+**M19: a clock that survives sleep.** 2026-09-25, `build/scenario-m19*.log`.
+The guest's timebase was wall time since its first read, times
+`SOA_SPEED`, from `timespec_get(TIME_UTC)`: a system clock step moved it,
+and a machine put to sleep woke to a clock a minute ahead -- the game's play
+time jumped and every deadline in the gap fired at once. `runtime/clock.c`
+now accumulates speed x the host's monotonic time between reads (QPC), and a
+gap between two reads longer than `SOA_CLOCK_GAP_MS` (250) counts as no time
+and bumps an epoch. Guest time cannot run backwards; a pause (the system's
+own suspend, `WM_POWERBROADCAST`, or `unfocused = pause`) is excluded, with
+the guest thread held at tick.c's safe point; a speed change is continuous.
+dsp.c starts its audio DMA deadline again from now after an epoch change,
+instead of catching up block by block. `[clock] origin at W s` gives the
+first read, and the `[run]` line the gaps and the seconds excluded.
+`SOA_CLOCK=utc` keeps the old source for one release.
+
+Headless title runs, each checked on its own: with `SOA_STALL=600:10`, one
+gap, `frame 601: a gap of 10.0 s wall counted as 0 s of guest time`, and
+70.0 guest seconds against 80.0 wall (the origin 0.004 s), four checks
+passing; the same with `SOA_CLOCK_GAP_MS=0` (the mutation), no gap line and
+79.9 guest against 79.9 wall. Ordinary runs trip nothing: the title (69.8
+against 69.8) and the battle scenario's 12,000 frames (405.8 against 405.8)
+log 0 gaps, and `speed --check` at `SOA_SPEED=10` passes with 0 gaps. **One
+limit, measured:** the first stall run went beside a compiler building the
+P3 worker's tests, and logged two more gaps, 0.5 s at frame 1 and 0.8 s at
+frame 951 -- the guest thread starved that long without reading the clock
+-- which the rule, by its own definition, counts as no time; rerun on a
+quiet machine, the same command logged the one gap only. A heavily loaded
+host can trip the rule; what it costs is that much guest time not counted.
+
+Checks: `test_clock.py` (clock.c built alone on synthetic host times:
+steady steps, a 10 s gap counting 0 and one epoch -- or 10 s with the rule
+off -- a backward host step, a continuous speed change, a pause excluded,
+and a peek that writes nothing); the self test's new case (above) and its
+mutation; `test_profiler.py`'s clock driver now reads the timebase every 10
+ms, as a guest does, where it used to read once and sleep 1.2 s -- which is
+now, correctly, a gap.

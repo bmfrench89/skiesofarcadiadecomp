@@ -64,7 +64,7 @@ static const Setting k_settings[] = {
      1, "encounter-rate", "0|1"},
     {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)"},
     {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)"},
-    {"unfocused", "SOA_UNFOCUSED", "run (the default) or mute: with another window in front, mute ignores the pad and silences the game"},
+    {"unfocused", "SOA_UNFOCUSED", "run (the default), mute or pause: with another window in front, mute ignores the pad and silences the game, pause holds it"},
     {"rumble", "SOA_RUMBLE", "0 to 100: how hard the pad rumbles when the game asks; default 100, 0 is off"},
     {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
      "autotext", NULL},

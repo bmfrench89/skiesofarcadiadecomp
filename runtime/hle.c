@@ -8,6 +8,7 @@
  * first few of each as they happen.
  */
 #include "cpu.h"
+#include "clock.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -205,7 +206,8 @@ void hle_report(void)
         double guest = hle_guest_seconds(), wall = hle_wall_seconds();
         fprintf(stderr, "[run] %u game frames, %llu VI retraces", frames, retraces);
         if (frames) fprintf(stderr, " (%.2f per frame; the game's 30 fps cap wants 2.00)", (double)retraces / frames);
-        fprintf(stderr, "; %.1f guest seconds at SOA_SPEED=%u, %.1f wall seconds\n", guest, hle_speed(), wall);
+        fprintf(stderr, "; %.1f guest seconds at SOA_SPEED=%u, %.1f wall seconds; %llu clock gap(s), %.1f s excluded\n",
+                guest, hle_speed(), wall, clock_gaps(), clock_excluded_seconds());
     }
     frametime_report();
     for (i = 0; i < REPORT_HOOKS && g_report_hooks[i]; i++) g_report_hooks[i]();
@@ -290,20 +292,44 @@ unsigned hle_speed(void)
 
 static uint64_t g_tb_origin;
 static int g_tb_started; /* the guest has read the timebase, so the origin is fixed */
+static int g_clock_utc;  /* SOA_CLOCK=utc: the old wall-clock source, for bisecting a timing report */
+double hle_wall_seconds(void);
 
+/* A host gap the clock did not count (clock.c), with the frame it fell in. */
+static void clock_gap(double gap_s)
+{
+    fprintf(stderr, "[clock] frame %u: a gap of %.1f s wall counted as 0 s of guest time\n", gx_frame_count(), gap_s);
+}
+
+/* The Gekko timebase: clock.c's guest time (M19), which is monotonic and
+ * does not count a host sleep or stall past SOA_CLOCK_GAP_MS; or, with
+ * SOA_CLOCK=utc, the old wall time since the first read, times SOA_SPEED. */
 static uint64_t timebase(void)
 {
-    struct timespec ts;
-    static unsigned speed = 1;
     uint64_t ns;
-    timespec_get(&ts, TIME_UTC);
-    ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
     if (!g_tb_started) {
+        const char* src = getenv("SOA_CLOCK");
+        const char* gap = getenv("SOA_CLOCK_GAP_MS");
+        g_clock_utc = src && !strcmp(src, "utc");
+        clock_configure(hle_speed(), gap && *gap ? atol(gap) : -1, clock_gap);
+        if (g_clock_utc) {
+            struct timespec ts;
+            timespec_get(&ts, TIME_UTC);
+            g_tb_origin = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+            fprintf(stderr, "[clock] SOA_CLOCK=utc: guest time is wall time since the first read, as before M19\n");
+        } else {
+            clock_advance_at(clock_host_ns());
+            fprintf(stderr, "[clock] origin at %.3f s of wall time since start\n", hle_wall_seconds());
+        }
         g_tb_started = 1;
-        g_tb_origin = ns;
-        speed = hle_speed();
     }
-    ns = (ns - g_tb_origin) * speed;
+    if (g_clock_utc) {
+        struct timespec ts;
+        timespec_get(&ts, TIME_UTC);
+        ns = ((uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec - g_tb_origin) * hle_speed();
+    } else {
+        ns = clock_advance_at(clock_host_ns());
+    }
     return ns / 1000000000ull * TB_HZ + ns % 1000000000ull * TB_HZ / 1000000000ull;
 }
 
@@ -480,7 +506,9 @@ double hle_wall_seconds(void)
  * says which. */
 double hle_guest_seconds(void)
 {
-    return g_tb_started ? (double)timebase() / (double)TB_HZ : 0.0;
+    if (!g_tb_started) return 0.0;
+    /* the report may run on the UI thread: read the clock, do not advance it */
+    return g_clock_utc ? (double)timebase() / (double)TB_HZ : (double)clock_peek_at(clock_host_ns()) / 1e9;
 }
 
 /* The race seed (seed.c, PLAN-GAMEPLAY-MODS P6): with SOA_SEED set, a read

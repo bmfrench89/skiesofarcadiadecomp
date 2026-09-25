@@ -123,7 +123,7 @@ $env:SOA_SELFTEST = '1'
 gen\soa.exe extracted
 ```
 
-That runs 81 checks over the translated C library, the device models, the card
+That runs 82 checks over the translated C library, the device models, the card
 and SRAM, the AX mixer and the software renderer — including the 12
 hand-decompiled functions the port runs natively, compared against their
 recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
@@ -226,7 +226,10 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
 | `SOA_THREADS=n` | rasterizer worker threads, default three quarters of the logical CPUs (12 of 16), which was fastest in the heaviest field scene measured (FINDINGS "H15c") |
 | `SOA_NOSOUND=1` | no audio device |
-| `SOA_UNFOCUSED=run\|mute` | with another window in front: `run` (the default) carries on as before; `mute` silences the game and ignores the pad until the window is back in front (`unfocused`, M5b) |
+| `SOA_UNFOCUSED=run\|mute\|pause` | with another window in front: `run` (the default) carries on as before; `mute` silences the game and ignores the pad until the window is back in front (M5b); `pause` holds the game, and its clock with it, until then (M19) |
+| `SOA_CLOCK_GAP_MS=n` | the guest's clock (M19, `runtime/clock.c`) counts a gap of more than n ms between two reads -- a host asleep, or stopped in a debugger -- as no time, logging `[clock] frame F: a gap of S s wall counted as 0 s of guest time`; default 250, 0 turns the rule off. The `[run]` line ends with the gaps and the seconds excluded. The system's own sleep holds the game outright. Under a heavy host load (a concurrent compiler) the guest thread has gone 0.5-0.8 s without reading the clock, which the rule counts as gaps too |
+| `SOA_CLOCK=utc` | the clock before M19, wall time since the first read times `SOA_SPEED`, for bisecting a timing report; for one release |
+| `SOA_STALL=frame:seconds` | a check's knob: the guest thread sleeps once, at that frame's end, the way a host that went to sleep would stop it (M19) |
 | `SOA_ROOT=dir` / `SOA_SETTINGS=file` | for tests: the port root (by default the exe's folder, or the parent of the `gen` folder beside `runtime\`), and a `soa.ini` to read in place of `<root>\soa.ini` |
 | `SOA_RUMBLE=0..100` | how hard the pad rumbles when the game asks (PADControlMotor), as a share of full; default 100, 0 is off. The motor turns only with a window open and no `SOA_PAD` script or `SOA_PAD_FILE` replay driving the input, and stops when the window loses focus or closes and at the end of a run (PLAN-GAMEPLAY-MODS M18) |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
@@ -263,7 +266,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1017 tests; any that need a dump skip themselves
+python -m pytest                     # 1023 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

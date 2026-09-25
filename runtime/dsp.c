@@ -60,6 +60,9 @@ static uint32_t g_dma_start;
 static uint16_t g_dma_ctrl;
 static uint64_t g_dma_due, g_dma_period, g_dma_blocks_done;
 
+unsigned clock_epoch(void);
+static unsigned g_dma_epoch;
+
 static uint64_t tb_now(CpuState* s)
 {
     return ((uint64_t)guest_timebase_hi(s) << 32) | guest_timebase_lo(s);
@@ -202,6 +205,7 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
             g_dma_period = (uint64_t)blocks * 32u * TB_HZ / 128000u;
             if (!g_dma_period) g_dma_period = 1;
             g_dma_due = tb_now(s) + g_dma_period;
+            g_dma_epoch = clock_epoch();
         }
         return 1;
     }
@@ -210,18 +214,40 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 }
 
 /* Called from the delivery point: a block that has finished playing raises
- * AIDINT, and the engine keeps looping the block until it is disabled. */
+ * AIDINT, and the engine keeps looping the block until it is disabled.
+ * After the clock's epoch changes -- a host gap, a pause, a speed change
+ * (M19) -- the next block is the last one owed: the deadline starts again
+ * from now instead of catching up block by block. Only then, so a run at
+ * SOA_SPEED=10, where the DMA legitimately runs behind, keeps its count. */
 void dsp_poll(CpuState* s)
 {
     if ((g_dma_ctrl & 0x8000u) && g_dma_period && tb_now(s) >= g_dma_due) {
         uint32_t bytes = (g_dma_ctrl & 0x7FFFu) * 32u;
-        g_dma_due += g_dma_period;
+        unsigned epoch = clock_epoch();
+        if (epoch != g_dma_epoch) {
+            g_dma_epoch = epoch;
+            g_dma_due = tb_now(s) + g_dma_period;
+        } else {
+            g_dma_due += g_dma_period;
+        }
         g_dma_blocks_done++;
         /* the block the DAC just played */
         if (bytes && (g_dma_start & MEM_MASK) + bytes <= MEM1_SIZE)
             audio_push_block(mem_ptr(s, g_dma_start | 0x80000000u), bytes, 32000);
         dsp_csr_raise(CSR_AIDINT);
     }
+}
+
+/* The self test's view of the DMA: blocks played, and a deadline pushed
+ * `periods` into the past, as a host stall would leave it. */
+uint64_t dsp_dma_blocks(void)
+{
+    return g_dma_blocks_done;
+}
+
+void dsp_dma_backdate(unsigned periods)
+{
+    g_dma_due -= (uint64_t)periods * g_dma_period;
 }
 
 void dsp_report(void)
