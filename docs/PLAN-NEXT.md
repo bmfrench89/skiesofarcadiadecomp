@@ -1,8 +1,8 @@
 <!-- Written 2026-09-25 by the planning session, read-only, at main 24d9235, and reviewed the same day at
 main 012164a: a consistency check across this file and the four specs and against the repository, whose
 fixes the specs' review logs list. Between the two, C5a (750cef0), P6b (79c9ad8), manifest 2's second
-follow-up (b1199b3) and T0c (012164a) landed. At 012164a the working tree held the implementation
-session's uncommitted P1a. Path in the repository: docs/PLAN-NEXT.md, the name docs/specs/now.md gives
+follow-up (b1199b3) and T0c (012164a) landed. Committed as dc0cc98; then updated at 1a09d4a after P1a
+(090eea6) and the A5/B3 edits (1a09d4a) landed. Path in the repository: docs/PLAN-NEXT.md, the name docs/specs/now.md gives
 it. It sequences four reviewed specs -- specs/comfort-pack.md, specs/disc-layer.md, specs/portability.md
 and specs/gpu-backend.md, each revised after two reviews -- with the slices the committed plans already
 hold, and with the implementation session's input of 2026-09-25 (it stopped at 574c683) and its facts
@@ -102,8 +102,9 @@ run, stopped at 12,000, could not see (FINDINGS "P6, followed up").
 **The implementation session's order was C5a, then P6b, then P1a** (C1 says why C5a went first). C5a
 and P6b have landed, and so have T0c and a manifest 2 follow-up, taken in between.
 
-**In flight at 012164a** [V, `git status`], uncommitted: **P1a** (`mods/encounter-rate/`, the move of
-`encounters-off` to `examples/mods`, `mod.c`, `main.c`, `settings.c`, `recompile.py` and tests).
+**Landed after dc0cc98:** **P1a** (090eea6), with its accessory case as a self-test case
+(specs/comfort-pack.md P1a), and the A5 and B3 edits (1a09d4a). **In flight at 1a09d4a:** P11 in its
+live checks, M18 written, and I2 being built in a separate worktree.
 
 ### A2. H13 is closed as "done enough"
 
@@ -184,10 +185,10 @@ H17 goes. Its fixes (particles, reordered alpha, HUD, cuts, texture copies) are 
 rules on the guest thread, so the GPU decision does not change them. The status edits below make the
 two lines agree. If you meant otherwise, say so at the first sitting (D-24).
 
-### A5. The status edits `docs/PLAN-60FPS-MODS.md` still needs
+### A5. The status edits `docs/PLAN-60FPS-MODS.md` needed
 
-cb469d6 made the H13, H15d, H16 and H17a edits. These remain. Each is a one-line change, for the
-implementation session to make in its next docs commit. Line numbers are at 012164a (this file has not
+**Done, 1a09d4a.** cb469d6 made the H13, H15d, H16 and H17a edits, and 1a09d4a made the rest, listed
+here as they were proposed. Each was a one-line change. Line numbers are at 012164a (this file has not
 changed since 24d9235).
 
 | Line | Today | Change to |
@@ -255,10 +256,9 @@ changed since 24d9235).
   file's milestone table, and fixes every copy of any count it moved (CLAUDE.md, "Counts in prose
   rot").
 
-### B3. Pointer edits the other documents need
+### B3. Pointer edits the other documents needed
 
-Proposed here and not made here. The implementation session makes them in one docs commit, or the
-planning session does if asked. Line numbers are at 012164a.
+**Done, 1a09d4a** (and dc0cc98 for PLAN-GAMEPLAY-MODS's own lines). Listed here as they were proposed. Line numbers are at 012164a.
 
 **Landing the specs.** One docs-only commit adds:
 - `docs/specs/comfort-pack.md`, `docs/specs/disc-layer.md`, `docs/specs/portability.md` and
@@ -320,7 +320,7 @@ docs/PLAN.md" could become "Plan of record docs/PLAN.md; what is next, in order,
 
 | Milestone | Slices | Size | What you get | You are needed |
 |---|---|---|---|---|
-| **M1. Comfort pack** | C5a first (done, 750cef0), then P6b (done, 79c9ad8), P1a (in flight), P11, P1b, M18, CH1, P11b, H19a, M5b, M19, P3, P10a, P10b, P5a, P5b, M11a; gap fillers T0c (done, 012164a), I2, L3a, L2a, H20 | about 4 weeks | The comfort features; 1.42 GB of disk back; the display-list question answered | Sessions A and B |
+| **M1. Comfort pack** | C5a first (done, 750cef0), then P6b (done, 79c9ad8), P1a (done, 090eea6), P11, P1b, M18, CH1, P11b, H19a, M5b, M19, P3, P10a, P10b, P5a, P5b, M11a; gap fillers T0c (done, 012164a), I2, L3a, L2a, H20 | about 4 weeks | The comfort features; 1.42 GB of disk back; the display-list question answered | Sessions A and B |
 | **M2. The picture right, then 60 fps** | C5b, C5c, H17a, H17b, (H9), H18 by class | 3 to 4 weeks | Effects drawn as the console layers them (C5a confirmed the cause); 60 images a second where the CPU keeps up, the frame repeated where it cannot | Look C, session D |
 | **M3. Your own disc, one copy** | I1, I3 (I5a only if the implementation session agrees to it, C3) | about 1 week (+2 if you want the store) | Runs from your ISO; wrong disc refused; replays need no disc | One yes/no (D-5) |
 | **M4. Portability groundwork** | M4a: L2, L4a, L4b, L8, L3b, L1. M4b (L6, L7, L9) after the gate by default (D-10). L5 rides the next planned retranslation (C7) | 2 to 3 weeks (M4a); about 1.5 more for M4b | clang-cl building the same frames, CI on Linux, ARM and ThreadSanitizer, the Deck question answered by Wine | Two yes/no answers (D-13, D-14) |
@@ -373,7 +373,7 @@ cost least.
 |---|---|---|---|---|---|
 | 1 | **C5a** confirm the recorded-display-list chain, `SOA_GX_DLLOG` ([specs/gpu-backend.md](specs/gpu-backend.md) §6). **Done, 750cef0:** the chain is confirmed (FINDINGS "Recorded display lists (C5a)") | hours | `--link` (gx.c, a log only) | — | — |
 | 2 | **P6b** P6's three additions: the `[seed] pin:` line, 640- and 1024-byte config buffers with a "cut at" line, `test_seed.py`'s log check (comfort 3.3 and its P6b slice). **Done, 79c9ad8** (FINDINGS "P6, followed up") | hours | `--link` | P6 (24d9235) | — |
-| 3 | **P1a** encounter slider and hold-B with restore; per-mod write counts; `--link` builds `mods/*/mod.c`; `encounters-off` moved to `examples/`. **In flight** (working tree, uncommitted at 012164a) | a day | none for the DLL, `--link` for the rest | P6b | — |
+| 3 | **P1a** encounter slider and hold-B with restore; per-mod write counts; `--link` builds `mods/*/mod.c`; `encounters-off` moved to `examples/`. **Done, 090eea6** | a day | none for the DLL, `--link` for the rest | P6b | — |
 | 4 | **P11** dialogue auto-advance | hours | none, `--link` for its key | P1a | — |
 | 5 | **T0c** (gap) card images under any name. **Done, 012164a**, wider than specified: saves under any name too, every suffix in a name, and history read for content | hours | none | — | — |
 | 6 | **I2** (gap) one copy on disk: the tools read the image; `--prune-loose` | hours to a day | none | — | **Owner** runs the prune in session A |

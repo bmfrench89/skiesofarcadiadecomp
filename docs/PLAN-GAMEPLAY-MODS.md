@@ -304,7 +304,7 @@ The first idea list was comfort and community features, the second gameplay and 
 
 **Goal.** The comfort features, each off by default and switched in `soa.ini` (M5). P2, turbo, moved into section F's M11 entry.
 
-**P1. Encounter slider and hold-B** — *hours; ships now as a `mod.dll`, plus one `settings.c` line (a relink)* (M3 done). *Specified as P1a (the mod) and P1b (the encounter contrast) in [specs/comfort-pack.md](specs/comfort-pack.md) 3.4, which supersedes the design below where they differ: `normal` writes nothing, hold-B restores the game's value on release, and the addresses were read in a run (2026-09-25). P1a in progress.*
+**P1. Encounter slider and hold-B** — *hours; ships now as a `mod.dll`, plus one `settings.c` line (a relink)* (M3 done). *Specified as P1a (the mod) and P1b (the encounter contrast) in [specs/comfort-pack.md](specs/comfort-pack.md) 3.4, which supersedes the design below where they differ: `normal` writes nothing, hold-B restores the game's value on release, and the addresses were read in a run (2026-09-25). P1a done (090eea6), its accessory case a self-test case; P1b waits on a card and route in a rate-20 zone where the step counter counts.*
 - **How the game already does it [checked here].** The game reads the u8 at `0x8030B7AD` at `0x800C2000`. It sign-extends it, skips it at −1, and otherwise multiplies the encounter odds by byte/50:
   - the usable range is 0–127, which is 0–254%;
   - 128–254 are negative and turn encounters off;
@@ -388,7 +388,7 @@ The first idea list was comfort and community features, the second gameplay and 
   - The mutation: with the second battle-start lr set to `0x8000A1DC` instead of `0x8000A1D8`, the report counts 0 pinned reseeds at that site, and the check fails.
   - Until K6, this bullet is P6's whole Done.
 - **After K6** (it is K6's own two-run question, so it waits on K6 under rule 7; R0's log alone is not enough): if K6 finds battles repeatable, two runs with equal seeds give the same first-round order and damage in R0's log. A run with a different seed must give a different log, which catches a pin that ignores the seed. If K6 finds they are not repeatable, this bullet is dropped and P6 keeps only the pinned reseeds (section E, "After K6").
-- Add "and at every battle start" to PLAN-60FPS-MODS.md:721 (section F).
+- Add "and at every battle start" to PLAN-60FPS-MODS.md's note on what replays from a seed (section F). *Adopted: PLAN-60FPS-MODS.md:723 says it.*
 
 **P7. Captain's Log** — *several days, after M8 and K7; the owner check after P3.*
 - **The checklist:**
@@ -1042,7 +1042,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
   - About 112 are distinct.
 - **Scores** are rounds, damage taken and game frames at `0x803475C0`, counted from the first phase 1 to the victory phase (`0x8034733C == 7`).
   - **Game frames do not depend only on the fight.** The counter ticks once per dispatcher pass (`801DC390`), including while the player chooses a command in phase 1. It also ticks through the disc loads inside a fight: the effect packages a fight loads, and `PCWIN.MLK` at the win (FINDINGS.md:1451).
-  - Loads run on the wall clock (rule 7). With M11's tick unlock, each wall second of them counts about 60 frames instead of 30 (PLAN-60FPS-MODS.md:605); a host drawing below 30 fps counts fewer, and heavy drawn scenes still do today (PLAN-60FPS-MODS.md, H15c). How much a score moves is not measured [I].
+  - Loads run on the wall clock (rule 7). With M11's tick unlock, each wall second of them counts about 60 frames instead of 30 (PLAN-60FPS-MODS.md:607); a host drawing below 30 fps counts fewer, and heavy drawn scenes still do today (PLAN-60FPS-MODS.md, H15c). How much a score moves is not measured [I].
   - So a scored fight runs with the tick locked (turbo off), the run records the setting (rule 6), and a frame score is compared only with scores made at the same setting.
 - **What it must handle:**
   - 29 records are "must not lose": force "may lose", or catch the game-over;
@@ -1253,7 +1253,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 | Milestone | Slices | What a player gets | Rough size |
 |---|---|---|---|
 | **1. Comfort pack** | P1, P6, P11, P10, P3, P5, T0; from section F: M18 rumble, H19 fullscreen, M19 the clock, gamepad chords (without the overlay withholding until M8), the first-run amendment (specified in `docs/specs/comfort-pack.md`, which adds P6b, CH1, M5b, P10a, P11b, T0c and M11a) | Encounter slider (a `soa.ini` line until M16), dialogue auto-advance, couch co-op, rumble, fullscreen, a clock that survives sleep, `.gci` saves, picture options, a pinned seed (reproducible battles wait on K6) | about 3 weeks |
-| **2. The gameplay core** | T9, T1, R0, batch A (R1 + X2 incl. N11's NG+ sites), T2, K1, K6, K12; from F: manifest v2, M16 options, M3d's in-game fault stop, the event track (settings lines first; hotkey and overlay lines once M8 lands) | Nothing visible yet; every later mod stands on it | 4–5 weeks |
+| **2. The gameplay core** | M8 and M7a/b first (PLAN-NEXT C6), then T9, T1, R0, batch A (R1 + X2 incl. N11's NG+ sites), T2, K1, K6, K12; from F: M16 options (manifest v2 is done), M3d's in-game fault stop, the event track (settings lines first; hotkey and overlay lines once M8 lands) | Nothing visible yet; every later mod stands on it | 4–5 weeks |
 | **3. First gameplay mods** | R3, R4, R5, T3 + K8, T5, R6, P7 + K7, K2, K11 | Difficulty presets, boosts, battle information, rebalances, the Captain's Log | 3 weeks |
 | **4. New ways to play** | T4, P9, N10, N11, R8, P12 + K9, P4 | Arena and boss rush, New Game+ and challenges, auto-battle, fast travel, fast boot, the developer rooms | 4–5 weeks |
 | **5. The new bounty** | X1, T6, T11, T10, X3, N1, N2, N3 | The first new content: a quest, an enemy, a weapon with its description | 4–6 weeks |
@@ -1273,7 +1273,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 2. **P11** (hours; M3b is done), dialogue auto-advance.
 3. **T0** (hours), the guard's new suffixes and the content check.
 
-After the milestone-1 decision, milestone 2 opens with **T9**, then **T1** and **R0**.
+Milestone 2 follows the GPU gate ([PLAN-NEXT.md](PLAN-NEXT.md) C6). It opens with **M8** and **M7a/b**, which many later slices need (the dependencies above), then **T9**, **T1** (disc-layer I6/I7) and **R0**.
 
 X1 (a day, `--link`) comes first in milestone 5, because T11 is its first user: the AI tracer runs on its log-and-forward thunks. R2 and N6 follow in milestone 6, and X7 in milestone 7.
 
@@ -1364,8 +1364,8 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - One tick-unlock setting with battle-only and sky-only options, still after H13.
   - Drawn, the opening and ship battles gain almost nothing (18.9 against 19.3 fps; 25.5 against 26.0), and battles about 1.6×.
   - M11's frame skip (SOA_SNAP's `g_snap_every … return` test in `gxr_draw_inner`; `gxr.c:2279` at cb904fa) drops draws only. The EFB-copy path (`reg == 0x52` → `enqueue_copy`) has no such test, so the game's copies to texture still run on skipped frames and copy an EFB that frame's draws never reached. M11's Done must open a battle PNG taken right after a skipped frame.
-  - M11's line "The audio report is unchanged" (PLAN-60FPS-MODS.md:607) compares the unlocked run with a locked one (rule 7): a frame-bounded run's DMA block count follows its wall time (`dsp_poll`, `dsp.c:215-222`). Replace it with a one-run check: in the unlocked run the AI DMA delivers about 32,000 samples a wall second, counted from the `SOA_WAV` file's byte count over the run's wall seconds, within a tolerance fixed before the run; a `SOA_SPEED=2` run (the mutation) falls outside it. Dropped blocks are checked, against a fixed limit, only when the `[audio]` line has an output device, because with none `audio_push_block` returns before it counts a drop (`audio_out.c:110`). M2's :479 carries the same sentence, but M2 is done and FINDINGS "M2" checked the rate.
-  - PLAN-60FPS-MODS.md:602 cites the skip as `gxr.c:1534`, stale the same way. Name the function, since each H commit rewrites `gxr.c`.
+  - *Adopted (PLAN-60FPS-MODS.md:609 now gives the one-run rate check).* M11's line "The audio report is unchanged" compared the unlocked run with a locked one (rule 7): a frame-bounded run's DMA block count follows its wall time (`dsp_poll`, `dsp.c:215-222`). Replace it with a one-run check: in the unlocked run the AI DMA delivers about 32,000 samples a wall second, counted from the `SOA_WAV` file's byte count over the run's wall seconds, within a tolerance fixed before the run; a `SOA_SPEED=2` run (the mutation) falls outside it. Dropped blocks are checked, against a fixed limit, only when the `[audio]` line has an output device, because with none `audio_push_block` returns before it counts a drop (`audio_out.c:110`). M2's :479 carries the same sentence, but M2 is done and FINDINGS "M2" checked the rate.
+  - *Adopted (PLAN-60FPS-MODS.md:604 names `gxr_draw_inner`).* M11 cited the skip as `gxr.c:1534`, stale the same way; it now names the function, since each H commit rewrites `gxr.c`.
   - **Turbo past 2×** in battles, with audio muted: `SOA_SPEED` speeds up the game's audio DMA with everything else, and `audio_out.c` drops what the device cannot play. It covers character battles (scene 7) and ship battles (scene 6 on a map ≥ 500).
     - Character battles run up to 104 guest fps (about 3.5×), so draw every second or third frame.
     - Ship battles run about 80 (about 2.7×), so draw every fourth: drawn every frame they are render-bound at 25.5 fps (FINDINGS "H3").
@@ -1388,14 +1388,14 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - T12(c)'s control channel is always loopback-only, with an Origin check and a token.
 - **M9 note.** M3c's texture provider froze a hash with no version field; P8 computes Dolphin's names inside the renderer.
 - **M12 note.** The text-speed question is answered (B3).
-- **PLAN-60FPS-MODS.md:721.** Add "and at every battle start" (B1).
+- **PLAN-60FPS-MODS.md:723.** Add "and at every battle start" (B1). *Adopted.*
 - **Done lines in Track M that cannot fail, or are stale (rule 7).**
-  - **M8 (:575).** `SOA_HASH` is taken from `g_screen` when the game's copy to the screen is queued (`enqueue_copy` in `gxr.c`). M8 draws its overlay later, in `present()`, and never into `g_screen` (:568). So "`SOA_HASH` lines are identical with the overlay open" cannot fail. Replace it with:
+  - **M8 (:577).** `SOA_HASH` is taken from `g_screen` when the game's copy to the screen is queued (`enqueue_copy` in `gxr.c`). M8 draws its overlay later, in `present()`, and never into `g_screen` (:570). So "`SOA_HASH` lines are identical with the overlay open" cannot fail. Replace it with:
     - a capture taken after `present()` with the overlay open, opened;
     - a same-run check that `g_screen`'s hash is equal before and after `present()` with the overlay open, with a mutation that draws the overlay into `g_screen` and must fail it.
-  - **M3 (:501, :503)** is stale against its own status line (:483): M3 is done, and its filters were checked under `--replay`, not on a title run.
-    - :501 should say "a `pad_filter` that drops every button", since dropping START alone does not keep a run on the title.
-    - :503 should say what FINDINGS "M3c" records: an identity projection filter matches 23 of 23 captures under `--replay`, and a wider view matches only the four orthographic boot frames.
+  - **M3 (:503, :505)** is stale against its own status line (:485): M3 is done, and its filters were checked under `--replay`, not on a title run.
+    - :503 should say "a `pad_filter` that drops every button", since dropping START alone does not keep a run on the title.
+    - :505 should say what FINDINGS "M3c" records: an identity projection filter matches 23 of 23 captures under `--replay`, and a wider view matches only the four orthographic boot frames.
 
 **For Track H (frame pacing and speed):**
 - **H19. Fullscreen and a window that fits a 7–8 inch screen** — *hours first, then several days. Specified as comfort-pack H19a (3.8).*
@@ -1406,8 +1406,8 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
 - **H20. A power line in every run report** — *hours. A gap filler in PLAN-NEXT M1; its Done is written first.* AC or battery, the battery percentage, the power plan's name, and mWh used on battery. Energy per drawn frame feeds the GPU-backend decision.
 - **H8** already falls back to GDI: `SOA_PRESENTER=gdi` selects it, and it takes over when DXGI cannot start (`window.c:327-329`, FINDINGS "H8"). The proposal is only that the path stays when H8 closes, and that **H15d** puts SIMD behind an x64 guard with a scalar path, so Linux and ARM stay possible.
 - **Done lines in Track H that compare two live runs (rule 7).** Two unmodded title runs differ on 22 of 40 hashes (FINDINGS "M3c"), so each of these fails with no defect:
-  - **H9 (:270-271).** Drop "and `SOA_HASH` lines are unchanged" (:271). Headless runs keep today's path by construction (:263), and replay 23/23 plus `title --check` already cover it. Replace :270's "The audio report is unchanged" with the one-run audio-rate check in section F's M11 entry.
-  - **H17a (:380-381).**
+  - **H9 (:272-273).** Drop "and `SOA_HASH` lines are unchanged" (:273). Headless runs keep today's path by construction (:265), and replay 23/23 plus `title --check` already cover it. Replace :272's "The audio report is unchanged" with the one-run audio-rate check in section F's M11 entry.
+  - **H17a (:382-383).** *Adopted: PLAN-60FPS-MODS.md's H17a Done now reads as below.*
     - **Off:** replay 23/23 and `title --check`, with no `SOA_HASH` comparison.
     - **On:** a same-run contrast. In one `SOA_INTERP=1` run, hash each real frame's `g_screen` before and after its in-between pass; the two must be equal. A mutation that lets the in-between pass write `g_screen` must make them differ. The in-between PNGs are still opened.
 

@@ -447,16 +447,19 @@ Other flags and fields:
 2,913 frames (3087–5999), on the officer's page 《どうせみないでしょ？》. The A at 6000 moved it through
 5 and 3, and the choice that followed (「みる」「みない」) rested at 6 from 6007 to the end at 6600 [V run,
 FINDINGS "P11's spike"]. HANDOFF (lines 311-321) and FINDINGS "The developers' part select" describe
-the next step. Choosing みる leads to 《どうする？》, shown first as a message box waiting for A, then to
-the B/C/next choice (「Bパートへ」「Cパートへ」 and "next"), where the first choice runs the part
-routines and warps to part B's `/field/a002b.mld` [V, earlier runs].
+the next step, and P11's live run (2026-09-25) measured it: choosing みる leads to two pages, then
+《どうする？》 with a choice whose first entry is 「パートにとびたい」 (up at frame 6574), then a page, then
+the B/C box (「Bパートへ」「Cパートへ」, up at 6962). Choosing B runs the part routines and warps to part
+B's `/field/a002b.mld` [V run]. HANDOFF and FINDINGS had one menu level fewer.
 
 **The mod.** `mods/autotext/mod.c`, v2 `mod.ini`, id `autotext`. One `pad_filter`:
 - Only while `scene() == 6`. Read the state; read the context through `0x80346E4C` → +36 with the
   API's checked reads (a zero or out-of-range pointer means "no window").
 - **The delay.** `SOA_AUTOTEXT` unset or `0` is off; `on` or `1` means 45 frames (1.5 s); a number of 2
   or more is that many frames. README and `k_settings`' text say the same.
-- When the state is 4 and `(flags & 0x50) == 0`, start a wait. After the delay, press A: set
+- When the state is 4 and `(flags & 0x50) == 0`, start a wait. The flags test belongs to state 4
+  only: a choice box's context carries flag 0x10 too, so a guard applied in every state would stop the
+  press-in-choice mutation from ever pressing [V, P11's live run]. After the delay, press A: set
   `SOA_PAD_A` on every read of two frames, then clear it on every read of the next two. Press once per
   page, re-arming only after the state has left 4.
 - Never in state 6, or in any state but 4. Never when the person is already pressing A or B (the
@@ -924,9 +927,9 @@ Test-only variables (not in `k_settings`): `SOA_ENCOUNTERS_TEST`, `SOA_AUTOTEXT_
 - T0c: 012164a;
 - manifest 2's second follow-up (the recording line's `+N more` tail keyed by id): b1199b3.
 
-**In flight** (working tree, uncommitted at 012164a): P1a. The implementation session ran
-../PLAN-NEXT.md's C5a (gpu-backend.md section 6, a `gx.c` log) first, before P6b; it landed as 750cef0,
-and it is not a comfort slice.
+**Landed since:** P1a as 090eea6. The implementation session ran ../PLAN-NEXT.md's C5a (gpu-backend.md
+section 6, a `gx.c` log) first, before P6b; it landed as 750cef0, and it is not a comfort slice. **In
+flight:** P11 (its live checks), M18 (written).
 
 **Order:** P1a, P11, P1b (now.md's N5 and N6, with P1 split), then M18, CH1, P11b, H19a, M5b, M19,
 P3, P10a, P10b, P5a, P5b, M11a. P6b and T0c have landed. [../PLAN-NEXT.md](../PLAN-NEXT.md) C1
@@ -1028,8 +1031,8 @@ than specified (3.2).*
   - The contract held: replay 23/23 at 1, 2, 3 and 8 threads, the self test, `title --check`.
 
 **P1a. Encounter slider and hold-B** — *a day; none for the DLL, `--link` for the settings lines, the
-mod-id line and the DLL build; prerequisites P6 (recorded settings) and P6b, both landed. In flight in
-the working tree at 012164a.*
+mod-id line and the DLL build; prerequisites P6 (recorded settings) and P6b, both landed. Landed as 090eea6
+(2026-09-25), with case B as a self-test case (below).*
 - Files: `mods/encounter-rate/{mod.c,mod.ini}`, `examples/mods/encounters-off/` (moved), `runtime/mod.c`
   (per-mod write counts), `runtime/settings.c`, `runtime/main.c` (the "no such mod" line),
   `tools/recompile.py` (builds `mods/*/mod.c`), `tools/tests/test_mods.py` (with a `__main__` log
@@ -1066,17 +1069,19 @@ the working tree at 012164a.*
       rewrote it (the next frame is back);
     - at normal it reads the game's own `FF`, and the report says `0 write(s)`.
 
-    Case B, the accessory:
-    - poke 210 into character 0's slot, `3000:0x8030B808=0x00D2LLLL`, where LLLL is the lower half as
-      case A's peek of `0x8030B808@2990` read it;
-    - then warp to the same map at 3010 with HANDOFF's five pokes (`0x80305CF0=0x4D453130`,
-      `0x80305CF4=0x31422E53`, `0x80305CF8=0x43540000`, `0x8030E420=0`, `0x80311AEC=15`, i.e.
-      `ME101B.SCT`), so the load runs `fn_801EF7E0`;
-    - `--env SOA_PEEK=0x8030B7AC@3300-3900`: 50 at half, 127 at double, and the game's own `64` at normal
-      with `0 write(s)`. At normal, `64` is also the proof that the load recomputed the byte. `FF` there
-      means the setup, not the mod, is wrong [I: `lr 0x800FFD98` is the load path].
+    Case B, the accessory, **is a self-test case, not a run.** The planned run (poke accessory 210, warp,
+    peek) read `FF` at normal, not `64`. The game recomputes `0x8030B7AD` in `fn_801EF7E0` only from
+    Continue (lr `0x801A4538`) and from the equipment menus, never at a warp. At Continue, the save's
+    party block lands in the same frame (2648), so no poke can get between them [V run, store watch in
+    `build/p1a/W-watch.log`]. Instead:
+    - a self-test case (`$env:SOA_SELFTEST='1'; gen\soa.exe extracted`) runs the game's own
+      `fn_801EF7E0` on five synthetic parties, and reads `FF`, `FF`, `64`, `05` and `05`: no accessory,
+      accessories without code 84, 210 (100), 211 (5), and 210 then 211 (the last character wins);
+    - the mod's own base, computed from the same five parties on the fake guest (`test_mods.py`), agrees
+      with each, so 50 at half and 127 at double with 210.
 
-    Mutation: a build that overwrites instead of multiplying reads 25 and 100 in case B.
+    Mutations: a first-character-wins scan fails the fifth party; a build that overwrites instead of
+    multiplying reads 25 and 100 with 210.
   - **Hold B at normal, restored.** Case A's command at `normal` with `,3400:b#300` added to the pad reads
     `00` from 3401 to 3700 and `FF` from 3701 to 3900, within one frame at each edge. Mutation: a build
     without the restore reads `00` to 3900.
@@ -1095,31 +1100,32 @@ P6, P1a (now.md N6, auto-advance only; its spike is done, b911380).*
 - *Done:*
   - **One run** from a copy of `card-saved`: `python tools/scenario.py run battle --frames 8000
     --env SOA_CARD=<copy> --env SOA_MODS=mods --env SOA_AUTOTEXT=45
-    --env "SOA_PAD=1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2240:a,2440:a,2640:a,6000:a,6900:a"
+    --env "SOA_PAD=1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2240:a,2440:a,2640:a,6000:a,6900:a,7300:a"
     --env "SOA_POKE=3000:0x80305CF0=0x4D453335,3000:0x80305CF4=0x35412E53,3000:0x80305CF8=0x43540000,3000:0x8030E420=0,3000:0x80311AEC=15"
     --env SOA_PEEK=0x80346E64@2900-7900 --log build/scenario-p11.log`. The state is the upper halfword
     of each peek. `python tools/tests/test_mods.py p11 build/scenario-p11.log` applies these rules
     (its pytest feeds it a synthetic log with one rule broken). The run passes when:
-    - (a) the mod logs at least two presses (the officer's page 《どうせみないでしょ？》, and
-      《どうする？》 after 6000), and for each one the peek at the end of the frame before it reads 4;
+    - (a) the mod logs at least four presses (the officer's page 《どうせみないでしょ？》, the two pages
+      after みる, and the page after 「パートにとびたい」), and for each one the peek at the end of the
+      frame before it reads 4;
     - (b) the first frame after 3002 that reads 6 comes less than 120 frames after the first that reads
       4. The spike's page completed at 3087, and without the mod it rested at 4 for 2,913 frames;
     - (c) from that first 6 until frame 5999, every peek reads 6: the mod never presses in a choice;
     - (d) `/field/a002b.mld` (part B) loads, and the last `[peek] frame F` line before its load line has
-      F ≥ 6900.
+      F ≥ 7300 (the live run: the B/C box at 6962, a002b committed at 7336).
   - **Mutations, same pad script and pokes:**
-    - without `SOA_MODS`, (b) fails: the first 6 comes after 6000, as in the spike. (d) fails too,
-      because the A at 6000 dismisses the officer's page and the A at 6900 chooses みる, so nothing
-      loads;
+    - without `SOA_MODS`, (b) fails: the first 6 comes after 6000, as in the spike. (d) fails too:
+      the A at 6000 only finishes the officer's page, and the later A's land on pages, so nothing loads;
     - with `SOA_AUTOTEXT_TEST=press-in-choice`, (c) fails and a002b loads before 6000.
 
-    The sequence after みる (《どうする？》 as a box, then the B/C choice) is from earlier runs, not this
-    one [V FINDINGS "The developers' part select"]. If the B/C choice is not up by 6900, the log shows
-    it, and the pad's second A moves later.
+    The sequence after みる is from P11's live run (3.5): two pages, 《どうする？》 with
+    「パートにとびたい」 at 6574, a page, the B/C box at 6962. The three A's at 6000, 6900 and 7300 choose
+    みる, 「パートにとびたい」 and B.
   - `python -m pytest tools/tests/test_mods.py`, on the fake guest:
     - with state 4 and flags 0 written to the words above, the filter presses A for two frames after
       the delay, and not again until the state leaves 4;
-    - with flags 0x10 or 0x40, state 6, state 8 or a task word of 0, it never presses;
+    - in state 4 with flags 0x10 or 0x40, in state 6 (with and without flag 0x10), in state 8, or with
+      a task word of 0, it never presses; with the test mode on, it presses in state 6 with flag 0x10;
     - `SOA_AUTOTEXT=on` waits 45 frames and `0` never presses.
 
     Mutation: writing the guard as `flags & 0x50 == 0` fails the flags cases.
@@ -1764,3 +1770,8 @@ landed while it ran (C5a 750cef0, P6b 79c9ad8, b1199b3, T0c 012164a):
 - `--link` builds the mods with the msvc profile only (portability.md L3a).
 - Q-I2, Q-I4 and Q-I8 are marked answered; the encounters-off copies are re-cited at 012164a
   (README.md:202).
+- **After dc0cc98, from the implementation session's live runs:** P1a's case B became a self-test case,
+  because the game recomputes the encounter byte only at Continue and in the equipment menus, never at a
+  warp (entry 25's warp could not work). P11's run found one more menu level in the part select, so its
+  Done has a third A at 7300. The flags test applies in state 4 only, because a choice box also carries
+  flag 0x10.
