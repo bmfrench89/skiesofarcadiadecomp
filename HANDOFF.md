@@ -73,6 +73,25 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   TEV shapes and the blend most pixels use run directly, the helpers inline,
   about 59 -> 46 ns a fragment; the default worker count is three quarters of
   the CPUs. The Dangral base, 17.7 fps drawn every frame in H1, runs at ~27.
+- **The heaviest field now runs at the 30 fps cap (2026-09-25).** Texture
+  decoding is 80-90% smaller: decode walks tiles instead of dividing per texel,
+  and a palette load re-hashes the textures it touches instead of throwing
+  their decodes out (every one of 305,617 came back unchanged). **Copy
+  images** (H14 step 6): a draw sampling a texture copied earlier in the frame
+  takes an image the workers decoded as they copied, instead of waiting for the
+  copy on the guest thread (+9% pooled). A filtered copy fences on its two
+  neighbouring workers only. On a quiet machine the Dangral base runs at 29.8
+  fps drawn every frame. FINDINGS "Palette loads", "Copy images", "Neighbour
+  fences".
+- **The guest thread has room, and a translator bug is fixed (H13 first
+  steps).** The data-cache range calls are no-ops, paired-single loads skip
+  `ldexp`, and `mtfsb` names the bit it should: the guest alone runs the
+  Dangral base at about 125 images a second (+9%). FINDINGS "H13, first
+  steps".
+- **H15d has begun**: per-pixel counters out of thread-local storage and the
+  bilinear blend in SSE4.1, -7% ns a fragment, every hash unchanged; the
+  rasterizer's attributes in SIMD was tried and was no faster (FINDINGS). The
+  host profiler now names inlined helpers and samples the guest thread.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
 
@@ -101,8 +120,9 @@ the story or by losing a fight.
 The port boots, plays the opening with dialogue, wins the first battle, and
 is carried by the story through the Valuan ship's hold into `a101b`, where
 it moves around with menus, a minimap and random encounters (the hold itself
-has no encounter table; see wrong statement 8). It renders in a window -- at 18-22 fps in heavy scenes, below the game's
-30 fps cap, when every frame is drawn (FINDINGS, H1) -- plays music,
+has no encounter table; see wrong statement 8). It renders in a window -- at
+about 30 fps in the heaviest field scene measured, the game's cap, when every
+frame is drawn (FINDINGS "Copy images"; 18-22 in H1) -- plays music,
 effects and speech, takes keyboard or gamepad input, and reads and writes a
 memory card. Headless it runs about ten times real time.
 
