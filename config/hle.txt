@@ -4,6 +4,13 @@
 0x80232B90  __OSInitAudioSystem   # boots a DSP program that clears ARAM; DSP is high-level emulated
 0x80232D4C  __OSStopAudioSystem   # its shutdown counterpart
 
+# The data-cache range calls: there is no cache to maintain (runtime/hle_os.c, H13b).
+0x80232E38  DCInvalidateRange
+0x80232E64  DCFlushRange
+0x80232E94  DCStoreRange          # fn_80232E94 in dtk's symbols; dcbst, then sc
+0x80232EC4  DCFlushRangeNoSync
+0x80232EF0  DCStoreRangeNoSync    # fn_80232EF0 in dtk's symbols; dcbst alone
+
 # Thread context switching lives on host fibers (runtime/threads.c).
 0x80233544  OSSaveContext         # setjmp-like snapshot; dtk left this one unnamed
 0x802335C4  OSLoadContext         # restore + rfi: a mid-function resume, impossible to recompile

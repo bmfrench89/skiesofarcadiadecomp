@@ -200,6 +200,19 @@ def test_fused_multiply_add_uses_fma():
     assert "fma(s->fpr[2].ps0, s->fpr[4].ps0, s->fpr[3].ps0)" in cs[BASE]
 
 
+def test_mtfsb_takes_its_bit_from_crbd():
+    """mtfsb0 and mtfsb1 name an FPSCR bit in bits 6-10 (crbD, the rd field).
+    The emitter read `bo`, which the X-form decode never sets, so every one
+    touched bit 0, FX: OSInit's `mtfsb1 29` at 0x80231AC8 set FX, not NI."""
+    mtfsb1_29 = (63 << 26) | (29 << 21) | (38 << 1)
+    mtfsb0_30 = (63 << 26) | (30 << 21) | (70 << 1)
+    cs, _ = emit([mtfsb1_29, mtfsb0_30, BLR])
+    c = cs[BASE]
+    assert "s->fpscr |= (1u << 2);" in c
+    assert "s->fpscr &= ~(1u << 1);" in c
+    assert "(1u << 31)" not in c
+
+
 def test_cr_logical_uses_all_three_slots():
     # crxor crb6, crb6, crb6  == crclr 6
     crxor = (19 << 26) | (6 << 21) | (6 << 16) | (6 << 11) | (193 << 1)

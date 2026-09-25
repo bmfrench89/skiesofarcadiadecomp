@@ -79,7 +79,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 848 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 849 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -111,7 +111,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 848 |
+| Python tests | 849 |
 | Self-test cases | 75 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -400,10 +400,12 @@ out; FINDINGS "Neighbour fences"), and turning the one-drain-a-frame gate off
 was tried and was worse (the guest ran frames ahead into the ring). On a
 quiet machine the Dangral base now runs at the cap, 29.8 fps. So 30 fps at 1x
 is there in the heaviest field; what 60 needs is the render ceiling, since
-H17a draws twice as many images: H15d (SIMD spans) for the workers, H13
-(guest-thread speed; the mtfsb translation fix, H13b's cache-call no-ops and
-H13a's psq loads without `ldexp` are written and in test), H16, and H11's
-other half (the guest idle loop still spins on one core). M4 (`call_guest`) is done, and M5,
+H17a draws twice as many images: H15d (SIMD spans) for the workers, then
+H16 and H11's other half (the guest idle loop still spins on one core). The
+guest thread has room: alone it runs the Dangral base at about 125 images a
+second, +9% since H13's first steps (the cache calls as no-ops, paired-single
+loads without `ldexp`, and an `mtfsb` translation fix; FINDINGS "H13, first
+steps"). M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

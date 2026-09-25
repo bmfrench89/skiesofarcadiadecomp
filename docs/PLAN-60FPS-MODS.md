@@ -300,7 +300,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 
 **H13. Guest-thread speed** — *three slices, each measured.* M2's "about 60 a second" in heavy scenes needs these, and so does M11. They also free producer-thread time for route (c). Each reports guest ms per frame, meaning wall × (1 − `SelectThread` − the two spins), in snapshot runs of Part L and a battle, and H3's uncapped ceiling. The target is the heaviest scene's 18.2 ms brought under 16.7 ms; the research estimates 10–30% from all three together [I].
 
-**H13a. Paired singles and fma** — *a day, plus a full retranslation (`cpu.h`).*
+**H13a. Paired singles and fma** — *a day, plus a full retranslation (`cpu.h`). First step done 2026-09-25: f32 loads and stores skip the scale and the quantized types build it from bits, no `ldexp`; a self-test case against the generic formula over every type and scale. With H13b, the Dangral guest ceiling +9%. `fma` inline is left. FINDINGS "H13, first steps".*
 - Specialise `psq_l`/`psq_st` for this binary's six constant GQRs, with no `ldexp` (`cpu.h:441`, `:467`, `:500`). Fall back to the generic path when a GQR differs.
 - Inline `fma` with `/arch:AVX2` or intrinsics.
 
@@ -309,7 +309,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 - The full self test, replay 23/23 and `title --check` pass.
 - Guest ms per frame is measured before and after.
 
-**H13b. PSMTXConcat native; DC range calls as no-ops** — *hours, plus a full retranslation (`hle.txt`).*
+**H13b. PSMTXConcat native; DC range calls as no-ops** — *hours, plus a full retranslation (`hle.txt`). The DC half done 2026-09-25: all five range calls bound to no-ops that keep the synced forms' syscall, with a twin case; `DCInvalidateRange` was 5.2% of the Dangral guest thread. PSMTXConcat is not in the profile's top rows and stays translated. FINDINGS "H13, first steps".*
 - Bind `fn_80238B60` (`PSMTXConcat`) natively, with a twin case.
 - Bind `DCInvalidateRange` and `DCFlushRange` as no-ops. `dcbi` already emits nothing (`gen/chunk_013.c:31609`); check that `dcbf` does too before binding `DCFlushRange`.
 - Use lowercase `0x` and eight hex digits, or the line is dropped silently.

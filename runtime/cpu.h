@@ -449,6 +449,17 @@ static inline int psq_sscale(uint32_t six)
     return v > 31 ? v - 64 : v;
 }
 
+/* 2^k for a scale k in -32..31, exactly what ldexp(1.0, k) returns, from its
+ * bits: the biased exponent alone, with no library call on every quantized
+ * load and store (PLAN-60FPS-MODS H13a). */
+static inline double psq_pow2(int k)
+{
+    uint64_t u = (uint64_t)(1023 + k) << 52;
+    double d;
+    memcpy(&d, &u, 8);
+    return d;
+}
+
 static inline double psq_load1(CpuState* s, uint32_t ea, uint32_t type, double deq, uint32_t* size)
 {
     switch (type) {
@@ -464,10 +475,17 @@ static inline void psq_load(CpuState* s, int frd, uint32_t ea, int gqr, int w)
 {
     uint32_t g = s->gqr[gqr];
     uint32_t type = (g >> 16) & 7u;
-    double deq = ldexp(1.0, -psq_sscale(g >> 24));
-    uint32_t size;
-    double v0 = psq_load1(s, ea, type, deq, &size);
-    double v1 = w ? 1.0 : psq_load1(s, ea + size, type, deq, &size);
+    double v0, v1;
+    if (type < 4) {
+        /* f32, as most of this binary's are: the scale does not apply */
+        v0 = (double)mem_rf32(s, ea);
+        v1 = w ? 1.0 : (double)mem_rf32(s, ea + 4);
+    } else {
+        double deq = psq_pow2(-psq_sscale(g >> 24));
+        uint32_t size;
+        v0 = psq_load1(s, ea, type, deq, &size);
+        v1 = w ? 1.0 : psq_load1(s, ea + size, type, deq, &size);
+    }
     s->fpr[frd].ps0 = (double)(float)v0;
     s->fpr[frd].ps1 = (double)(float)v1;
 }
@@ -497,8 +515,14 @@ static inline void psq_store(CpuState* s, int frs, uint32_t ea, int gqr, int w)
 {
     uint32_t g = s->gqr[gqr];
     uint32_t type = g & 7u;
-    double quant = ldexp(1.0, psq_sscale(g >> 8));
+    double quant;
     uint32_t size;
+    if (type < 4) {
+        mem_wf32(s, ea, (float)s->fpr[frs].ps0);
+        if (!w) mem_wf32(s, ea + 4, (float)s->fpr[frs].ps1);
+        return;
+    }
+    quant = psq_pow2(psq_sscale(g >> 8));
     psq_store1(s, ea, type, quant, s->fpr[frs].ps0, &size);
     if (!w) psq_store1(s, ea + size, type, quant, s->fpr[frs].ps1, &size);
 }

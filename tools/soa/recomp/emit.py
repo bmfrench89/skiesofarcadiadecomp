@@ -641,10 +641,14 @@ class Emitter:
             st.append(
                 f"s->fpscr = (s->fpscr & {u32(~mask)}) | ((uint32_t)fpr_bits(s, {rb}) & {u32(mask)});"
             )
-        elif m == "mtfsb0":
-            st.append(f"s->fpscr &= ~(1u << {31 - i.bo});")
-        elif m == "mtfsb1":
-            st.append(f"s->fpscr |= (1u << {31 - i.bo});")
+        elif m in ("mtfsb0", "mtfsb1"):
+            # The bit is crbD, bits 6-10: the rd field. This read `bo`, which
+            # the X-form decode never sets, so every one touched FX (bit 0).
+            bit = 31 - i.rd
+            if m == "mtfsb0":
+                st.append(f"s->fpscr &= ~(1u << {bit});")
+            else:
+                st.append(f"s->fpscr |= (1u << {bit});")
 
         # ---- paired singles (Gekko) -----------------------------------
         elif m in _PSQ:

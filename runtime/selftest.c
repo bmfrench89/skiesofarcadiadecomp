@@ -1646,6 +1646,100 @@ static int tick_selftest(CpuState* s, char* got, size_t cap)
     return check("VIGetRetraceCount native vs twin", got, bad ? "agreement" : got);
 }
 
+/* The data-cache range calls answered natively (H13b) against their
+ * recompiled twins, over random ranges and empty ones: neither side moves the
+ * stack, and the two that end in `sc` make it exactly when the twin does. */
+void recomp_fn_80232E38(CpuState* s); void recomp_fn_80232E64(CpuState* s); void recomp_fn_80232E94(CpuState* s);
+void recomp_fn_80232EC4(CpuState* s); void recomp_fn_80232EF0(CpuState* s);
+void fn_80232E38(CpuState* s); void fn_80232E64(CpuState* s); void fn_80232E94(CpuState* s);
+void fn_80232EC4(CpuState* s); void fn_80232EF0(CpuState* s);
+uint64_t hle_syscall_count(void);
+
+static int dcache_selftest(CpuState* s, char* got, size_t cap)
+{
+    static void (*const twin[5])(CpuState*) = {recomp_fn_80232E38, recomp_fn_80232E64, recomp_fn_80232E94,
+                                               recomp_fn_80232EC4, recomp_fn_80232EF0};
+    static void (*const native[5])(CpuState*) = {fn_80232E38, fn_80232E64, fn_80232E94, fn_80232EC4, fn_80232EF0};
+    int round, k, bad = 0;
+    for (round = 0; round < 100 && !bad; round++) {
+        for (k = 0; k < 5 && !bad; k++) {
+            uint32_t start = SCRATCH + rnd() % 4096u, len = round % 4 == 0 ? 0u : rnd() % 16384u;
+            uint64_t c0, c1, c2;
+            uint32_t sp;
+            c0 = hle_syscall_count();
+            s->gpr[3] = start; s->gpr[4] = len;
+            run_twin(s, twin[k]);
+            c1 = hle_syscall_count();
+            sp = s->gpr[1];
+            s->gpr[3] = start; s->gpr[4] = len;
+            native[k](s);
+            c2 = hle_syscall_count();
+            if (c2 - c1 != c1 - c0 || s->gpr[1] != sp) {
+                bad = 1;
+                snprintf(got, cap, "call %d, %08X+%u: twin %llu syscalls, native %llu, sp %08X then %08X", k, start, len,
+                         (unsigned long long)(c1 - c0), (unsigned long long)(c2 - c1), sp, s->gpr[1]);
+            }
+        }
+    }
+    if (!bad) snprintf(got, cap, "five calls over %d rounds, a quarter of them empty", round);
+    return check("DC range calls native vs twin", got, bad ? "agreement" : got);
+}
+
+/* psq_load and psq_store (PLAN-60FPS-MODS H13a) against the generic formula
+ * they replaced -- the scale from ldexp on every access, whatever the type --
+ * over all eight types and all 64 scales, paired and single, with random bit
+ * patterns in (NaNs and infinities among them) and random floats out. The two
+ * must agree bit for bit, loads and stores both. */
+static int psq_selftest(CpuState* s, char* got, size_t cap)
+{
+    const uint32_t A = SCRATCH + 0x2000, B = SCRATCH + 0x2100, C = SCRATCH + 0x2200;
+    int type, sc, i, bad = 0, n = 0;
+    for (type = 0; type < 8 && !bad; type++) {
+        for (sc = 0; sc < 64 && !bad; sc++) {
+            uint32_t g = ((uint32_t)type << 16) | ((uint32_t)sc << 24) | (uint32_t)type | ((uint32_t)sc << 8);
+            for (i = 0; i < 16 && !bad; i++, n++) {
+                int w = i & 1;
+                uint32_t size, k, u0 = rnd(), u1 = rnd();
+                float f0, f1;
+                double deq = ldexp(1.0, -psq_sscale(g >> 24)), quant = ldexp(1.0, psq_sscale(g >> 8)), r0, r1;
+                uint64_t got0, got1, want0, want1;
+                mem_w32(s, A, rnd());
+                mem_w32(s, A + 4, rnd());
+                s->gqr[2] = g;
+                psq_load(s, 5, A, 2, w);
+                r0 = psq_load1(s, A, (uint32_t)type, deq, &size);
+                r1 = w ? 1.0 : psq_load1(s, A + size, (uint32_t)type, deq, &size);
+                r0 = (double)(float)r0;
+                r1 = (double)(float)r1;
+                memcpy(&got0, &s->fpr[5].ps0, 8); memcpy(&got1, &s->fpr[5].ps1, 8);
+                memcpy(&want0, &r0, 8); memcpy(&want1, &r1, 8);
+                if (got0 != want0 || got1 != want1) {
+                    bad = 1;
+                    snprintf(got, cap, "load type %d scale %d w %d: %016llX %016llX, generic %016llX %016llX", type, sc, w,
+                             (unsigned long long)got0, (unsigned long long)got1, (unsigned long long)want0, (unsigned long long)want1);
+                    break;
+                }
+                memcpy(&f0, &u0, 4); memcpy(&f1, &u1, 4);
+                if (i & 2) { f0 = (float)((int32_t)u0 >> (u0 & 15)); f1 = (float)((int32_t)u1 >> (u1 & 15)); }
+                s->fpr[6].ps0 = f0; s->fpr[6].ps1 = f1;
+                mem_w32(s, B, 0); mem_w32(s, B + 4, 0); mem_w32(s, C, 0); mem_w32(s, C + 4, 0);
+                psq_store(s, 6, B, 2, w);
+                psq_store1(s, C, (uint32_t)type, quant, s->fpr[6].ps0, &size);
+                if (!w) psq_store1(s, C + size, (uint32_t)type, quant, s->fpr[6].ps1, &size);
+                for (k = 0; k < 8; k++)
+                    if (mem_r8(s, B + k) != mem_r8(s, C + k)) {
+                        bad = 1;
+                        snprintf(got, cap, "store type %d scale %d w %d: byte %u is %02X, generic %02X", type, sc, w, k,
+                                 mem_r8(s, B + k), mem_r8(s, C + k));
+                        break;
+                    }
+            }
+        }
+    }
+    if (!bad) snprintf(got, cap, "%d loads and stores over 8 types and 64 scales agree with the generic path", n);
+    return check("psq_load/psq_store vs generic", got, bad ? "agreement" : got);
+}
+
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
  * dispatched like any translated call, with every register set to a pattern
  * first. The length comes back in r3, and every register -- r1, r2, r13, the
@@ -1799,6 +1893,8 @@ int selftest(CpuState* s)
     failures += render_selftest(s, got, sizeof got);
     failures += decomp_selftest(s, got, sizeof got);
     failures += tick_selftest(s, got, sizeof got);
+    failures += dcache_selftest(s, got, sizeof got);
+    failures += psq_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

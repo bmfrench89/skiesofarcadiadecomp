@@ -259,6 +259,12 @@ void guest_unimplemented(CpuState* s, uint32_t pc, const char* what)
     exit(2);
 }
 
+/* For the self test, which holds the native cache calls to their twins. */
+uint64_t hle_syscall_count(void)
+{
+    return g_syscalls;
+}
+
 void guest_syscall(CpuState* s, uint32_t pc)
 {
     (void)s;

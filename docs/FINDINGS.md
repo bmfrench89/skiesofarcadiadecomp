@@ -2786,3 +2786,51 @@ Checks: replay 23/23 at 1, 2, 3 and 8 threads with every hash unchanged; the
 overlap test (its stalls hold worker 2 back, whose rows are the taps of
 workers 1 and 3) passes, and four breakages each turn it red -- only the
 previous neighbour asked, only the next, no exit fence, no entry fence.
+
+
+**H13, first steps: the cache calls as no-ops, paired-single loads without
+`ldexp`, and an mtfsb that named the wrong bit.** 2026-09-25,
+`build/soa-near.exe` against `build/soa-h13.exe`, `build/exeab-9000-*.log`.
+One retranslation carries three things.
+
+- **H13b's data-cache calls.** `DCInvalidateRange`, `DCFlushRange`,
+  `DCStoreRange` and the two NoSync forms translated to loops that walked
+  their range 32 bytes at a time doing nothing but count and poll for
+  interrupts (`dcbi`, `dcbf` and `dcbst` emit nothing); `DCInvalidateRange`
+  alone was 5.2% of the guest thread in the Dangral window. They are bound in
+  `config/hle.txt` to natives in `hle_os.c` that do nothing but keep the
+  syscall the two synced forms end in, for a non-empty range as the originals
+  do. A self-test case holds all five to their recompiled twins. PSMTXConcat
+  stays translated: it is not in the profile's top rows.
+- **H13a's paired-single loads and stores** computed their scale with
+  `ldexp` on every access, whatever the type, and the f32 type -- almost every
+  one in this binary -- ignores the scale. f32 now skips it, and the
+  quantized types build the power of two from its bits. A self-test case
+  compares every type and scale, paired and single, loads and stores, bit for
+  bit against the old formula. `fma` inline is not done.
+- **A translation bug**, found by the planning session's portability survey:
+  `mtfsb0`/`mtfsb1` name their FPSCR bit in bits 6-10, and the emitter read a
+  field the X-form decode never sets, so every one touched bit 0 (FX). The
+  binary has one, OSInit's `mtfsb1 29` at 0x80231AC8, which set FX where it
+  meant NI (non-IEEE mode). The port acts on neither, so the only change is
+  what `mffs` and CR1 report. `test_emit.py` pins the emitted bit.
+
+The guest thread's ceiling in the Dangral window -- H1's Part L run in
+snapshot mode, uncapped from frame 3000, the clock at four times real time,
+so nothing waits for a field -- interleaved in two blocks:
+
+| build | images a second | p50 | guest idle loop |
+|---|---|---|---|
+| base | 112.1 / 115.0; 114.7 / 114.7 | 8.4 ms | 27.6-30.2% |
+| H13 steps | 127.6 / 121.5; 123.8 / 125.3 | 8.0-8.2 ms | 34.7-35.9% |
+
+**+9% (114.1 -> 124.6), in both blocks.** The guest thread alone runs this
+scene at four times the 30 fps cap, so none of this moves the frame rate
+at real time; it is headroom, for M11's battle speed-up and for H17a's
+second image. (The H13 runs make slightly fewer syscalls, 1.472 M against
+1.476 M: uncapped at four times real time, a faster guest spends less guest
+time on the same 9,000 frames, and the audio driver flushes its buffers once
+an audio frame.) Checks: the full retranslation, the self test with its two
+new cases (each turned red by a deliberate breakage: the power of two off by
+one in the exponent, the syscall made for an empty range), replay 23/23,
+`title --check`, 849 tests.

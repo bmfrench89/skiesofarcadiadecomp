@@ -32,8 +32,9 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(20 entries today: 12 decompiled routines, and `VIGetRetraceCount`, which
-`tick.c` answers so the main loop has a safe point).
+(25 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
+`tick.c` answers so the main loop has a safe point; and the five data-cache
+range calls, answered as the no-ops they are with no cache to keep).
 
 **Threads in the process.** One guest CPU thread, which owns every device
 model and parses the graphics command stream; that thread's guest threads
@@ -454,7 +455,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
 | `settings.c` | host plumbing | `soa.ini` beside `soa.exe` (M5): the switches a player would set, and the disc, applied where the environment is silent; off for every check (`SOA_SETTINGS=0`) | A player's file could move a check if a script forgot `SOA_SETTINGS=0`; `test_settings.py` holds that each one sets it |
 | `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
-| `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, and all 12 decompiled functions against their recompiled twins over 200 random rounds | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
+| `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, all 12 decompiled functions against their recompiled twins over 200 random rounds, `VIGetRetraceCount` and the five data-cache calls against theirs, and the paired-single loads and stores against the generic formula they replaced | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
 
 ---
 
@@ -490,7 +491,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 20 entries and **none of them is a GX function**: every
+`config/hle.txt` has 25 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 
@@ -624,7 +625,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 848 tests, none of which needs a disc (anything that
+- `tools/tests/` — 849 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

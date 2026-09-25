@@ -28,3 +28,20 @@ void fn_80232D4C(CpuState* s)
 {
     (void)s;
 }
+
+/* The data-cache range calls (PLAN-60FPS-MODS H13b): DCInvalidateRange
+ * (0x80232E38), DCFlushRange (0x80232E64), DCStoreRange (0x80232E94),
+ * DCFlushRangeNoSync (0x80232EC4) and DCStoreRangeNoSync (0x80232EF0). There
+ * is no data cache here -- dcbi, dcbf and dcbst translate to nothing -- so
+ * each was a loop that walked its range 32 bytes at a time doing nothing but
+ * count and poll for interrupts: DCInvalidateRange alone was 2.5% of the guest
+ * thread in the Dangral base drawn every frame, 5.2% with the drawing out of
+ * the way (FINDINGS "H13, first steps"). What the loop leaves in r3-r5, CTR
+ * and CR0 is volatile across a call. The two that end in `sc` still make
+ * it, for a non-empty range as the original does, so the report's syscall
+ * count is unchanged; the self test holds all five to their twins. */
+void fn_80232E38(CpuState* s) { s->pc = 0x80232E38u; }
+void fn_80232E64(CpuState* s) { s->pc = 0x80232E64u; if (s->gpr[4]) guest_syscall(s, 0x80232E8Cu); }
+void fn_80232E94(CpuState* s) { s->pc = 0x80232E94u; if (s->gpr[4]) guest_syscall(s, 0x80232EBCu); }
+void fn_80232EC4(CpuState* s) { s->pc = 0x80232EC4u; }
+void fn_80232EF0(CpuState* s) { s->pc = 0x80232EF0u; }
