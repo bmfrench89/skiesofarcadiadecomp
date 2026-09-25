@@ -132,8 +132,12 @@ recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
 
 Keyboard when the window has focus: arrows or WASD move the stick, IJKL the
 C-stick; X = A, Z = B, C = X, V = Y, Enter or Space = START, R = Z, Q = L,
-E = R, T/F/G/H = D-pad up/left/down/right, Escape quits. An XInput gamepad
-works as you would expect (triggers are L/R, the right shoulder is Z). The
+E = R, T/F/G/H = D-pad up/left/down/right, Escape quits (or, in fullscreen,
+leaves it). F11 or Alt+Enter switches borderless fullscreen on and off, and so
+does View+LB on a pad; the window can be resized and maximised, and the
+picture stays whole-pixel sharp with black bars round it. An XInput gamepad
+works as you would expect (triggers are L/R, the right shoulder is Z), in any
+of the four slots. The
 keyboard is read only while the window is in front, so switching to another
 window releases every key; the gamepad keeps driving the game whatever has the
 focus.
@@ -170,7 +174,7 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b`, `autotext` and `rumble`, each standing for the switch below. A key
+`encounters_hold_b`, `autotext`, `rumble`, `fullscreen` and `scaler`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys and
 `autotext`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys and `autotext` are read by the mods
@@ -191,7 +195,10 @@ an unquoted path with a space in it is two arguments.
 | Variable | Effect |
 |---|---|
 | `SOA_RENDER=1` | render (and open the window) |
-| `SOA_SCALE=n` | window scale, default 2 |
+| `SOA_SCALE=n` | the window's starting size, n times 640x480; by default the largest whole multiple whose window fits the monitor's work area |
+| `SOA_FULLSCREEN=1` | start in borderless fullscreen (`fullscreen = 1`); F11, Alt+Enter and View+LB toggle it |
+| `SOA_SCALER=integer\|fit` | how the picture fills the window (`scaler`): `integer`, the default, the largest whole multiple of 640x480, sharp, with black bars; `fit`, the largest 4:3 that fits, nearest neighbour, uneven pixels (H19a) |
+| `SOA_WINDOW_TEST=fs@N,win@N,size:WxH@N` | a check's knob: at each presented frame named, fullscreen, windowed or a client size, then one `[window] frame F: client WxH, image WxH at +X+Y, ...` line; `python tools/tests/test_picture.py <log>` checks those lines (H19a) |
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
@@ -249,7 +256,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1005 tests; any that need a dump skip themselves
+python -m pytest                     # 1009 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

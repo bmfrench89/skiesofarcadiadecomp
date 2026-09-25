@@ -54,9 +54,15 @@ void mod_set_host_buttons(uint32_t (*fn)(void));
 /* A gamepad chord (CH1): View with LB, RS or LS. One arm per chord, each
  * replaced by the slice that builds its action -- H19a fullscreen, M11a
  * turbo, M8 the menu -- so CH1 depends on none of them. */
+int window_toggle_fullscreen(void); /* window.c, H19a */
+
 static void on_chord(int chord, unsigned frame)
 {
     switch (chord) {
+    case 0: /* view+lb: fullscreen on the UI thread, which owns the window (H19a) */
+        fprintf(stderr, "[chord] frame %u: %s -> %s%s\n", frame, si_chord_name(chord, 0), si_chord_name(chord, 1),
+                window_toggle_fullscreen() ? "" : " (no window: logged only)");
+        break;
     default:
         fprintf(stderr, "[chord] frame %u: %s -> %s (not built yet)\n", frame, si_chord_name(chord, 0),
                 si_chord_name(chord, 1));

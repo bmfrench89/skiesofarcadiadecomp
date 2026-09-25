@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1005 passed in 193.43s
+1009 passed in 208.78s
 ```
 
-1005 tests in 53 files, none of which reads the disc. They cover the Python
+1009 tests in 54 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -93,6 +93,7 @@ its own and run it, some of the C as well:
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
+| `test_picture.py` | 4 | `runtime/picture.c`, built alone (H19a): `picture_layout` gives the spec's rectangles at 1920x1080, 1280x800 and 2560x1600 in both modes and agrees with a Python twin over a grid of clients, always inside the client; `present_interval` holds 60, 85, 120 and 144 Hz to 2, 1, 4 and 1; both mutations (width and height swapped, a plain round) fail; and the twin's log check passes a good windowed run and fails each rule broken |
 | `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
@@ -103,10 +104,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1005 passed` |
-| no capstone — **what CI installs** | `986 passed, 1 skipped` |
-| no MSVC | `689 passed, 316 skipped` |
-| neither — **the Ubuntu CI leg** | `670 passed, 317 skipped` |
+| everything (MSVC + capstone) | `1009 passed` |
+| no capstone — **what CI installs** | `990 passed, 1 skipped` |
+| no MSVC | `690 passed, 319 skipped` |
+| neither — **the Ubuntu CI leg** | `671 passed, 320 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -188,7 +189,7 @@ ok   aram.c
 ...
 ok   window.c
 
-compiled 26/26 runtime translation units
+compiled 27/27 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -1037,7 +1038,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 316 of the 1005 skip without a C compiler; they build one runtime file and run it.
+² 319 of the 1009 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1048,8 +1049,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 670 passed, 317 skipped |
-| **Tests** | windows | the same three — 986 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 671 passed, 320 skipped |
+| **Tests** | windows | the same three — 990 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

@@ -5,7 +5,9 @@
  *
  * Keyboard: arrows/WASD main stick, IJKL C-stick, X = A, Z = B, C = X,
  * V = Y, Enter/Space = START, R = Z, Q = L, E = R, T/F/G/H = D-pad,
- * Escape closes. Gamepad: the obvious mapping, triggers to L/R, RB to Z.
+ * Escape closes (or leaves fullscreen). F11 or Alt+Enter toggles borderless
+ * fullscreen (H19a). Gamepad: the obvious mapping, triggers to L/R, RB to Z;
+ * LB, View and the stick clicks are host buttons (CH1).
  *
  * window_pad() reports the whole controller -- both sticks at their real
  * positions and both triggers at their real values, not just the twelve
@@ -18,6 +20,7 @@
 #define COBJMACROS
 #include "cpu.h"
 #include "gxr.h"
+#include "picture.h"
 #include <windows.h>
 #include <xinput.h>
 #include <process.h>
@@ -44,7 +47,7 @@ void watchdog_fallback(void);
 
 static HWND g_hwnd;
 static volatile int g_open;
-static int g_scale = 2;
+static int g_scale; /* SOA_SCALE, or 0: the largest whole multiple of 640x480 that fits the monitor */
 static uint8_t* g_bgra; /* the frame converted for GDI */
 static int g_shown_w, g_shown_h;
 
@@ -77,6 +80,21 @@ static LONGLONG g_host0; /* QPC at the first present */
 static int g_drift_started;
 static UINT g_interval = 2;     /* refreshes each frame is held */
 static double g_refresh_ms = 0; /* the display's refresh period, as DWM measures it */
+static unsigned g_present_failed, g_resize_failed;
+
+/* ---- the window that fits (H19a) ------------------------------------------
+ * The client is any size now: the picture goes in it by picture_layout --
+ * the largest whole multiple of the frame (`scaler = integer`, the default)
+ * or the largest 4:3 that fits (`fit`) -- centred, with black bars. Borderless
+ * fullscreen (F11, Alt+Enter, the View+LB chord) is a WS_POPUP over the
+ * monitor, with the window's placement put back on the way out. */
+static int g_scaler = PICTURE_INTEGER;
+static int g_fullscreen;
+static WINDOWPLACEMENT g_placement;
+static volatile int g_resized;     /* WM_SIZE seen: the swap chain follows at the loop */
+static int g_client_w, g_client_h; /* the client as WM_SIZE last said, 0x0 minimised */
+static ULONGLONG g_mouse_at;       /* the last mouse movement, for hiding the cursor */
+#define WM_APP_FULLSCREEN (WM_APP + 1)
 
 static void note_present(void)
 {
@@ -140,6 +158,7 @@ static void present_report(void)
             bins[2], bins[3], bins[4], 1000.0 * (double)d[n / 2] / (double)g_qpf.QuadPart,
             1000.0 * (double)d[(n * 99) / 100] / (double)g_qpf.QuadPart);
     free(d);
+    fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
     if (g_drift_started && g_pt_n > 1) {
         /* the guest's VI against the wall clock, and so against the display:
          * H9 locks the two only where the display's rate is a multiple of 60 */
@@ -195,24 +214,49 @@ static int dxgi_start(HWND h, int w, int ht)
     return g_scaled != NULL;
 }
 
-/* g_bgra (the frame, w x h) scaled by whole pixels into the back buffer and
- * presented, held for two refreshes. */
+/* g_bgra (the frame, w x h) into the back buffer where picture_layout puts
+ * it -- nearest neighbour, so whole pixels at `integer` -- with black bars
+ * round it, and presented, held for g_interval refreshes. */
 static void dxgi_present(int w, int h)
 {
     ID3D11Texture2D* bb = NULL;
-    int y, x, sx = g_bw / w, sy = g_bh / h;
-    if (sx < 1) sx = 1;
-    if (sy < 1) sy = 1;
-    for (y = 0; y < g_bh; y++) {
-        const uint32_t* src = (const uint32_t*)(g_bgra + (size_t)(y / sy < h ? y / sy : h - 1) * w * 4);
-        uint32_t* dst = (uint32_t*)(g_scaled + (size_t)y * g_bw * 4);
-        for (x = 0; x < g_bw; x++) dst[x] = src[x / sx < w ? x / sx : w - 1];
+    PicRect r = picture_layout(w, h, g_bw, g_bh, g_scaler);
+    int y, x;
+    if (g_bw < 1 || g_bh < 1 || r.w < 1 || r.h < 1) return;
+    memset(g_scaled, 0, (size_t)g_bw * g_bh * 4);
+    for (y = 0; y < r.h; y++) {
+        const uint32_t* src = (const uint32_t*)(g_bgra + (size_t)((long long)y * h / r.h) * w * 4);
+        uint32_t* dst = (uint32_t*)(g_scaled + ((size_t)(r.y + y) * g_bw + r.x) * 4);
+        for (x = 0; x < r.w; x++) dst[x] = src[(long long)x * w / r.w];
     }
-    if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) return;
+    if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) {
+        g_present_failed++;
+        return;
+    }
     ID3D11DeviceContext_UpdateSubresource(g_ctx, (ID3D11Resource*)bb, 0, NULL, g_scaled, (UINT)g_bw * 4, 0);
     ID3D11Texture2D_Release(bb);
-    IDXGISwapChain1_Present(g_sc, g_interval, 0);
+    if (FAILED(IDXGISwapChain1_Present(g_sc, g_interval, 0))) g_present_failed++;
     note_present();
+}
+
+/* The swap chain to the client's new size: no back buffer is held between
+ * presents, so ResizeBuffers can run as it is. */
+static void dxgi_resize(int w, int h)
+{
+    uint8_t* s;
+    if (w < 1 || h < 1 || (w == g_bw && h == g_bh)) return;
+    if (FAILED(IDXGISwapChain1_ResizeBuffers(g_sc, 0, (UINT)w, (UINT)h, DXGI_FORMAT_UNKNOWN, 0))) {
+        g_resize_failed++;
+        return;
+    }
+    s = (uint8_t*)realloc(g_scaled, (size_t)w * h * 4);
+    if (!s) {
+        g_resize_failed++;
+        return;
+    }
+    g_scaled = s;
+    g_bw = w;
+    g_bh = h;
 }
 
 void si_set_motor_sink(void (*fn)(unsigned speed));
@@ -231,6 +275,46 @@ static void motor(unsigned speed)
     if (slot >= 0) XInputSetState((DWORD)slot, &v);
 }
 
+/* The monitor the window is on. */
+static RECT monitor_rect(HWND h, int work)
+{
+    MONITORINFO mi;
+    RECT r = {0, 0, 640, 480};
+    memset(&mi, 0, sizeof mi);
+    mi.cbSize = sizeof mi;
+    if (GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTOPRIMARY), &mi)) r = work ? mi.rcWork : mi.rcMonitor;
+    return r;
+}
+
+#define WINDOW_STYLE WS_OVERLAPPEDWINDOW
+
+/* Borderless fullscreen on and off, on the UI thread. */
+static void set_fullscreen(int on)
+{
+    if (!g_hwnd || on == g_fullscreen) return;
+    if (on) {
+        RECT m = monitor_rect(g_hwnd, 0);
+        memset(&g_placement, 0, sizeof g_placement);
+        g_placement.length = sizeof g_placement;
+        GetWindowPlacement(g_hwnd, &g_placement);
+        SetWindowLongPtrA(g_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(g_hwnd, HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
+                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    } else {
+        SetWindowLongPtrA(g_hwnd, GWL_STYLE, WINDOW_STYLE | WS_VISIBLE);
+        SetWindowPlacement(g_hwnd, &g_placement);
+        SetWindowPos(g_hwnd, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+    g_fullscreen = on;
+}
+
+/* The cursor goes in fullscreen, and after two seconds of no movement in a window. */
+static int cursor_hidden(void)
+{
+    return g_fullscreen || GetTickCount64() - g_mouse_at > 2000;
+}
+
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -243,8 +327,54 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         PostQuitMessage(0);
         return 0;
     case WM_KEYDOWN:
-        if (w == VK_ESCAPE) { g_open = 0; PostQuitMessage(0); }
+        if (w == VK_ESCAPE) {
+            if (g_fullscreen) set_fullscreen(0); /* Escape leaves fullscreen first (Q-O3) */
+            else { g_open = 0; PostQuitMessage(0); }
+        } else if (w == VK_F11) set_fullscreen(!g_fullscreen);
         return 0;
+    case WM_SYSKEYDOWN:
+        if (w == VK_RETURN && (l & (1 << 29))) { /* Alt+Enter; window_pad keeps it from pressing START */
+            set_fullscreen(!g_fullscreen);
+            return 0;
+        }
+        return DefWindowProc(h, m, w, l);
+    case WM_APP_FULLSCREEN:
+        set_fullscreen(w == 2 ? !g_fullscreen : (int)w);
+        return 0;
+    case WM_SIZE:
+        g_client_w = LOWORD(l);
+        g_client_h = HIWORD(l);
+        g_resized = 1;
+        if (!g_dxgi) InvalidateRect(h, NULL, FALSE);
+        return 0;
+    case WM_DPICHANGED: {
+        const RECT* r = (const RECT*)l;
+        SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        g_mouse_at = GetTickCount64();
+        return 0;
+    case WM_SETCURSOR:
+        if (LOWORD(l) == HTCLIENT && cursor_hidden()) {
+            SetCursor(NULL);
+            return TRUE;
+        }
+        return DefWindowProc(h, m, w, l);
+    case WM_TIMER:
+        if (cursor_hidden()) {
+            POINT p;
+            if (GetCursorPos(&p) && WindowFromPoint(p) == h) SetCursor(NULL);
+        }
+        return 0;
+    case WM_DISPLAYCHANGE: {
+        double hz;
+        g_refresh_ms = refresh_ms();
+        hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
+        g_interval = present_interval(hz, 30);
+        fprintf(stderr, "[window] the display changed: %.1f Hz, each frame held %u refresh(es)\n", hz, g_interval);
+        return DefWindowProc(h, m, w, l);
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
@@ -269,8 +399,19 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             bi.bmiHeader.biPlanes = 1;
             bi.bmiHeader.biBitCount = 32;
             bi.bmiHeader.biCompression = BI_RGB;
-            SetStretchBltMode(dc, COLORONCOLOR);
-            StretchDIBits(dc, 0, 0, rc.right, rc.bottom, 0, 0, g_shown_w, g_shown_h, g_bgra, &bi, DIB_RGB_COLORS, SRCCOPY);
+            {
+                /* the same rectangle the DXGI path uses, and the bars round it */
+                PicRect r = picture_layout(g_shown_w, g_shown_h, rc.right, rc.bottom, g_scaler);
+                RECT bar;
+                HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+                SetRect(&bar, 0, 0, rc.right, r.y); FillRect(dc, &bar, black);
+                SetRect(&bar, 0, r.y + r.h, rc.right, rc.bottom); FillRect(dc, &bar, black);
+                SetRect(&bar, 0, r.y, r.x, r.y + r.h); FillRect(dc, &bar, black);
+                SetRect(&bar, r.x + r.w, r.y, rc.right, r.y + r.h); FillRect(dc, &bar, black);
+                SetStretchBltMode(dc, COLORONCOLOR);
+                if (!StretchDIBits(dc, r.x, r.y, r.w, r.h, 0, 0, g_shown_w, g_shown_h, g_bgra, &bi, DIB_RGB_COLORS, SRCCOPY))
+                    g_present_failed++;
+            }
             note_present();
         }
         EndPaint(h, &ps);
@@ -298,22 +439,107 @@ static void present(void)
     else InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+/* SOA_WINDOW_TEST=fs@300,win@600,size:1000x700@900 (H19a's check): at each
+ * presented frame named, fullscreen, windowed or a client size, then one
+ * [window] line with what came of it. Checked by tools/tests/test_picture.py. */
+typedef struct { long frame; int kind, w, h; } WindowAct; /* kind 0 fs, 1 win, 2 size */
+static WindowAct g_acts[16];
+static int g_act_n, g_act_i;
+
+static void window_test_parse(void)
+{
+    const char* p = getenv("SOA_WINDOW_TEST");
+    while (p && *p && g_act_n < 16) {
+        WindowAct a;
+        char* end;
+        memset(&a, 0, sizeof a);
+        if (!strncmp(p, "fs@", 3)) { a.kind = 0; p += 3; }
+        else if (!strncmp(p, "win@", 4)) { a.kind = 1; p += 4; }
+        else if (!strncmp(p, "size:", 5)) {
+            a.kind = 2;
+            a.w = (int)strtol(p + 5, &end, 10);
+            if (*end != 'x') break;
+            a.h = (int)strtol(end + 1, &end, 10);
+            if (*end != '@') break;
+            p = end + 1;
+        } else break;
+        a.frame = strtol(p, &end, 10);
+        if (end == p) break;
+        g_acts[g_act_n++] = a;
+        p = *end == ',' ? end + 1 : end;
+    }
+    if (p && *p) fprintf(stderr, "[window] SOA_WINDOW_TEST not understood from \"%s\" on; that part is ignored\n", p);
+}
+
+static void window_line(long frame)
+{
+    RECT cr, mon = monitor_rect(g_hwnd, 0);
+    PicRect r;
+    int sw = g_shown_w ? g_shown_w : 640, sh = g_shown_h ? g_shown_h : 480;
+    GetClientRect(g_hwnd, &cr);
+    r = picture_layout(sw, sh, cr.right, cr.bottom, g_scaler);
+    fprintf(stderr, "[window] frame %ld: client %ldx%ld, image %dx%d at +%d+%d, from %dx%d, monitor %ldx%ld, mode %s %s\n",
+            frame, cr.right, cr.bottom, r.w, r.h, r.x, r.y, sw, sh, mon.right - mon.left, mon.bottom - mon.top,
+            g_scaler == PICTURE_FIT ? "fit" : "integer", g_fullscreen ? "fullscreen" : "window");
+}
+
+/* The client size a window of `scale` would need, as the window's outer size. */
+static SIZE outer_size(int cw, int ch, UINT dpi)
+{
+    typedef BOOL(WINAPI * AdjustForDpi)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    AdjustForDpi adj = (AdjustForDpi)(void*)GetProcAddress(GetModuleHandleA("user32.dll"), "AdjustWindowRectExForDpi");
+    RECT rc = {0, 0, cw, ch};
+    SIZE s;
+    if (adj) adj(&rc, WINDOW_STYLE, FALSE, 0, dpi);
+    else AdjustWindowRect(&rc, WINDOW_STYLE, FALSE);
+    s.cx = rc.right - rc.left;
+    s.cy = rc.bottom - rc.top;
+    return s;
+}
+
 static unsigned __stdcall ui_thread(void* arg)
 {
     WNDCLASSA wc;
-    RECT rc = {0, 0, 640 * g_scale, 480 * g_scale};
     MSG msg;
     long last = -1;
+    SIZE outer;
+    UINT dpi = 96;
     (void)arg;
+    {
+        /* Per-monitor DPI awareness, before any window: the client is then
+         * physical pixels, which is what whole-pixel scaling needs. */
+        typedef BOOL(WINAPI * SetCtx)(HANDLE);
+        typedef UINT(WINAPI * GetDpi)(void);
+        HMODULE u = GetModuleHandleA("user32.dll");
+        SetCtx set = (SetCtx)(void*)GetProcAddress(u, "SetProcessDpiAwarenessContext");
+        GetDpi get = (GetDpi)(void*)GetProcAddress(u, "GetDpiForSystem");
+        if (!set || !set((HANDLE)-4 /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */)) SetProcessDPIAware();
+        if (get) dpi = get();
+    }
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = wndproc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = "SoaWindow";
     RegisterClassA(&wc);
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, FALSE);
-    g_hwnd = CreateWindowA("SoaWindow", "Skies of Arcadia Legends -- native", WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-                           CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, wc.hInstance, NULL);
+    if (!g_scale) {
+        /* The largest whole multiple of 640x480 whose window fits the work area. */
+        MONITORINFO mi;
+        RECT work = {0, 0, 1280, 1024};
+        memset(&mi, 0, sizeof mi);
+        mi.cbSize = sizeof mi;
+        {
+            POINT o = {0, 0};
+            if (GetMonitorInfoA(MonitorFromPoint(o, MONITOR_DEFAULTTOPRIMARY), &mi)) work = mi.rcWork;
+        }
+        for (g_scale = 1; g_scale < 16; g_scale++) {
+            SIZE s = outer_size(640 * (g_scale + 1), 480 * (g_scale + 1), dpi);
+            if (s.cx > work.right - work.left || s.cy > work.bottom - work.top) break;
+        }
+    }
+    outer = outer_size(640 * g_scale, 480 * g_scale, dpi);
+    g_hwnd = CreateWindowA("SoaWindow", "Skies of Arcadia Legends -- native", WINDOW_STYLE, CW_USEDEFAULT, CW_USEDEFAULT,
+                           outer.cx, outer.cy, NULL, NULL, wc.hInstance, NULL);
     if (!g_hwnd) {
         /* The watchdog stood down because this window was coming; without
          * either, nothing would ever end the run. */
@@ -323,13 +549,17 @@ static unsigned __stdcall ui_thread(void* arg)
         return 0;
     }
     ShowWindow(g_hwnd, SW_SHOW);
+    SetTimer(g_hwnd, 1, 500, NULL);
+    g_mouse_at = GetTickCount64();
     QueryPerformanceFrequency(&g_qpf);
     {
         const char* p = getenv("SOA_PRESENTER");
+        const char* fs = getenv("SOA_FULLSCREEN");
+        const char* sc = getenv("SOA_SCALER");
         RECT cr;
-        GetClientRect(g_hwnd, &cr);
         DEVMODEA dm;
         double hz;
+        GetClientRect(g_hwnd, &cr);
         memset(&dm, 0, sizeof dm);
         dm.dmSize = sizeof dm;
         g_refresh_ms = refresh_ms();
@@ -337,12 +567,10 @@ static unsigned __stdcall ui_thread(void* arg)
         /* A 30-a-second frame is held for a whole number of refreshes only
          * when the display's rate is a multiple of 30: two at 60 Hz, four at
          * 120. Anything else takes the next refresh, and H9 is the answer. */
-        if (hz / 30.0 - (double)(int)(hz / 30.0 + 0.5) < 0.02 && hz / 30.0 - (double)(int)(hz / 30.0 + 0.5) > -0.02)
-            g_interval = (UINT)(hz / 30.0 + 0.5);
-        else
-            g_interval = 1;
-        if (g_interval < 1) g_interval = 1;
-        if (g_interval > 4) g_interval = 4;
+        g_interval = present_interval(hz, 30);
+        if (sc && !strcmp(sc, "fit")) g_scaler = PICTURE_FIT;
+        else if (sc && *sc && strcmp(sc, "integer"))
+            fprintf(stderr, "[window] SOA_SCALER=%s is not integer or fit; integer\n", sc);
         if (!(p && !strcmp(p, "gdi"))) {
             g_dxgi = dxgi_start(g_hwnd, cr.right, cr.bottom);
             if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
@@ -351,7 +579,9 @@ static unsigned __stdcall ui_thread(void* arg)
         fprintf(stderr, "[window] the display refreshes every %.2f ms (%.1f Hz; the mode says %lu Hz)%s\n",
                 g_refresh_ms, hz, EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm) ? dm.dmDisplayFrequency : 0ul,
                 g_interval == 1 ? ", not a multiple of 30: each frame takes the next refresh" : "");
+        if (fs && atoi(fs)) set_fullscreen(1);
     }
+    window_test_parse();
     g_open = 1;
     si_set_motor_sink(motor);
     si_set_motor_window(1);
@@ -362,6 +592,7 @@ static unsigned __stdcall ui_thread(void* arg)
         fprintf(stderr, "[window] open at %dx, presenting with GDI on an 8 ms poll\n", g_scale);
     for (;;) {
         long now;
+        int logged_resize = 0;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
                 g_open = 0;
@@ -380,6 +611,30 @@ static unsigned __stdcall ui_thread(void* arg)
             DispatchMessage(&msg);
         }
         now = gxr_presented();
+        if (g_act_i < g_act_n && now >= g_acts[g_act_i].frame) {
+            const WindowAct* a = &g_acts[g_act_i++];
+            if (a->kind == 0) set_fullscreen(1);
+            else if (a->kind == 1) set_fullscreen(0);
+            else {
+                SIZE s;
+                set_fullscreen(0);
+                s = outer_size(a->w, a->h, dpi);
+                SetWindowPos(g_hwnd, NULL, 0, 0, s.cx, s.cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { /* the size messages the switch sent */
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+            logged_resize = 1;
+        }
+        if (g_resized) {
+            g_resized = 0;
+            if (g_client_w > 0 && g_client_h > 0) { /* minimised is 0x0: no resize, no present */
+                if (g_dxgi) dxgi_resize(g_client_w, g_client_h);
+                if (g_shown_w) present(); /* the last frame again, at the new size */
+            }
+        }
+        if (logged_resize) window_line(now);
         if (now != last) { last = now; present(); }
         MsgWaitForMultipleObjects(0, NULL, FALSE, 8, QS_ALLINPUT);
     }
@@ -406,6 +661,15 @@ int window_open(void)
     return g_open;
 }
 
+/* The View+LB chord (CH1): fullscreen on or off, posted to the UI thread that
+ * owns the window. 0 with no window to switch. */
+int window_toggle_fullscreen(void)
+{
+    if (!g_open || !g_hwnd) return 0;
+    PostMessageA(g_hwnd, WM_APP_FULLSCREEN, 2, 0);
+    return 1;
+}
+
 /* Controller state for port 1 from the keyboard (when the window has the
  * focus) and gamepad 0. Returns 0 when there is no window.
  *
@@ -430,7 +694,7 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
         if (K('Z')) b |= 0x0200; /* B */
         if (K('C')) b |= 0x0400; /* X */
         if (K('V')) b |= 0x0800; /* Y */
-        if (K(VK_RETURN) || K(VK_SPACE)) b |= 0x1000; /* START */
+        if ((K(VK_RETURN) && !K(VK_MENU)) || K(VK_SPACE)) b |= 0x1000; /* START; Alt+Enter is fullscreen */
         if (K('R')) b |= 0x0010; /* Z */
         if (K('Q')) { b |= 0x0040; lt = 255; }
         if (K('E')) { b |= 0x0020; rt = 255; }
@@ -520,5 +784,6 @@ int window_host(uint16_t* host)
 void window_start(void) {}
 int window_open(void) { return 0; }
 int window_host(uint16_t* host) { (void)host; return 0; }
+int window_toggle_fullscreen(void) { return 0; }
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 #endif

@@ -53,6 +53,8 @@ static const Setting k_settings[] = {
      1, "encounter-rate", "off|half|normal|double"},
     {"encounters_hold_b", "SOA_ENCOUNTERS_HOLD_B", "0: holding B no longer keeps random battles away (mod encounter-rate)",
      1, "encounter-rate", "0|1"},
+    {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)"},
+    {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)"},
     {"rumble", "SOA_RUMBLE", "0 to 100: how hard the pad rumbles when the game asks; default 100, 0 is off"},
     {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
      "autotext", NULL},

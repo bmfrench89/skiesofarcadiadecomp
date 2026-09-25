@@ -98,7 +98,7 @@ jobs:
   # the owner's machine -- and a runtime that several agents had edited was
   # found broken by a local build, not by CI.
   #
-  # COVERED: every runtime/*.c (26 files today), each compiled on its own with
+  # COVERED: every runtime/*.c (27 files today), each compiled on its own with
   # /c and the flags in tools/soa/toolchain.py, plus the handful of warnings
   # that mean a call does not match the function it names (an implicit
   # declaration first among them) promoted to errors, since nothing here

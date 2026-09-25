@@ -3306,3 +3306,39 @@ On the fake guest: presses at frames 1-2, 5-6 and 9-10 through states 3
 and 4, none after LB is let go on a page already pressed, none in a choice,
 on a flagged page, in state 8 or 1, and with LB clear only the auto-advance
 at its delay.
+
+
+**H19a: fullscreen and a window that fits.** 2026-09-25,
+`build/scenario-h19a.log` (DXGI), `build/scenario-h19a-gdi.log` (GDI). The
+window was a fixed 2x with no resizing, and at 150% scaling on a small
+screen it was taller than the screen. Now: the process is per-monitor DPI
+aware, so the client is physical pixels; the window starts at the largest
+whole multiple of 640x480 that fits the monitor's work area (`SOA_SCALE`
+still wins); it can be resized and maximised, and the swap chain follows
+(`ResizeBuffers`, the last frame shown again at the new size; minimised,
+nothing); and the picture goes where `runtime/picture.c`'s `picture_layout`
+puts it -- the largest whole multiple (`scaler = integer`, the default) or
+the largest 4:3 that fits (`fit`) -- centred with black bars, the same
+rectangle in the DXGI and GDI paths. F11, Alt+Enter and the View+LB chord
+switch borderless fullscreen (the chord's arm, CH1's, now posts to the UI
+thread; headless it says `(no window: logged only)`); Alt+Enter no longer
+presses START; Escape in fullscreen leaves it; the cursor hides in
+fullscreen and after two seconds still. H8's sync interval moved into
+`present_interval`, the rule unchanged, and follows `WM_DISPLAYCHANGE`.
+
+On the owner's 3440x1440 display at 85 Hz, `SOA_WINDOW_TEST=fs@300,win@600,
+size:1000x700@900` over the title: fullscreen, client 3440x1440 (the
+monitor), image 1920x1440 at +760+0; back in a window, 1280x960 (2x, the
+largest whole multiple that fits the work area); at 1000x700, 640x480 at
++180+110; `0 failed present(s), 0 failed resize(s)` -- the same in each of
+the two runs, DXGI and GDI, each checked on its own by `python
+tools/tests/test_picture.py <log>` (the rectangle is the Python twin's for
+its logged client and mode, inside the client, 4:3 within a pixel, centred
+within a pixel, the client the monitor's in fullscreen). The `[window]`
+lines report the rectangle the presenter computed, so they check the layout
+and the window's sizes, not the pixels drawn; the picture itself, the
+cursor and Alt+Enter not pressing START are the owner's check (session A).
+`test_picture.py` holds picture.c built alone to the spec's cases and to
+the twin over a grid of clients, and its two mutations fail: width and
+height swapped in the fit fails three cases, a plain `round(hz / 30)` fails
+85 and 144 Hz.

@@ -164,7 +164,7 @@ python tools/citest/compile_runtime.py
 ...
 ok   window.c
 
-compiled 26/26 runtime translation units
+compiled 27/27 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -257,13 +257,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1005 passed in 193.43s
+1009 passed in 208.78s
 ```
 
-1005 tests in 53 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `986 passed, 1 skipped` without
+1009 tests in 54 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `990 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `689 passed, 316 skipped` without MSVC.
+module-level skip), `690 passed, 319 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
