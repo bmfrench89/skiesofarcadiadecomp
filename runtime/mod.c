@@ -348,7 +348,7 @@ static int next_line(const char** text, char* line)
 /* ---- native mods: mod.dll on SoaModApi (PLAN M3) ------------------------ */
 
 #define CB_MAX 64
-enum { CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_KINDS };
+enum { CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_KINDS };
 
 typedef struct {
     void* fn;
@@ -369,6 +369,7 @@ static int g_seen_scene, g_loading;
 unsigned gx_frame_count(void);
 int tick_on_safe_point(void (*fn)(CpuState*));
 void si_set_pad_filter(void (*fn)(unsigned frame, void* pad));
+void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 
 /* RAM, aligned to the width, and for a write not the game's code. */
 static int api_ok(uint32_t addr, uint32_t n, uint32_t align, int write)
@@ -450,6 +451,10 @@ static int api_pad_filter(void (*fn)(void*, uint32_t, SoaPad*), void* user)
 {
     return api_register(CB_PAD_FILTER, (void*)fn, user);
 }
+static int api_projection_filter(void (*fn)(void*, float*, int), void* user)
+{
+    return api_register(CB_PROJECTION, (void*)fn, user);
+}
 
 static void api_log(const char* line)
 {
@@ -465,7 +470,20 @@ static const SoaModApi g_api = {
     api_on_frame_end, api_on_safe_point, api_on_map_loaded, api_on_scene_change,
     api_log,
     api_pad_filter,
+    api_projection_filter,
 };
+
+/* Each new projection, from gxr.c: each mod's filter in load order. */
+static void mod_projection(float p[6], int orthographic)
+{
+    int i;
+    for (i = 0; i < g_cb_n[CB_PROJECTION]; i++) {
+        g_cur_mod = g_cb[CB_PROJECTION][i].mod;
+        g_cb[CB_PROJECTION][i].calls++;
+        ((void (*)(void*, float*, int))g_cb[CB_PROJECTION][i].fn)(g_cb[CB_PROJECTION][i].user, p, orthographic);
+    }
+    g_cur_mod = -1;
+}
 
 /* Every controller read, from si.c: each mod's filter in load order. */
 static void mod_pad(unsigned frame, void* pad)
@@ -738,6 +756,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     }
     if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE]) tick_on_safe_point(mod_safe_point);
     if (g_cb_n[CB_PAD_FILTER]) si_set_pad_filter(mod_pad);
+    if (g_cb_n[CB_PROJECTION]) gxr_set_projection_filter(mod_projection);
     fprintf(stderr, "[mod] SOA_MODS=%s: %d mod(s) loaded, %u patch(es)\n", dir, g_mod_n, g_patch_n);
     return g_mod_n;
 }
@@ -795,9 +814,9 @@ void mod_report(void)
                 for (c = 0; c < g_cb_n[k]; c++)
                     if (g_cb[k][c].mod == m) calls[k] += g_cb[k][c].calls;
             fprintf(stderr, "[mod] %s mod.dll: %u callback(s); called at %llu frame end(s), %llu safe point(s), "
-                            "%llu map load(s), %llu scene change(s), %llu controller read(s)\n", g_mods[m].dir,
-                    g_mods[m].callbacks, calls[CB_FRAME_END], calls[CB_SAFE_POINT], calls[CB_MAP_LOADED],
-                    calls[CB_SCENE_CHANGE], calls[CB_PAD_FILTER]);
+                            "%llu map load(s), %llu scene change(s), %llu controller read(s), %llu projection(s)\n",
+                    g_mods[m].dir, g_mods[m].callbacks, calls[CB_FRAME_END], calls[CB_SAFE_POINT],
+                    calls[CB_MAP_LOADED], calls[CB_SCENE_CHANGE], calls[CB_PAD_FILTER], calls[CB_PROJECTION]);
         }
         for (i = g_mods[m].first; i < g_mods[m].first + g_mods[m].count; i++) {
             const Patch* p = &g_patches[i];

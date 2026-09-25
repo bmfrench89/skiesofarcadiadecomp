@@ -45,6 +45,8 @@ void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);
 void gxr_texture_hazard(uint32_t addr, uint32_t bytes); /* flush if a queued copy writes there */
+/* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
+void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 const uint8_t* gxr_screen(int* w, int* h);           /* the last frame copied out (RGBA, EFB_W stride) */
 /* FNV-1a over that frame's pixels, the value SOA_HASH prints as
  * "[gxr] frame <n> <w>x<h> hash <16 hex digits>" once per presented frame.

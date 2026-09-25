@@ -1970,3 +1970,32 @@ was never made, and `title --check` has no map to assert. Dropping every
 button is the mutation that holds: the game never leaves the demo. A recording
 made with the pass-through pair names both, with hashes over each DLL:
 `# config ... mods=map-log:132780d5,passthrough:4f07bb15`.
+
+
+**M3c, the projection: a mod can change the view, and one that does not
+changes nothing.** 2026-09-25, `build/m3c-*`. `SoaModApi` gains
+`projection_filter`, appended. `gxr.c` hands a mod GXSetProjection's six
+parameters and whether it is orthographic once each time the game sets a new
+projection, cached against XF 0x1020-0x1026's raw words, never per vertex;
+with no filter the transform is the code it was. It runs on the thread that
+parses the command stream, the guest's.
+
+**The live title is not a hash oracle.** Two title runs with no mod at all
+differ on 22 of their 40 snapshot hashes: loads run on the wall clock, so the
+same frame number is a slightly different moment of the same animation. The
+oracle is the replay instead -- mods load before `main.c` reaches `--replay`,
+so a captured frame renders through the filter, deterministically. (Not
+through `scenario.py replay`: it drops every `SOA_*` variable from the
+environment it hands the port, on purpose, so each capture ran directly.)
+
+| mod | captures matching `config/fifo_manifest.tsv` |
+|---|---|
+| a filter that changes nothing | **23 of 23** |
+| a wider view (`p[0] *= 0.75` when perspective) | 4 of 23 -- the four boot frames (100-700), text and logos drawn only orthographically |
+
+Capture 6000 was opened wide and as pinned: the wide one shows more of the
+room left and right with the figure narrower, which is the change asked for.
+What there is to draw in the widened margin is still the game's decision --
+it culls against its own frustum -- and a real widescreen mod starts there.
+
+The texture provider, M3c's other half, remains.

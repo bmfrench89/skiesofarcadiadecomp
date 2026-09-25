@@ -616,6 +616,35 @@ static void light_channel(const uint32_t* xf, unsigned chan, int alpha, const Ve
     for (k = 0; k < 4; k++) out[k] = mat[k] * clamp01(acc[k]);
 }
 
+/* A mod's say in the projection (PLAN-60FPS-MODS M3c): the six parameters of
+ * GXSetProjection (XF 0x1020-0x1025) and whether it is orthographic (0x1026),
+ * handed over once each time the game sets a new one and cached against the
+ * raw register words, never per vertex. Registered through a setter so the
+ * renderer still links alone; with none, transform() is the code it was. It
+ * runs on the thread that parses the command stream, the guest's. */
+static void (*g_proj_filter)(float p[6], int orthographic);
+static uint32_t g_proj_raw[7];
+static float g_proj_out[6];
+static int g_proj_valid;
+
+void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic))
+{
+    g_proj_filter = fn;
+    g_proj_valid = 0;
+}
+
+static void filtered_projection(const uint32_t* xf, float p[6])
+{
+    int i;
+    if (!g_proj_valid || memcmp(g_proj_raw, xf + 0x1020, sizeof g_proj_raw) != 0) {
+        memcpy(g_proj_raw, xf + 0x1020, sizeof g_proj_raw);
+        for (i = 0; i < 6; i++) g_proj_out[i] = xff(xf, 0x1020 + (unsigned)i);
+        g_proj_filter(g_proj_out, (int)(xf[0x1026] & 1));
+        g_proj_valid = 1;
+    }
+    memcpy(p, g_proj_out, sizeof g_proj_out);
+}
+
 static void transform(CpuState* s, const VertexIn* in, Vertex* out)
 {
     const uint32_t* xf = gx_xf_regs();
@@ -636,6 +665,11 @@ static void transform(CpuState* s, const VertexIn* in, Vertex* out)
     /* projection (XF 0x1020-0x1026, GXSetProjection) */
     {
         float p0 = xff(xf, 0x1020), p1 = xff(xf, 0x1021), p2 = xff(xf, 0x1022), p3 = xff(xf, 0x1023), p4 = xff(xf, 0x1024), p5 = xff(xf, 0x1025);
+        if (g_proj_filter) {
+            float p[6];
+            filtered_projection(xf, p);
+            p0 = p[0]; p1 = p[1]; p2 = p[2]; p3 = p[3]; p4 = p[4]; p5 = p[5];
+        }
         if (xf[0x1026] & 1) { /* orthographic */
             out->x = p0 * view[0] + p1;
             out->y = p2 * view[1] + p3;

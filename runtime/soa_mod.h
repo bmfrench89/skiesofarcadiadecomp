@@ -90,6 +90,14 @@ typedef struct SoaModApi {
      * holds the input as given, and a replay made with the same mod applies
      * the filter again, so it stays exact. */
     int (*pad_filter)(void (*fn)(void* user, uint32_t frame, SoaPad* pad), void* user);
+
+    /* Appended (M3c). Each time the game sets a new projection
+     * (GXSetProjection), before any vertex uses it: p[0..5] as XF 0x1020-0x1025.
+     * Perspective: x' = p0 x + p1 z, y' = p2 y + p3 z, z' = p4 z + p5, w' = -z;
+     * orthographic: x' = p0 x + p1, y' = p2 y + p3, z' = p4 z + p5. Change p to
+     * change the picture -- a wider view scales p[0] -- but what is there to
+     * draw is still the game's choice: it culls against its own frustum. */
+    int (*projection_filter)(void (*fn)(void* user, float p[6], int orthographic), void* user);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

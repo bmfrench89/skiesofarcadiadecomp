@@ -50,6 +50,8 @@ unsigned gx_frame_count(void) { return g_frames; }
 void hle_on_report(void (*fn)(void)) { (void)fn; }
 static void (*g_pad)(unsigned, void*);
 void si_set_pad_filter(void (*fn)(unsigned, void*)) { g_pad = fn; }
+static void (*g_proj)(float p[6], int o);
+void gxr_set_projection_filter(void (*fn)(float p[6], int o)) { g_proj = fn; }
 void fn_8023F704(CpuState* s);
 
 /* mods.exe MODSDIR DOLFILE, then commands on stdin:
@@ -57,7 +59,8 @@ void fn_8023F704(CpuState* s);
  *   frame              one frame end      get ADDR          print a word
  *   report             mod_report()       describe          mod_describe()
  *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88
- *   pad F B            a controller read at frame F with buttons B, through the filter */
+ *   pad F B            a controller read at frame F with buttons B, through the filter
+ *   proj O P0..P5      a new projection (O 1 orthographic), through the filter */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -80,6 +83,15 @@ int main(int argc, char** argv)
             pad[0] = (uint8_t)v; pad[1] = (uint8_t)(v >> 8); /* PadState's u16, host order */
             if (g_pad) g_pad(a, pad);
             printf("pad %u %04X %s\n", a, (unsigned)(pad[0] | pad[1] << 8), g_pad ? "filtered" : "unfiltered");
+        }
+        else if (!strcmp(cmd, "proj")) {
+            float p[6];
+            int o = 0, k;
+            if (scanf("%d %f %f %f %f %f %f", &o, &p[0], &p[1], &p[2], &p[3], &p[4], &p[5]) != 7) break;
+            if (g_proj) g_proj(p, o);
+            printf("proj");
+            for (k = 0; k < 6; k++) printf(" %.4f", p[k]);
+            printf(" %s" "\n", g_proj ? "filtered" : "unfiltered");
         }
         else if (!strcmp(cmd, "get") && scanf("%x", &a) == 1) printf("%08X=%08X\n", a, mem_r32(&s, a));
         else if (!strcmp(cmd, "report")) { fflush(stdout); mod_report(); fflush(stderr); }
@@ -386,6 +398,10 @@ static void fe(void* u) { uint32_t v; (void)u; if (A->read32(0x80346D28, &v)) A-
 static void sp(void* u) { (void)u; snprintf(b, sizeof b, "safe point, scene %u", A->scene()); A->log(b); }
 static void ml(void* u, uint32_t map) { (void)u; snprintf(b, sizeof b, "map loaded %08X", map); A->log(b); }
 static void sc(void* u, uint32_t f, uint32_t t) { (void)u; snprintf(b, sizeof b, "scene %u -> %u", f, t); A->log(b); }
+#ifdef PROJ
+/* a wider view: perspective x scaled by 3/4, orthographic (the 2D layer) left alone */
+static void wide(void* u, float p[6], int ortho) { (void)u; if (!ortho) p[0] *= 0.75f; }
+#endif
 #ifdef PADF
 /* from frame 10, START never reaches the game; everything else does */
 static void pf(void* u, uint32_t frame, SoaPad* p) { (void)u; if (frame >= 10) p->buttons &= ~SOA_PAD_START; }
@@ -421,6 +437,9 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
     api->on_scene_change(sc, NULL);
 #ifdef PADF
     api->pad_filter(pf, NULL);
+#endif
+#ifdef PROJ
+    api->projection_filter(wide, NULL);
 #endif
     return RC;
 }
@@ -579,3 +598,27 @@ def test_without_a_filter_si_c_is_never_handed_one(driver, tmp_path):
     dll(tmp_path, "native")
     out, _ = play(driver, tmp_path, "pad 20 1100")
     assert "pad 20 1100 unfiltered" in out, out
+
+
+@needs_msvc
+def test_a_projection_filter_sees_each_projection_and_may_change_it(driver, tmp_path):
+    """gxr.c hands over GXSetProjection's six parameters once per new
+    projection; this filter widens the 3D view and leaves the 2D layer,
+    which is orthographic, as it was."""
+    dll(tmp_path, "wide", "PROJ")
+    out, err = play(
+        driver, tmp_path, "proj 0 1.5 0 2 0 -1 -0.1 proj 1 0.003 -1 -0.004 1 -1 0 report"
+    )
+    projs = [line for line in out.splitlines() if line.startswith("proj ")]
+    assert projs == [
+        "proj 1.1250 0.0000 2.0000 0.0000 -1.0000 -0.1000 filtered",
+        "proj 0.0030 -1.0000 -0.0040 1.0000 -1.0000 0.0000 filtered",
+    ], out
+    assert "2 projection(s)" in err, err
+
+
+@needs_msvc
+def test_without_a_projection_filter_gxr_c_is_never_handed_one(driver, tmp_path):
+    dll(tmp_path, "native")
+    out, _ = play(driver, tmp_path, "proj 0 1.5 0 2 0 -1 -0.1")
+    assert "proj 1.5000 0.0000 2.0000 0.0000 -1.0000 -0.1000 unfiltered" in out, out
