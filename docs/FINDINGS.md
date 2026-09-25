@@ -3252,3 +3252,34 @@ that ignores the window (the mutation used, tried) fails the no-window
 line. `test_padrec.py` is unchanged: the sink is a setter. Whether the pad
 rumbles in a battle with the game's Vibration option on, and not with it
 off, is the owner's check (session A).
+
+
+**CH1: gamepad chords and host buttons.** 2026-09-25, `build/scenario-ch1.log`,
+`build/ch1.pad`. The pad's LB, View (Back) and the two stick clicks -- none
+of them a GameCube button -- are now host buttons: the port's and the
+mods', never the game's (the keyboard's Tab counts as LB). `window.c`
+reads them beside the pad; a pad script names them `lb`, `view`, `ls` and
+`rs`, in si.c and in scenario.py alike. si.c takes them on the first read of
+each frame, so a chord read three times a frame fires once, and holds none
+during a replay, which is the whole input. A chord fires on the frame its
+last button goes down: View+LB is fullscreen (H19a), View+RS turbo (M11a),
+View+LS the menu (M8); main.c's handler has one arm per chord and today
+each logs `(not built yet)`. A chord writes `# chord F keys action` into a
+recording, which the replay passes over. Mods get `host_buttons` (appended
+to `SoaModApi`; a mod built before it still loads). Port 1 now follows the
+pad: the first connected XInput slot of the four, kept until it goes, so a
+pad Windows puts in slot 1 or 2 plays.
+
+The title scenario with `1700:view+lb,1800:lb,1900:view+rs` added to its
+pad passes its four checks; the log has exactly `[chord] frame 1700: view+lb
+-> fullscreen (not built yet)` and `[chord] frame 1900: view+rs -> turbo (not
+built yet)` -- none at 1800, where LB is alone -- the `[si]` lines show no
+button change after 1650, and the recording holds both `# chord` lines. The
+spec's mutation, LB mapped to Z as well, shows `buttons 0010` at 1700 and
+1800. Checks: `test_padrec.py` (the host bits for exactly the frames held and
+no report changing, one chord for ten frames read three times, LB alone not
+a chord and View arriving under it one, each name parsed and a misspelling
+refused, the chord a comment in the recording and absent from its replay);
+`test_scenario.py` (the grammar); `test_mods.py` (`host_buttons` as si.c
+gives it; map-log built against the header before it still loads). The
+owner's check -- a pad in slot 1 or 2 plays port 1 -- is session A's.

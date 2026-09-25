@@ -118,6 +118,16 @@ def test_pad_parses_presses_repeats_holds_and_the_stick():
     assert events[3].every == 900 and events[3].hold == 300
 
 
+def test_pad_parses_the_host_buttons_apart_from_the_game_s():
+    """lb, view, ls and rs (CH1) are si.c's host buttons: they parse, and
+    they are kept apart from the buttons the game sees."""
+    events = scenario.parse_pad("1700:view+lb,1800:lb,1900:view+rs,2000:ls+a")
+    assert [e.host for e in events] == [("view", "lb"), ("lb",), ("view", "rs"), ("ls",)]
+    assert [e.buttons for e in events] == [(), (), (), ("a",)]
+    with pytest.raises(scenario.ScenarioError, match="host buttons are lb view ls rs"):
+        scenario.parse_pad("1700:lbb")
+
+
 def test_pad_takes_one_trailing_comma_because_si_does():
     """script_init() steps over the comma after each event and then finds the
     end of the string, so "100:a,200:b," is two events there too."""

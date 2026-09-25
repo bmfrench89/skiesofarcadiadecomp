@@ -131,6 +131,8 @@ NEEDED_FILES = ("sys/main.dol", "sys/boot.bin", "sys/fst.bin", "disc.iso")
 # four stick deflections script_init() understands.
 BUTTONS = ("a", "b", "x", "y", "z", "l", "r", "start", "up", "down", "left", "right")
 STICKS = ("sup", "sdown", "sleft", "sright")
+# si.c host_named() -- the host buttons (CH1), which never reach the game.
+HOST = ("lb", "view", "ls", "rs")
 HOLD_FRAMES = 10  # si.c HOLD_FRAMES, the hold an event gets without #H
 MAX_EVENTS = 1024  # si.c g_script[], which silently keeps only the first 1024
 
@@ -184,6 +186,7 @@ class PadEvent:
     sticks: tuple[str, ...]
     every: int  # 0 = once
     hold: int
+    host: tuple[str, ...] = ()  # lb, view, ls, rs: the port's, never the game's
 
 
 # [0-9], not \d: Python's \d and int() take every Unicode digit, and strtoul()
@@ -229,12 +232,14 @@ def parse_pad(script: str) -> list[PadEvent]:
         if not m:
             raise ScenarioError(f"{item!r} is not frame:buttons[@repeat][#hold]")
         frame, names, suffixes = int(m.group(1)), m.group(2), m.group(3)
-        buttons, sticks = [], []
+        buttons, sticks, host = [], [], []
         for token in names.split("+"):
             if token in BUTTONS:
                 buttons.append(token)
             elif token in STICKS:
                 sticks.append(token)
+            elif token in HOST:
+                host.append(token)
             elif not token:
                 # si.c reads "a+" as "a" (the '+' only advances its cursor), so
                 # this is a typo rather than a script that drives the wrong
@@ -251,7 +256,8 @@ def parse_pad(script: str) -> list[PadEvent]:
             else:
                 raise ScenarioError(
                     f"{item!r} names {token!r}, which si.c does not know; "
-                    f"buttons are {' '.join(BUTTONS)} and the stick is {' '.join(STICKS)}"
+                    f"buttons are {' '.join(BUTTONS)}, the stick is {' '.join(STICKS)} "
+                    f"and the host buttons are {' '.join(HOST)}"
                 )
         every, hold = 0, HOLD_FRAMES
         for kind, count in re.findall(r"([@#])([0-9]+)", suffixes):
@@ -259,14 +265,14 @@ def parse_pad(script: str) -> list[PadEvent]:
                 every = int(count)
             else:
                 hold = int(count)
-        events.append(PadEvent(frame, tuple(buttons), tuple(sticks), every, hold))
+        events.append(PadEvent(frame, tuple(buttons), tuple(sticks), every, hold, tuple(host)))
     if len(events) > MAX_EVENTS:
         raise ScenarioError(f"{len(events)} events; si.c keeps only the first {MAX_EVENTS} of them")
     return events
 
 
 def describe_event(e: PadEvent) -> str:
-    what = " + ".join(e.buttons + e.sticks) or "nothing"
+    what = " + ".join(e.buttons + e.sticks + e.host) or "nothing"
     when = f"frame {e.frame}"
     held = "" if e.hold == HOLD_FRAMES else f", held {e.hold} frames"
     if e.every and e.hold >= e.every:

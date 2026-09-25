@@ -519,6 +519,20 @@ static void api_log(const char* line)
 static int api_call_guest(uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
                           uint32_t n_floats, uint32_t* r3, double* f1);
 
+/* The host buttons (CH1): si.c's, through a setter main.c calls, so this
+ * file still links alone -- test_mods.py's driver hands it a stub. */
+static uint32_t (*g_host_fn)(void);
+
+void mod_set_host_buttons(uint32_t (*fn)(void))
+{
+    g_host_fn = fn;
+}
+
+static uint32_t api_host_buttons(void)
+{
+    return g_host_fn ? g_host_fn() : 0;
+}
+
 static const SoaModApi g_api = {
     sizeof(SoaModApi), SOA_MOD_API_VERSION,
     api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
@@ -530,6 +544,7 @@ static const SoaModApi g_api = {
     api_projection_filter,
     api_texture_provider,
     api_call_guest,
+    api_host_buttons,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */

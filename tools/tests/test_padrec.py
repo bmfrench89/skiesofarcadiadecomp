@@ -48,6 +48,12 @@ void si_report(void);
 int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 void si_set_config_extra(const char* extra);
+void si_set_chord_handler(void (*fn)(int chord, unsigned frame));
+uint32_t si_host_buttons(void);
+
+/* The window's host buttons (CH1): none here -- a script's are the test. */
+int window_host(uint16_t* host) { (void)host; return 0; }
+static void chord(int c, unsigned f) { printf("chord %u %d\n", f, c); }
 
 static unsigned g_frame;
 static uint64_t g_retrace;
@@ -84,8 +90,11 @@ int main(int argc, char** argv)
 {
     unsigned last = argc > 2 ? (unsigned)strtoul(argv[2], NULL, 10) : 100u;
     unsigned per = argc > 3 ? (unsigned)strtoul(argv[3], NULL, 10) : 2u;
+    unsigned reads = argc > 4 ? (unsigned)strtoul(argv[4], NULL, 10) : 2u;
     uint64_t hi = 0, lo = 0, was_hi = ~0ull, was_lo = ~0ull;
-    unsigned f;
+    uint32_t was_host = 0;
+    unsigned f, k;
+    si_set_chord_handler(chord);
     g_live = argc > 1 && strcmp(argv[1], "record") == 0;
     if (getenv("DRIVER_EXTRA")) {
         /* What main.c hands over -- recorded settings and the mod list -- as
@@ -104,8 +113,11 @@ int main(int argc, char** argv)
         g_frame = f;
         g_retrace = (uint64_t)f * per;
         /* Twice, as the guest does: the field poll and a direct transfer. */
-        si_poll();
-        si_poll();
+        for (k = 0; k < reads; k++) si_poll();
+        if (si_host_buttons() != was_host) {
+            was_host = si_host_buttons();
+            printf("host %u %X\n", f, (unsigned)was_host);
+        }
         si_read(NULL, 0xCC006404u, 4, &hi);
         si_read(NULL, 0xCC006408u, 4, &lo);
         if (hi != was_hi || lo != was_lo) {
@@ -149,7 +161,7 @@ def driver(tmp_path_factory):
     return exe
 
 
-def run(driver, tmp_path, mode, env=None, last=100, per=2):
+def run(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
     """One run of the driver. Reports go to stdout, everything si.c says to
     stderr, so the two are never confused for each other."""
     e = dict(os.environ)
@@ -177,7 +189,7 @@ def run(driver, tmp_path, mode, env=None, last=100, per=2):
     )
     e.update(env or {})
     proc = subprocess.run(
-        [str(driver), mode, str(last), str(per)],
+        [str(driver), mode, str(last), str(per), str(reads)],
         capture_output=True,
         text=True,
         env=e,
@@ -372,3 +384,67 @@ def test_a_long_config_line_arrives_whole_and_a_longer_one_says_it_was_cut(drive
     )
     assert "[pad] the config line was cut at 639 bytes of 800" in err, err
     assert "END" not in rec2.read_text()
+
+
+# --------------------------------------------------------------------------
+# host buttons and chords (CH1)
+# --------------------------------------------------------------------------
+
+
+def reports(out: str) -> list[str]:
+    return [ln for ln in out.splitlines() if ln[:1].isdigit()]
+
+
+@needs_msvc
+def test_host_buttons_come_from_the_script_and_never_reach_the_game(driver, tmp_path):
+    """view+lb held ten frames: the host bits are View and LB for exactly
+    those frames, the chord fires once, and not one GameCube bit moves --
+    the reports are the neutral pad's from start to end."""
+    out, err = run(driver, tmp_path, "script", {"SOA_PAD": "5:view+lb"}, last=30)
+    assert "host 5 3" in out and "host 15 0" in out, out
+    assert [ln for ln in out.splitlines() if ln.startswith("chord")] == ["chord 5 0"], out
+    neutral, _ = run(driver, tmp_path, "script", {"SOA_PAD": "40:a"}, last=30)
+    assert reports(out) == reports(neutral), (out, neutral)
+    assert "1 scripted controller events" in err, err
+
+
+@needs_msvc
+def test_a_chord_fires_once_on_the_frame_its_last_button_goes_down(driver, tmp_path):
+    """Held ten frames and read three times a frame, a chord fires once. LB
+    alone is not a chord; View arriving while LB is held fires it then."""
+    out, _ = run(driver, tmp_path, "script", {"SOA_PAD": "10:view+rs"}, last=40, reads=3)
+    assert [ln for ln in out.splitlines() if ln.startswith("chord")] == ["chord 10 1"], out
+    out, _ = run(driver, tmp_path, "script", {"SOA_PAD": "20:lb#30,30:view,60:view+ls"}, last=80)
+    assert [ln for ln in out.splitlines() if ln.startswith("chord")] == [
+        "chord 30 0",
+        "chord 60 2",
+    ], out
+
+
+@needs_msvc
+@pytest.mark.parametrize("name", ["lb", "view", "ls", "rs"])
+def test_each_host_button_parses(driver, tmp_path, name):
+    out, err = run(driver, tmp_path, "script", {"SOA_PAD": f"3:{name}"}, last=10)
+    assert "1 scripted controller events" in err and "not understood" not in err, err
+    assert "host 3 " in out, out
+
+
+@needs_msvc
+def test_a_misspelt_host_button_is_refused(driver, tmp_path):
+    _, err = run(driver, tmp_path, "script", {"SOA_PAD": "3:lbb"}, last=10)
+    assert "parsed no events" in err, err
+
+
+@needs_msvc
+def test_a_chord_is_a_comment_in_the_recording_and_not_replayed(driver, tmp_path):
+    """The recording says the chord happened; the replay is the whole input,
+    so it carries no host buttons and fires no chord, and plays the same."""
+    rec = tmp_path / "chord.pad"
+    live, _ = run(
+        driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec), "SOA_PAD": "12:view+lb"}, last=40
+    )
+    assert "# chord 12 view+lb fullscreen" in rec.read_text(), rec.read_text()
+    assert "chord 12 0" in live, live
+    again, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=40)
+    assert "chord" not in again and "host" not in again, again
+    assert reports(again) == reports(live), (live, again)

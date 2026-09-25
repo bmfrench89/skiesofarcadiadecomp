@@ -221,11 +221,14 @@ void si_motor_stop(void);
 
 /* The rumble motor's sink (si.c, M18): both of port 1's motors at the speed
  * si.c asks for. A pad that is not there refuses the call, which is fine. */
+static int g_pad_slot = -1; /* the XInput slot port 1 follows, or -1 for none */
+
 static void motor(unsigned speed)
 {
     XINPUT_VIBRATION v;
+    int slot = g_pad_slot;
     v.wLeftMotorSpeed = v.wRightMotorSpeed = (WORD)speed;
-    XInputSetState(0, &v);
+    if (slot >= 0) XInputSetState((DWORD)slot, &v);
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -412,8 +415,8 @@ int window_open(void)
  * focus and keeps driving the game. A recording is faithful to both -- it
  * writes down what the port returned -- but a keyboard session interrupted
  * by another window records the neutral input the guest really saw. */
-static int g_pad_present;
 static ULONGLONG g_pad_probe_at;
+static WORD g_pad_xbuttons; /* the last XInput buttons window_pad read, for window_host */
 
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2])
 {
@@ -448,12 +451,27 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
      * there; a pad plugged in mid-session is picked up within a second of
      * plugging it in. The statics are safe unlocked because every caller of
      * window_pad is si.c on the guest thread. */
+    /* Port 1 follows the pad (CH1, the M8 amendment): the first connected
+     * slot of the four, found by probing all of them once a second while
+     * none is, and kept until it goes -- so a pad Windows put in slot 1 or 2
+     * still plays. */
     memset(&xs, 0, sizeof xs);
-    if (g_pad_present || GetTickCount64() >= g_pad_probe_at) {
-        g_pad_present = XInputGetState(0, &xs) == ERROR_SUCCESS;
-        if (!g_pad_present) g_pad_probe_at = GetTickCount64() + 1000;
+    if (g_pad_slot >= 0 && XInputGetState((DWORD)g_pad_slot, &xs) != ERROR_SUCCESS) {
+        g_pad_slot = -1;
+        g_pad_probe_at = GetTickCount64() + 1000;
+        memset(&xs, 0, sizeof xs);
     }
-    if (g_pad_present) {
+    if (g_pad_slot < 0 && GetTickCount64() >= g_pad_probe_at) {
+        DWORD slot;
+        for (slot = 0; slot < XUSER_MAX_COUNT && g_pad_slot < 0; slot++)
+            if (XInputGetState(slot, &xs) == ERROR_SUCCESS) g_pad_slot = (int)slot;
+        if (g_pad_slot < 0) {
+            g_pad_probe_at = GetTickCount64() + 1000;
+            memset(&xs, 0, sizeof xs);
+        }
+    }
+    g_pad_xbuttons = g_pad_slot >= 0 ? xs.Gamepad.wButtons : 0;
+    if (g_pad_slot >= 0) {
         const XINPUT_GAMEPAD* g = &xs.Gamepad;
         if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
         if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;
@@ -479,9 +497,28 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
     trig[1] = (uint8_t)rt;
     return 1;
 }
+
+/* The host buttons (CH1): LB, View and the stick clicks of the pad port 1
+ * follows, as window_pad last read it, and Tab as LB while the window has
+ * the focus. None is mapped to a GameCube button, and si.c keeps them out
+ * of the report: they are the port's and the mods', never the game's. */
+int window_host(uint16_t* host)
+{
+    uint16_t h = 0;
+    WORD x = g_pad_xbuttons;
+    if (!g_open) return 0;
+    if (x & XINPUT_GAMEPAD_LEFT_SHOULDER) h |= 0x1;
+    if (x & XINPUT_GAMEPAD_BACK) h |= 0x2;
+    if (x & XINPUT_GAMEPAD_LEFT_THUMB) h |= 0x4;
+    if (x & XINPUT_GAMEPAD_RIGHT_THUMB) h |= 0x8;
+    if (GetForegroundWindow() == g_hwnd && (GetAsyncKeyState(VK_TAB) & 0x8000)) h |= 0x1;
+    *host = h;
+    return 1;
+}
 #else
 #include <stdint.h>
 void window_start(void) {}
 int window_open(void) { return 0; }
+int window_host(uint16_t* host) { (void)host; return 0; }
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 #endif

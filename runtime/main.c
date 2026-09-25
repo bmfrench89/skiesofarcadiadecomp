@@ -46,6 +46,23 @@ void settings_record_as(const char* key, const char* value);
 void settings_check_mods(int (*loaded)(const char* id));
 void si_set_motor_strength(int percent); /* si.c, M18 */
 void si_motor_stop(void);
+void si_set_chord_handler(void (*fn)(int chord, unsigned frame)); /* si.c, CH1 */
+uint32_t si_host_buttons(void);
+const char* si_chord_name(int chord, int what);
+void mod_set_host_buttons(uint32_t (*fn)(void));
+
+/* A gamepad chord (CH1): View with LB, RS or LS. One arm per chord, each
+ * replaced by the slice that builds its action -- H19a fullscreen, M11a
+ * turbo, M8 the menu -- so CH1 depends on none of them. */
+static void on_chord(int chord, unsigned frame)
+{
+    switch (chord) {
+    default:
+        fprintf(stderr, "[chord] frame %u: %s -> %s (not built yet)\n", frame, si_chord_name(chord, 0),
+                si_chord_name(chord, 1));
+        break;
+    }
+}
 int mod_loaded(const char* id); /* mod.c */
 void seed_report(void);
 /* Set while gx.c is inside the command-stream parse. The sampler reads it
@@ -1198,6 +1215,8 @@ int main(int argc, char** argv)
          * the report covers each path through hle_report, atexit the exit()s
          * that skip it; window.c stops it on focus loss and close. */
         si_set_motor_strength(rumble && *rumble ? atoi(rumble) : 100);
+        si_set_chord_handler(on_chord);
+        mod_set_host_buttons(si_host_buttons);
         hle_on_report(si_motor_stop);
         atexit(si_motor_stop);
         if (seed_init(seed, sizeof seed)) hle_on_report(seed_report);

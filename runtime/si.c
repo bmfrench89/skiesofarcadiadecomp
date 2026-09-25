@@ -67,6 +67,18 @@ static const struct { const char* n; uint16_t b; } g_button_names[] = {
 };
 #define BUTTON_NAMES (sizeof g_button_names / sizeof g_button_names[0])
 
+/* Host buttons (CH1): the pad's buttons the game never sees -- LB, View and
+ * the two stick clicks, the keyboard's Tab counting as LB. A script names
+ * them like buttons; they go to g_host, never into the report. */
+#define HOST_LB 0x1u
+#define HOST_VIEW 0x2u
+#define HOST_LS 0x4u
+#define HOST_RS 0x8u
+static const struct { const char* n; uint8_t b; } g_host_names[] = {
+    {"lb", HOST_LB}, {"view", HOST_VIEW}, {"ls", HOST_LS}, {"rs", HOST_RS},
+};
+#define HOST_NAMES (sizeof g_host_names / sizeof g_host_names[0])
+
 static uint32_t g_outbuf[4], g_inbuf_hi[4], g_inbuf_lo[4];
 static uint32_t g_poll, g_comcsr, g_sr, g_exilk;
 static uint8_t g_iobuf[128];
@@ -75,7 +87,7 @@ static int g_present[4] = {1, 0, 0, 0};
 
 /* ---- scripted controller ------------------------------------------------ */
 
-typedef struct { unsigned frame, every, hold; uint16_t buttons; uint8_t stick[2]; } PadEvent;
+typedef struct { unsigned frame, every, hold; uint16_t buttons; uint8_t stick[2]; uint8_t host; } PadEvent;
 static PadEvent g_script[1024]; /* "F:buttons" once at frame F; "@N" again every N frames; "#H" held H frames */
 static int g_script_n = -1;
 #define HOLD_FRAMES 10
@@ -86,6 +98,15 @@ static uint16_t button_named(const char* name, size_t len)
     for (i = 0; i < BUTTON_NAMES; i++)
         if (strlen(g_button_names[i].n) == len && strncmp(g_button_names[i].n, name, len) == 0)
             return g_button_names[i].b;
+    return 0;
+}
+
+static uint8_t host_named(const char* name, size_t len)
+{
+    size_t i;
+    for (i = 0; i < HOST_NAMES; i++)
+        if (strlen(g_host_names[i].n) == len && strncmp(g_host_names[i].n, name, len) == 0)
+            return g_host_names[i].b;
     return 0;
 }
 
@@ -106,6 +127,7 @@ static void script_init(void)
         char* end;
         unsigned frame, every = 0, hold = HOLD_FRAMES;
         uint16_t buttons = 0;
+        uint8_t host = 0;
         if (*p < '0' || *p > '9') break; /* strtoul would skip a space or take a sign */
         frame = (unsigned)strtoul(p, &end, 10);
         if (*end != ':') break;
@@ -115,6 +137,7 @@ static void script_init(void)
             const char* q = p;
             size_t len;
             uint16_t b;
+            uint8_t h;
             while (*q && *q != ',' && *q != '+' && *q != '@' && *q != '#') q++;
             len = (size_t)(q - p);
             /* sup/sdown/sleft/sright move the main stick; everything else is a button */
@@ -123,6 +146,7 @@ static void script_init(void)
             else if (len == 5 && strncmp(p, "sleft", 5) == 0) stick[0] = 0;
             else if (len == 6 && strncmp(p, "sright", 6) == 0) stick[0] = 255;
             else if ((b = button_named(p, len)) != 0) buttons |= b;
+            else if ((h = host_named(p, len)) != 0) host |= h;
             else { bad = 1; break; }
             named = 1;
             p = *q == '+' ? q + 1 : q;
@@ -141,6 +165,7 @@ static void script_init(void)
         g_script[g_script_n].buttons = buttons;
         g_script[g_script_n].stick[0] = stick[0];
         g_script[g_script_n].stick[1] = stick[1];
+        g_script[g_script_n].host = host;
         g_script_n++;
         if (*p == ',') p++;
     }
@@ -160,12 +185,13 @@ uint64_t irq_retrace_count(void);
 
 unsigned gx_frame_count(void);
 
-static uint16_t buttons_now(uint8_t stick[2])
+static uint16_t script_now(uint8_t stick[2], uint8_t* host)
 {
     uint64_t frame = gx_frame_count(); /* the game's frames, not fields: deterministic against its logic */
     uint16_t b = 0;
     int i;
     stick[0] = stick[1] = 128;
+    *host = 0;
     if (g_script_n < 0) script_init();
     for (i = 0; i < g_script_n; i++) {
         uint64_t rel;
@@ -174,6 +200,7 @@ static uint16_t buttons_now(uint8_t stick[2])
         if (g_script[i].every) rel %= g_script[i].every;
         if (rel < g_script[i].hold) {
             b |= g_script[i].buttons;
+            *host |= g_script[i].host;
             if (g_script[i].stick[0] != 128) stick[0] = g_script[i].stick[0];
             if (g_script[i].stick[1] != 128) stick[1] = g_script[i].stick[1];
         }
@@ -181,7 +208,14 @@ static uint16_t buttons_now(uint8_t stick[2])
     return b;
 }
 
+static uint16_t buttons_now(uint8_t stick[2])
+{
+    uint8_t host;
+    return script_now(stick, &host);
+}
+
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
+int window_host(uint16_t* host);
 
 /* ---- recording and replay ---------------------------------------------- */
 
@@ -730,6 +764,70 @@ void si_set_pad_filter(void (*fn)(unsigned frame, void* pad))
     g_pad_filter = fn;
 }
 
+/* ---- host buttons and chords (CH1) --------------------------------------
+ * g_host is the window's host buttons and the script's, taken on the first
+ * read of each frame -- whether or not a recording latches -- so a chord
+ * read three times a frame fires once. During a replay it is 0: the replay
+ * is the whole input. A chord fires on the frame its last button goes down;
+ * the handler main.c sets does what it names, and a recording gets a
+ * `# chord` comment the replay passes over (replaying the actions is the
+ * event track's, milestone 2). LB held alone is not a chord: mods read it. */
+static uint32_t g_host, g_host_prev;
+static unsigned g_host_frame;
+static int g_host_valid;
+static void (*g_chord_fn)(int chord, unsigned frame);
+static const struct { uint32_t mask; const char* keys; const char* what; } k_chords[] = {
+    {HOST_VIEW | HOST_LB, "view+lb", "fullscreen"}, /* SI_CHORD_FULLSCREEN, 0 */
+    {HOST_VIEW | HOST_RS, "view+rs", "turbo"},      /* SI_CHORD_TURBO, 1 */
+    {HOST_VIEW | HOST_LS, "view+ls", "menu"},       /* SI_CHORD_MENU, 2: reserved for M8 */
+};
+
+void si_set_chord_handler(void (*fn)(int chord, unsigned frame))
+{
+    g_chord_fn = fn;
+}
+
+uint32_t si_host_buttons(void)
+{
+    return g_host;
+}
+
+/* The chord's two names, for the handler's line: "view+lb" and "fullscreen". */
+const char* si_chord_name(int chord, int what)
+{
+    if (chord < 0 || chord >= (int)(sizeof k_chords / sizeof k_chords[0])) return "?";
+    return what ? k_chords[chord].what : k_chords[chord].keys;
+}
+
+static void host_update(unsigned frame)
+{
+    uint32_t pressed;
+    size_t i;
+    if (g_host_valid && frame == g_host_frame) return;
+    g_host_valid = 1;
+    g_host_frame = frame;
+    g_host_prev = g_host;
+    g_host = 0;
+    if (!g_play_n) {
+        uint16_t w = 0;
+        uint8_t stick[2], script = 0;
+        if (window_host(&w)) g_host = w;
+        script_now(stick, &script);
+        g_host |= script;
+    }
+    pressed = g_host & ~g_host_prev;
+    for (i = 0; i < sizeof k_chords / sizeof k_chords[0]; i++) {
+        if ((g_host & k_chords[i].mask) != k_chords[i].mask || !(pressed & k_chords[i].mask)) continue;
+        if (g_rec && !g_rec_done) {
+            char line[80];
+            snprintf(line, sizeof line, "# chord %u %s %s\n", frame, k_chords[i].keys, k_chords[i].what);
+            fputs(line, g_rec);
+            fflush(g_rec);
+        }
+        if (g_chord_fn) g_chord_fn((int)i, frame);
+    }
+}
+
 /* The 8-byte controller report: buttons, main stick, C stick, triggers. */
 static void pad_report(uint8_t out[8])
 {
@@ -739,6 +837,7 @@ static void pad_report(uint8_t out[8])
     unsigned frame = gx_frame_count();
     PadState st;
     if (!g_rec_tried) pad_record_open();
+    if (!g_play_tried) pad_replay_load();
     /* The port reads the pad several times a frame -- the field poll, and any
      * direct transfer -- and the keyboard and the gamepad each answer with
      * whatever is true at that instant. A recording keyed by the frame can
@@ -759,6 +858,7 @@ static void pad_report(uint8_t out[8])
         latch_frame = frame;
         latch_valid = 1;
     }
+    host_update(frame); /* after the sample, so the window's host buttons are this read's */
     if (g_rec) pad_record(&st, frame);
     if (g_pad_filter) {
         g_pad_filter(frame, &st);

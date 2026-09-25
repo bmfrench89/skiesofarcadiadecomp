@@ -45,6 +45,12 @@
 #define SOA_PAD_Y 0x0800u
 #define SOA_PAD_START 0x1000u
 
+/* Host buttons (host_buttons, CH1): the pad's buttons the game never sees. */
+#define SOA_HOST_LB 0x1u   /* the left bumper, and the keyboard's Tab */
+#define SOA_HOST_VIEW 0x2u /* View (Back) */
+#define SOA_HOST_LS 0x4u   /* the left stick's click */
+#define SOA_HOST_RS 0x8u   /* the right stick's click */
+
 /* One controller read, laid out as si.c's PadState (for pad_filter, M3b). */
 typedef struct SoaPad {
     uint16_t buttons;  /* SOA_PAD_* */
@@ -138,6 +144,12 @@ typedef struct SoaModApi {
      * returns when that thread runs again. */
     int (*call_guest)(uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
                       uint32_t n_floats, uint32_t* r3, double* f1);
+
+    /* Appended (CH1). The host buttons held as of the current controller
+     * read, SOA_HOST_* bits: the buttons a person presses for the port or a
+     * mod, which never reach the game. 0 while a recording replays, which is
+     * the whole input. Not in recordings yet (the event track's). */
+    uint32_t (*host_buttons)(void);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);
