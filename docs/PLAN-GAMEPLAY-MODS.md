@@ -342,7 +342,7 @@ The first idea list was comfort and community features, the second gameplay and 
 - **Comparing settings across separate runs,** even with P6's seed and one pad script, waits on K6 (rule 7). All three equal would not be a pass there: a mod that does nothing gives it.
 - The contract holds.
 
-**P3. `.gci` import and export** — *hours. Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.11 as P3.*
+**P3. `.gci` import and export** — *hours. Specified in [specs/comfort-pack.md](specs/comfort-pack.md) 3.11 as P3; done (1d4bb73), but for the owner's check with a Dolphin save.*
 - `cardformat.py export CARD SLOT out.gci` and `import CARD in.gci`: a 0x40-byte directory entry plus blocks.
 - It refuses a wrong game code, a full card and a corrupt file.
 - Export warns when the save's map has no op 138 and the save carries no X2 fallback. Such a save may trap in Dolphin (section F's M7a amendment).

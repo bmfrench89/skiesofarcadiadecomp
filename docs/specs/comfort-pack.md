@@ -163,11 +163,11 @@ of these slices among the other plans' (its C1).
   `build/cards/slotA.raw` (`exi.c:90`), mirrored in `si.c:294` [V]. The disc default is CWD-relative
   `extracted` (`main.c:1087`), and `aram.c:160-172` reads the disc directory from MSVC's `__argv`,
   ignoring `soa.ini`'s `disc` [V].
-- `cardformat.py` writes, shows and verifies (`cardformat.py:1045-1087`, `:1117-1160`); it parses
-  directory entries (`:475-557`) but has no import or export [V]. `--size` takes 4–128 Mbit
-  (`CARD_SIZES`, `:120`; `:1089-1095`). `verify()` (`:700-826`) checks each directory and FAT block's
-  checksum and free count, never which slot an update wrote. `current_slot()` (`:560-570`) picks the
-  slot with the lower check code as the one written next [V]. A card image's block 0 begins with the
+- `cardformat.py` writes, shows and verifies (`cmd_write`, `main`); it parses directory entries
+  (`DirEntry`) and, before P3, had no import or export [V]. `--size` takes 4–128 Mbit (`CARD_SIZES`;
+  `add_card_options`). `verify()` checks each directory and FAT block's checksum and free count, never
+  which slot an update wrote. `current_slot()` picks the slot with the lower check code as the one
+  written next [V]. (Functions are named, not lines: P3, 1d4bb73, moved every line of this file.) A card image's block 0 begins with the
   12-byte scrambled flash serial (`id_block`, `:300`), not the game code [V]. The game's save is one
   file per slot, `GEAE 8P SA_LEGENDS.000`, 3 blocks, permission 0x04 (save-load.md:170;
   FINDINGS.md:1236) [V].
@@ -639,7 +639,7 @@ All in window.c, on the UI thread that already owns the window and presents.
 
 - **The format:** a 0x40-byte directory entry, as on the card, then `blocks × 8192` bytes; Dolphin
   checks the file size against the entry's block count at 0x38 [V, Dolphin `GCIFile.cpp`,
-  `GCMemcard.h`; the offsets match `cardformat.py:475-557`].
+  `GCMemcard.h`; the offsets match `cardformat.py`'s `DirEntry`].
 - **`export CARD (--index N | --name NAME) OUT.gci`:** the entry from the current directory, then the
   blocks along its chain in the current FAT. The default file name follows Dolphin's GCI-folder
   naming [I; check against Dolphin's `DEntry::GCI_FileName` before shipping].
@@ -657,7 +657,7 @@ All in window.c, on the UI thread that already owns the window and presents.
   - It writes the new directory and FAT into **the slot `current_slot()` picks**, the one with the lower
     check code, with check code = the other slot's + 1 (s16 wrap), recomputing checksums. The other,
     newer slot is left byte for byte as it was. This is how the card library itself alternates them
-    (`cardformat.py:560-570`), and it keeps the previous state as the backup copy. `verify()` cannot
+    (`cardformat.py`'s `current_slot()`), and it keeps the previous state as the backup copy. `verify()` cannot
     see a wrong choice (2.6), so the Done checks the slots directly.
   - It keeps the entry's own fields (time, permission, copy count), setting only the start block.
   - It re-verifies what it wrote and exits 1 unless the mount would say READY.
@@ -1368,7 +1368,15 @@ since M19, pause.*
   - **Owner:** sleep the handheld for a minute in the field; on waking, the play-time clock has not
     jumped.
 
-**P3. `.gci` import and export** — *a day; none; prerequisites none. **Owner.***
+**P3. `.gci` import and export** — *a day; none; prerequisites none. **Owner.** Landed as 1d4bb73
+(its FINDINGS entry and count updates are in ddb4b21), but for the owner's check with a Dolphin save
+(session B). What the build found:
+- **The check code wraps.** When the slot's check code is at 0x7FFF, the next one wraps negative, and
+  the card library's signed comparison would then pick the older slot, so an import would be invisible
+  to the game. `import` exits 1 and says why instead of writing it.
+- **A card with one damaged copy** of its directory or FAT is refused for both export and import.
+- **The export name** is `<maker>-<game>-<name>.gci`. It has not been checked against Dolphin's own
+  source (`DEntry::GCI_FileName`), which the owner's session B covers.*
 - Files: `tools/cardformat.py`, `tools/tests/test_cardformat.py`.
 - What: 3.11.
 - *Done:*

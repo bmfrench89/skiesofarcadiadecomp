@@ -107,8 +107,8 @@ and P6b have landed, and so have T0c and a manifest 2 follow-up, taken in betwee
 live checks, M18 written, and I2 being built in a separate worktree. Since then P11 (664f005), M18
 (3d08479, but for the owner's check) and I2 (12077d1, but for the owner's prune) have landed, then
 CH1 (d1000af), P11b (4c698f5) and H19a (63661a0), then M5b (9642613) and M19 (fe7e48f). CH1, H19a,
-M5b and M19 wait only for the owner's checks, so **owner session A is ready** (C8). P3 is being built in a
-worktree; P10a, then P5a, P5b and M11a, are next.
+M5b and M19 wait only for the owner's checks, so **owner session A is ready** (C8). P3 has landed
+(1d4bb73), but for the owner's check in session B; P10a, then P5a, P5b and M11a, are next.
 
 ### A2. H13 is closed as "done enough"
 
@@ -389,7 +389,7 @@ cost least.
 | 12 | **M5b** a first run without a terminal. **Done, 9642613**, but for the owner's check | a day | `--link` | D-3 | **Owner** (A) |
 | 13 | **M19** a clock that survives sleep. **Done, fe7e48f**, but for the owner's check | several days | `--link` | — | **Owner** (A) |
 | — | **Owner session A** (C8) | — | — | 8, 9, 11, 12, 13 landed | **Owner** |
-| 14 | **P3** `.gci` import and export | a day | none | — | **Owner** (B) |
+| 14 | **P3** `.gci` import and export. **Done, 1d4bb73**, but for the owner's check | a day | none | — | **Owner** (B) |
 | 15 | **P10a** pad 2 in the runtime | a day | `--link` | — | — |
 | 16 | **P10b** couch co-op (its one-hour spike first) | hours to a day | none, `--link` for its key | P10a, P1a | **Owner** (B) |
 | 17 | **P5a** picture options | a day | `--link` | H19a for `sharp`/`crt` | — |
