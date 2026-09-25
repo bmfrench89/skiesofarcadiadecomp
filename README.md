@@ -178,6 +178,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_RENDER=1` | render (and open the window) |
 | `SOA_SCALE=n` | window scale, default 2 |
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
+| `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
 | `SOA_SNAP=n` | write `build/frames/NNNN.png` every n frames; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |

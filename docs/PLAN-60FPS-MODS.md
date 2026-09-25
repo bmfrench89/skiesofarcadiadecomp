@@ -245,7 +245,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - H4's analyser, keyed on tags, reaches at least 90% of pixels matched in every scene. If it does not, FINDINGS says so and route (c) is re-decided against H5's verdict.
 - With tags off, 23/23 and `title --check`.
 
-**H8. A paced presenter** — *a day. **Owner:** one windowed session.*
+**H8. A paced presenter** — *presenter built 2026-09-25 (DXGI flip model, sync interval from the display's rate, present histogram and VI drift in the report; `SOA_PRESENTER=gdi` for the old path). The owner's display runs at 85 Hz, where 30 fps cannot be paced evenly, and the guest's VI ran 51.3 Hz in the opening. **Owner:** set 60 or 120 Hz, then the windowed session and the verdict. FINDINGS "H8".*
 - A DXGI flip-model swap chain with vsync, presented on an event instead of the 8 ms poll.
 - A double-buffered screen.
 - Each real frame is held for exactly two refreshes.

@@ -15,11 +15,15 @@
  */
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS
+#define COBJMACROS
 #include "cpu.h"
 #include "gxr.h"
 #include <windows.h>
 #include <xinput.h>
 #include <process.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#include <dwmapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,9 +31,15 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "xinput9_1_0.lib")
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "dxguid.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 long gxr_presented(void);
 void hle_report(void);
+void hle_on_report(void (*fn)(void));
+uint64_t irq_retrace_count(void);
 void watchdog_fallback(void);
 
 static HWND g_hwnd;
@@ -37,6 +47,173 @@ static volatile int g_open;
 static int g_scale = 2;
 static uint8_t* g_bgra; /* the frame converted for GDI */
 static int g_shown_w, g_shown_h;
+
+/* ---- the paced presenter (PLAN-60FPS-MODS H8) ----------------------------
+ *
+ * The window used to be painted with GDI whenever the 8 ms poll below saw a
+ * new frame: no relation to the display's refresh, so a frame at 30 a second
+ * was held for one refresh, then three, then two, as the poll and the vblank
+ * drifted past each other. This is a DXGI flip-model swap chain instead: each
+ * new frame is copied into the back buffer (scaled by whole pixels on the CPU,
+ * as GDI's COLORONCOLOR did, so it looks the same) and presented with a sync
+ * interval of 2, which holds it for exactly two refreshes -- 30 frames a
+ * second paced to a 60 Hz display. SOA_PRESENTER=gdi keeps the old path, and
+ * the old path is also what runs if DXGI cannot start. Both paths record the
+ * time of every present for the report, which is the histogram H8 asks for,
+ * and the guest's retraces are set against the host's refreshes over the
+ * session, the drift H9 needs. Nothing here touches g_screen, so no frame
+ * hash can move. */
+static int g_dxgi; /* 1 when the flip-model presenter is running */
+static ID3D11Device* g_dev;
+static ID3D11DeviceContext* g_ctx;
+static IDXGISwapChain1* g_sc;
+static uint8_t* g_scaled; /* the back buffer's contents, client-sized */
+static int g_bw, g_bh;
+static LARGE_INTEGER g_qpf;
+static LONGLONG* g_pt; /* QPC time of each present */
+static size_t g_pt_n, g_pt_cap;
+static uint64_t g_guest0;
+static LONGLONG g_host0; /* QPC at the first present */
+static int g_drift_started;
+static UINT g_interval = 2;     /* refreshes each frame is held */
+static double g_refresh_ms = 0; /* the display's refresh period, as DWM measures it */
+
+static void note_present(void)
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (g_pt_n == g_pt_cap) {
+        size_t cap = g_pt_cap ? g_pt_cap * 2 : 4096;
+        LONGLONG* p = (LONGLONG*)realloc(g_pt, cap * sizeof *g_pt);
+        if (!p) return;
+        g_pt = p;
+        g_pt_cap = cap;
+    }
+    g_pt[g_pt_n++] = now.QuadPart;
+    if (!g_drift_started) {
+        g_host0 = now.QuadPart;
+        g_guest0 = irq_retrace_count();
+        g_drift_started = 1;
+    }
+}
+
+/* The display's refresh period, from DWM's own measurement: what the sync
+ * interval has to be counted in. */
+static double refresh_ms(void)
+{
+    DWM_TIMING_INFO ti;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.qpcRefreshPeriod && g_qpf.QuadPart)
+        return 1000.0 * (double)ti.qpcRefreshPeriod / (double)g_qpf.QuadPart;
+    return 0.0;
+}
+
+static int cmp_ll(const void* a, const void* b)
+{
+    LONGLONG x = *(const LONGLONG*)a, y = *(const LONGLONG*)b;
+    return (x > y) - (x < y);
+}
+
+/* The histogram, in refreshes of the display, and the drift. */
+static void present_report(void)
+{
+    double period_ms = g_refresh_ms > 0.0 ? g_refresh_ms : 1000.0 / 60.0;
+    size_t i, n = g_pt_n > 1 ? g_pt_n - 1 : 0;
+    unsigned bins[5] = {0, 0, 0, 0, 0};
+    LONGLONG* d;
+    if (!n || !(d = (LONGLONG*)malloc(n * sizeof *d))) {
+        fprintf(stderr, "[present] %s: fewer than two frames presented\n", g_dxgi ? "dxgi" : "gdi");
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        double ms = 1000.0 * (double)(g_pt[i + 1] - g_pt[i]) / (double)g_qpf.QuadPart;
+        int r = (int)(ms / period_ms + 0.5);
+        bins[r < 1 ? 0 : (r > 4 ? 4 : r)]++;
+        d[i] = g_pt[i + 1] - g_pt[i];
+    }
+    qsort(d, n, sizeof *d, cmp_ll);
+    fprintf(stderr,
+            "[present] %s: %zu intervals between presents at a %.2f ms refresh (%.1f Hz): under 1 refresh %u, 1: %u, "
+            "2: %u, 3: %u, 4 or more: %u; p50 %.1f ms, p99 %.1f ms\n",
+            g_dxgi ? "dxgi flip model" : "gdi, 8 ms poll", n, period_ms, 1000.0 / period_ms, bins[0], bins[1],
+            bins[2], bins[3], bins[4], 1000.0 * (double)d[n / 2] / (double)g_qpf.QuadPart,
+            1000.0 * (double)d[(n * 99) / 100] / (double)g_qpf.QuadPart);
+    free(d);
+    if (g_drift_started && g_pt_n > 1) {
+        /* the guest's VI against the wall clock, and so against the display:
+         * H9 locks the two only where the display's rate is a multiple of 60 */
+        double secs = (double)(g_pt[g_pt_n - 1] - g_host0) / (double)g_qpf.QuadPart;
+        double guest = (double)(irq_retrace_count() - g_guest0);
+        if (secs > 1.0)
+            fprintf(stderr, "[present] the guest's VI ran %.3f Hz over %.1f s of presents, the display %.3f Hz (H9)\n",
+                    guest / secs, secs, 1000.0 / period_ms);
+    }
+}
+
+static int dxgi_start(HWND h, int w, int ht)
+{
+    IDXGIDevice1* dd = NULL;
+    IDXGIAdapter* ad = NULL;
+    IDXGIFactory2* f = NULL;
+    DXGI_SWAP_CHAIN_DESC1 d;
+    D3D_FEATURE_LEVEL fl;
+    HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, NULL, 0,
+                                   D3D11_SDK_VERSION, &g_dev, &fl, &g_ctx);
+    if (FAILED(hr)) return 0;
+    if (SUCCEEDED(ID3D11Device_QueryInterface(g_dev, &IID_IDXGIDevice1, (void**)&dd))) {
+        IDXGIDevice1_SetMaximumFrameLatency(dd, 1);
+        if (SUCCEEDED(IDXGIDevice1_GetAdapter(dd, &ad))) IDXGIAdapter_GetParent(ad, &IID_IDXGIFactory2, (void**)&f);
+    }
+    if (f) {
+        memset(&d, 0, sizeof d);
+        d.Width = (UINT)w;
+        d.Height = (UINT)ht;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        d.BufferCount = 2;
+        d.Scaling = DXGI_SCALING_STRETCH;
+        d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        hr = IDXGIFactory2_CreateSwapChainForHwnd(f, (IUnknown*)g_dev, h, &d, NULL, NULL, &g_sc);
+        if (SUCCEEDED(hr)) IDXGIFactory2_MakeWindowAssociation(f, h, DXGI_MWA_NO_ALT_ENTER);
+    }
+    if (f) IDXGIFactory2_Release(f);
+    if (ad) IDXGIAdapter_Release(ad);
+    if (dd) IDXGIDevice1_Release(dd);
+    if (!g_sc) {
+        ID3D11DeviceContext_Release(g_ctx);
+        ID3D11Device_Release(g_dev);
+        g_ctx = NULL;
+        g_dev = NULL;
+        return 0;
+    }
+    g_bw = w;
+    g_bh = ht;
+    g_scaled = (uint8_t*)calloc((size_t)w * ht, 4);
+    return g_scaled != NULL;
+}
+
+/* g_bgra (the frame, w x h) scaled by whole pixels into the back buffer and
+ * presented, held for two refreshes. */
+static void dxgi_present(int w, int h)
+{
+    ID3D11Texture2D* bb = NULL;
+    int y, x, sx = g_bw / w, sy = g_bh / h;
+    if (sx < 1) sx = 1;
+    if (sy < 1) sy = 1;
+    for (y = 0; y < g_bh; y++) {
+        const uint32_t* src = (const uint32_t*)(g_bgra + (size_t)(y / sy < h ? y / sy : h - 1) * w * 4);
+        uint32_t* dst = (uint32_t*)(g_scaled + (size_t)y * g_bw * 4);
+        for (x = 0; x < g_bw; x++) dst[x] = src[x / sx < w ? x / sx : w - 1];
+    }
+    if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) return;
+    ID3D11DeviceContext_UpdateSubresource(g_ctx, (ID3D11Resource*)bb, 0, NULL, g_scaled, (UINT)g_bw * 4, 0);
+    ID3D11Texture2D_Release(bb);
+    IDXGISwapChain1_Present(g_sc, g_interval, 0);
+    note_present();
+}
 
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -52,7 +229,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
-        if (!(g_bgra && g_shown_w)) {
+        if (g_dxgi) {
+            /* the swap chain owns the client area; GDI must not draw over it */
+        } else if (!(g_bgra && g_shown_w)) {
             /* Nothing rasterized yet (or SOA_RENDER unset, so nothing ever
              * will be): the class has no background brush and WM_ERASEBKGND
              * is refused, so without this the client area shows whatever was
@@ -73,6 +252,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             bi.bmiHeader.biCompression = BI_RGB;
             SetStretchBltMode(dc, COLORONCOLOR);
             StretchDIBits(dc, 0, 0, rc.right, rc.bottom, 0, 0, g_shown_w, g_shown_h, g_bgra, &bi, DIB_RGB_COLORS, SRCCOPY);
+            note_present();
         }
         EndPaint(h, &ps);
         return 0;
@@ -95,7 +275,8 @@ static void present(void)
         for (x = 0; x < w; x++) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; s += 4; d += 4; }
     }
     g_shown_w = w; g_shown_h = h;
-    InvalidateRect(g_hwnd, NULL, FALSE);
+    if (g_dxgi) dxgi_present(w, h);
+    else InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 static unsigned __stdcall ui_thread(void* arg)
@@ -123,8 +304,41 @@ static unsigned __stdcall ui_thread(void* arg)
         return 0;
     }
     ShowWindow(g_hwnd, SW_SHOW);
+    QueryPerformanceFrequency(&g_qpf);
+    {
+        const char* p = getenv("SOA_PRESENTER");
+        RECT cr;
+        GetClientRect(g_hwnd, &cr);
+        DEVMODEA dm;
+        double hz;
+        memset(&dm, 0, sizeof dm);
+        dm.dmSize = sizeof dm;
+        g_refresh_ms = refresh_ms();
+        hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
+        /* A 30-a-second frame is held for a whole number of refreshes only
+         * when the display's rate is a multiple of 30: two at 60 Hz, four at
+         * 120. Anything else takes the next refresh, and H9 is the answer. */
+        if (hz / 30.0 - (double)(int)(hz / 30.0 + 0.5) < 0.02 && hz / 30.0 - (double)(int)(hz / 30.0 + 0.5) > -0.02)
+            g_interval = (UINT)(hz / 30.0 + 0.5);
+        else
+            g_interval = 1;
+        if (g_interval < 1) g_interval = 1;
+        if (g_interval > 4) g_interval = 4;
+        if (!(p && !strcmp(p, "gdi"))) {
+            g_dxgi = dxgi_start(g_hwnd, cr.right, cr.bottom);
+            if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
+        }
+        hle_on_report(present_report);
+        fprintf(stderr, "[window] the display refreshes every %.2f ms (%.1f Hz; the mode says %lu Hz)%s\n",
+                g_refresh_ms, hz, EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm) ? dm.dmDisplayFrequency : 0ul,
+                g_interval == 1 ? ", not a multiple of 30: each frame takes the next refresh" : "");
+    }
     g_open = 1;
-    fprintf(stderr, "[window] open at %dx\n", g_scale); /* the keys and the quit key are in the startup line */
+    if (g_dxgi)
+        fprintf(stderr, "[window] open at %dx, presenting with a DXGI flip-model swap chain, each frame held %u "
+                        "refresh(es)\n", g_scale, g_interval);
+    else
+        fprintf(stderr, "[window] open at %dx, presenting with GDI on an 8 ms poll\n", g_scale);
     for (;;) {
         long now;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {

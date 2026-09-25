@@ -342,7 +342,8 @@ what the game reads) and **M3c**'s projection filter (a wider view, checked on
 the 23 pinned captures under `--replay`, which loads mods) and its texture
 provider (any texture replaced by content hash, at any size). Next: H11's other half (the guest idle loop still spins on one core), then
 the renderer track toward 60 fps (H10 first, the offline midpoint). M4 (`call_guest`) is done, and M5,
-`soa.ini` beside the exe, is done but for the owner's check. **H8** needs the owner at a window for
+`soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
+the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this
 machine drifts 15% within a session on identical code (FINDINGS "H11"). The
 live title is no frame-hash oracle -- two unmodded runs differ on 22 of 40

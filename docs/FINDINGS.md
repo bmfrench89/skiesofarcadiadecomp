@@ -2108,3 +2108,34 @@ must be the game's small-data bases.
 With M1-M5 the mod framework the plan asked for is in: data patches, a safe
 point and tick, native DLLs on a versioned API with filters for input, the
 view and textures, calls into the game, and a settings file.
+
+
+**H8, the presenter: built and measured here; the owner's display runs at
+85 Hz.** 2026-09-25, `build/h8-*.log`. The window now presents through a DXGI
+flip-model swap chain: each new frame is scaled by whole pixels on the CPU
+(as GDI's COLORONCOLOR did) into the back buffer and presented with a sync
+interval chosen from the display's own refresh period -- two refreshes at
+60 Hz, four at 120, and the next refresh at a rate that is not a multiple of
+30. `SOA_PRESENTER=gdi` keeps the old path (GDI on an 8 ms poll), which is
+also the fallback if DXGI cannot start. Both paths record every present's
+time; the report gives the histogram in refreshes and the guest's VI rate
+against the display's. Nothing touches `g_screen`: the self test,
+`title --check` and the replay are unchanged.
+
+The first windowed runs (the `window` scenario, frames 0-2400, then 0-1500)
+found what the plan did not assume: **the display is set to 85 Hz** (DWM
+measures 11.76 ms; the display mode says 85). A 30-a-second frame is 2.83
+refreshes there, so no presenter can hold every frame the same number of
+refreshes. Over the opening, which draws at about 25 frames a second here
+(H1, H3), both paths show the same shape -- intervals of 3 refreshes 1,341
+and 1,363 times, 4 or more 1,012 and 1,015, p50 31.9 ms -- because the game,
+not the presenter, sets the pace below 30. And the guest's VI, which should
+run at 60 Hz of guest time, ran at **51.3 Hz**: a retrace the guest reaches
+late is delivered once and the lost time is not made up (`irq.c`'s
+late-retrace rule), which is H9's subject, now with a number.
+
+For the owner: set the display to 60 or 120 Hz (or leave variable refresh on,
+if the panel has it) for the presenter to pace 30 frames a second evenly,
+then run the `window` scenario for H8's session and say whether it looks
+smoother than `SOA_PRESENTER=gdi`. Until then H8's pacing target is unmet
+for a reason outside the port.
