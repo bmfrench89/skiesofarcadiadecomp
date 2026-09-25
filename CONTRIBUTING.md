@@ -18,9 +18,16 @@ into the tree and CI scans the whole history for them.
        pip install -e ".[dev]"
 
 3. Unpack your own disc dump. Every format the extractor understands ends up
-   in `extracted/`, which is gitignored:
+   in `extracted/`, which is gitignored, as `disc.iso` and `sys/`; the tools
+   read any other file of the disc through the image (`soa.disc.open_data`),
+   so the loose files are written only with `--files`:
 
-       python tools/extract.py "path/to/Skies of Arcadia Legends (USA).rvz" --iso
+       python tools/extract.py "path/to/Skies of Arcadia Legends (USA).rvz"
+
+   `--iso` is accepted and is now the default. An older `extracted/` with
+   loose files in it: `python tools/extract.py --prune-loose --dry-run`
+   compares each with its slice of `disc.iso`, and without `--dry-run`
+   deletes those that match, keeping and naming any that differ.
 
 4. Translate the executable, compile it and link the runtime:
 

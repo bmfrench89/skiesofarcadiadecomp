@@ -10,6 +10,10 @@ premise in docs/SPEC.md -- a premise the original reasoning ("no .rel files on
 the disc") did not actually establish, since two thirds of the disc is
 compressed and a raw byte scan could not see inside it.
 
+Walks the disc's file table and reads each file through `<root>/disc.iso`
+(`--root` may also name an image); an extraction without an image is read as
+its loose tree, `sys/` aside.
+
 Reports structural statistics only; no asset content is emitted.
 """
 
@@ -22,17 +26,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from soa.aklz import AklzError, decompress, is_aklz, parse_header  # noqa: E402
+from soa.disc import open_data  # noqa: E402
 
 BLR = 0x4E800020  # the PowerPC return instruction, our code-density probe
 MFLR_R0 = 0x7C0802A6
 
 
-def scan_one(path_str: str) -> dict:
-    """Decompress one file if needed and measure PowerPC code density."""
-    path = Path(path_str)
-    raw = path.read_bytes()
+def read_extent(file: str, offset: int, size: int) -> bytes:
+    """`size` bytes of `file` from `offset`; the whole file when size < 0."""
+    with open(file, "rb") as f:
+        f.seek(offset)
+        return f.read() if size < 0 else f.read(size)
+
+
+def scan_one(job: tuple[str, str, int, int]) -> dict:
+    """Decompress one file if needed and measure PowerPC code density. `job`
+    is (path on the disc, host file, offset, length): a slice of the image,
+    or a whole loose file (offset 0, length -1)."""
+    name, file, offset, size = job
+    raw = read_extent(file, offset, size)
     result = {
-        "path": path_str,
+        "path": name,
         "compressed": False,
         "ok": True,
         "error": "",
@@ -41,6 +55,10 @@ def scan_one(path_str: str) -> dict:
         "blr": 0,
         "mflr": 0,
     }
+    if size >= 0 and len(raw) != size:
+        result["ok"] = False
+        result["error"] = f"read {len(raw)} bytes, the file table says {size}"
+        return result
 
     data = raw
     if is_aklz(raw):
@@ -70,30 +88,42 @@ def scan_one(path_str: str) -> dict:
     return result
 
 
-def main() -> int:
+def collect(mapped, total: int) -> list[dict]:
+    results = []
+    for n, r in enumerate(mapped, 1):
+        results.append(r)
+        if n % 250 == 0 or n == total:
+            print(f"\r  {n:>5}/{total}", end="", flush=True)
+    print()
+    return results
+
+
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", type=Path, default=Path("extracted"))
-    ap.add_argument("--jobs", type=int, default=0, help="0 = cpu_count")
-    args = ap.parse_args()
+    ap.add_argument("--jobs", type=int, default=0, help="0 = cpu_count; 1 = in this process")
+    args = ap.parse_args(argv)
 
     if not args.root.exists():
         print(f"error: {args.root} not found; run tools/extract.py first", file=sys.stderr)
         return 1
+    try:
+        with open_data(args.root) as data:
+            jobs = [(p, str(f), o, s) for p, f, o, s in data.extents()]
+            source = data.source
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not jobs:
+        print(f"error: no files in {source}; run tools/extract.py first", file=sys.stderr)
+        return 1
+    print(f"scanning {len(jobs):,} files in {source}")
 
-    files = [
-        str(p)
-        for p in sorted(args.root.rglob("*"))
-        if p.is_file() and "sys" not in p.relative_to(args.root).parts[:1]
-    ]
-    print(f"scanning {len(files):,} files under {args.root}/")
-
-    results = []
-    with ProcessPoolExecutor(max_workers=args.jobs or None) as pool:
-        for n, r in enumerate(pool.map(scan_one, files, chunksize=8), 1):
-            results.append(r)
-            if n % 250 == 0 or n == len(files):
-                print(f"\r  {n:>5}/{len(files)}", end="", flush=True)
-    print()
+    if args.jobs == 1:
+        results = collect(map(scan_one, jobs), len(jobs))
+    else:
+        with ProcessPoolExecutor(max_workers=args.jobs or None) as pool:
+            results = collect(pool.map(scan_one, jobs, chunksize=8), len(jobs))
 
     compressed = [r for r in results if r["compressed"]]
     failed = [r for r in results if not r["ok"]]

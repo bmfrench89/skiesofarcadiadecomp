@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-968 passed in 199.91s
+985 passed in 191.81s
 ```
 
-968 tests in 52 files, none of which reads the disc. They cover the Python
+985 tests in 53 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -60,6 +60,7 @@ its own and run it, some of the C as well:
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
+| `test_extract.py` | 17 | I2, on `tools/soa/discfixture.py`'s synthetic image (a test game id, no game bytes): the fixture holds every file where its FST says, each AKLZ file decodes, and each layout feature is there; `extract.py` writes `disc.iso` and the four `sys/` files, each equal to its slice, and no loose file, `--files` writes every file equal to its slice, `--iso` is accepted; `--prune-loose` deletes exactly the loose files equal to the image and keeps and names the ones altered (a byte flipped, a byte short), `--dry-run` deletes nothing; `sct.py`, `validate_assets.py` and `audio_check.py` each read a file present only in the image, and a container broken there fails. The `audio_check.py` case needs numpy, which CI does not install. (Count to be regenerated.) |
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
 | `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
@@ -102,10 +103,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `968 passed` |
-| no capstone — **what CI installs** | `949 passed, 1 skipped` |
-| no MSVC | `670 passed, 298 skipped` |
-| neither — **the Ubuntu CI leg** | `651 passed, 299 skipped` |
+| everything (MSVC + capstone) | `985 passed` |
+| no capstone — **what CI installs** | `966 passed, 1 skipped` |
+| no MSVC | `687 passed, 298 skipped` |
+| neither — **the Ubuntu CI leg** | `668 passed, 299 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -1036,7 +1037,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 298 of the 968 skip without a C compiler; they build one runtime file and run it.
+² 298 of the 985 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1047,8 +1048,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 651 passed, 299 skipped |
-| **Tests** | windows | the same three — 949 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 668 passed, 299 skipped |
+| **Tests** | windows | the same three — 966 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
@@ -1082,10 +1083,11 @@ are yours to run; nobody else can.**
   be one its own mount would accept.
 - `python tools/audio_check.py build/opening.wav extracted/sound/<stream>.dsp` —
   cross-correlates a `SOA_WAV` recording against the decoded stream on the disc.
-  Needs numpy, which `pyproject.toml` does not list.
-- `python tools/validate_assets.py` — decodes every AKLZ container on the disc
-  and asserts each yields exactly its declared size and contains no PowerPC
-  code.
+  Needs numpy, which `pyproject.toml` does not list. A stream path that is not
+  there loose is read through `extracted/disc.iso`.
+- `python tools/validate_assets.py` — decodes every AKLZ container on the disc,
+  read through `extracted/disc.iso`, and asserts each yields exactly its
+  declared size and contains no PowerPC code.
 
 ---
 

@@ -4,6 +4,7 @@
     python tools/sct.py 103a                 # every entry of me103a.sct
     python tools/sct.py 103a M04100 me103aa19  # only these entries
     python tools/sct.py path/to/me103a.sct
+    python tools/sct.py 103a --data D:/dumps/Skies.iso   # any extraction or image
 
 A map's script decides what the map does -- which event plays, where the camera
 and the party go, which exit warps where -- and it decides from story flags.
@@ -23,8 +24,11 @@ Opcodes with raw or variable-length operands the table does not describe (23,
 24, 25, 33, 69, 144 among them) can desynchronise a linear pass; when that
 happens the entry says so rather than printing guesses.
 
-Reads the disc, prints nothing but the script. Opcode names come from
-config/functions.tsv through the DOL's handler table when the DOL is there.
+Reads the disc, prints nothing but the script: the loose file when there is
+one, else the script read through the data directory's `disc.iso` (the loose
+tree is written only by `extract.py --files`). Opcode names come from
+config/functions.tsv through the DOL's handler table when `sys/main.dol` is
+there.
 """
 
 import argparse
@@ -36,7 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import aklz  # noqa: E402
+from soa import aklz, disc  # noqa: E402
 
 OPCODE_TABLE = 0x802F7940
 OPCODES = 266
@@ -209,16 +213,34 @@ def script(d: bytes, want: list[str] | None = None, names: dict[int, str] | None
         yield name, off, end, lines
 
 
-def main() -> int:
+def load(script: str, data: Path) -> bytes:
+    """The raw (still compressed) script: a path as given, else a map name
+    looked up under the data directory or in its image."""
+    path = Path(script)
+    if path.suffix.lower() == ".sct" or len(path.parts) > 1:
+        return disc.read_data_path(path)
+    return disc.read_data_file(data, f"field/me{script.lower()}.sct")
+
+
+def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("script", help="a map like 103a, or a path to a .sct")
     p.add_argument("entry", nargs="*", help="only these entries")
-    a = p.parse_args()
-    path = Path(a.script)
-    if not path.exists():
-        path = ROOT / "extracted" / "field" / f"me{a.script.lower()}.sct"
-    d = aklz.decompress(path.read_bytes())
-    names = opcode_names()
+    p.add_argument(
+        "--data",
+        type=Path,
+        default=ROOT / "extracted",
+        help="the extraction (or disc image) a map name is looked up in",
+    )
+    a = p.parse_args(argv)
+    try:
+        raw = load(a.script, a.data)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    d = aklz.decompress(raw)
+    beside = a.data if a.data.is_dir() else a.data.parent
+    names = opcode_names(beside / "sys" / "main.dol")
     for name, off, end, lines in script(d, a.entry, names):
         print(f"==== {name} @{off:05x}..{end:05x}")
         for line in lines:

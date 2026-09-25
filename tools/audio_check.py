@@ -8,6 +8,11 @@ it plays and how well it matches. A clear peak with a high normalised
 correlation means the ADPCM decode, the sample-rate conversion and the
 stream's timing are right; the game mixes voices and effects over the music,
 so the coefficient is never 1.0. Analysis only; prints numbers.
+
+A `.dsp` path that does not exist is read through the disc image of the data
+directory it names (`extracted/sound/m01_L.dsp` -> `sound/m01_L.dsp` in
+`extracted/disc.iso`), so the command above works whether or not the loose
+files were written (`extract.py --files`).
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from soa import dspadpcm  # noqa: E402
+from soa import disc, dspadpcm  # noqa: E402
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
@@ -60,7 +65,7 @@ def best_offset(hay: np.ndarray, needle: np.ndarray) -> tuple[int, float]:
     return off, float(np.dot(seg, needle) / denom) if denom else 0.0
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -70,13 +75,17 @@ def main() -> int:
     ap.add_argument(
         "--start", type=float, default=5.0, help="where in the stream the excerpt starts"
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
+    try:
+        data = disc.read_data_path(args.dsp)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     pcm, rate = read_wav(args.wav)
     chan = 0 if args.dsp.stem.lower().endswith("_l") else 1
     hay = pcm[:, chan] if pcm.ndim == 2 else pcm
 
-    data = args.dsp.read_bytes()
     h = dspadpcm.parse_header(data)
     want = int((args.start + args.seconds) * h.sample_rate)
     stream = np.array(dspadpcm.decode(data, h, max_samples=want), dtype=np.float64)

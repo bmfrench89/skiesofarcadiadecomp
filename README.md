@@ -58,7 +58,7 @@ your own dump of the disc (`.rvz`, `.iso` or `.gcm`).
 
 ```powershell
 pip install -e ".[dev]"
-python tools/extract.py "path\to\Skies of Arcadia Legends (USA).rvz" --iso
+python tools/extract.py "path\to\Skies of Arcadia Legends (USA).rvz"
 python tools/checkdump.py
 python tools/recompile.py --compile --link
 $env:SOA_RENDER = '1'
@@ -89,7 +89,16 @@ gen\soa.exe extracted
 
 `extract.py` unpacks the disc into `extracted/` (gitignored, never committed)
 and finishes by checking the executable it unpacked against the sha1 in
-`config/GEAE8P/config.yml`. `checkdump.py` is that same check on its own, for
+`config/GEAE8P/config.yml`. What it writes is `disc.iso`, the flat image the
+port reads (1.46 GB), and `sys/`, four system files for the tools (3.3 MB);
+the tools read any other file of the disc through the image. `--files` also
+writes every file loose (another 1.42 GB, for browsing; nothing reads them),
+and `--iso`, which older instructions give, is accepted and is now the
+default. An `extracted/` from before this still holds 5,552 loose files:
+`python tools/extract.py --prune-loose --dry-run` compares each one with its
+slice of `disc.iso` and says what it would delete, and without `--dry-run` it
+deletes those that match, keeps and names any that differ, and never touches
+`sys/` or the image. `checkdump.py` is that same check on its own, for
 an `extracted/` that has been sitting around: it needs nothing but the files
 already on disk, and it refuses — naming both hashes — if the dump is not the
 build `config/` describes. Nothing downstream looks at the executable's
@@ -239,7 +248,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 968 tests; any that need a dump skip themselves
+python -m pytest                     # 985 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes
