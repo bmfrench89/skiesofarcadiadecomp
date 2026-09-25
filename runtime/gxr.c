@@ -1568,6 +1568,26 @@ static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read
 static DrawCmd* g_queue;
 static volatile LONGLONG g_published;            /* commands published, ever */
 static volatile LONGLONG g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
+
+/* Another thread's count, read so that nothing read after it -- the command
+ * it published, the rows or memory it finished -- can be read before it. Each
+ * count is written with an Interlocked call, a full barrier everywhere, so the
+ * writes it covers are out first; this is the other half. On x64 any load is
+ * already ordered so, and this is the same instruction as the plain volatile
+ * read it replaces: compared in the /FA listing before and after, the worker
+ * loop, wait_ran, ran_min and drain are unchanged, and fence_wait loads with
+ * the same plain movs, its registers allocated differently; on ARM64 it
+ * is an LDAR, where a plain load would let a worker read a command slot or a
+ * neighbour's rows stale (docs/specs/now.md N4; the portability research's
+ * "Bugs that compile fine and give wrong results"). The producer reads its
+ * own g_published plainly: it is the only writer. */
+#ifdef _MSC_VER
+#define LOAD_ACQUIRE64(p) ReadAcquire64((LONG64 const volatile*)(p))
+#define LOAD_ACQUIRE32(p) ReadAcquire((LONG const volatile*)(p))
+#else
+#define LOAD_ACQUIRE64(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#define LOAD_ACQUIRE32(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#endif
 static uint64_t g_flushes;                       /* producer only: drains, so a nested one can be seen */
 static uint8_t* g_arena;
 static size_t g_arena_used;
@@ -1610,7 +1630,7 @@ static long long ran_min(void)
     long long m = g_published;
     int i;
     for (i = 1; i <= g_workers; i++) {
-        long long r = g_ran[i];
+        long long r = LOAD_ACQUIRE64(&g_ran[i]);
         if (r < m) m = r;
     }
     return m;
@@ -1633,7 +1653,7 @@ static void wait_ran(long long c, int why)
     prev = gxr_phase(T_WAIT);
     t0 = gxr_ticks();
     for (i = 1; i <= g_workers; i++)
-        while (g_ran[i] <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (LOAD_ACQUIRE64(&g_ran[i]) <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
     t1 = gxr_ticks();
     g_wait_n[why]++;
     if (t1 > t0) g_wait_ticks[why] += t1 - t0;
@@ -1706,7 +1726,7 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
     for (j = 1; j <= g_workers; j++) {
         long long f = (j == prev || j == next) && nbr > all ? nbr : all;
         if (j == self) continue;
-        while (g_ran[j] < f) {
+        while (LOAD_ACQUIRE64(&g_ran[j]) < f) {
             if (++spins > 4000) {
                 LONGLONG seen = g_ran[j];
                 InterlockedIncrement(&g_fence_sleepers);
@@ -1721,7 +1741,7 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
     charge(W, &W->idle);
     W->fence_ticks += W->idle - idle0;
     W->fences++;
-    _ReadWriteBarrier(); /* the rows the others wrote are read after the wait */
+    _ReadWriteBarrier(); /* the compiler's half: the load above is the machine's */
 }
 #endif
 
@@ -1741,7 +1761,7 @@ static DWORD WINAPI worker(LPVOID arg)
     for (;;) {
         const DrawCmd* D;
         unsigned spins = 0;
-        while (mine >= g_published) {
+        while (mine >= LOAD_ACQUIRE64(&g_published)) {
             /* A short spin, for the next command of a burst, then sleep
              * until the producer publishes (H11). This used to be
              * Sleep(0), which returns at once when no other thread is
@@ -1766,10 +1786,12 @@ static DWORD WINAPI worker(LPVOID arg)
             }
         }
         charge(W, &W->idle);
-        /* The producer fills a slot before it publishes the count, and this
-         * machine does not reorder two loads, so the command is there. The
-         * barrier is against the compiler alone, stopping it from reading the
-         * command's fields before the spin ends; it emits nothing. */
+        /* The producer fills a slot before it publishes the count, and the
+         * count was read with an acquire load, so the command is there on any
+         * machine -- this one does not reorder two loads, and an ARM64 would
+         * without it. The barrier is against the compiler alone, stopping it
+         * from reading the command's fields before the spin ends; it emits
+         * nothing. */
         _ReadWriteBarrier();
         D = &g_queue[mine & QMASK];
         if (D->seq != mine)
@@ -2056,7 +2078,7 @@ static void drain(int why)
      * SOA_THREADS=16 cost 3.1-3.5s and 12-15s of CPU each without it, and
      * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
-        while (g_ran[i] < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (LOAD_ACQUIRE64(&g_ran[i]) < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
     {
         uint64_t t1 = gxr_ticks();
         g_wait_n[why]++;
@@ -2755,7 +2777,8 @@ void gxr_hook_hazard(uint32_t addr, uint32_t bytes)
 
 long gxr_presented(void)
 {
-    return g_workers > 0 ? g_frames_presented / g_workers : g_frames_presented;
+    long n = LOAD_ACQUIRE32(&g_frames_presented);
+    return g_workers > 0 ? n / g_workers : n;
 }
 
 const uint8_t* gxr_screen(int* w, int* h)
