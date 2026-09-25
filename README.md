@@ -215,6 +215,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_GXR_DRAIN=1` | order EFB copies the way the renderer did before PLAN-60FPS-MODS H14: a full drain before and after every copy that reads rows other workers own (every copy the game makes), and for every texture read from a queued copy. The fallback if a scene draws wrong with H14's fences, and the oracle they are tested against |
 | `SOA_GXR_TOKENWAIT=1` | make a draw token (`GXSetDrawSync`) wait for the copies before it. Off, a token is answered as it is parsed, as it always has been, and one that arrives while a copy is still running is counted in the report; on, a game that reads a copy's memory right after its token sees it finished, at the cost of H14's gain (this game's tokens sit at the top of each frame) |
 | `SOA_HOSTPROF=1` | sample the instruction pointer of every rasterizer worker and of the guest thread about once a millisecond and end the report with where their time went, by function and by source line (through `gen/soa.pdb`, which `--link` writes): the host code under a translated function -- a memory accessor, a paired-single helper -- that `SOA_PROFILE` charges to the guest function. The workers' table also folds by the innermost inlined function, so the pixel path's `__forceinline` helpers each get their own row and line. For finding what to make faster; a profiled run is for reading, not for timing |
+| `SOA_GXR_NOSIMD=1` | the pixel path's SSE4.1 code (the bilinear blend, H15d) takes its scalar loop instead, which is also what a CPU without SSE4.1 gets; the two give the same bytes (`test_gxr_fastpath.py`) |
 | `SOA_REPLAY_REPEAT=N` | `--replay` renders the capture N times, each from its own RAM image: a frame long enough for `SOA_HOSTPROF` to sample |
 | `SOA_GXR_STALL=w:k:us[,...]` | a test knob: rasterizer worker `w` waits `us` microseconds before every command of kind `k` (0 a draw, 1 a copy, 2 a clear), which turns an ordering race between the workers into a certain failure (`tools/tests/test_gxr_overlap.py`). The run says it is a test |
 | `SOA_GXR_LIGHTS=N` / `SOA_GXR_NOTEX=1` / `SOA_CULLFLIP=1` | more renderer forensics: dump the lighting setup of the first N draws, draw every texture flat grey, reverse the winding the rasterizer culls by |
@@ -226,7 +227,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 849 tests; any that need a dump skip themselves
+python -m pytest                     # 850 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

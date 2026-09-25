@@ -2865,3 +2865,29 @@ arithmetic in lanes); the TEV's general path the same way; then the
 rasterizer's attribute stepping, which repeats an addition per pixel that a
 four-pixel span could not reproduce bit for bit -- that one would move
 hashes, and waits until everything that cannot has been done.
+
+
+**H15d, first step: the counters out of thread-local storage, the bilinear
+blend in integer SIMD.** 2026-09-25, `build/soa-h15d0.exe` against
+`build/soa-h15d1.exe`, `tools/perfbench.py` through an interleaved A/B. Two
+changes that leave every byte as it was:
+
+- `shade` returns what it did with the pixel -- drawn, failed alpha, failed
+  depth -- and a triangle counts those in locals and adds them to its
+  thread's totals once, where each pixel used to bump a counter found through
+  thread-local storage (3% of worker time).
+- The bilinear blend runs its four channels at once with SSE4.1: one
+  multiply-add of each texel pair by (256 - ax, ax) for the horizontal pass
+  (255 * 256 fits a signed 16-bit lane), 32-bit multiplies for the vertical,
+  the scalar loop's integers exactly. The CPU is asked once, on the producer,
+  in `tev_prepare`; `SOA_GXR_NOSIMD=1` or a CPU without SSE4.1 takes the
+  scalar loop, which stays as the reference. A new differential test samples
+  600,000 random points (sizes powers of two and not, every wrap mode, exact
+  texels and half-texel points) through both and finds no difference; with
+  one weight pair swapped it goes red.
+
+At one thread, over the whole perfset, interleaved in two blocks:
+43.9 / 43.4 ns a fragment -> **40.6 / 40.7** (**-7%**); the Dangral field
+frames 38.7-41.4 -> 35.9-38.7, the sky 57.7 -> 51.3-57.7 (the busy clock's
+10 ms grain is coarse on a 1.6 M-fragment frame). Replay 23/23 with every
+hash unchanged; the self test.

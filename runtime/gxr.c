@@ -1020,7 +1020,14 @@ PIXEL_INLINE int depth_test(const PixelCfg* px, int x, int y, float depth)
     return pass;
 }
 
-PIXEL_INLINE void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][4], float depth)
+/* What shade() did with a pixel. Its callers count them, a triangle in
+ * locals added once at its end: a thread-local counter bumped a pixel at a
+ * time was 3% of the workers' time (FINDINGS "H15d's starting point"). */
+#define SHADE_DRAWN 0
+#define SHADE_ALPHA 1
+#define SHADE_DEPTH 2
+
+PIXEL_INLINE int shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][4], float depth)
 {
     uint8_t out[4];
     int alpha_ok = 1;
@@ -1038,13 +1045,21 @@ PIXEL_INLINE void shade(const DrawCmd* D, int x, int y, const int col[2][4], con
      * alpha-tested pixels, so test late unless ztop is set -- or unless the
      * draw's alpha test passes every alpha, when the order cannot matter and
      * testing first spares the TEV every fragment depth would discard (H15a). */
-    if ((D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    if ((D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) return SHADE_DEPTH;
     tev_pixel(&D->tev, col, tex, out, &alpha_ok);
-    if (!alpha_ok) { g_rej_alpha++; return; }
-    if (!(D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    if (!alpha_ok) return SHADE_ALPHA;
+    if (!(D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) return SHADE_DEPTH;
     fog_apply(&D->px, out, depth);
     blend_pixel(&D->px, x, y, out);
-    g_pixels++;
+    return SHADE_DRAWN;
+}
+
+/* One pixel's outcome into this thread's counts, for lines and points. */
+static void count_shaded(int r)
+{
+    if (r == SHADE_DRAWN) g_pixels++;
+    else if (r == SHADE_ALPHA) g_rej_alpha++;
+    else g_rej_depth++;
 }
 
 /* Plane equation of a value linear in screen space: v = a*x + b*y + c. */
@@ -1112,6 +1127,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
      * many worker threads were rasterizing. */
     float tex[8][4];
     int col[2][4], chn[2], act[8], nch, nact;
+    uint64_t shaded[3] = {0, 0, 0};
 
     if (area == 0.0f) return;
     if (g_cull_flip) area = -area;
@@ -1232,10 +1248,13 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
                 tex[i][3] = lod[i];
                 lod[i] += dlod[i];
             }
-            shade(D, x, y, (const int (*)[4])col, (const float (*)[4])tex, av[di]);
+            shaded[shade(D, x, y, (const int (*)[4])col, (const float (*)[4])tex, av[di])]++;
             for (n = 0; n < nattr; n++) av[n] += attr[n].a;
         }
     }
+    g_pixels += shaded[SHADE_DRAWN];
+    g_rej_alpha += shaded[SHADE_ALPHA];
+    g_rej_depth += shaded[SHADE_DEPTH];
 }
 
 static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
@@ -1264,7 +1283,7 @@ static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
             for (k = 0; k < 3; k++) tex[t][k] = a->tex[t][k] + (b->tex[t][k] - a->tex[t][k]) * f;
             tex[t][3] = 0.0f;
         }
-        shade(D, x, y, col, tex, a->depth + (b->depth - a->depth) * f);
+        count_shaded(shade(D, x, y, col, tex, a->depth + (b->depth - a->depth) * f));
     }
 }
 
@@ -1282,7 +1301,7 @@ static void raster_point(const DrawCmd* D, const Vertex* a)
         for (k = 0; k < 4; k++) { int cv = (int)(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
     }
     for (t = 0; t < 8; t++) { tex[t][0] = a->tex[t][0]; tex[t][1] = a->tex[t][1]; tex[t][2] = a->tex[t][2]; tex[t][3] = 0.0f; }
-    shade(D, x, y, col, tex, a->depth);
+    count_shaded(shade(D, x, y, col, tex, a->depth));
 }
 
 /* ---- clipping ----------------------------------------------------------- */

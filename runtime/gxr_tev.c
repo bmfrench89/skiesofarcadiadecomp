@@ -15,9 +15,32 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#include <smmintrin.h>
+#define TEX_SIMD 1
+#endif
 
 static CpuState* g_s;
 static uint8_t g_tmem[1u << 20];
+
+/* SSE4.1 for the sampler's integer SIMD (H15d): 1 when this CPU has it and
+ * SOA_GXR_NOSIMD is not set, 0 otherwise. Decided on the producer, in
+ * tev_prepare, before any worker samples; the scalar path is the fallback and
+ * the reference, and the two agree bit for bit (test_gxr_fastpath.py). */
+static int g_simd = -1;
+
+static void simd_decide(void)
+{
+    g_simd = 0;
+#ifdef TEX_SIMD
+    {
+        int r[4];
+        __cpuid(r, 1);
+        g_simd = ((r[2] >> 19) & 1) && !getenv("SOA_GXR_NOSIMD");
+    }
+#endif
+}
 
 /* Tripwires, as in gxr.c: what this file does not model says so once and then
  * keeps quiet. Neither of the two below can use that file's plain flag -- one
@@ -1058,6 +1081,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
      * the maps this draw has already resolved. */
     for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
     g_tex_fence = 0;
+    if (g_simd < 0) simd_decide();
     g_building = T;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
@@ -1150,6 +1174,29 @@ TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t o
         const uint8_t* p01 = img + ((size_t)yb * w + xa) * 4;
         const uint8_t* p11 = img + ((size_t)yb * w + xb) * 4;
         int i;
+#ifdef TEX_SIMD
+        if (g_simd > 0) {
+            /* The loop below, four channels at a time (H15d): a lane is a
+             * channel. The horizontal pass is one multiply-add of the texel
+             * pair by (256 - ax, ax) -- 255 * 256 fits a signed 16-bit lane --
+             * the vertical one 32-bit multiplies; the same integers, so the
+             * same bytes. */
+            int32_t q00, q10, q01, q11;
+            __m128i z = _mm_setzero_si128(), wx, top, bot, r;
+            memcpy(&q00, p00, 4); memcpy(&q10, p10, 4); memcpy(&q01, p01, 4); memcpy(&q11, p11, 4);
+            wx = _mm_set_epi16((short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax),
+                               (short)ax, (short)(256 - ax));
+            top = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128(q00), _mm_cvtsi32_si128(q10)), z), wx);
+            bot = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128(q01), _mm_cvtsi32_si128(q11)), z), wx);
+            r = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(top, _mm_set1_epi32(256 - ay)), _mm_mullo_epi32(bot, _mm_set1_epi32(ay))),
+                              _mm_set1_epi32(32768));
+            r = _mm_srli_epi32(r, 16);
+            r = _mm_packus_epi16(_mm_packus_epi32(r, r), z);
+            q00 = _mm_cvtsi128_si32(r);
+            memcpy(out, &q00, 4);
+            return;
+        }
+#endif
         for (i = 0; i < 4; i++) {
             int top = p00[i] * (256 - ax) + p10[i] * ax;
             int bot = p01[i] * (256 - ax) + p11[i] * ax;

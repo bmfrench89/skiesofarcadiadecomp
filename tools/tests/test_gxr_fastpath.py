@@ -14,7 +14,11 @@ happens to use it. So these compare the two paths on random inputs:
   and every pixel is run through tev_pixel twice -- as prepared, and with the
   shape switched off -- and must agree, colour and alpha test;
 - random source and destination colours go through blend_pixel with the
-  specialised case and with the general one.
+  specialised case and with the general one;
+- random bilinear samples -- texture sizes powers of two and not, all three
+  wrap modes, coordinates across and outside the texture, exact texels and
+  half-texel points among them -- go through sample_level's integer SIMD
+  (H15d) and its scalar loop, and must give the same bytes.
 
 The first driver includes gxr_tev.c and the second gxr.c, to reach their
 statics. No disc and no game data.
@@ -129,6 +133,49 @@ int main(void)
 }
 """
 
+BILINEAR_DRIVER = r"""
+#define _CRT_SECURE_NO_WARNINGS
+#include "gxr_tev.c"
+
+uint32_t mmio_read32(CpuState* s, uint32_t ea) { (void)s; (void)ea; return 0; }
+void hle_report(void) {}
+
+static uint32_t g_r = 0x9E3779B9u;
+static uint32_t rnd(void) { g_r ^= g_r << 13; g_r ^= g_r >> 17; g_r ^= g_r << 5; return g_r; }
+
+int main(void)
+{
+    static uint8_t img[64 * 64 * 4];
+    long long n = 0, bad = 0;
+    int t, p, i;
+    simd_decide();
+    printf("[fastpath] simd %d\n", g_simd);
+    for (i = 0; i < (int)sizeof img; i++) img[i] = (uint8_t)rnd();
+    for (t = 0; t < 3000 && g_simd > 0; t++) {
+        TexCfg C;
+        memset(&C, 0, sizeof C);
+        if (rnd() % 2) { C.lw[0] = 1 << (rnd() % 7); C.lh[0] = 1 << (rnd() % 7); }
+        else { C.lw[0] = 1 + (int)(rnd() % 64); C.lh[0] = 1 + (int)(rnd() % 64); }
+        C.level[0] = img; C.nlevels = 1; C.w = C.lw[0]; C.h = C.lh[0];
+        C.wrap_s = rnd() % 3; C.wrap_t = rnd() % 3; C.linear = 1;
+        for (p = 0; p < 200; p++) {
+            float u = ((float)(int)(rnd() % 20001) - 10000.0f) / 100.0f, v = ((float)(int)(rnd() % 20001) - 10000.0f) / 100.0f;
+            uint8_t o1[4], o2[4];
+            if (p % 7 == 0) { u = (float)(int)(rnd() % 201) - 100.0f; v = (float)(int)(rnd() % 201) - 100.5f; }
+            g_simd = 1; sample_level(&C, 0, u, v, o1);
+            g_simd = 0; sample_level(&C, 0, u, v, o2);
+            g_simd = 1;
+            n++;
+            if (memcmp(o1, o2, 4) && ++bad <= 5)
+                printf("MISMATCH %dx%d wrap %u/%u at %g,%g: %d,%d,%d,%d vs %d,%d,%d,%d\n", C.lw[0], C.lh[0], C.wrap_s, C.wrap_t,
+                       u, v, o1[0], o1[1], o1[2], o1[3], o2[0], o2[1], o2[2], o2[3]);
+        }
+    }
+    printf("[fastpath] bilinear %lld samples, %lld mismatches\n", n, bad);
+    return 0;
+}
+"""
+
 BLEND_DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.c"
@@ -213,6 +260,15 @@ def test_the_tev_shapes_give_the_general_answer(tmp_path):
     # was exercised, and not every setup was taken.
     assert all(n > 20 for n in shapes), out
     assert 0 < fast < setups, out
+
+
+@needs_msvc
+def test_the_simd_bilinear_gives_the_scalar_answer(tmp_path):
+    out = build(tmp_path, "bilinear", BILINEAR_DRIVER, ["gx.c", "gxr.c", "png.c"])
+    if "[fastpath] simd 1" not in out:
+        pytest.skip("this CPU has no SSE4.1, so there is no SIMD path to compare")
+    m = re.search(r"\[fastpath\] bilinear (\d+) samples, (\d+) mismatches", out)
+    assert m and int(m[1]) == 3000 * 200 and m[2] == "0", out
 
 
 @needs_msvc

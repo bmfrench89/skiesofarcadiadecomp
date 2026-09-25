@@ -354,7 +354,7 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 *Done:* C4's criterion of 1.5× on the heaviest captures, replay 23/23, and ns per fragment.
 
-**H15d. SIMD spans** — *several days to week-plus.*
+**H15d. SIMD spans** — *several days to week-plus. First step done 2026-09-25: the per-pixel counters out of thread-local storage and the bilinear blend in SSE4.1 integer SIMD, bit for bit the scalar loop's (a differential test); -7% ns a fragment at one thread, every hash unchanged. At 8 threads the field captures were already under 61 ns (55); the sky and ship are not (77-83, 79). FINDINGS "H15d's starting point", "H15d, first step".*
 
 *Done:*
 - At most 61 ns per fragment at 8 threads on the field captures, and on the sky and ship captures, which need about 2.9×.
