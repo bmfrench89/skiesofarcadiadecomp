@@ -3078,3 +3078,36 @@ Two things C5b has to handle that the spec did not name:
   with C5b only what the list holds at the call is drawn. (Counted per
   buffer address, and a block the heap reuses for another list counts under
   the same address, so the per-list numbers are an upper bound.)
+
+
+**P6, followed up: each pin in the log, the reload after a battle, and the
+seed in effect recorded.** 2026-09-25, `build/scenario-p6.log`,
+`build/p6.pad`. Each pin now prints `[seed] pin: site S (lr X) n N -> 0xV`,
+and `python tools/tests/test_seed.py <log> [<recording>]` checks a run by
+those lines with the Python finaliser: every value, each site counting from
+zero, the report's counts equal to the lines', a field-load pin *after* a
+battle start, and the recording's `# config` line ending `seed=<seed>`.
+The first P6 run stopped at frame 12,000, mid-battle, so the field-load site
+was never seen from a battle's exit path -- the review of 2026-09-25 caught
+that the Done asked for it and the entry did not have it. The battle
+scenario to frame 13,500 with `SOA_SEED=12345`: `field load 4, battle start
+1 and 1 pinned; 214554 other OSGetTick reads left alone`. The field-load
+site fired twice before the fight and twice after it -- once between frames
+12,800 and 12,900, with the victory pose on screen, and once between 13,060
+and 13,100, after the results screen (13,000) and before the deck field is
+back (13,400). The check passes on it; with one pin's value edited it names
+that pin and fails. The two battle-start pins are the `8739D20C` and
+`2A787E8A` the store watch saw srand take.
+
+The same review found that the recording named the text in the environment,
+not the seed in effect: `SOA_SEED=12x` was refused and still recorded as
+`seed=12x`, and `0x3039` and `12345` -- one seed -- recorded differently, so
+a replay with either claimed another configuration. `seed_init` now hands
+back the seed it pinned, in decimal, or nothing, and `settings_record_as`
+lets a key's owner say what is recorded (`test_settings.py`, with the raw
+text as the mutation). The config line has more room: 640 bytes for the
+settings and mods (from 320), 1024 for the line, and a line cut short says
+`[pad] the config line was cut at N bytes` instead of dropping what did not
+fit -- `settings_recorded` used to leave half a value in the buffer when it
+overflowed. `test_padrec.py` sends 600 bytes through whole and 800 cut, and
+the old 320-byte buffer fails the first.

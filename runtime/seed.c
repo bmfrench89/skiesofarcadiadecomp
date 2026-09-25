@@ -51,12 +51,20 @@ uint32_t seed_value(uint32_t s, int site, uint32_t n)
     return fmix32(s ^ (uint32_t)(site + 1) * 0x9E3779B9u ^ n * 0x85EBCA6Bu);
 }
 
-/* OSGetTick's answer: pinned at the three sites, the timebase elsewhere. */
+/* OSGetTick's answer: pinned at the three sites, the timebase elsewhere.
+ * Each pin says so in a line, which is what a live run is checked by
+ * (test_seed.py's __main__): the report gives only counts. Pins happen at
+ * loads and battle starts, a few a minute at most, and the line has no frame
+ * number so this file still links alone. */
 uint32_t seed_pin(uint32_t lr, uint32_t tb)
 {
     int i;
     for (i = 0; i < SITES; i++)
-        if (lr == k_site[i]) return seed_value(g_seed, i, (uint32_t)g_pinned[i]++);
+        if (lr == k_site[i]) {
+            uint32_t n = (uint32_t)g_pinned[i]++, v = seed_value(g_seed, i, n);
+            fprintf(stderr, "[seed] pin: site %d (lr %08X) n %u -> 0x%08X\n", i, k_site[i], n, v);
+            return v;
+        }
     g_other++;
     return tb;
 }
@@ -71,12 +79,16 @@ void seed_set(int on, uint32_t seed)
 }
 
 /* SOA_SEED: a decimal number, or 0x and up to eight hex digits, 32 bits.
- * Anything else is refused out loud and the seeds stay the game's own. */
-int seed_init(void)
+ * Anything else is refused out loud and the seeds stay the game's own.
+ * `in_effect` gets the seed as the recording should name it -- decimal, so
+ * 0x3039 and 12345 record alike -- or "" when none is pinned, so a refused
+ * value records nothing rather than a seed that was never applied. */
+int seed_init(char* in_effect, size_t cap)
 {
     const char* v = getenv("SOA_SEED");
     unsigned long long n = 0;
     int ok;
+    if (cap) in_effect[0] = '\0';
     if (!v || !*v) return 0;
     if (v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
         const char* h = v + 2;
@@ -92,6 +104,7 @@ int seed_init(void)
         return 0;
     }
     seed_set(1, (uint32_t)n);
+    if (cap) snprintf(in_effect, cap, "%u", (unsigned)n);
     fprintf(stderr, "[seed] SOA_SEED=%s: the field-load and battle-start reseeds are pinned; a recording names the seed\n", v);
     return 1;
 }

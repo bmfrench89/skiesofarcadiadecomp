@@ -30,6 +30,7 @@ DRIVER = r"""
 #include <string.h>
 const char* settings_load(void);
 const char* settings_recorded(char* out, size_t cap);
+void settings_record_as(const char* key, const char* value);
 int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
@@ -39,6 +40,7 @@ int main(int argc, char** argv)
     char rec[320];
     if (argc > 1 && !strcmp(argv[1], "recorded")) {
         settings_load();
+        if (argc > 2) settings_record_as("seed", argv[2]); /* what seed.c says is in effect */
         printf("recorded [%s]\n", settings_recorded(rec, sizeof rec));
         return 0;
     }
@@ -159,11 +161,16 @@ def test_the_file_is_documented():
     assert "soa.ini" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
-def recorded(exe, **env_set) -> str:
+def recorded(exe, *in_effect, **env_set) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env.update(env_set)
     proc = subprocess.run(
-        [str(exe), "recorded"], capture_output=True, text=True, env=env, timeout=60, check=False
+        [str(exe), "recorded", *in_effect],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return next(ln for ln in proc.stdout.splitlines() if ln.startswith("recorded ["))[10:-1]
@@ -178,3 +185,27 @@ def test_only_what_changes_the_game_is_recorded(driver):
     assert recorded(driver, SOA_SEED="12345", SOA_RENDER="1", SOA_SCALE="3") == "seed=12345"
     (driver.parent / "soa.ini").write_text("seed = 0x3039\nwindow = 1\n", encoding="utf-8")
     assert recorded(driver) == "seed=0x3039"
+
+
+@needs_msvc
+def test_a_recorded_setting_too_long_for_the_line_is_left_out_and_said(driver):
+    """No half a value: a replay would read a cut seed as a different seed.
+    The driver's buffer is 320 bytes, so a 400-digit value cannot fit."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env["SOA_SEED"] = "9" * 400
+    proc = subprocess.run(
+        [str(driver), "recorded"], capture_output=True, text=True, env=env, timeout=60, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "recorded []" in proc.stdout, proc.stdout
+    assert "[pad] the config line was cut at 0 bytes, before seed" in proc.stderr, proc.stderr
+
+
+@needs_msvc
+def test_the_recording_names_the_seed_in_effect_not_the_text(driver):
+    """seed.c says what it pinned, and that is what is recorded: a refused
+    value records nothing, and 0x3039 records as the 12345 it is, so a
+    replay with either spelling agrees with the recording."""
+    assert recorded(driver, "12345", SOA_SEED="0x3039") == "seed=12345"
+    assert recorded(driver, "", SOA_SEED="12x") == ""
+    assert recorded(driver, SOA_SEED="12x") == "seed=12x"  # the mutation: no owner, the raw text

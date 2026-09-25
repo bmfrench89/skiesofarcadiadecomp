@@ -47,6 +47,7 @@ void si_poll(void);
 void si_report(void);
 int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
+void si_set_config_extra(const char* extra);
 
 static unsigned g_frame;
 static uint64_t g_retrace;
@@ -86,6 +87,18 @@ int main(int argc, char** argv)
     uint64_t hi = 0, lo = 0, was_hi = ~0ull, was_lo = ~0ull;
     unsigned f;
     g_live = argc > 1 && strcmp(argv[1], "record") == 0;
+    if (getenv("DRIVER_EXTRA")) {
+        /* What main.c hands over -- recorded settings and the mod list -- as
+         * this many bytes: big=aaa...END. */
+        size_t n = (size_t)strtoul(getenv("DRIVER_EXTRA"), NULL, 10);
+        char* b = (char*)malloc(n + 1);
+        memset(b, 'a', n);
+        memcpy(b, "big=", 4);
+        memcpy(b + n - 3, "END", 3);
+        b[n] = '\0';
+        si_set_config_extra(b);
+        free(b);
+    }
     si_write(NULL, 0xCC006430u, 4, 0x80u); /* SIPOLL: channel 0 polled every field */
     for (f = 0; f <= last; f++) {
         g_frame = f;
@@ -333,3 +346,29 @@ def test_an_uncapped_recording_says_so_and_a_capped_one_is_unchanged(driver, tmp
     plain = tmp_path / "plain.pad"
     run(driver, tmp_path, "record", {"SOA_PAD_RECORD": str(plain)}, last=20)
     assert " uncap=" not in plain.read_text()  # the temp path itself contains "uncap"
+
+
+@needs_msvc
+def test_a_long_config_line_arrives_whole_and_a_longer_one_says_it_was_cut(driver, tmp_path):
+    """Recorded settings and the mod list share the recording's config line
+    (PLAN-GAMEPLAY-MODS P6). Six hundred bytes of them reach it whole and
+    read back the same; eight hundred do not fit, and the cut is said out
+    loud instead of dropping a setting a replay needed. The mutation is the
+    320-byte buffer this replaced, which fails the first half."""
+    rec = tmp_path / "long.pad"
+    _, err = run(
+        driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec), "DRIVER_EXTRA": "600"}, last=5
+    )
+    cfg = [ln for ln in rec.read_text().splitlines() if ln.startswith("# config ")]
+    assert len(cfg) == 1 and cfg[0].endswith(" big=" + "a" * 593 + "END"), cfg
+    assert "cut at" not in err, err
+    _, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "DRIVER_EXTRA": "600"}, last=5
+    )
+    assert "recorded with" not in err, err  # read back whole, so no difference is claimed
+    rec2 = tmp_path / "longer.pad"
+    _, err = run(
+        driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec2), "DRIVER_EXTRA": "800"}, last=5
+    )
+    assert "[pad] the config line was cut at 639 bytes of 800" in err, err
+    assert "END" not in rec2.read_text()

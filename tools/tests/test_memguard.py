@@ -38,7 +38,8 @@ void hle_report(void) {}
 void hle_clock_start(void) {}
 const char* settings_load(void) { return 0; }
 const char* settings_recorded(char* out, size_t cap) { (void)cap; out[0] = 0; return out; }
-int seed_init(void) { return 0; }
+int seed_init(char* e, size_t cap) { if (cap) e[0] = 0; return 0; }
+void settings_record_as(const char* k, const char* v) { (void)k; (void)v; }
 void seed_report(void) {}
 void hle_frame_mark(void) {}
 void hle_frametime_restart(unsigned frame) { (void)frame; }

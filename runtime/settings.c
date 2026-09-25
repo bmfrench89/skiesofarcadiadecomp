@@ -89,20 +89,41 @@ static int settings_path(char* out, size_t cap)
 #endif
 }
 
-/* "key=value ..." for every recorded setting whose variable is set, for the
- * pad recording's config line: a recording made with a seed says which,
- * and one made with none of them keeps the line it always had. Empty when
- * none is set. */
+/* What a recorded key's owner says is in effect, where it has said: seed.c
+ * for `seed`, so the recording names the seed that was pinned rather than
+ * the text in the environment -- a refused value names none, and 0x3039 and
+ * 12345 name the same one. "" records nothing. */
+static char g_record_as[N_SETTINGS][64];
+static int g_record_as_set[N_SETTINGS];
+
+void settings_record_as(const char* key, const char* value)
+{
+    size_t i;
+    for (i = 0; i < N_SETTINGS; i++)
+        if (!strcmp(k_settings[i].key, key)) {
+            snprintf(g_record_as[i], sizeof g_record_as[i], "%s", value ? value : "");
+            g_record_as_set[i] = 1;
+        }
+}
+
+/* "key=value ..." for every recorded setting that is set, for the pad
+ * recording's config line: a recording made with a seed says which, and one
+ * made with none of them keeps the line it always had. Empty when none is
+ * set. */
 const char* settings_recorded(char* out, size_t cap)
 {
     size_t i, used = 0;
     out[0] = '\0';
     for (i = 0; i < N_SETTINGS; i++) {
-        const char* v = k_settings[i].recorded ? getenv(k_settings[i].env) : NULL;
+        const char* v = !k_settings[i].recorded ? NULL : g_record_as_set[i] ? g_record_as[i] : getenv(k_settings[i].env);
         int k;
         if (!v || !*v) continue;
         k = snprintf(out + used, cap - used, "%s%s=%s", used ? " " : "", k_settings[i].key, v);
-        if (k < 0 || (size_t)k >= cap - used) break;
+        if (k < 0 || (size_t)k >= cap - used) {
+            out[used] = '\0'; /* no half a value: the replay would read it as a different one */
+            fprintf(stderr, "[pad] the config line was cut at %zu bytes, before %s\n", used, k_settings[i].key);
+            break;
+        }
         used += (size_t)k;
     }
     return out;

@@ -279,14 +279,18 @@ static long long file_size(const char* path)
  * and the second run starts at a title screen with a Continue entry the
  * first run did not have, so frame one of the menu picks the wrong thing.
  * The default path mirrors exi.c's; keep the two in step. */
-static char g_cfg_extra[320];
+static char g_cfg_extra[640];
 
-/* What else a recording depends on, from outside this file: the mods main.c
- * loaded (mod_describe). Only a run with mods has any, so a recording made
- * without them reads exactly as it always did. */
+/* What else a recording depends on, from outside this file: the settings
+ * that change the game (settings_recorded) and the mods main.c loaded
+ * (mod_describe). A run with neither has none, so its recording reads
+ * exactly as it always did. Too long a line is cut, and says so. */
 void si_set_config_extra(const char* extra)
 {
+    size_t n = extra ? strlen(extra) : 0;
     snprintf(g_cfg_extra, sizeof g_cfg_extra, "%s", extra ? extra : "");
+    if (n >= sizeof g_cfg_extra)
+        fprintf(stderr, "[pad] the config line was cut at %zu bytes of %zu\n", sizeof g_cfg_extra - 1, n);
 }
 
 static void pad_config(char* out, size_t cap)
@@ -330,7 +334,7 @@ static FILE* pad_record_create(const char* path)
 static void pad_record_open(void)
 {
     const char* path = getenv("SOA_PAD_RECORD");
-    char cfg[768];
+    char cfg[1024];
     g_rec_tried = 1;
     g_rec_last = PAD_NEUTRAL;
     if (!path || !*path) return;
@@ -499,7 +503,7 @@ static void pad_replay_load(void)
 {
     const char* path = getenv("SOA_PAD_FILE");
     const char* script;
-    char line[1024], was[768], now[768];
+    char line[2048], was[1024], now[1024]; /* line holds "# config " and a whole cfg */
     unsigned lineno = 0, bad = 0;
     FILE* f;
     g_play_tried = 1;

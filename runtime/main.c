@@ -41,7 +41,8 @@ int irq_in_handler(void);
 void hle_clock_start(void);
 const char* settings_load(void); /* settings.c */
 const char* settings_recorded(char* out, size_t cap);
-int seed_init(void); /* seed.c */
+int seed_init(char* in_effect, size_t cap); /* seed.c */
+void settings_record_as(const char* key, const char* value);
 void seed_report(void);
 /* Set while gx.c is inside the command-stream parse. The sampler reads it
  * because a clock pair there would cost more than the parse. */
@@ -1183,15 +1184,19 @@ int main(int argc, char** argv)
         /* What else a recording depends on: the settings that change the
          * game (seed.c's, and each later one marked recorded in settings.c),
          * then the mods. A run with neither keeps the line it always had. */
-        static char extra[320];
+        static char extra[640];
         const char* mods = getenv("SOA_MODS");
         int modded = mods && *mods && mod_load(&s, mods, dol, dol_size);
         size_t n;
-        if (seed_init()) hle_on_report(seed_report);
+        char seed[16];
+        if (seed_init(seed, sizeof seed)) hle_on_report(seed_report);
+        settings_record_as("seed", seed);
         settings_recorded(extra, sizeof extra);
         n = strlen(extra);
         if (modded) {
-            snprintf(extra + n, sizeof extra - n, "%s%s", n ? " " : "", mod_describe());
+            int k = snprintf(extra + n, sizeof extra - n, "%s%s", n ? " " : "", mod_describe());
+            if (k < 0 || (size_t)k >= sizeof extra - n)
+                fprintf(stderr, "[pad] the config line was cut at %zu bytes, in the mod list\n", sizeof extra - 1);
             hle_on_report(mod_report);
         }
         if (extra[0]) si_set_config_extra(extra);
