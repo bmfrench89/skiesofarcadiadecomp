@@ -4,7 +4,7 @@
  * SOA_MODS=<dir> names a folder of mods; every subfolder holding a mod.ini
  * is one, loaded in name order so that two runs apply them the same way:
  *
- *   mods/encounters-off/mod.ini
+ *   examples/mods/encounters-off/mod.ini
  *       manifest = 2
  *       id = encounters-off
  *       version = 1.0
@@ -12,7 +12,7 @@
  *       authors = the port's authors
  *       api = 1
  *       dol_sha1 = 8c0e278126fa3b0173400fdb632038172743cc13
- *   mods/encounters-off/patches.txt
+ *   examples/mods/encounters-off/patches.txt
  *       # trigger    address      value   conditions (all must hold)
  *       every_frame  0x80346d28 = 0       when scene=6
  *
@@ -101,6 +101,7 @@ typedef struct {
     unsigned first, count;
     void* dll;          /* the loaded mod.dll, or NULL */
     unsigned callbacks; /* what it registered */
+    unsigned long long writes; /* guest writes its callbacks made that the API took (the report) */
 } Mod;
 
 static Mod g_mods[MOD_MAX];
@@ -435,9 +436,15 @@ static int api_read_bytes(uint32_t a, void* o, uint32_t n)
     memcpy(o, mem_ptr(g_s, a), n);
     return 1;
 }
-static int api_write8(uint32_t a, uint8_t v) { if (!api_ok(a, 1, 1, 1)) return 0; mem_w8(g_s, a, v); return 1; }
-static int api_write16(uint32_t a, uint16_t v) { if (!api_ok(a, 2, 2, 1)) return 0; mem_w16(g_s, a, v); return 1; }
-static int api_write32(uint32_t a, uint32_t v) { if (!api_ok(a, 4, 4, 1)) return 0; mem_w32(g_s, a, v); return 1; }
+/* A write the API took, counted against the mod whose callback made it. */
+static void wrote(void)
+{
+    if (g_cur_mod >= 0 && g_cur_mod < g_mod_n) g_mods[g_cur_mod].writes++;
+}
+
+static int api_write8(uint32_t a, uint8_t v) { if (!api_ok(a, 1, 1, 1)) return 0; mem_w8(g_s, a, v); wrote(); return 1; }
+static int api_write16(uint32_t a, uint16_t v) { if (!api_ok(a, 2, 2, 1)) return 0; mem_w16(g_s, a, v); wrote(); return 1; }
+static int api_write32(uint32_t a, uint32_t v) { if (!api_ok(a, 4, 4, 1)) return 0; mem_w32(g_s, a, v); wrote(); return 1; }
 static int api_write_f32(uint32_t a, float v)
 {
     uint32_t u;
@@ -448,6 +455,7 @@ static int api_write_bytes(uint32_t a, const void* in, uint32_t n)
 {
     if (!api_ok(a, n, 1, 1)) return 0;
     memcpy(mem_ptr(g_s, a), in, n);
+    wrote();
     return 1;
 }
 
@@ -1087,6 +1095,16 @@ void mod_frame(CpuState* s, unsigned frame)
 
 const char* mod_describe(void) { return g_describe; }
 
+/* Whether a mod with this manifest 2 id is loaded: settings.c asks, for a
+ * setting only that mod reads. */
+int mod_loaded(const char* id)
+{
+    int i;
+    for (i = 0; i < g_mod_n; i++)
+        if (g_mods[i].id[0] && !strcmp(g_mods[i].id, id)) return 1;
+    return 0;
+}
+
 void mod_report(void)
 {
     int m;
@@ -1102,10 +1120,10 @@ void mod_report(void)
                     if (g_cb[k][c].mod == m) calls[k] += g_cb[k][c].calls;
             fprintf(stderr, "[mod] %s mod.dll: %u callback(s); called at %llu frame end(s), %llu safe point(s), "
                             "%llu map load(s), %llu scene change(s), %llu controller read(s), %llu projection(s), "
-                            "%llu texture(s)\n",
+                            "%llu texture(s); %llu write(s)\n",
                     g_mods[m].dir, g_mods[m].callbacks, calls[CB_FRAME_END], calls[CB_SAFE_POINT],
                     calls[CB_MAP_LOADED], calls[CB_SCENE_CHANGE], calls[CB_PAD_FILTER], calls[CB_PROJECTION],
-                    calls[CB_TEXTURE]);
+                    calls[CB_TEXTURE], g_mods[m].writes);
         }
         for (i = g_mods[m].first; i < g_mods[m].first + g_mods[m].count; i++) {
             const Patch* p = &g_patches[i];

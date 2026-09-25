@@ -31,13 +31,25 @@ DRIVER = r"""
 const char* settings_load(void);
 const char* settings_recorded(char* out, size_t cap);
 void settings_record_as(const char* key, const char* value);
+void settings_check_mods(int (*loaded)(const char* id));
+static const char* g_loaded; /* the one mod id "loaded", from argv */
+static int loaded(const char* id) { return g_loaded && !strcmp(id, g_loaded); }
 int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
-                                  "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED"};
+                                  "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED",
+                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B"};
     const char* disc;
     unsigned i;
     char rec[320];
+    if (argc > 2 && !strcmp(argv[1], "mods")) {
+        /* after mods load: argv[2] is the id loaded ("-" for none) */
+        g_loaded = strcmp(argv[2], "-") ? argv[2] : NULL;
+        settings_load();
+        settings_check_mods(loaded);
+        printf("recorded [%s]\n", settings_recorded(rec, sizeof rec));
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "recorded")) {
         settings_load();
         if (argc > 2) settings_record_as("seed", argv[2]); /* what seed.c says is in effect */
@@ -101,7 +113,8 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "# a player's file\n"
         "disc = C:\\Games\\Skies\\extracted\n"
         "render = 1\nwindow = 1\nscale = 3\nthreads = 6\nmods = C:\\Games\\mods\n"
-        "card = C:\\Games\\card.raw\nrecord = play.pad\nnosound = 1\nuncap = 3300\nseed = 12345\n",
+        "card = C:\\Games\\card.raw\nrecord = play.pad\nnosound = 1\nuncap = 3300\nseed = 12345\n"
+        "encounters = half\nencounters_hold_b = 0\n",
         encoding="utf-8",
     )
     disc, got, err = run(driver)
@@ -117,8 +130,10 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_NOSOUND": "1",
         "SOA_UNCAP": "3300",
         "SOA_SEED": "12345",
+        "SOA_ENCOUNTERS": "half",
+        "SOA_ENCOUNTERS_HOLD_B": "0",
     }, got
-    assert "10 setting(s) applied, 0 overridden" in err, err
+    assert "12 setting(s) applied, 0 overridden" in err, err
 
 
 @needs_msvc
@@ -209,3 +224,39 @@ def test_the_recording_names_the_seed_in_effect_not_the_text(driver):
     assert recorded(driver, "12345", SOA_SEED="0x3039") == "seed=12345"
     assert recorded(driver, "", SOA_SEED="12x") == ""
     assert recorded(driver, SOA_SEED="12x") == "seed=12x"  # the mutation: no owner, the raw text
+
+
+def mods(exe, loaded_id, **env_set):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env.update(env_set)
+    proc = subprocess.run(
+        [str(exe), "mods", loaded_id],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    rec = next(ln for ln in proc.stdout.splitlines() if ln.startswith("recorded ["))[10:-1]
+    return rec, proc.stderr
+
+
+@needs_msvc
+def test_a_mod_setting_without_its_mod_says_so_and_is_not_recorded(driver):
+    """`encounters` is read by the encounter-rate mod, not by the port: with
+    no mod of that id loaded it does nothing, so it says so and the recording
+    does not claim it. With the mod loaded it is recorded, and only as one of
+    the values the mod takes."""
+    rec, err = mods(driver, "-", SOA_ENCOUNTERS="half")
+    assert rec == "", rec
+    assert (
+        "`encounters = half` is set, and no mod with id `encounter-rate` is loaded; it does nothing"
+        in err
+    ), err
+    rec, err = mods(driver, "encounter-rate", SOA_ENCOUNTERS="half", SOA_ENCOUNTERS_HOLD_B="0")
+    assert rec == "encounters=half encounters_hold_b=0" and "does nothing" not in err, (rec, err)
+    rec, _ = mods(driver, "encounter-rate", SOA_ENCOUNTERS="HALF")
+    assert rec == "", rec  # the mod refuses HALF and runs at the game's rate, so none is recorded
+    rec, err = mods(driver, "some-other-mod", SOA_ENCOUNTERS="off")
+    assert rec == "" and "no mod with id `encounter-rate`" in err, (rec, err)

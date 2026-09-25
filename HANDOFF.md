@@ -44,7 +44,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   (`runtime/soa_mod.h`): guest memory with refusals, a safe point at the top of
   the main loop, map and scene callbacks, filters for the controller, the
   projection and textures, and `call_guest` into the game's own functions.
-  `mods/encounters-off` and `examples/mods/map-log` are the examples; `soa.ini`
+  `examples/mods/encounters-off` and `examples/mods/map-log` are the examples; `soa.ini`
   beside the exe starts the port without a terminal. An adversarial review
   found eleven defects in the layer, all fixed.
 - **What speed costs, measured (H1-H6, H3, H11).** Drawn every frame the port
@@ -94,11 +94,24 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   host profiler now names inlined helpers and samples the guest thread.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
+- **The comfort pack has begun (2026-09-25; `docs/PLAN-GAMEPLAY-MODS.md`
+  milestone 1, specified in `docs/specs/comfort-pack.md`).** Manifest 2 for
+  mods, the guard's T0 and T0c (card images and saves under any name, history
+  read for content), the race seed (P6: `SOA_SEED`, and settings that change
+  the game written into a recording), and the first shipped mod,
+  `mods/encounter-rate` (P1a: `SOA_ENCOUNTERS=off|half|normal|double`, hold
+  B for none; `--link` builds it). `examples/mods/encounters-off` moved out
+  of `mods/` for it.
+- **Recorded display lists run at recording (C5a).** The game records lists
+  every frame and the port parses them as they are recorded, so every list
+  called is empty; 28.5% of the opening's draws happen that way. C5b is the
+  fix, bracketed by the list functions -- the logo screen draws through a
+  redirected FIFO that is not a list (FINDINGS "Recorded display lists").
 
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 946 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 957 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -131,8 +144,8 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 946 |
-| Self-test cases | 75 |
+| Python tests | 957 |
+| Self-test cases | 79 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 
@@ -392,7 +405,7 @@ pinned benchmark set, 85.4 ns a fragment), **S2** (guard suffixes), **S1**
 50 images a second and a battle at 104, the renderer draws them at 19 and 48,
 and 8 workers burn 8.4-8.9 cores at any load), **S3** (the encounter
 accelerator fights only where the story allows), **M1** (`SOA_MODS`, data
-patches; `mods/encounters-off` stops random battles) and **M2** (`tick.c`: a
+patches; `examples/mods/encounters-off` stops random battles) and **M2** (`tick.c`: a
 safe point at the top of the main loop, and `SOA_UNCAP=N` lets the frame end's
 spin go after one field), **H11**'s workers' half (idle rasterizer workers
 sleep: the title costs 1.2 cores instead of 8.8, at the same fps measured

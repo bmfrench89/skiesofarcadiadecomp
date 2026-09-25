@@ -1786,6 +1786,53 @@ static int seed_selftest(CpuState* s, char* got, size_t cap)
     return check("race seed at OSGetTick", got, bad ? "agreement" : got);
 }
 
+/* The encounter multiplier as the game itself works it out (PLAN-GAMEPLAY-MODS
+ * P1a): mods/encounter-rate computes base and the game's own byte from the
+ * party's accessories every frame and writes the byte back at normal after a
+ * hold of B, so its reckoning has to be the game's. The game's is
+ * fn_801EF7E0, which Continue and the equipment menus call (a warp does not:
+ * FINDINGS "P1a"). Here it runs on parties set up in memory -- no accessory
+ * with effect 84, accessory 210 on character 0, and 211 on character 1 as
+ * well -- and must leave the byte at 0x8030B7AD as the mod's base_now
+ * would: FF, 64, and 05, the last character's. The party block and the
+ * bytes the function writes are put back afterwards. */
+void fn_801EF7E0(CpuState* s);
+
+static int encounter_selftest(CpuState* s, char* got, size_t cap)
+{
+    static uint8_t saved[0x8030BC00u - 0x8030B4D4u];
+    static const struct {
+        uint16_t acc[6];
+        uint8_t want;
+        const char* what;
+    } k_case[] = {
+        {{0, 0, 0, 0, 0, 0}, 0xFF, "no accessory"},
+        {{204, 201, 0, 0, 0, 0}, 0xFF, "204 and 201, no effect 84"},
+        {{210, 0, 0, 0, 0, 0}, 0x64, "210 on character 0"},
+        {{210, 211, 0, 0, 0, 0}, 0x05, "210 on 0, 211 on 1"},
+        {{0, 0, 0, 0, 0, 211}, 0x05, "211 on character 5"},
+    };
+    unsigned i, c;
+    int bad = 0;
+    memcpy(saved, mem_ptr(s, 0x8030B4D4u), sizeof saved);
+    for (i = 0; i < sizeof k_case / sizeof k_case[0] && !bad; i++) {
+        uint8_t v;
+        for (c = 0; c < 6; c++) mem_w16(s, 0x8030B7F4u + 92u * c + 20u, k_case[i].acc[c]);
+        mem_w8(s, 0x8030B7ADu, 0x5A);
+        s->gpr[1] = STACK_TOP - 0x400; s->gpr[2] = SDA2_BASE; s->gpr[13] = SDA_BASE;
+        s->lr = 0x801A4538u; /* Continue's call */
+        fn_801EF7E0(s);
+        v = mem_r8(s, 0x8030B7ADu);
+        if (v != k_case[i].want) {
+            bad = 1;
+            snprintf(got, cap, "%s: the byte %02X, not %02X", k_case[i].what, v, k_case[i].want);
+        }
+    }
+    memcpy(mem_ptr(s, 0x8030B4D4u), saved, sizeof saved);
+    if (!bad) snprintf(got, cap, "FF with none or without effect 84, 64 for 210, 05 for 211 on a later character");
+    return check("encounter multiplier as the game has it", got, bad ? "agreement" : got);
+}
+
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
  * dispatched like any translated call, with every register set to a pattern
  * first. The length comes back in r3, and every register -- r1, r2, r13, the
@@ -1942,6 +1989,7 @@ int selftest(CpuState* s)
     failures += dcache_selftest(s, got, sizeof got);
     failures += psq_selftest(s, got, sizeof got);
     failures += seed_selftest(s, got, sizeof got);
+    failures += encounter_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

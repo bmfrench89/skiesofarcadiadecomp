@@ -32,6 +32,8 @@ typedef struct {
     const char* env;
     const char* what;
     int recorded; /* changes what the game does, so a pad recording names it (settings_recorded) */
+    const char* mod;     /* read by the DLL mod with this id, not by the port (settings_check_mods) */
+    const char* choices; /* "a|b|c": the only values its reader takes; no other is recorded */
 } Setting;
 
 /* The switches a player would use. Each later enhancement adds its line here,
@@ -47,6 +49,10 @@ static const Setting k_settings[] = {
     {"nosound", "SOA_NOSOUND", "1 opens no audio device"},
     {"uncap", "SOA_UNCAP", "from this frame on, a frame waits one field: the whole game up to twice as fast"},
     {"seed", "SOA_SEED", "a number: the game's field-load and battle-start reseeds follow it (P6)", 1},
+    {"encounters", "SOA_ENCOUNTERS", "off, half, normal or double: how often random battles come (mod encounter-rate)",
+     1, "encounter-rate", "off|half|normal|double"},
+    {"encounters_hold_b", "SOA_ENCOUNTERS_HOLD_B", "0: holding B no longer keeps random battles away (mod encounter-rate)",
+     1, "encounter-rate", "0|1"},
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 
@@ -106,10 +112,41 @@ void settings_record_as(const char* key, const char* value)
         }
 }
 
+/* Whether `v` is one of `choices` ("a|b|c"); any value when there are none. */
+static int is_choice(const char* choices, const char* v)
+{
+    size_t n = strlen(v);
+    const char* p = choices;
+    if (!choices) return 1;
+    while (p && *p) {
+        const char* bar = strchr(p, '|');
+        size_t k = bar ? (size_t)(bar - p) : strlen(p);
+        if (k == n && !strncmp(p, v, n)) return 1;
+        p = bar ? bar + 1 : NULL;
+    }
+    return 0;
+}
+
+/* A setting a DLL mod reads does nothing without that mod, and says so once
+ * mods have loaded -- and, doing nothing, is not recorded. `loaded` answers
+ * whether a mod with an id is loaded (mod.c's mod_loaded). */
+void settings_check_mods(int (*loaded)(const char* id))
+{
+    size_t i;
+    for (i = 0; i < N_SETTINGS; i++) {
+        const char* v = k_settings[i].mod ? getenv(k_settings[i].env) : NULL;
+        if (!v || !*v || loaded(k_settings[i].mod)) continue;
+        fprintf(stderr, "[settings] `%s = %s` is set, and no mod with id `%s` is loaded; it does nothing\n",
+                k_settings[i].key, v, k_settings[i].mod);
+        settings_record_as(k_settings[i].key, "");
+    }
+}
+
 /* "key=value ..." for every recorded setting that is set, for the pad
  * recording's config line: a recording made with a seed says which, and one
- * made with none of them keeps the line it always had. Empty when none is
- * set. */
+ * made with none of them keeps the line it always had. A value its reader
+ * refuses is not one it runs with, so it is not recorded either. Empty when
+ * none is set. */
 const char* settings_recorded(char* out, size_t cap)
 {
     size_t i, used = 0;
@@ -117,7 +154,7 @@ const char* settings_recorded(char* out, size_t cap)
     for (i = 0; i < N_SETTINGS; i++) {
         const char* v = !k_settings[i].recorded ? NULL : g_record_as_set[i] ? g_record_as[i] : getenv(k_settings[i].env);
         int k;
-        if (!v || !*v) continue;
+        if (!v || !*v || !is_choice(k_settings[i].choices, v)) continue;
         k = snprintf(out + used, cap - used, "%s%s=%s", used ? " " : "", k_settings[i].key, v);
         if (k < 0 || (size_t)k >= cap - used) {
             out[used] = '\0'; /* no half a value: the replay would read it as a different one */

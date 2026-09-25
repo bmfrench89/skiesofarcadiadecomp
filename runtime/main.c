@@ -43,6 +43,8 @@ const char* settings_load(void); /* settings.c */
 const char* settings_recorded(char* out, size_t cap);
 int seed_init(char* in_effect, size_t cap); /* seed.c */
 void settings_record_as(const char* key, const char* value);
+void settings_check_mods(int (*loaded)(const char* id));
+int mod_loaded(const char* id); /* mod.c */
 void seed_report(void);
 /* Set while gx.c is inside the command-stream parse. The sampler reads it
  * because a clock pair there would cost more than the parse. */
@@ -1191,6 +1193,7 @@ int main(int argc, char** argv)
         char seed[16];
         if (seed_init(seed, sizeof seed)) hle_on_report(seed_report);
         settings_record_as("seed", seed);
+        settings_check_mods(mod_loaded);
         settings_recorded(extra, sizeof extra);
         n = strlen(extra);
         if (modded) {

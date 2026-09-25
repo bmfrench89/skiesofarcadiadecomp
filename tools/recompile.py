@@ -33,6 +33,45 @@ from soa.recomp import Emitter  # noqa: E402
 
 RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
 
+# Where mods with native code live: the ones the port ships, and the examples
+# a mod author copies. --link builds each folder's mod.c into its mod.dll.
+MOD_FOLDERS = ("mods", "examples/mods")
+
+
+def mod_dll_sources(root: Path = RUNTIME.parent) -> list[Path]:
+    """Every mod.c under MOD_FOLDERS, one per mod folder, in name order."""
+    return sorted(p for d in MOD_FOLDERS for p in (root / d).glob("*/mod.c"))
+
+
+def mod_dll_command(src: Path) -> list[str]:
+    """The cl line --link builds a mod's mod.dll with, beside its mod.c
+    (test_mods.py builds the shipped mods with this same line)."""
+    folder = src.parent
+    return [
+        *toolchain.CFLAGS,
+        "/LD",
+        f"/I{RUNTIME}",
+        str(src),
+        f"/Fo{folder}{os.sep}",
+        f"/Fe:{folder / 'mod.dll'}",
+    ]
+
+
+def build_mod_dlls(root: Path = RUNTIME.parent) -> int:
+    """Build every mod.dll, naming each; the number that failed. A DLL a
+    running soa.exe has loaded cannot be replaced, and fails here."""
+    failed = 0
+    for src in mod_dll_sources(root):
+        where = src.parent.relative_to(root) / "mod.dll"
+        proc = toolchain.cl(mod_dll_command(src), cwd=src.parent)
+        if proc.returncode != 0:
+            errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
+            print(f"  FAIL {where}: {errs[0] if errs else proc.stdout[-300:]}", file=sys.stderr)
+            failed += 1
+        else:
+            print(f"built {where}")
+    return failed
+
 
 # A definition or declaration starting in column 1; the name is the last
 # identifier before the parameter list. ``typedef`` is excluded because a
@@ -246,6 +285,8 @@ def main() -> int:
             print(proc.stdout[-2000:], file=sys.stderr)
             return 1
         print(f"linked {exe} ({time.time() - t0:.1f}s)")
+        if build_mod_dlls():
+            return 1
     return 0
 
 

@@ -200,13 +200,19 @@ def mod(root: Path, name: str, patches: str | None = PATCH, ini: str | None = No
     return d
 
 
-def play(driver, mods: Path, script: str = "") -> tuple[str, str]:
+def play(driver, mods: Path, script: str = "", **env_set) -> tuple[str, str]:
+    """One run of the fake guest. The environment is this process's with
+    every SOA_ switch taken out, so a mod that reads one sees only what the
+    test sets."""
     exe, dol = driver
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env.update(env_set)
     proc = subprocess.run(
         [str(exe), str(mods), str(dol)],
         input=script,
         capture_output=True,
         text=True,
+        env=env,
         timeout=60,
         check=False,
     )
@@ -400,16 +406,18 @@ def test_a_folder_that_is_not_there_says_so(driver, tmp_path):
 
 
 def test_the_example_mod_parses_under_the_documented_grammar():
-    """The example in mods/ is what a mod author copies, so it has to be one
-    this parser would load: its DOL SHA-1 is the one config.yml pins."""
-    ini = (ROOT / "mods" / "encounters-off" / "mod.ini").read_text(encoding="utf-8")
+    """The example in examples/mods/ is what a mod author copies, so it has to
+    be one this parser would load: its DOL SHA-1 is the one config.yml pins."""
+    ini = (ROOT / "examples" / "mods" / "encounters-off" / "mod.ini").read_text(encoding="utf-8")
     pinned = next(
         line.split(":", 1)[1].strip()
         for line in (ROOT / "config" / "GEAE8P" / "config.yml").read_text().splitlines()
         if line.startswith("hash:")
     )
     assert f"dol_sha1 = {pinned}" in ini
-    patches = (ROOT / "mods" / "encounters-off" / "patches.txt").read_text(encoding="utf-8")
+    patches = (ROOT / "examples" / "mods" / "encounters-off" / "patches.txt").read_text(
+        encoding="utf-8"
+    )
     assert "every_frame 0x80346d28 = 0 when scene=6" in patches
 
 
@@ -965,7 +973,7 @@ def test_two_mods_with_one_id_the_second_is_refused_and_names_the_first(driver, 
 def test_the_shipped_mods_are_manifest_2():
     """The folders a mod author copies from carry the manifest a new mod
     should: an id and a version, api as a minimum."""
-    for folder in ("mods/encounters-off", "examples/mods/map-log"):
+    for folder in ("mods/encounter-rate", "examples/mods/encounters-off", "examples/mods/map-log"):
         keys = {}
         for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
             key, eq, value = line.partition("=")
@@ -1018,3 +1026,178 @@ def test_a_manifest_2_mod_past_the_recording_line_is_keyed_by_id_not_folder(driv
     out, _ = play(driver, tmp_path, "describe")
     after = next(x for x in out.splitlines() if x.startswith("describe ["))
     assert after == before, (before, after)
+
+
+# --------------------------------------------------------------------------
+# mods/encounter-rate (PLAN-GAMEPLAY-MODS P1a) on the fake guest
+# --------------------------------------------------------------------------
+
+ENC = ROOT / "mods" / "encounter-rate"
+FIELD = "set 803475cc 6 "
+BYTE = "get 8030b7ac "  # the multiplier is the second byte of this word
+# Character 0's accessory is the high half of 0x8030B808; accessory 210's
+# record's first effect is {84, 0, 100}, 211's {84, 0, 5}.
+ACC_210 = "set 8030b808 00d20000 set 802c75f8 54000064 "
+ACC_211_ON_1 = "set 8030b864 00d30000 set 802c7620 54000005 "
+
+
+def shipped(tmp_path: Path, source: str | None = None) -> Path:
+    """mods/encounter-rate built with the line --link uses, into a folder
+    whose mod.ini pins the fake DOL -- or, given `source`, a mutation of it."""
+    import recompile
+    from soa import toolchain
+
+    d = tmp_path / "encounter-rate"
+    d.mkdir(parents=True)
+    ini = (ENC / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    src = d / "mod.c"
+    src.write_text(source or (ENC / "mod.c").read_text(encoding="utf-8"), encoding="utf-8")
+    proc = toolchain.cl(recompile.mod_dll_command(src), cwd=d)
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    return d
+
+
+def multipliers(out: str) -> list[int]:
+    """The multiplier byte at each `get` of its word, in order."""
+    return [
+        int(line.split("=")[1], 16) >> 16 & 0xFF
+        for line in out.splitlines()
+        if line.startswith("8030B7AC=")
+    ]
+
+
+def writes(err: str) -> int:
+    line = next(ln for ln in err.splitlines() if "encounter-rate mod.dll:" in ln)
+    return int(line.rsplit(";", 1)[1].split()[0])
+
+
+def test_every_shipped_mod_is_built_by_link():
+    """--link builds each mod.c under mods/ and examples/mods/ (recompile.py's
+    list): the shipped mod is among them, beside the example."""
+    import recompile
+
+    srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
+    assert {"mods/encounter-rate", "examples/mods/map-log"} <= srcs, srcs
+
+
+@needs_msvc
+def test_encounter_rate_unset_writes_nothing(driver, tmp_path):
+    shipped(tmp_path)
+    out, err = play(driver, tmp_path, FIELD + "frame " * 100 + BYTE + "report")
+    assert "loaded 1" in out, err
+    assert "[mod] encounter-rate: random battles normal in the field" in err, err
+    assert "[mod] encounter-rate: base 50 (none)" in err, err
+    assert writes(err) == 0 and multipliers(out) == [0], (out, err)
+
+
+@needs_msvc
+def test_encounter_rate_presets_without_an_accessory(driver, tmp_path):
+    shipped(tmp_path)
+    for preset, want in (("half", 25), ("double", 100), ("off", 0)):
+        out, err = play(
+            driver,
+            tmp_path,
+            FIELD + "setb 8030b7ad ff frame " + BYTE + "report",
+            SOA_ENCOUNTERS=preset,
+        )
+        assert multipliers(out) == [want], (preset, out, err)
+        assert writes(err) == 1, (preset, err)
+
+
+@needs_msvc
+def test_encounter_rate_works_from_the_accessory_as_the_game_does(driver, tmp_path):
+    """Base is the effect-84 value of the last character whose accessory has
+    one: 210 on character 0 gives 100, and 211 on character 1 after it 5."""
+    shipped(tmp_path)
+    out, err = play(
+        driver, tmp_path, FIELD + ACC_210 + "frame frame " + BYTE, SOA_ENCOUNTERS="half"
+    )
+    assert multipliers(out) == [50], out
+    assert "base 100 (character 0's accessory 210)" in err, err
+    out, _ = play(driver, tmp_path, FIELD + ACC_210 + "frame " + BYTE, SOA_ENCOUNTERS="double")
+    assert multipliers(out) == [127], out
+    out, err = play(
+        driver, tmp_path, FIELD + ACC_210 + ACC_211_ON_1 + "frame " + BYTE, SOA_ENCOUNTERS="half"
+    )
+    assert multipliers(out) == [2] and "base 5 (character 1's accessory 211)" in err, (out, err)
+
+
+@needs_msvc
+def test_encounter_rate_writes_only_in_the_field(driver, tmp_path):
+    shipped(tmp_path)
+    out, err = play(
+        driver, tmp_path, "set 803475cc 7 frame frame " + BYTE + "report", SOA_ENCOUNTERS="off"
+    )
+    assert multipliers(out) == [0] and writes(err) == 0, (out, err)
+
+
+HOLD = (
+    FIELD
+    + "setb 8030b7ad ff pad 1 0200 "
+    + ("frame " + BYTE) * 30
+    + "pad 31 0000 "
+    + ("frame " + BYTE) * 5
+)
+
+
+@needs_msvc
+def test_hold_b_at_normal_writes_zero_then_puts_the_game_s_value_back_once(driver, tmp_path):
+    """Thirty frames with B held read 0; the first frame after B is let go
+    writes the game's own 0xFF, and after that nothing more is written."""
+    shipped(tmp_path)
+    out, err = play(driver, tmp_path, HOLD + "report")
+    assert multipliers(out) == [0] * 30 + [0xFF] * 5, out
+    assert writes(err) == 31, err
+
+
+@needs_msvc
+def test_hold_b_restores_the_accessory_s_value_not_ff(driver, tmp_path):
+    shipped(tmp_path)
+    out, _ = play(driver, tmp_path, ACC_210 + HOLD.replace("setb 8030b7ad ff", "setb 8030b7ad 64"))
+    assert multipliers(out)[30:] == [0x64] * 5, out
+
+
+@needs_msvc
+def test_hold_b_off_leaves_the_controller_alone(driver, tmp_path):
+    shipped(tmp_path)
+    out, err = play(driver, tmp_path, HOLD + "report", SOA_ENCOUNTERS_HOLD_B="0")
+    assert "pad 1 0200 unfiltered" in out and multipliers(out) == [0xFF] * 35, out
+    assert "holding B keeps them away off" in err and writes(err) == 0, err
+
+
+@needs_msvc
+def test_a_preset_the_mod_does_not_know_is_the_game_s_rate(driver, tmp_path):
+    shipped(tmp_path)
+    out, err = play(driver, tmp_path, FIELD + "frame " + BYTE + "report", SOA_ENCOUNTERS="HALF")
+    assert "SOA_ENCOUNTERS=HALF is not off, half, normal or double" in err, err
+    assert writes(err) == 0 and multipliers(out) == [0], (out, err)
+
+
+@needs_msvc
+def test_the_mutations_fail_the_checks(driver, tmp_path):
+    """The spec's two mutations: halving the byte read back instead of base
+    compounds frame on frame (50, 25, 12, ...), and a build without the
+    restore leaves battles off after one press of B."""
+    src = (ENC / "mod.c").read_text(encoding="utf-8")
+    compound = "    base = base_now(&game, &who, &item);\n"
+    assert src.count(compound) == 1
+    reread = compound + (
+        "    { uint8_t now; if (g_api->read8(MULTIPLIER, &now) && now != 0xFF) base = (int8_t)now; }\n"
+    )
+    shipped(tmp_path / "a", src.replace(compound, reread))
+    out, _ = play(
+        driver,
+        tmp_path / "a",
+        FIELD + ACC_210 + "setb 8030b7ad 64 " + ("frame " + BYTE) * 3,
+        SOA_ENCOUNTERS="half",
+    )
+    assert multipliers(out) == [50, 25, 12], out  # the shipped mod reads 50, 50, 50
+
+    restore = "        if (g_dirty && g_api->write8(MULTIPLIER, (uint8_t)game)) g_dirty = 0;\n"
+    assert src.count(restore) == 1
+    shipped(tmp_path / "b", src.replace(restore, ""))
+    out, _ = play(driver, tmp_path / "b", HOLD)
+    assert multipliers(out)[30:] == [0] * 5, out  # the shipped mod reads FF

@@ -257,13 +257,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-946 passed in 179.05s
+957 passed in 176.01s
 ```
 
-946 tests in 52 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `927 passed, 1 skipped` without
+957 tests in 52 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `938 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `669 passed, 277 skipped` without MSVC.
+module-level skip), `670 passed, 287 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
@@ -357,7 +357,7 @@ gen\soa.exe extracted
 [selftest] 0 failure(s)
 ```
 
-**0.11 s, 80 lines, 75 cases** — the cheapest real check in the project and the
+**0.09 s, 90 lines, 79 cases** — the cheapest real check in the project and the
 one to run after every `--link`. It calls the recompiled library, the device
 models, the AX mixer and the software renderer directly, outside the game's
 control flow, so a wrong answer is a bug with a two-line repro. Every case

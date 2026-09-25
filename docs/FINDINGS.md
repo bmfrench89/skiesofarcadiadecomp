@@ -3118,3 +3118,62 @@ settings and mods (from 320), 1024 for the line, and a line cut short says
 fit -- `settings_recorded` used to leave half a value in the buffer when it
 overflowed. `test_padrec.py` sends 600 bytes through whole and 800 cut, and
 the old 320-byte buffer fails the first.
+
+
+**P1a: the encounter slider and hold-B, and where the game works out its
+multiplier.** 2026-09-25, `build/p1a/`. `mods/encounter-rate` is the first
+mod the port ships: a `mod.dll` (built by `--link`, which now builds every
+`mods/*/mod.c` and `examples/mods/*/mod.c` and fails if one does not
+compile) that writes the game's encounter multiplier, the signed byte at
+`0x8030B7AD`, from the frame end while the scene is the field. The game's
+byte is -1 (no multiplier) or the effect-84 value of a party accessory;
+the mod works out the same base every frame -- 50 with none -- and writes
+base/2 at `half`, min(base x 2, 127) at `double`, 0 at `off`, and nothing at
+`normal`; B held in the field writes 0, and at `normal` the first frame after
+B is let go puts the game's own value back, once. `encounters` and
+`encounters_hold_b` are recorded settings, recorded only as values the mod
+takes and only when the mod is loaded; without it the port says the key
+does nothing. mod.c's report gives each DLL's writes. `mods/encounters-off`
+moved to `examples/mods/`, so `mods = ...\mods` no longer turns battles off
+for good beside the slider.
+
+Each run from a copy of `card-saved` (a101b), the Continue preamble, the
+multiplier's word peeked every frame (the byte is its second):
+- nothing poked: the mod logs `base 50 (none)`; `half` reads `19` (25) and
+  `double` `64` (100) on every frame from 3000 to 3600; `normal` reads the
+  game's `FF` with `0 write(s)`;
+- accessory 210 poked onto character 0 at 3000, then a warp to `ME101B.SCT`:
+  the mod logs `base 100 (character 0's accessory 210)`, and `half` reads
+  `32` (50) and `double` `7F` (127) on every frame from 3300 to 3900;
+- `normal` with `3400:b#300`: `FF` to 3400, `00` from 3401 to 3700, `FF` from
+  3701 -- to the frame at both edges -- and `301 write(s)`: 300 zeros, one
+  restore;
+- `SOA_ENCOUNTERS=half` without `SOA_MODS`: "`encounters = half` is set, and
+  no mod with id `encounter-rate` is loaded; it does nothing".
+
+**The spec's one expectation that did not hold is about the game, not the
+mod.** At `normal` after the accessory poke and the warp, the byte read
+`FF`, where the spec expected the game's own `64` and said `FF` would mean
+the setup was wrong. It was: a store watch on the byte through the Continue
+load, the poke and the warp (`build/p1a/W-watch.log`) shows the game writing
+it once, at the Continue load (frame 2648, `fn_801EF7E0` reached from
+`0x801A4538`), and never at the warp. `fn_801EF7E0` resets the multiplier
+to -1 and runs `fn_801EE5A4` for each of characters 0-5, party or not; its
+twenty callers are Continue, the equipment menus (`0x801F0xxx`-`0x801F4xxx`)
+and a few others -- a map load is not among them. And the save's party
+block lands in the same frame as that call (`W2-watch.log`, both at 2648),
+so no poke can get between them. In its place the self test runs the
+game's own `fn_801EF7E0` on parties set up in memory: `FF` with no
+accessory and with 204 and 201 (no effect 84), `64` with 210 on character
+0, and `05` with 211 on character 1 after it or on character 5 alone --
+exactly what the mod's reckoning gives on the fake guest for the same
+parties. Claiming the first character wins instead (the mutation) fails it:
+the game gives `05`.
+
+Checks: `test_mods.py`'s new cases on the fake guest (nothing written unset;
+each preset from each base; only in the field; hold-B's zeros and its one
+restore of `FF`, or of `64` with 210; hold-B off leaving the controller
+alone; `HALF` refused), with the spec's two mutations built from the shipped
+source -- halving the byte read back reads 50, 25, 12 where the mod holds
+50, and without the restore battles stay off after B; `test_settings.py`'s
+"does nothing" line and choices; the self test's new case.
