@@ -159,8 +159,9 @@ mods = C:\Games\Skies\mods
 ```
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
-`record` (`SOA_PAD_RECORD`), `nosound` and `uncap`, each standing for the
-switch below. A variable set in the environment always wins over the file, and
+`record` (`SOA_PAD_RECORD`), `nosound`, `uncap` and `seed`, each standing for the
+switch below. A key that changes what the game does (`seed` today) is also
+written into a pad recording's `# config` line when it is set. A variable set in the environment always wins over the file, and
 the port says so; a key it does not know is reported with its line and ignored.
 The checks -- `scenario.py`'s runs and replays, `perfbench.py` and the self
 test -- run with the file off (`SOA_SETTINGS=0`), so a player's settings never
@@ -188,6 +189,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_PAD_STOP=n` | frames to keep running after a replayed recording runs out, then stop (default 120; 0 keeps going) |
 | `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
 | `SOA_UNCAP=N` | from frame `N` on (`1` is from the start), let the frame end's spin go after one field instead of two: `runtime/tick.c` answers `VIGetRetraceCount` with the frame's start plus one at the spin's call site. The game's logic advances once a frame, so this runs the **whole game** up to twice as fast — it is not 60 fps. Start it after a pad script has reached its scene: disc loads run on the wall clock, so uncapped from boot the script's presses land somewhere else. For measuring how fast the port can go (`docs/PLAN-60FPS-MODS.md` H3), not for play. Every run's report also ends with a `[frametime]` line: frames a second, the median, 95th and 99th percentile and worst wall milliseconds per frame, and the process's CPU seconds; with an uncap, over the frames from `N` on. The `[tick]` line counts the main loop's safe points (one per frame, less the frame shown before the loop starts) and how often the spin was let go |
+| `SOA_SEED=n` | a 32-bit number, decimal or `0x` hex: the game's three reseeds of its random numbers -- every field load and the two at every battle start, OSGetTick called from `0x801012B0`, `0x8000A1D0` and `0x8000A1D8` -- take values made from it (`runtime/seed.c`), so a run with the same seed starts every battle from the same seeds; every other timebase read is untouched. The report counts the pins per site, and a recording's `# config` line ends `seed=n` (PLAN-GAMEPLAY-MODS P6). Whether the same seeds give the same battle is K6's question |
 | `SOA_FRAMETIME_FROM=N` | start the `[frametime]` record at frame `N` without uncapping: a capped run's figures for the same stretch an uncapped one reports |
 | `SOA_FIFO_DUMP=n,n` | capture those frame numbers; each lands as `NNNN.fifo`/`.regs`/`.ram`, zero-padded to four digits, for `gen\soa.exe --replay build/fifo/NNNN` |
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
@@ -227,7 +229,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 891 tests; any that need a dump skip themselves
+python -m pytest                     # 906 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

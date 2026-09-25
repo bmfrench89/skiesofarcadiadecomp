@@ -27,13 +27,22 @@ DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 const char* settings_load(void);
-int main(void)
+const char* settings_recorded(char* out, size_t cap);
+int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
-                                  "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP"};
-    const char* disc = settings_load();
+                                  "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED"};
+    const char* disc;
     unsigned i;
+    char rec[320];
+    if (argc > 1 && !strcmp(argv[1], "recorded")) {
+        settings_load();
+        printf("recorded [%s]\n", settings_recorded(rec, sizeof rec));
+        return 0;
+    }
+    disc = settings_load();
     printf("disc %s\n", disc ? disc : "-");
     for (i = 0; i < sizeof names / sizeof names[0]; i++)
         printf("%s=%s\n", names[i], getenv(names[i]) ? getenv(names[i]) : "-");
@@ -90,7 +99,7 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "# a player's file\n"
         "disc = C:\\Games\\Skies\\extracted\n"
         "render = 1\nwindow = 1\nscale = 3\nthreads = 6\nmods = C:\\Games\\mods\n"
-        "card = C:\\Games\\card.raw\nrecord = play.pad\nnosound = 1\nuncap = 3300\n",
+        "card = C:\\Games\\card.raw\nrecord = play.pad\nnosound = 1\nuncap = 3300\nseed = 12345\n",
         encoding="utf-8",
     )
     disc, got, err = run(driver)
@@ -105,8 +114,9 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_PAD_RECORD": "play.pad",
         "SOA_NOSOUND": "1",
         "SOA_UNCAP": "3300",
+        "SOA_SEED": "12345",
     }, got
-    assert "9 setting(s) applied, 0 overridden" in err, err
+    assert "10 setting(s) applied, 0 overridden" in err, err
 
 
 @needs_msvc
@@ -147,3 +157,24 @@ def test_every_check_runs_with_the_file_off():
 
 def test_the_file_is_documented():
     assert "soa.ini" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def recorded(exe, **env_set) -> str:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env.update(env_set)
+    proc = subprocess.run(
+        [str(exe), "recorded"], capture_output=True, text=True, env=env, timeout=60, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    return next(ln for ln in proc.stdout.splitlines() if ln.startswith("recorded ["))[10:-1]
+
+
+@needs_msvc
+def test_only_what_changes_the_game_is_recorded(driver):
+    """settings_recorded names a recorded setting only when it is set -- from
+    the environment or soa.ini -- so a run with none keeps the recording's
+    line as it was; the display switches are never in it."""
+    assert recorded(driver) == ""
+    assert recorded(driver, SOA_SEED="12345", SOA_RENDER="1", SOA_SCALE="3") == "seed=12345"
+    (driver.parent / "soa.ini").write_text("seed = 0x3039\nwindow = 1\n", encoding="utf-8")
+    assert recorded(driver) == "seed=0x3039"

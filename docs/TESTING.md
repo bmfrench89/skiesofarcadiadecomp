@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-891 passed in 164.58s
+906 passed in 171.48s
 ```
 
-891 tests in 51 files, none of which reads the disc. They cover the Python
+906 tests in 52 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -69,6 +69,7 @@ its own and run it, some of the C as well:
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
 | `test_matchcheck_relocs.py` | 14 | what a relocated word is allowed to hide — every case is a thing the old oracle called a MATCH |
 | `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
+| `test_seed.py` | 14 | `runtime/seed.c`, built alone: the race seed's values are MurmurHash3's finaliser over the seed, the site and the site's call count (against an independent Python one), exactly the three OSGetTick sites are pinned, each counts its own calls, a seed that is not 32 bits is refused; and each site is in the translated code once, followed by srand |
 | `test_regs.py` | 12 | which GPR an instruction actually writes |
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
@@ -77,8 +78,8 @@ its own and run it, some of the C as well:
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
+| `test_settings.py` | 8 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
-| `test_settings.py` | 7 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, and every scripted check sets it |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
@@ -101,10 +102,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `891 passed` |
-| no capstone — **what CI installs** | `872 passed, 1 skipped` |
-| no MSVC | `633 passed, 258 skipped` |
-| neither — **the Ubuntu CI leg** | `614 passed, 259 skipped` |
+| everything (MSVC + capstone) | `906 passed` |
+| no capstone — **what CI installs** | `887 passed, 1 skipped` |
+| no MSVC | `634 passed, 272 skipped` |
+| neither — **the Ubuntu CI leg** | `615 passed, 273 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -987,7 +988,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 258 of the 891 skip without a C compiler; they build one runtime file and run it.
+² 272 of the 906 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -998,8 +999,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 614 passed, 259 skipped |
-| **Tests** | windows | the same three — 872 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 615 passed, 273 skipped |
+| **Tests** | windows | the same three — 887 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

@@ -1740,6 +1740,52 @@ static int psq_selftest(CpuState* s, char* got, size_t cap)
     return check("psq_load/psq_store vs generic", got, bad ? "agreement" : got);
 }
 
+/* The race seed (P6, seed.c): with a seed set, the game's own OSGetTick
+ * called from each of the three reseed sites returns that site's pin, and
+ * the game's srand stores it at the seed word 0x803469A8; from a return
+ * address one instruction past the last site (0x8000A1DC, the plan's
+ * mutation) nothing is pinned. */
+void fn_8023851C(CpuState* s); /* OSGetTick */
+void fn_8025ECBC(CpuState* s); /* srand */
+void seed_set(int on, uint32_t seed);
+uint32_t seed_value(uint32_t s, int site, uint32_t n);
+
+static int seed_selftest(CpuState* s, char* got, size_t cap)
+{
+    static const uint32_t sites[3] = {0x801012B0u, 0x8000A1D0u, 0x8000A1D8u};
+    const uint32_t seed = 12345u;
+    int i, n, bad = 0;
+    uint32_t v;
+    seed_set(1, seed);
+    for (n = 0; n < 2 && !bad; n++)
+        for (i = 0; i < 3 && !bad; i++) {
+            uint32_t want = seed_value(seed, i, (uint32_t)n);
+            s->gpr[1] = STACK_TOP - 0x400; s->gpr[2] = SDA2_BASE; s->gpr[13] = SDA_BASE;
+            s->lr = sites[i];
+            fn_8023851C(s);
+            v = s->gpr[3];
+            s->lr = sites[i] + 8;
+            fn_8025ECBC(s);
+            if (v != want || mem_r32(s, 0x803469A8u) != want) {
+                bad = 1;
+                snprintf(got, cap, "call %d from %08X: OSGetTick %08X, seed word %08X, the pin %08X", n, sites[i], v,
+                         mem_r32(s, 0x803469A8u), want);
+            }
+        }
+    s->lr = 0x8000A1DCu;
+    fn_8023851C(s);
+    v = s->gpr[3];
+    for (n = 0; n < 4 && !bad; n++)
+        for (i = 0; i < 3 && !bad; i++)
+            if (v == seed_value(seed, i, (uint32_t)n)) {
+                bad = 1;
+                snprintf(got, cap, "OSGetTick from 8000A1DC returned a pin, %08X", v);
+            }
+    seed_set(0, 0);
+    if (!bad) snprintf(got, cap, "three sites pinned twice each and srand stored each pin; 8000A1DC left to the clock");
+    return check("race seed at OSGetTick", got, bad ? "agreement" : got);
+}
+
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
  * dispatched like any translated call, with every register set to a pattern
  * first. The length comes back in r3, and every register -- r1, r2, r13, the
@@ -1895,6 +1941,7 @@ int selftest(CpuState* s)
     failures += tick_selftest(s, got, sizeof got);
     failures += dcache_selftest(s, got, sizeof got);
     failures += psq_selftest(s, got, sizeof got);
+    failures += seed_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

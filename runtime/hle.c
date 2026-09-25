@@ -159,15 +159,19 @@ unsigned hle_speed(void);
  * one. */
 void profile_report(void);
 
-/* Reports that belong to something optional (mod.c's), registered rather
- * than called, so that this file still links without them. */
-static void (*g_report_hooks[4])(void);
+/* Reports that belong to something optional (mod.c's, seed.c's), registered
+ * rather than called, so that this file still links without them. Room for
+ * sixteen, and a seventeenth says so instead of vanishing, which is what the
+ * fifth used to do when the table held four. */
+#define REPORT_HOOKS 16
+static void (*g_report_hooks[REPORT_HOOKS])(void);
 
 void hle_on_report(void (*fn)(void))
 {
     int i;
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < REPORT_HOOKS; i++)
         if (!g_report_hooks[i]) { g_report_hooks[i] = fn; return; }
+    fprintf(stderr, "[hle] report hook table full (%d); a report will be missing\n", REPORT_HOOKS);
 }
 
 void hle_report(void)
@@ -204,7 +208,7 @@ void hle_report(void)
         fprintf(stderr, "; %.1f guest seconds at SOA_SPEED=%u, %.1f wall seconds\n", guest, hle_speed(), wall);
     }
     frametime_report();
-    for (i = 0; i < 4 && g_report_hooks[i]; i++) g_report_hooks[i]();
+    for (i = 0; i < REPORT_HOOKS && g_report_hooks[i]; i++) g_report_hooks[i]();
     irq_report();
     threads_report();
     for (i = 0; i < MMIO_SLOTS; i++) {
@@ -479,5 +483,16 @@ double hle_guest_seconds(void)
     return g_tb_started ? (double)timebase() / (double)TB_HZ : 0.0;
 }
 
-uint32_t guest_timebase_lo(CpuState* s) { (void)s; return (uint32_t)timebase(); }
+/* The race seed (seed.c, PLAN-GAMEPLAY-MODS P6): with SOA_SEED set, a read
+ * from inside OSGetTick -- pc 0x8023851C, the only place the pc decides
+ * anything -- goes to seed_pin, which pins the three reseed sites by their
+ * return address and hands every other read its timebase. */
+extern int g_seed_on;
+uint32_t seed_pin(uint32_t lr, uint32_t tb);
+
+uint32_t guest_timebase_lo(CpuState* s)
+{
+    uint32_t v = (uint32_t)timebase();
+    return g_seed_on && s->pc == 0x8023851Cu ? seed_pin(s->lr, v) : v;
+}
 uint32_t guest_timebase_hi(CpuState* s) { (void)s; return (uint32_t)(timebase() >> 32); }

@@ -150,6 +150,7 @@ def frame_driver(tmp_path_factory):
             str(ROOT / "runtime"),
             str(out / "frames.c"),
             str(ROOT / "runtime" / "hle.c"),
+            str(ROOT / "runtime" / "seed.c"),
             "/Fo" + str(out) + os.sep,
             "/Fe" + str(exe),
         ],

@@ -31,6 +31,7 @@ typedef struct {
     const char* key;
     const char* env;
     const char* what;
+    int recorded; /* changes what the game does, so a pad recording names it (settings_recorded) */
 } Setting;
 
 /* The switches a player would use. Each later enhancement adds its line here,
@@ -45,6 +46,7 @@ static const Setting k_settings[] = {
     {"record", "SOA_PAD_RECORD", "record controller input to this file"},
     {"nosound", "SOA_NOSOUND", "1 opens no audio device"},
     {"uncap", "SOA_UNCAP", "from this frame on, a frame waits one field: the whole game up to twice as fast"},
+    {"seed", "SOA_SEED", "a number: the game's field-load and battle-start reseeds follow it (P6)", 1},
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 
@@ -85,6 +87,25 @@ static int settings_path(char* out, size_t cap)
     snprintf(out, cap, "soa.ini");
     return 1;
 #endif
+}
+
+/* "key=value ..." for every recorded setting whose variable is set, for the
+ * pad recording's config line: a recording made with a seed says which,
+ * and one made with none of them keeps the line it always had. Empty when
+ * none is set. */
+const char* settings_recorded(char* out, size_t cap)
+{
+    size_t i, used = 0;
+    out[0] = '\0';
+    for (i = 0; i < N_SETTINGS; i++) {
+        const char* v = k_settings[i].recorded ? getenv(k_settings[i].env) : NULL;
+        int k;
+        if (!v || !*v) continue;
+        k = snprintf(out + used, cap - used, "%s%s=%s", used ? " " : "", k_settings[i].key, v);
+        if (k < 0 || (size_t)k >= cap - used) break;
+        used += (size_t)k;
+    }
+    return out;
 }
 
 /* Read soa.ini, if there is one and SOA_SETTINGS is not 0, into the

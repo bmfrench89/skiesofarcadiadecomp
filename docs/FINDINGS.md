@@ -2990,3 +2990,38 @@ pressed for 2,913 frames, the A moved it on, and the choice box that
 followed rested at 6: what the draft predicted, so P11 can build on these
 words. The task reads 0 for two frames of a warp, which a mod must treat as
 "no window".
+
+
+**P6: the race seed pinned, and settings that change the game recorded.**
+2026-09-25, `build/scenario-p6.log`, `build/scenario-p6-watch.log`,
+`build/p6.pad`. The game seeds its random numbers from the timebase through
+OSGetTick at three sites -- a field load (the call returns to `0x801012B0`)
+and twice at a battle start (`0x8000A1D0`, `0x8000A1D8`) -- each followed at
+once by srand, which stores its argument to the seed word `0x803469A8`.
+With `SOA_SEED` set, `guest_timebase_lo` hands a read from inside OSGetTick
+(the guest's pc `0x8023851C`: the one place the pc decides anything, and a
+necessary gate, since the device models read the timebase through the
+guest's registers with whatever lr it last set) to `runtime/seed.c`, which
+answers the three sites with MurmurHash3's finaliser over the seed, the
+site and that site's call count, and every other read with the clock.
+`k_settings` now marks the keys that change the game as recorded; `seed` is
+the first, and the recording's `# config` line carries every recorded key
+that is set -- a run with none keeps the line it had. The report-hook table
+grows from four to sixteen and says so when it overflows, where a fifth hook
+used to vanish.
+
+The battle scenario with `SOA_SEED=12345`: `field load 2, battle start 1 and
+1 pinned; 191132 other OSGetTick reads left alone` -- both field loads before
+the deck fight, which starts at frame 9810 and is still going at the
+scenario's 12,000 -- and the recording's line ends `seed=12345`. A store
+watch on the seed word from frame 9790 shows srand storing `8739D20C` from
+lr `0x8000A1D4` and `2A787E8A` from `0x8000A1DC` at frame 9810: the two
+battle-start pins for that seed, exactly, then `rand()`'s first store at
+9814. Checks: `test_seed.py` holds seed.c built alone to an independent
+Python finaliser (36 values), pins exactly the three sites, counts each
+site's calls, and refuses a seed that is not 32 bits; a test finds each site
+in `gen/` once, followed by srand, so a retranslation that moves one fails;
+the self test runs the game's own OSGetTick and srand through the pin at
+each site twice, and from `0x8000A1DC` -- the plan's mutation -- gets the
+clock; `test_settings.py` has `seed` recorded only when set. Whether one
+seed gives one battle is K6's question, and waits on it.
