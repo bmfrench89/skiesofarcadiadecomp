@@ -117,9 +117,15 @@ def test_a_good_item_before_a_bad_one_is_kept_and_the_rest_reported(tmp_path):
 @needs_msvc
 def test_no_switch_says_nothing(tmp_path):
     """A facility that announces itself in every log is one people stop
-    reading, which is the argument the renderer's tripwire header makes."""
-    assert "[poke]" not in run(build(tmp_path), tmp_path, None)
-    assert "[poke]" not in run(build(tmp_path), tmp_path, "")
+    reading, which is the argument the renderer's tripwire header makes.
+
+    One build for both runs: linking boot.exe a second time into the same
+    directory, straight after running it, failed once in a full suite run
+    (2026-09-24) and passed on every rerun -- the shape of a just-run image
+    still held open on Windows."""
+    exe = build(tmp_path)
+    assert "[poke]" not in run(exe, tmp_path, None)
+    assert "[poke]" not in run(exe, tmp_path, "")
 
 
 def test_the_switch_is_documented_where_the_port_says_it_is():

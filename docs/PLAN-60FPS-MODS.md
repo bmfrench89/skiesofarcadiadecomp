@@ -189,7 +189,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
   - Steps of 2 or more while uncapped mean the guest thread alone cannot finish a frame in one field. H13 then comes before M11.
   - If the fade takes the same number of *fields* in both runs, the logic is not per frame. Uncapping would then be the 60 fps route, and this plan is redone.
 
-**H3. Frame-time percentiles and a sustained uncap** — *hours, `--link`.*
+**H3. Frame-time percentiles and a sustained uncap** — *done 2026-09-24: `[frametime]`, `SOA_UNCAP=N` (a start frame, not `=1`: disc loads run on the wall clock, so a frame-keyed pad script needs the scene reached first) and `SOA_FRAMETIME_FROM=N`. Guest ceilings 50/104/80 and render ceilings 19/48/26 in the opening, a battle and a ship battle; 8.4-8.9 cores at any load with 8 workers. FINDINGS "H3".*
 - Add per-frame wall time (p50, p95, p99 and max) and the process's CPU seconds to the `[run]` report. Today it prints totals only, so hitches are invisible.
 - Add `SOA_UNCAP=1`: the frame hook writes 0 to 0x8034768C every frame. It is for measurement only; M2 replaces it for play.
 
@@ -451,7 +451,7 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 - **A guard on every function.** Its overhead is unmeasured; measure it before adopting it.
 - **Rendering at 60 ticks.** When the tick is unlocked, rendering must either keep up with every frame (Track H) or skip every other frame.
 
-**M1. The mod runtime, data patches only** — *several days, `--link`.*
+**M1. The mod runtime, data patches only** — *loader done 2026-09-24 (`runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`, 42 parser tests); the two acceptance runs are next. The map condition reads the committed map 0x80311AC0, not 0x80311AC4, the picker's working copy (FINDINGS "131e renders").*
 - `runtime/mod.c` with `SOA_MODS`.
 - A `mod.ini` per mod: name, API version, and the required DOL SHA-1.
 - A patch-list format: `addr = value`, with a `when` condition on scene, map or state, and a trigger of `every_frame`, `on_map_load` or `once`.
@@ -762,7 +762,7 @@ It is small and fully understood, calls undecompiled SDK functions, and reads r1
 - `SOA_UNTIL` exits 0 and prints the full report.
 - The fps cost of `SOA_RASTER_ALL` is recorded.
 
-**S1. `soak.py check`** — *a day, no disc needed.*
+**S1. `soak.py check`** — *done 2026-09-24: `python tools/soak.py check LOG...`; all 12 logs pass the failure invariants, battle counts as below. Two criteria were wrong and the checker follows the logs: only **four** logs "did not test what it says" (bsoak303/404/505/606, the battle mix with no battle) -- soakE/H/J/L were walk soaks that ran under `scenario.py run battle` for its environment and never claimed a battle; and soakD's battle is at frame ~30,670, not ~28.3k. BP_MASK follows the game over (GXInit again on the reset to the title), not battles.*
 It adds the new invariants (tripwire lines and setup assertions) and writes `summary.json`. It counts battles by `stsicon.mld` loads, one per battle, not one per matching line.
 
 *Done:*
@@ -774,14 +774,14 @@ It adds the new invariants (tripwire lines and setup assertions) and writes `sum
 - Each injected mutation fails: an `[mmio!]` line, 5 unknown bytes, a `[mem]` line, a missing `[gx]` line, and a wrong landing map.
 - FINDINGS.md:1544 is corrected to three battles.
 
-**S2. Guard suffixes and the stale TESTING lines** — *hours.*
+**S2. Guard suffixes and the stale TESTING lines** — *done 2026-09-24 (commit 468b3c2): six suffixes (`.raw .fifo .regs .ram .wav .png`), CI's regex matches, counts updated.*
 
 *Done:*
 - `guard.py` and `--history` pass.
 - `test_guard` covers the new suffixes and the CI regex.
 - Every copy of the test count is updated.
 
-**S3. Dungeon soaks with the accelerator** — *a day plus two runs.*
+**S3. Dungeon soaks with the accelerator** — *tooling done 2026-09-24 (`soak.py --warp/--encounter-every/--pokes/--peeks`, `check --expect-reach/--frames`, and `SOA_FRAMES_DIR` so a job's snapshots are its own); the two runs are next.*
 - Add `--warp NNNx` and `--encounter-every K`, which re-pokes 0x80346D28=100000 every K frames. At K=600 that is 50 pokes per 30k frames.
 - A test asserts that 0x803473D4 appears nowhere in the generated pokes.
 - Every job is judged by S1's checker, setup assertions included.

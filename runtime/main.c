@@ -11,6 +11,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "gxr.h"
+#include "mod.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -835,11 +836,61 @@ static void peek_at_frame(CpuState* s, unsigned frame)
     }
 }
 
+/* SOA_UNCAP=1 zeroes the frame-start field count (0x8034768C, stored at
+ * 0x801DCB88) at every frame end, so the game's frame end no longer waits for
+ * a second field before presenting: the cap is the immediate `cmpli r0,1` at
+ * 0x801DC4A4, and the logic runs once per frame, so this runs the whole game
+ * up to twice as fast (FINDINGS "H2"). For measuring the ceiling only -- it is
+ * not 60 fps -- and PLAN-60FPS-MODS M2 replaces it for play.
+ *
+ * SOA_UNCAP=N starts at frame N, and 1 is from the start. A start frame is
+ * what makes it usable at all: a disc load runs on the wall clock, so uncapped
+ * from boot, a pad script's START at 1600 reaches the title at some other
+ * frame -- H2's fade arrived 41 frames late. 0 or unset is off.
+ *
+ * The [frametime] record restarts at the same frame, so the percentiles are
+ * the uncapped stretch's. SOA_FRAMETIME_FROM=N restarts it at N without
+ * uncapping, which is how a capped run measures the same stretch. */
+#define FRAME_START_FIELDS 0x8034768Cu
+static uint32_t g_uncap_from;     /* 0 = off */
+static uint32_t g_frametime_from; /* 0 = the uncap's frame, or the whole run */
+static int g_uncap_read;
+
+static uint32_t frame_switch(const char* name, const char* consequence)
+{
+    const char* u = getenv(name);
+    const char* p = u;
+    uint32_t v;
+    if (!u || !*u) return 0;
+    if (!poke_number(&p, 10, &v) || *p) {
+        fprintf(stderr, "[uncap] %s=%s is not a frame number; %s\n", name, u, consequence);
+        return 0;
+    }
+    return v;
+}
+
+static void uncap_parse(void)
+{
+    g_uncap_read = 1;
+    g_uncap_from = frame_switch("SOA_UNCAP", "the cap stays on");
+    g_frametime_from = frame_switch("SOA_FRAMETIME_FROM", "[frametime] covers the whole run");
+    if (g_uncap_from)
+        fprintf(stderr, "[uncap] from frame %u, 0x8034768C is zeroed every frame, so frames need one field, "
+                        "not two -- the game runs up to twice as fast; for measurement, not play\n", g_uncap_from);
+    if (!g_frametime_from) g_frametime_from = g_uncap_from;
+}
+
+void hle_frame_mark(void);
+void hle_frametime_restart(unsigned frame);
+void hle_on_report(void (*fn)(void));
+void si_set_config_extra(const char* extra);
+
 void poke_at_frame(CpuState* s, unsigned frame);
 
 void poke_at_frame(CpuState* s, unsigned frame)
 {
     int i;
+    hle_frame_mark();
     peek_at_frame(s, frame);
     if (g_poke_n < 0) poke_parse();
     for (i = 0; i < g_poke_n; i++) {
@@ -854,6 +905,18 @@ void poke_at_frame(CpuState* s, unsigned frame)
                 g_pokes[i].value, mem_r32(s, g_pokes[i].ea));
         mem_w32(s, g_pokes[i].ea, g_pokes[i].value);
     }
+    /* The mods after the pokes and the peeks before both, so a peek reads
+     * what the game wrote and a mod has the last word (PLAN M1). */
+    mod_frame(s, frame);
+    if (!g_uncap_read) uncap_parse();
+    if (g_frametime_from && frame >= g_frametime_from) {
+        static int started;
+        if (!started) {
+            started = 1;
+            hle_frametime_restart(frame);
+        }
+    }
+    if (g_uncap_from && frame >= g_uncap_from) mem_w32(s, FRAME_START_FIELDS, 0);
 }
 
 #define ARENA_HI 0x81700000u
@@ -955,7 +1018,8 @@ static void setup_low_memory(uint8_t* mem, const uint8_t* boot, uint32_t fst_add
 static void print_mode(int windowed, int rendering, int scripted, unsigned frames, unsigned snap,
                        unsigned watchdog_secs)
 {
-    char stop[256], snaps[80];
+    char stop[256], snaps[512];
+    const char* fdir = getenv("SOA_FRAMES_DIR"); /* gxr.c reads the same switch */
     int n = 0;
     stop[0] = '\0';
     snaps[0] = '\0';
@@ -963,7 +1027,8 @@ static void print_mode(int windowed, int rendering, int scripted, unsigned frame
      * hook never reaches the renderer, so no PNG is ever written. Say that
      * rather than promise files that will not appear. */
     if (snap && rendering)
-        snprintf(snaps, sizeof snaps, ", a snapshot to build/frames every %u frames", snap);
+        snprintf(snaps, sizeof snaps, ", a snapshot to %s every %u frames", fdir && *fdir ? fdir : "build/frames",
+                 snap);
     if (frames) STOP_ADD(stop, n, "stopping after %u frames", frames);
     if (windowed) STOP_ADD(stop, n, "%sEscape or closing the window quits", n ? ", " : "");
     if (watchdog_secs)
@@ -1047,6 +1112,7 @@ int main(int argc, char** argv)
      * ignored them. The pokes themselves still fire at their own frames. */
     poke_parse();
     peek_parse();
+    uncap_parse();
     watch_init(); /* here with the others, so SOA_WATCH is read before the disc is */
     gx_set_frame_hook(poke_at_frame);
 
@@ -1063,6 +1129,15 @@ int main(int argc, char** argv)
     }
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
+    /* Mods check themselves against this DOL, so they load once it is here;
+     * a recording then names them, and the report says what each applied. */
+    {
+        const char* mods = getenv("SOA_MODS");
+        if (mods && *mods && mod_load(&s, mods, dol, dol_size)) {
+            si_set_config_extra(mod_describe());
+            hle_on_report(mod_report);
+        }
+    }
 
     /* The apploader parks the FST at the top of memory, 32-byte aligned, and
      * ends the arena where it starts. Both files are bounded before they are

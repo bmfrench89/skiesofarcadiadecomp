@@ -36,6 +36,10 @@ STUBS = """
 void fn_80003140(CpuState* s) { (void)s; }
 void hle_report(void) {}
 void hle_clock_start(void) {}
+void hle_frame_mark(void) {}
+void hle_frametime_restart(unsigned frame) { (void)frame; }
+void hle_on_report(void (*fn)(void)) { (void)fn; }
+void si_set_config_extra(const char* x) { (void)x; }
 /* The renderer's phase words and its clock. main.c reads them for the profile
  * it prints at the end of a run; this boot never gets that far, but it still
  * has to link. */
@@ -165,6 +169,7 @@ def build(tmp_path):
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "main.c"),
+            str(ROOT / "runtime" / "mod.c"),
             str(tmp_path / "stubs.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),

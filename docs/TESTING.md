@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-651 passed in 71.50s
+744 passed in 94.15s
 ```
 
-651 tests in 41 files, none of which reads the disc. They cover the Python
+744 tests in 43 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -45,8 +45,11 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_scenario.py` | 91 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
 | `test_cardformat.py` | 77 | the memory-card formatter: does the image it writes say what the mount reads? |
+| `test_mods.py` | 42 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; `every_frame`, `once` and `on_map_load` apply when they say |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
+| `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
+| `test_guard.py` | 23 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
 | `test_emit.py` | 21 | the emitter; the last cases compile the emitted C with MSVC and run it |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
@@ -54,6 +57,7 @@ its own and run it, some of the C as well:
 | `test_padrec.py` | 17 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
+| `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
 | `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
@@ -61,6 +65,7 @@ its own and run it, some of the C as well:
 | `test_formats.py` | 14 | the disc's format parsers, on synthesised fixtures |
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
 | `test_matchcheck_relocs.py` | 14 | what a relocated word is allowed to hide — every case is a thing the old oracle called a MATCH |
+| `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
 | `test_regs.py` | 12 | which GPR an instruction actually writes |
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
@@ -72,10 +77,7 @@ its own and run it, some of the C as well:
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
-| `test_guard.py` | 23 | the game-data guard: its suffix and size limits against CI's copy, the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, and an exemption keyed by content |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
-| `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
-| `test_soak.py` | 6 | `tools/soak.py`'s generated play: the same seed replays the same presses, every script passes the strict pad grammar and fits what `si.c` holds |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
@@ -91,10 +93,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `651 passed` |
-| no capstone — **what CI installs** | `632 passed, 1 skipped` |
-| no MSVC | `552 passed, 99 skipped` |
-| neither — **the Ubuntu CI leg** | `533 passed, 100 skipped` |
+| everything (MSVC + capstone) | `744 passed` |
+| no capstone — **what CI installs** | `725 passed, 1 skipped` |
+| no MSVC | `589 passed, 155 skipped` |
+| neither — **the Ubuntu CI leg** | `570 passed, 156 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -937,7 +939,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 99 of the 651 skip without a C compiler; they build one runtime file and run it.
+² 155 of the 744 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -948,8 +950,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 533 passed, 100 skipped |
-| **Tests** | windows | the same three — 632 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 570 passed, 156 skipped |
+| **Tests** | windows | the same three — 725 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

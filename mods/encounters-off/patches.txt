@@ -1,0 +1,9 @@
+# trigger    address      value   conditions (all must hold)
+#
+# The step counter 0x80346D28 counts the frames the player has moved since
+# the last encounter. The roll wins when X < f31, with X in [0, 100) and
+# f31 = max((N - 30) * rate / 14400, 0) / 2 (docs/research/encounters.md);
+# held at 0 at every frame end in the field -- scene 6 -- N is at most 1 when
+# the roll reads it, f31 is 0, and no roll wins. Battles the story starts
+# itself take another path and still happen.
+every_frame 0x80346d28 = 0 when scene=6

@@ -83,6 +83,10 @@ void fn_80003140(CpuState* s)
 
 void hle_report(void) { profile_report(); }
 void hle_clock_start(void) {}
+void hle_frame_mark(void) {}
+void hle_frametime_restart(unsigned frame) { (void)frame; }
+void hle_on_report(void (*fn)(void)) { (void)fn; }
+void si_set_config_extra(const char* x) { (void)x; }
 void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }
@@ -126,6 +130,7 @@ def build(tmp_path: Path) -> Path:
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "main.c"),
+            str(ROOT / "runtime" / "mod.c"),
             str(tmp_path / "stubs.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),

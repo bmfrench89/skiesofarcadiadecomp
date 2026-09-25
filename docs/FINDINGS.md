@@ -1541,12 +1541,20 @@ story or the entrance, and the one prediction made from a script came true.
 `build/scenario-soak{D,G,J,E}.log`, `tools/soak.py` seeds 21, 33, 47 and 59,
 30,000 frames each under `SOA_STRICT=1`: exit 0 all four, no `[mmio!]`, 0
 unknown FIFO bytes. Part D walked off Pirate Isle onto the world map
-(`a099h`). Part G fought four random battles in the Gargantua prison, lost
+(`a099h`). Part G fought three random battles in the Gargantua prison, lost
 one to the random input, and took the game-over path -- `a090a`, then the
 title and its attract demos (`a299a`, `a297a`) -- which is the game doing
 what it should. Parts J (home base) and E (Maramba's port) stayed in their
 maps. With the H and L soaks that is six story points and about two hours of
 random play with no runtime fault.
+
+> Correction, 2026-09-24: this said four battles. `build/scenario-soakG.log`
+> loads `/battle/stsicon.mld` six times, twice per battle (`LoadCrew`, then
+> `LoadAsset` from inside it), so three battles, at or after pad frames 4723,
+> 11980 and 20107, and the game over at frame 20792 after the third.
+> `python tools/soak.py check build/scenario-soakG.log` counts them one per
+> battle. `docs/research/soak.md` traces the four to a grep that also matched
+> the log's one `m0458.info` line.
 
 
 **Battle soaks: random commands, no fault, and twenty effect packages.**
@@ -1721,3 +1729,66 @@ light frames cost the most per fragment. These single-frame replays run cheaper
 than H1's live 122 ns (292.9 ms busy over 2.40 M fragments), which carried the
 live game's contention; H13-H16 report against this set, so their before and
 after compare the same inputs.
+
+
+**H3: the uncapped ceilings, and eight cores spent at any load.**
+2026-09-24, `build/h3-*.log`, same machine and power settings as H1, 8
+rasterizer threads unless stated. Every run's report now ends with a
+`[frametime]` line (frames a second, wall milliseconds per frame at the 50th,
+95th and 99th percentile and worst, and the process's CPU seconds).
+`SOA_UNCAP=N` zeroes the frame-start field count from frame N, and
+`SOA_FRAMETIME_FROM=N` starts the record at N without uncapping, so each
+scene below is measured over the same frames capped and uncapped. Each run was
+checked for its scene from its map loads and its snapshots: the opening's
+cutscenes in `a201a`; the forced battle on `a101b`, fought from about frame
+3300 to 4400 and then its results screen (the window is both); the Delphinus
+against the Black Pirates on `a550a`.
+
+Images a second over the window:
+
+| scene, window | capped, snapshot | uncapped, snapshot | uncapped, snapshot, `SOA_SPEED=4` (guest ceiling) | capped, drawn | uncapped, drawn (render ceiling) |
+|---|---|---|---|---|---|
+| opening, 3600-7500 | 29.7 | 42.8 (p50 19.2 ms) | **50.3** (p50 19.4 ms) | 19.3 | **18.9** |
+| battle, 3700-5000 | 29.7 | 58.4 (p50 16.7 ms) | **104.1** (p50 8.8 ms) | 29.8 | **47.8** |
+| ship battle, 4000-6100 | 29.9 | 59.1 (p50 16.6 ms) | **80.4** (p50 12.4 ms) | 26.0 | **25.5** |
+
+- **The guest's ceiling** (snapshot mode, which parses every frame and
+  rasterises one in a hundred, with the clock at four times real time so no
+  field wait bounds it): 50 images a second in the opening, 80 in the ship
+  battle, 104 in the battle. The opening's median frame needs 19.4 ms of the
+  guest thread alone, more than a field -- so an uncapped opening is guest-bound
+  and H13 is what would move it. The two battles have headroom: at real time,
+  uncapped, their median frame sits on the one-field floor (16.7 ms).
+- **The renderer's ceiling** (every frame drawn, uncapped): 18.9, 47.8 and
+  25.5. The opening and the ship battle are no faster uncapped than capped --
+  they are render-bound below 30 already -- and the battle, the lightest scene
+  (0.72 M fragments a frame, H6), would run a 2x speed-up (M11) at about 1.6x.
+- **For interpolated 60 fps** (the logic at 30, 60 images drawn), the renderer
+  needs about 3.2x in the opening, 2.4x in the ship battle and 1.3x in the
+  battle, in line with H6's per-fragment gap.
+
+H1's Part L every-frame runs, repeated with this build for H11's baseline:
+
+| run | fps, H1 | fps, now | p50 / p95 / p99 ms | CPU seconds | cores |
+|---|---|---|---|---|---|
+| 3000 frames (boot, title, `126a`) | 24.1 | 24.0 | 38.1 / 57.3 / 63.9 | 1,074 | 8.6 |
+| 9000, 8 threads | 19.4 | 19.0 | 55.8 / 64.7 / 77.2 | 3,989 | 8.4 |
+| 9000, 4 threads | 14.6 | 14.3 | 76.0 / 90.7 / 99.7 | 2,985 | 4.7 |
+| 9000, 15 threads | 21.4 | 24.0 | 37.5 / 59.6 / 64.8 | 5,243 | 14.0 |
+| 9000, `SOA_SPEED=4` | 23.8 | 24.3 | 47.3 / 50.1 / 51.6 | 3,290 | 8.9 |
+
+The worst frame of every real-time run is about 1,280 ms: the boot's load, one
+frame. About a minute of the 8-thread run overlapped a test build on the same
+machine. Four of the five agree with H1 within 3%; the 15-thread run is 12%
+faster than H1's, so one run of one configuration is not a figure to quote
+closer than about ten per cent.
+
+**The cost that does not show in fps:** every run with 8 workers used 8.4-8.9
+cores for its whole length, whatever it drew. A capped snapshot run, which
+rasterises one frame in a hundred and leaves the guest idle in `SelectThread`
+47% of the time, used 8.9. With 15 workers it is 14.0 cores and with 4 it is
+4.7: a worker with nothing to draw spins on `YieldProcessor()` and, every
+4000 turns, `Sleep(0)`, which returns at once when no other thread is ready
+(`gxr.c:1414`), so the workers cost a core each whether they draw or not. On the
+handheld this was measured on, that is the battery and the fan at a title
+screen. It is H11's whole case, and these CPU seconds are its baseline.

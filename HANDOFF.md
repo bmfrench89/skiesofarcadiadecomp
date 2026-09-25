@@ -39,7 +39,7 @@ opening to reaching the whole game by jumping, and every step is in
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 651 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 744 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -71,7 +71,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 651 |
+| Python tests | 744 |
 | Self-test cases | 73 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -323,10 +323,16 @@ washed-out colour and a correct fix would have failed the suite.
 2026-09-24): 60 fps by renderer interpolation, then a native mod framework
 (data patches, a safe point, `mod.dll` with a versioned API), targeted
 decompilation only where a mod needs it, and a soak programme with checked
-invariants. Its first three slices -- **H1** (what drawing every frame costs,
-no build), **S4a** (`SOA_PEEK`, a frame-tagged read) and **H2** (prove the
-logic is per frame by timing a fade in fields) -- decide whether that route is
-right before anything larger is built. The list below still stands beside it.
+invariants. Each slice's line there says whether it is done and where its
+evidence is. Done by 2026-09-24: **H1** (drawing every frame runs 18-22 fps),
+**S4a** (`SOA_PEEK`), **H2** (the logic is per frame, so 60 fps is
+interpolation), **H4/H5** (every 3D draw matches its predecessor), **H6** (a
+pinned benchmark set, 85.4 ns a fragment), **S2** (guard suffixes), **S1**
+(`soak.py check`), and in flight at the time of writing **H3** (`SOA_UNCAP=N`,
+`[frametime]`), **S3** (the encounter accelerator, `SOA_FRAMES_DIR`) and **M1**
+(`runtime/mod.c`, `SOA_MODS`, `mods/encounters-off`). Next in the plan's order:
+**H8**, which needs the owner at a window for fifteen minutes, then M2 (the
+safe point and tick control). The list below still stands beside it.
 
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's

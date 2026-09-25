@@ -1880,20 +1880,42 @@ uint64_t gxr_screen_hash(void)
     return h;
 }
 
-/* Nothing else creates build/frames, so the first SOA_SNAP run on a clean
- * tree used to write nothing and say only that it could not. */
+/* Where SOA_SNAP writes: build/frames, or SOA_FRAMES_DIR. A job of its own
+ * directory is what lets a soak's snapshots be judged afterwards: every run
+ * shares build/frames, so what is there is whichever run wrote each number
+ * last (PLAN-60FPS-MODS S3, S6). */
+static const char* frames_dir(void)
+{
+    static char dir[400];
+    if (!dir[0]) {
+        const char* e = getenv("SOA_FRAMES_DIR");
+        snprintf(dir, sizeof dir, "%s", e && *e ? e : "build/frames");
+    }
+    return dir;
+}
+
+/* Nothing else creates the directory, so the first SOA_SNAP run on a clean
+ * tree used to write nothing and say only that it could not. Every level is
+ * made, as mkdir -p would. */
 static void ensure_frames_dir(void)
 {
     static int done;
+    char path[400];
+    size_t i;
     if (done) return;
     done = 1;
+    snprintf(path, sizeof path, "%s", frames_dir());
+    for (i = 1; path[i - 1]; i++) {
+        char c = path[i];
+        if (c != '/' && c != '\\' && c != '\0') continue;
+        path[i] = '\0';
 #ifdef _WIN32
-    _mkdir("build");
-    _mkdir("build/frames");
+        _mkdir(path);
 #else
-    mkdir("build", 0777);
-    mkdir("build/frames", 0777);
+        mkdir(path, 0777);
 #endif
+        path[i] = c;
+    }
 }
 
 static void write_frame_png(const char* path, int w, int h)
@@ -2060,7 +2082,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         int want = 0;
         unsigned frame = gx_frame_count(); /* the front end increments it after this copy, so this is the frame being presented */
         if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
-        else if (g_snap_every && (frame % g_snap_every) == 0) { ensure_frames_dir(); snprintf(path, sizeof path, "build/frames/%04u.png", frame); want = 1; }
+        else if (g_snap_every && (frame % g_snap_every) == 0) { ensure_frames_dir(); snprintf(path, sizeof path, "%s/%04u.png", frames_dir(), frame); want = 1; }
         /* The PNG and the hash both describe the finished frame, so wait here
          * for the rows of this copy every other worker owns. The hash is taken
          * from the same buffer the PNG is written from and at the same point,

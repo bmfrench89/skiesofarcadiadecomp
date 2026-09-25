@@ -160,11 +160,14 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
 | `SOA_SNAP=n` | write `build/frames/NNNN.png` every n frames; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
+| `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `+` combines (`1800:a+sup`), `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames |
 | `SOA_PAD_RECORD=path` | write down every controller input the port reads, keyed by frame, one line per change; play in the window, then replay it. An existing file is never overwritten — the run records to `path.1` instead |
 | `SOA_PAD_FILE=path` | replay a recording instead of live or scripted input (it becomes the whole input; `SOA_PAD` is then ignored). **Replay in the configuration you recorded in**: the recording is keyed by frame, the game runs on guest time, and the two only keep step while frames arrive at the same rate, so `SOA_SPEED`, `SOA_RENDER`, the window, the thread count and the memory card all have to match. The run says what it was recorded with and how far it has drifted |
 | `SOA_PAD_STOP=n` | frames to keep running after a replayed recording runs out, then stop (default 120; 0 keeps going) |
 | `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
+| `SOA_UNCAP=N` | from frame `N` on (`1` is from the start), zero the frame-start field count (`0x8034768C`) at every frame end, so a frame waits for one field instead of two. The game's logic advances once a frame, so this runs the **whole game** up to twice as fast — it is not 60 fps. Start it after a pad script has reached its scene: disc loads run on the wall clock, so uncapped from boot the script's presses land somewhere else. For measuring how fast the port can go (`docs/PLAN-60FPS-MODS.md` H3), not for play. Every run's report also ends with a `[frametime]` line: frames a second, the median, 95th and 99th percentile and worst wall milliseconds per frame, and the process's CPU seconds; with an uncap, over the frames from `N` on |
+| `SOA_FRAMETIME_FROM=N` | start the `[frametime]` record at frame `N` without uncapping: a capped run's figures for the same stretch an uncapped one reports |
 | `SOA_FIFO_DUMP=n,n` | capture those frame numbers; each lands as `NNNN.fifo`/`.regs`/`.ram`, zero-padded to four digits, for `gen\soa.exe --replay build/fifo/NNNN` |
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
 | `SOA_THREADS=n` | rasterizer worker threads, default half the CPUs |
@@ -172,6 +175,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with no video frame and print a report (default 20 headless, off when a window is open; 0 disables) |
 | `SOA_POKE=f:a=v[,f:a=v]` | store the 32-bit value `v` at guest address `a` at the end of frame `f`, once, printing what was there before. The one way to answer "what does the game do if this variable says that" without a recompile. Fires on the first frame at or after `f`, so a skipped frame number does not silently lose the poke. Up to 256 items, which is 85 field warps at three words each; a mistyped item stops parsing and says so rather than driving a run that looks like it ignored you. The field's own map identity is `0x80311AC4` (map number), `0x80311AC8` (map letter in the top byte) and `0x80311AEC` (field state, 8 is the steady update). A warp is the destination's script name, e.g. `ME103A.SCT`, as three words at `0x80305CF0`, then 15 in `0x80311AEC`: the game's own warp, no button; also set `0x8030E420` (`sys[15]`, where the party came from) to 0 so the map takes its default entrance, and do not poke the map words (`HANDOFF.md` has the command). Numbers are decimal or `0x` hex and must fit 32 bits; a sign, a space or a leading zero is refused rather than read some other way |
+| `SOA_MODS=dir` | load every mod in `dir`: each folder holding a `mod.ini` (`name`, `api = 1`, and `dol_sha1`, the SHA-1 of the DOL it was made for) and a `patches.txt` of `trigger 0x80346d28 = value [when scene=N state=N map=NNNx]` lines, where the trigger is `every_frame`, `once` or `on_map_load`. A patch writes one 32-bit word at the end of a frame. A mod with any fault — a misspelled address, one in the hardware window, outside RAM, unaligned or inside the game's code, an unknown key, another DOL — is refused whole and says which line. The report ends with how often each patch applied, and a recording names the mods it was made with. `mods/encounters-off` is an example (`docs/PLAN-60FPS-MODS.md` M1) |
 | `SOA_MEMPOKE=a,b` | store a word at each guest address before the game boots and read it back; an address past the console's 24 MB, e.g. `0x81800000`, is how to fire the out-of-range tripwire on purpose (needs no disc) |
 | `SOA_STRICT=1` | stop at the first hardware access outside the modelled range, with a guest backtrace (almost always a garbage pointer); without it the first twenty are reported and the run goes on |
 | `SOA_HASH=1` | print an FNV-1a hash of every frame the port presents (what `tools/scenario.py replay` compares) |
@@ -194,7 +198,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 651 tests; any that need a dump skip themselves
+python -m pytest                     # 744 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

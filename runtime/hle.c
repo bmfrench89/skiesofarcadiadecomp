@@ -10,6 +10,7 @@
 #include "cpu.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN /* mmsystem.h defines MMIO_READ/MMIO_WRITE, which are ours below */
@@ -150,12 +151,24 @@ uint64_t irq_retrace_count(void);
 /* Defined at the bottom of this file, with the clocks they read. */
 double hle_guest_seconds(void);
 double hle_wall_seconds(void);
+static void frametime_report(void);
 unsigned hle_speed(void);
 /* Defined in main.c, where the sampler lives. Called from here rather than
  * from the watchdog so that every stop path prints a profile: the old one was
  * reachable only from a stall, which is why no healthy run ever produced
  * one. */
 void profile_report(void);
+
+/* Reports that belong to something optional (mod.c's), registered rather
+ * than called, so that this file still links without them. */
+static void (*g_report_hooks[4])(void);
+
+void hle_on_report(void (*fn)(void))
+{
+    int i;
+    for (i = 0; i < 4; i++)
+        if (!g_report_hooks[i]) { g_report_hooks[i] = fn; return; }
+}
 
 void hle_report(void)
 {
@@ -190,6 +203,8 @@ void hle_report(void)
         if (frames) fprintf(stderr, " (%.2f per frame; the game's 30 fps cap wants 2.00)", (double)retraces / frames);
         fprintf(stderr, "; %.1f guest seconds at SOA_SPEED=%u, %.1f wall seconds\n", guest, hle_speed(), wall);
     }
+    frametime_report();
+    for (i = 0; i < 4 && g_report_hooks[i]; i++) g_report_hooks[i]();
     irq_report();
     threads_report();
     for (i = 0; i < MMIO_SLOTS; i++) {
@@ -336,6 +351,86 @@ void hle_clock_start(void)
     if (g_wall_started) return;
     g_wall_started = 1;
     g_wall_origin = wall_now();
+}
+
+/* Per-frame wall time, marked once a frame by the frame hook (main.c). The
+ * [run] line gives totals only, so a run that averages 29 fps and a run that
+ * holds 33 ms and hitches to 200 ms every few seconds read the same; the
+ * percentiles below tell them apart (PLAN-60FPS-MODS H3). */
+static double* g_ft;
+static size_t g_ft_n, g_ft_cap;
+static double g_ft_last = -1.0;
+static unsigned g_ft_from; /* 0: every frame of the run */
+
+/* Forget the frames so far, and count from frame `frame` on: SOA_UNCAP=N
+ * calls this at N, so an uncapped run's percentiles are the uncapped
+ * stretch's and not diluted by the capped frames a pad script needed to get
+ * there. */
+void hle_frametime_restart(unsigned frame)
+{
+    g_ft_n = 0;
+    g_ft_from = frame;
+}
+
+void hle_frame_mark(void)
+{
+    double now = hle_wall_seconds();
+    if (g_ft_last >= 0.0 && g_ft_n < (1u << 22)) {
+        if (g_ft_n == g_ft_cap) {
+            size_t cap = g_ft_cap ? g_ft_cap * 2 : 4096;
+            double* p = (double*)realloc(g_ft, cap * sizeof *g_ft);
+            if (!p) return;
+            g_ft = p;
+            g_ft_cap = cap;
+        }
+        g_ft[g_ft_n++] = now - g_ft_last;
+    }
+    g_ft_last = now;
+}
+
+static int cmp_double(const void* a, const void* b)
+{
+    double x = *(const double*)a, y = *(const double*)b;
+    return (x > y) - (x < y);
+}
+
+static double process_cpu_seconds(double* user, double* kernel)
+{
+#ifdef _WIN32
+    FILETIME c, e, k, u;
+    if (GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) {
+        *user = (double)(((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime) / 1e7;
+        *kernel = (double)(((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) / 1e7;
+        return *user + *kernel;
+    }
+#endif
+    *user = (double)clock() / CLOCKS_PER_SEC;
+    *kernel = 0.0;
+    return *user;
+}
+
+static void frametime_report(void)
+{
+    double user, kernel, cpu = process_cpu_seconds(&user, &kernel);
+    if (g_ft_n) {
+        double* s = (double*)malloc(g_ft_n * sizeof *s);
+        if (s) {
+            size_t i, n = g_ft_n;
+            double total = 0.0;
+            char from[48] = "";
+            memcpy(s, g_ft, n * sizeof *s);
+            for (i = 0; i < n; i++) total += s[i];
+            qsort(s, n, sizeof *s, cmp_double);
+            if (g_ft_from) snprintf(from, sizeof from, " from frame %u", g_ft_from);
+            fprintf(stderr, "[frametime] %zu frames%s, %.1f a second; wall ms per frame: p50 %.1f, p95 %.1f, "
+                            "p99 %.1f, max %.1f", n, from, total > 0.0 ? (double)n / total : 0.0, s[n / 2] * 1e3,
+                    s[(n * 95) / 100] * 1e3, s[(n * 99) / 100] * 1e3, s[n - 1] * 1e3);
+            free(s);
+        }
+    } else {
+        fprintf(stderr, "[frametime] no frames marked");
+    }
+    fprintf(stderr, "; process CPU %.1f s (%.1f user + %.1f kernel)\n", cpu, user, kernel);
 }
 
 double hle_wall_seconds(void)

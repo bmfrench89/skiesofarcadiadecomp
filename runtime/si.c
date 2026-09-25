@@ -275,12 +275,23 @@ static long long file_size(const char* path)
  * and the second run starts at a title screen with a Continue entry the
  * first run did not have, so frame one of the menu picks the wrong thing.
  * The default path mirrors exi.c's; keep the two in step. */
+static char g_cfg_extra[320];
+
+/* What else a recording depends on, from outside this file: the mods main.c
+ * loaded (mod_describe). Only a run with mods has any, so a recording made
+ * without them reads exactly as it always did. */
+void si_set_config_extra(const char* extra)
+{
+    snprintf(g_cfg_extra, sizeof g_cfg_extra, "%s", extra ? extra : "");
+}
+
 static void pad_config(char* out, size_t cap)
 {
     const char* card = env_or("SOA_CARD", "build/cards/slotA.raw");
-    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld",
+    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s",
              env_or("SOA_RENDER", "-"), env_or("SOA_WINDOW", "-"), env_or("SOA_SPEED", "1"),
-             env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card));
+             env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card),
+             g_cfg_extra[0] ? " " : "", g_cfg_extra);
 }
 
 /* An hour of play is not worth an overwrite: a second run with the same
@@ -310,7 +321,7 @@ static FILE* pad_record_create(const char* path)
 static void pad_record_open(void)
 {
     const char* path = getenv("SOA_PAD_RECORD");
-    char cfg[384];
+    char cfg[768];
     g_rec_tried = 1;
     g_rec_last = PAD_NEUTRAL;
     if (!path || !*path) return;
@@ -479,7 +490,7 @@ static void pad_replay_load(void)
 {
     const char* path = getenv("SOA_PAD_FILE");
     const char* script;
-    char line[512], was[384], now[384];
+    char line[1024], was[768], now[768];
     unsigned lineno = 0, bad = 0;
     FILE* f;
     g_play_tried = 1;
