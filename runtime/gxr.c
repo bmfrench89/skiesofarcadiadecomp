@@ -17,6 +17,7 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
+#pragma comment(lib, "Synchronization.lib") /* WaitOnAddress, for the idle workers */
 #else
 #include <sys/stat.h>
 #endif
@@ -1389,6 +1390,20 @@ static uint64_t g_prepare_flushes; /* draws whose setup had to wait for a queued
  * g_drained is not published. */
 static long long queued(void) { return g_published - g_drained; }
 
+/* Workers asleep in WaitOnAddress on g_published (PLAN-60FPS-MODS H11). The
+ * producer wakes them only when there are any, so a burst of draws with the
+ * pool awake costs one more interlocked read per command, and no call. */
+static volatile LONG g_sleepers;
+
+/* Publish one command to the pool, waking it if it has gone to sleep. */
+static void publish(void)
+{
+    InterlockedIncrement64(&g_published);
+#ifdef _WIN32
+    if (g_sleepers) WakeByAddressAll((PVOID)&g_published);
+#endif
+}
+
 #ifdef _WIN32
 static DWORD WINAPI worker(LPVOID arg)
 {
@@ -1406,13 +1421,28 @@ static DWORD WINAPI worker(LPVOID arg)
         const DrawCmd* D;
         unsigned spins = 0;
         while (mine >= g_published) {
-            /* Charging the wait as it goes rather than only when it ends is
-             * what lets a pool parked for twenty seconds under the watchdog
-             * still add up to the span the report divides by: the backoff
-             * bounds how much of an idle worker's time is unaccounted when
-             * the report reads these. One clock read per 4000 spins. */
-            if (++spins > 4000) { charge(W, &W->idle); Sleep(0); spins = 0; }
-            else YieldProcessor();
+            /* A short spin, for the next command of a burst, then sleep
+             * until the producer publishes (H11). This used to be
+             * Sleep(0), which returns at once when no other thread is
+             * ready, so an idle pool cost a core per worker at any load:
+             * 8.4-8.9 cores with 8 workers whether a frame was drawn or
+             * not (FINDINGS "H3"). The sleeper count goes up before
+             * g_published is read again and the producer reads it after
+             * publishing, both interlocked, so a publish in between is
+             * either seen here or wakes the wait. Charging the idle clock
+             * on every pass, and the wait's 50 ms bound, are what let a
+             * pool parked for twenty seconds under the watchdog still add
+             * up to the span the report divides by. */
+            if (++spins > 4000) {
+                LONGLONG seen = mine;
+                charge(W, &W->idle);
+                InterlockedIncrement(&g_sleepers);
+                if (g_published == seen) WaitOnAddress((volatile VOID*)&g_published, &seen, sizeof seen, 50);
+                InterlockedDecrement(&g_sleepers);
+                spins = 0;
+            } else {
+                YieldProcessor();
+            }
         }
         charge(W, &W->idle);
         /* The producer fills a slot before it publishes the count, and this
@@ -1588,7 +1618,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
     if (g_workers > 0) {
-        InterlockedIncrement64(&g_published); /* publish: the workers pick it up */
+        publish(); /* the workers pick it up */
     } else {
         t_tid = 1;
         /* Without workers the rasterizer runs on the producer, so it needs a
@@ -2024,7 +2054,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         g_copies_tex++;
     }
     if (g_workers > 0) {
-        InterlockedIncrement64(&g_published);
+        publish();
     } else {
         t_tid = 1;
         TIMED(T_RASTER, draw_command(D));
@@ -2066,7 +2096,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
             D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
             D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
             if (g_workers > 0) {
-                InterlockedIncrement64(&g_published);
+                publish();
             } else {
                 t_tid = 1;
                 TIMED(T_RASTER, draw_command(D));

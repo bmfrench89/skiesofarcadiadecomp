@@ -1867,3 +1867,46 @@ word the game stored is left as it wrote it.
   58.4, with 1.80 retraces a frame over the whole run in both.
 - With the tick locked: the self test's 74 cases, `title --check` 4/4 and the
   replay 23/23 at 1, 2, 3 and 8 threads all pass.
+
+
+**H11, the workers' half: an idle pool sleeps, and the title costs 1.2 cores
+instead of 8.8.** 2026-09-24/25, `build/h11-*.log`, `build/h11ab*-*.log`. A
+worker with nothing to draw used to spin on `YieldProcessor()` and `Sleep(0)`,
+which returns at once when no other thread is ready (FINDINGS "H3"). Now it
+spins 4000 turns for the rest of a burst and then waits on `g_published` with
+`WaitOnAddress`; the producer calls `WakeByAddressAll` after a publish only
+when a sleeper count says a worker is asleep. Both sides are interlocked, so a
+publish between a worker's last look and its wait is either seen or wakes it,
+and the wait's 50 ms bound keeps the idle clock charged.
+
+| run | CPU seconds before (H3) | after | cores before | after |
+|---|---|---|---|---|
+| title scenario, 2000 frames | 620 | **84** | 8.8 | **1.2** |
+| capped battle, snapshot mode (`a101b`, 5000 frames) | 1,527 | **207** | 8.9 | **1.2** |
+| Part L, every frame drawn, 9000 frames | 3,989 | 3,230 | 8.4 | 6.5 |
+
+Frame rate, measured interleaved because this machine drifts: the same
+per-fragment benchmark read 85.4 ns (H6, the morning), 98.0 and then 113.3 to
+127.8 over one later batch, on identical code. On H1's 3000-frame Part L run,
+drawn every frame, alternating builds:
+
+| build | fps | p99 ms | CPU seconds |
+|---|---|---|---|
+| spinning | 20.8, 22.2, 23.0 | 104, 87, 74 | 1,098, 1,086, 1,083 |
+| sleeping | 23.1, 23.5 (and 14.6) | 72, 71 (and 235) | 728, 721 (and 803) |
+
+The 14.6 run was slow everywhere, not in waiting: the producer's own vertex
+setup, which this change does not touch, took 13.3 s against 3.6-4.5 s in the
+other five, and decode, prepare and guest code were all about 1.4x slower --
+the machine, not the pool. Per fragment, on the H6 set interleaved with the
+spinning build, spin windows of 4000, 40,000 and 400,000 turns read 118.2,
+116.0 and 110.6 ns against 113.3 and 127.8 for the spinning build before and
+after: no difference the drift does not swamp, so the shortest window, which
+saves the most, stays. Retraces a frame over the title are 2.09, as before;
+`title --check` 4/4 and the replay 23/23 at 1, 2, 3 and 8 threads.
+
+**Measure on this machine interleaved from now on.** A figure from one run an
+hour ago is not a baseline: the same code moved 15% within a session.
+
+Not done: the other half of H11, the guest's idle loop, which still spins on
+the guest thread -- most of the 1.2 cores the title now costs.

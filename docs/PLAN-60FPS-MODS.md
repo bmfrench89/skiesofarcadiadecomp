@@ -280,7 +280,7 @@ Run headless in snapshot mode, so the guest thread is measured rather than the r
 - A synthetic test shows that a triangle moved by 2d between frames lands at d in the midpoint.
 - `scenario.py replay` is 23/23 unchanged.
 
-**H11. Stop spinning when idle** — *hours to a day, `--link`.*
+**H11. Stop spinning when idle** — *workers done 2026-09-25: an idle worker waits on `g_published` (`WaitOnAddress`); the title costs 1.2 cores instead of 8.8, a drawn Part L run a third less CPU, at the same fps measured interleaved. The guest idle loop's half remains. FINDINGS "H11".*
 About ten host threads stay busy while the game waits. The guest idle hook should sleep until the next device deadline. The workers should block on an event instead of calling `YieldProcessor` and `Sleep(0)`.
 
 *Done:*
