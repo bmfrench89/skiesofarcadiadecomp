@@ -1764,37 +1764,58 @@ static DWORD WINAPI worker(LPVOID arg)
 }
 #endif
 
-/* ---- SOA_HOSTPROF: where the workers' time goes, by function and line ------
+/* ---- SOA_HOSTPROF: where the host's time goes, by function and line -------
  *
  * The profile main.c prints samples the guest thread, and reads what it was
  * running from words that thread writes; a worker writes none, so the pixel
- * path was measurable only as a total. With SOA_HOSTPROF=1 a thread suspends
- * each worker about once a millisecond, reads its instruction pointer and lets
- * it go, and the report resolves the samples to functions and source lines
- * through gen/soa.pdb (dbghelp). Suspending a thread costs it a few
+ * path was measurable only as a total, and the guest thread's own table stops
+ * at the guest function -- a psq_load's ldexp, an irq_poll or a memory
+ * accessor inside it is charged to the function that called it. With
+ * SOA_HOSTPROF=1 a thread suspends each worker and the guest thread about once
+ * a millisecond, reads its instruction pointer and lets it go, and the report
+ * resolves the samples to functions and source lines through gen/soa.pdb
+ * (dbghelp): the workers in one table, the guest thread in another, where a
+ * translated function is its fn_XXXXXXXX. Suspending a thread costs it a few
  * microseconds a millisecond, well under the drift this machine has between
  * runs; a profiled run is for reading, not for timing. A sample in the kernel
- * or a wait counts under the function the worker was waiting in. */
+ * or a wait counts under the function the thread was waiting in. */
 #ifdef _WIN32
 #include <dbghelp.h>
 #include <process.h>
 #pragma comment(lib, "dbghelp.lib")
 #define HP_SLOTS 65536u
+typedef struct {
+    uint64_t rip[HP_SLOTS];
+    uint32_t count[HP_SLOTS];
+    uint64_t samples, lost;
+} HpTable;
 static HANDLE g_worker_handle[MAX_THREADS + 1];
-static uint64_t g_hp_rip[HP_SLOTS];
-static uint32_t g_hp_count[HP_SLOTS];
-static uint64_t g_hp_samples, g_hp_lost;
+static HANDLE g_guest_handle; /* the thread that started the pool: the guest's, which parses and sets up draws */
+static HpTable g_hp_workers, g_hp_guest;
 static volatile LONG g_hp_on;
 
-static void hp_add(uint64_t rip)
+static void hp_add(HpTable* t, uint64_t rip)
 {
     uint32_t h = (uint32_t)((rip * 0x9E3779B97F4A7C15ull) >> 48) & (HP_SLOTS - 1), i;
     for (i = 0; i < 64; i++) {
         uint32_t k = (h + i) & (HP_SLOTS - 1);
-        if (g_hp_rip[k] == rip) { g_hp_count[k]++; return; }
-        if (!g_hp_rip[k]) { g_hp_rip[k] = rip; g_hp_count[k] = 1; return; }
+        if (t->rip[k] == rip) { t->count[k]++; return; }
+        if (!t->rip[k]) { t->rip[k] = rip; t->count[k] = 1; return; }
     }
-    g_hp_lost++;
+    t->lost++;
+}
+
+static void hp_sample(HpTable* t, HANDLE h)
+{
+    CONTEXT ctx;
+    if (!h || SuspendThread(h) == (DWORD)-1) return;
+    memset(&ctx, 0, sizeof ctx);
+    ctx.ContextFlags = CONTEXT_CONTROL;
+    if (GetThreadContext(h, &ctx)) {
+        hp_add(t, ctx.Rip);
+        t->samples++;
+    }
+    ResumeThread(h);
 }
 
 static unsigned __stdcall hostprof_thread(void* arg)
@@ -1806,17 +1827,8 @@ static unsigned __stdcall hostprof_thread(void* arg)
         due.QuadPart = -10000; /* 1 ms */
         if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) WaitForSingleObject(timer, 100);
         else Sleep(1);
-        for (i = 1; i <= n; i++) {
-            CONTEXT ctx;
-            if (SuspendThread(g_worker_handle[i]) == (DWORD)-1) continue;
-            memset(&ctx, 0, sizeof ctx);
-            ctx.ContextFlags = CONTEXT_CONTROL;
-            if (GetThreadContext(g_worker_handle[i], &ctx)) {
-                hp_add(ctx.Rip);
-                g_hp_samples++;
-            }
-            ResumeThread(g_worker_handle[i]);
-        }
+        for (i = 1; i <= n; i++) hp_sample(&g_hp_workers, g_worker_handle[i]);
+        hp_sample(&g_hp_guest, g_guest_handle);
     }
 }
 
@@ -1824,9 +1836,13 @@ static void hostprof_start(int n)
 {
     const char* env = getenv("SOA_HOSTPROF");
     if (!env || !atoi(env) || n < 1) return;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_guest_handle,
+                         THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0))
+        g_guest_handle = NULL;
     g_hp_on = 1;
     _beginthreadex(NULL, 0, hostprof_thread, (void*)(intptr_t)n, 0, NULL);
-    fprintf(stderr, "[hostprof] sampling %d worker thread%s every millisecond\n", n, n == 1 ? "" : "s");
+    fprintf(stderr, "[hostprof] sampling %d worker thread%s%s every millisecond\n", n, n == 1 ? "" : "s",
+            g_guest_handle ? " and the guest thread" : "");
 }
 
 typedef struct {
@@ -1840,62 +1856,78 @@ static int hp_row_cmp(const void* a, const void* b)
     return x < y ? 1 : (x > y ? -1 : 0);
 }
 
-/* Fold the samples by key (function, or function and line) and print the top
- * rows. The key strings come from dbghelp; a table of 4096 is ample, since the
- * pixel path is a few functions. */
-static void hp_print(int by_line, int rows)
+static int hp_name_cmp(const void* a, const void* b)
 {
-    static HpRow table[4096];
-    int nrows = 0, i;
+    return strcmp(((const HpRow*)a)->name, ((const HpRow*)b)->name);
+}
+
+/* Fold the samples by key (function, or function and line) and print the top
+ * rows. One row per sampled address, sorted by key and merged, because the
+ * guest thread's translated code has far more distinct lines than a table
+ * searched row by row could afford; an inlined helper sampled at several
+ * addresses still folds into its one source line. */
+static void hp_print(const HpTable* t, int by_line, int rows)
+{
+    HpRow* table = (HpRow*)malloc(sizeof(HpRow) * HP_SLOTS);
+    int nrows = 0, merged = 0, i;
     uint32_t k;
     HANDLE proc = GetCurrentProcess();
+    if (!table) return;
     for (k = 0; k < HP_SLOTS; k++) {
         char buf[sizeof(SYMBOL_INFO) + 256];
         SYMBOL_INFO* sym = (SYMBOL_INFO*)buf;
-        char key[160];
+        char* key = table[nrows].name;
+        size_t cap = sizeof table[nrows].name;
         DWORD64 disp = 0;
-        if (!g_hp_rip[k]) continue;
+        if (!t->rip[k]) continue;
         memset(buf, 0, sizeof buf);
         sym->SizeOfStruct = sizeof(SYMBOL_INFO);
         sym->MaxNameLen = 255;
-        if (!SymFromAddr(proc, g_hp_rip[k], &disp, sym)) snprintf(key, sizeof key, "?? %llx", (unsigned long long)g_hp_rip[k]);
+        if (!SymFromAddr(proc, t->rip[k], &disp, sym)) snprintf(key, cap, "?? %llx", (unsigned long long)t->rip[k]);
         else if (by_line) {
             IMAGEHLP_LINE64 line;
             DWORD ldisp = 0;
             memset(&line, 0, sizeof line);
             line.SizeOfStruct = sizeof line;
-            if (SymGetLineFromAddr64(proc, g_hp_rip[k], &ldisp, &line)) {
+            if (SymGetLineFromAddr64(proc, t->rip[k], &ldisp, &line)) {
                 const char* file = strrchr(line.FileName, '\\');
-                snprintf(key, sizeof key, "%s %s:%lu", sym->Name, file ? file + 1 : line.FileName, (unsigned long)line.LineNumber);
-            } else snprintf(key, sizeof key, "%s +%llx", sym->Name, (unsigned long long)disp);
-        } else snprintf(key, sizeof key, "%s", sym->Name);
-        for (i = 0; i < nrows; i++)
-            if (!strcmp(table[i].name, key)) break;
-        if (i == nrows) {
-            if (nrows == 4096) continue;
-            snprintf(table[nrows].name, sizeof table[nrows].name, "%s", key);
-            table[nrows++].count = 0;
-        }
-        table[i].count += g_hp_count[k];
+                snprintf(key, cap, "%s %s:%lu", sym->Name, file ? file + 1 : line.FileName, (unsigned long)line.LineNumber);
+            } else snprintf(key, cap, "%s +%llx", sym->Name, (unsigned long long)disp);
+        } else snprintf(key, cap, "%s", sym->Name);
+        table[nrows++].count = t->count[k];
     }
-    qsort(table, (size_t)nrows, sizeof table[0], hp_row_cmp);
-    for (i = 0; i < nrows && i < rows; i++)
-        fprintf(stderr, "[hostprof] %5.1f%%  %s\n", 100.0 * (double)table[i].count / (double)g_hp_samples, table[i].name);
+    qsort(table, (size_t)nrows, sizeof table[0], hp_name_cmp);
+    for (i = 0; i < nrows; i++) {
+        if (merged && !strcmp(table[merged - 1].name, table[i].name)) table[merged - 1].count += table[i].count;
+        else table[merged++] = table[i];
+    }
+    qsort(table, (size_t)merged, sizeof table[0], hp_row_cmp);
+    for (i = 0; i < merged && i < rows; i++)
+        fprintf(stderr, "[hostprof] %5.1f%%  %s\n", 100.0 * (double)table[i].count / (double)t->samples, table[i].name);
+    free(table);
 }
 
 static void hostprof_report(void)
 {
-    if (!g_hp_on || !g_hp_samples) return;
+    if (!g_hp_on || !(g_hp_workers.samples + g_hp_guest.samples)) return;
     SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
     if (!SymInitialize(GetCurrentProcess(), NULL, TRUE)) {
-        fprintf(stderr, "[hostprof] %llu samples, but dbghelp would not start, so no names\n", (unsigned long long)g_hp_samples);
+        fprintf(stderr, "[hostprof] %llu samples, but dbghelp would not start, so no names\n",
+                (unsigned long long)(g_hp_workers.samples + g_hp_guest.samples));
         return;
     }
     fprintf(stderr, "[hostprof] %llu samples of the workers (%llu past a full table); by function:\n",
-            (unsigned long long)g_hp_samples, (unsigned long long)g_hp_lost);
-    hp_print(0, 20);
+            (unsigned long long)g_hp_workers.samples, (unsigned long long)g_hp_workers.lost);
+    hp_print(&g_hp_workers, 0, 20);
     fprintf(stderr, "[hostprof] by line:\n");
-    hp_print(1, 40);
+    hp_print(&g_hp_workers, 1, 40);
+    if (g_hp_guest.samples) {
+        fprintf(stderr, "[hostprof] %llu samples of the guest thread (%llu past a full table); by function:\n",
+                (unsigned long long)g_hp_guest.samples, (unsigned long long)g_hp_guest.lost);
+        hp_print(&g_hp_guest, 0, 40);
+        fprintf(stderr, "[hostprof] by line:\n");
+        hp_print(&g_hp_guest, 1, 40);
+    }
     SymCleanup(GetCurrentProcess());
 }
 #else
