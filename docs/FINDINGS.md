@@ -2590,3 +2590,29 @@ still overrides it, and a machine with fewer cores to spare for the guest
 thread may want less. Together with H14 and H15a-c, the Dangral base H1
 measured at 17.7 fps drawn every frame now runs at about 27, close to the
 game's 30 fps cap.
+
+
+**Texture decode by tile.** 2026-09-25, `build/soa-h15c3.exe` against
+`build/soa-dec.exe`, `build/exeab-3000-*.log`. With H15c done the host
+profiler (`SOA_HOSTPROF=1`, `build/hostprof2-L9000.log`) shows the twelve
+workers idle about two thirds of the Dangral window: the guest thread is the
+critical path, and of its time decoding textures is the largest piece the
+renderer owns. `decode_level` walked the texture in raster order and found
+each texel's tile, row and column with four divisions by the format's tile
+size, which the compiler cannot know. It now walks tile by tile, and within a
+tile row by row, so each texel is read from the same byte and written to the
+same place without them, and checks the tile against the end of memory once
+instead of once a texel. The pixels are identical by construction and by
+test: replay 23/23 at 1, 2, 3 and 8 threads, the texture-cache and fast-path
+tests, the self test. H1's Part L 3000 run, interleaved base, new, new, base:
+
+| build | fps | producer decode |
+|---|---|---|
+| base | 27.3 / 27.0 | 8.56 / 9.54 s |
+| tile walk | 28.2 / 27.1 | 7.25 / 8.07 s |
+
+Decode falls about 15% (9.05 -> 7.66 s); fps moves inside the noise. The
+divisions were therefore not most of what decoding costs, and the rest --
+which formats, how much is the palette lookup, how much is re-decoding the
+same copy every frame -- is unmeasured; the copies' own path (H14 step 6,
+copy images, which skips decoding a copy entirely) is the larger lever.

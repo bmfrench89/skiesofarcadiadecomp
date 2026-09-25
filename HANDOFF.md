@@ -383,12 +383,19 @@ the 23 pinned captures under `--replay`, which loads mods) and its texture
 provider (any texture replaced by content hash, at any size), and **H10** (the
 offline midpoint: right in all five pairs, by `tools/midpoint.py` and by eye;
 positions only, so colour and texture animation steps at 30 Hz, slightly).
-**H12** and **H14** are done too (texture hashing once an epoch; fences
-instead of drains around copies; FINDINGS "H12", "H14"). Next, in the plan's
-order: H15 (the pixel path -- the Dangral base is raster-bound, workers busy
-85% of a frame, so nothing on the producer side moves it now), H11's other
-half (the guest idle loop still spins on one core), H13 and H16, which are
-what 60 images a second at 1x needs before H17a turns interpolation on. M4 (`call_guest`) is done, and M5,
+**H12**, **H14** and **H15a-c** are done too (texture hashing once an epoch;
+fences instead of drains around copies; the pixel path a quarter faster; 12
+workers by default; FINDINGS "H12", "H14", "H15c"), and the Dangral base runs
+at about 27 fps drawn every frame. The bottleneck there has moved: with 12
+workers they wait two thirds of the time (`SOA_HOSTPROF=1` shows it), and the
+guest thread is the critical path -- per frame about 26 ms of guest code and
+parse, 4-5 ms decoding textures (about 40 decodes a frame; a tile-order walk
+took 15% off, FINDINGS "Texture decode by tile") and 4 ms of vertex setup,
+against the 33 ms the 30 fps cap allows. So next: find how much of that
+decoding is of copies (the plan's H14 step 6, copy images, would skip it), H16
+(vertex setup onto the workers), H13 (guest-thread speed), then H11's other
+half (the guest idle loop still spins on one core); H15d (SIMD spans) waits
+until the workers are the bottleneck again. M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

@@ -367,7 +367,7 @@ static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, 
 {
     const uint8_t* base;
     unsigned tw, th, bytes_per_tile, tiles_w;
-    unsigned x, y;
+    unsigned x, y, tx, ty;
     if (!out || !g_s) return;
     if ((addr & MEM_MASK) >= MEM1_SIZE) return;
     base = mem_ptr(g_s, addr);
@@ -408,71 +408,85 @@ static void decode_level(uint8_t* out, uint32_t addr, uint32_t fmt, uint32_t w, 
         return;
     }
 
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            const uint8_t* tile = base + ((y / th) * tiles_w + x / tw) * bytes_per_tile;
-            unsigned ix = x % tw, iy = y % th;
-            uint8_t* o = out + (y * w + x) * 4;
-            unsigned v;
+    /* Tile by tile, texel by texel within the tile: each texel comes from the
+     * same tile, row and column as a walk in raster order would give it,
+     * without the four divisions a texel that walk took to find them, by
+     * divisors the compiler could not know (FINDINGS, "Texture decode by
+     * tile"). The bounds check is the tile's, once. */
+    for (ty = 0; ty < (h + th - 1) / th; ty++) {
+        for (tx = 0; tx < tiles_w; tx++) {
+            const uint8_t* tile = base + (ty * tiles_w + tx) * bytes_per_tile;
+            unsigned ix, iy;
             if ((size_t)(tile - g_s->mem) + bytes_per_tile > MEM1_SIZE) continue;
-            switch (fmt) {
-            case 0: /* I4 */
-                v = tile[iy * 4 + ix / 2];
-                v = (ix & 1) ? (v & 15) : (v >> 4);
-                o[0] = o[1] = o[2] = o[3] = (uint8_t)(v * 17);
-                break;
-            case 1: /* I8 */
-                v = tile[iy * 8 + ix];
-                o[0] = o[1] = o[2] = o[3] = (uint8_t)v;
-                break;
-            case 2: /* IA4 */
-                v = tile[iy * 8 + ix];
-                o[0] = o[1] = o[2] = (uint8_t)((v & 15) * 17);
-                o[3] = (uint8_t)((v >> 4) * 17);
-                break;
-            case 3: /* IA8 */
-                o[3] = tile[(iy * 4 + ix) * 2];
-                o[0] = o[1] = o[2] = tile[(iy * 4 + ix) * 2 + 1];
-                break;
-            case 4: /* RGB565 */
-                v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                rgb565(v, o);
-                break;
-            case 5: /* RGB5A3 */
-                v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                if (v & 0x8000) {
-                    o[0] = (uint8_t)(((v >> 10) & 31) * 255 / 31);
-                    o[1] = (uint8_t)(((v >> 5) & 31) * 255 / 31);
-                    o[2] = (uint8_t)((v & 31) * 255 / 31);
-                    o[3] = 255;
-                } else {
-                    o[0] = (uint8_t)(((v >> 8) & 15) * 17);
-                    o[1] = (uint8_t)(((v >> 4) & 15) * 17);
-                    o[2] = (uint8_t)((v & 15) * 17);
-                    o[3] = (uint8_t)(((v >> 12) & 7) * 255 / 7);
+            for (iy = 0; iy < th; iy++) {
+                y = ty * th + iy;
+                if (y >= h) break;
+                for (ix = 0; ix < tw; ix++) {
+                    uint8_t* o;
+                    unsigned v;
+                    x = tx * tw + ix;
+                    if (x >= w) break;
+                    o = out + (y * w + x) * 4;
+                    switch (fmt) {
+                    case 0: /* I4 */
+                        v = tile[iy * 4 + ix / 2];
+                        v = (ix & 1) ? (v & 15) : (v >> 4);
+                        o[0] = o[1] = o[2] = o[3] = (uint8_t)(v * 17);
+                        break;
+                    case 1: /* I8 */
+                        v = tile[iy * 8 + ix];
+                        o[0] = o[1] = o[2] = o[3] = (uint8_t)v;
+                        break;
+                    case 2: /* IA4 */
+                        v = tile[iy * 8 + ix];
+                        o[0] = o[1] = o[2] = (uint8_t)((v & 15) * 17);
+                        o[3] = (uint8_t)((v >> 4) * 17);
+                        break;
+                    case 3: /* IA8 */
+                        o[3] = tile[(iy * 4 + ix) * 2];
+                        o[0] = o[1] = o[2] = tile[(iy * 4 + ix) * 2 + 1];
+                        break;
+                    case 4: /* RGB565 */
+                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+                        rgb565(v, o);
+                        break;
+                    case 5: /* RGB5A3 */
+                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+                        if (v & 0x8000) {
+                            o[0] = (uint8_t)(((v >> 10) & 31) * 255 / 31);
+                            o[1] = (uint8_t)(((v >> 5) & 31) * 255 / 31);
+                            o[2] = (uint8_t)((v & 31) * 255 / 31);
+                            o[3] = 255;
+                        } else {
+                            o[0] = (uint8_t)(((v >> 8) & 15) * 17);
+                            o[1] = (uint8_t)(((v >> 4) & 15) * 17);
+                            o[2] = (uint8_t)((v & 15) * 17);
+                            o[3] = (uint8_t)(((v >> 12) & 7) * 255 / 7);
+                        }
+                        break;
+                    case 6: /* RGBA8: 16 AR pairs then 16 GB pairs */
+                        o[3] = tile[(iy * 4 + ix) * 2];
+                        o[0] = tile[(iy * 4 + ix) * 2 + 1];
+                        o[1] = tile[32 + (iy * 4 + ix) * 2];
+                        o[2] = tile[32 + (iy * 4 + ix) * 2 + 1];
+                        break;
+                    case 8: /* C4 */
+                        v = tile[iy * 4 + ix / 2];
+                        v = (ix & 1) ? (v & 15) : (v >> 4);
+                        tlut_color(tlut_off, tlut_fmt, v, o);
+                        break;
+                    case 9: /* C8 */
+                        tlut_color(tlut_off, tlut_fmt, tile[iy * 8 + ix], o);
+                        break;
+                    case 10: /* C14X2 */
+                        v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
+                        tlut_color(tlut_off, tlut_fmt, v & 0x3FFF, o);
+                        break;
+                    default:
+                        o[0] = 255; o[1] = 0; o[2] = 255; o[3] = 255; /* unsupported: magenta */
+                        break;
+                    }
                 }
-                break;
-            case 6: /* RGBA8: 16 AR pairs then 16 GB pairs */
-                o[3] = tile[(iy * 4 + ix) * 2];
-                o[0] = tile[(iy * 4 + ix) * 2 + 1];
-                o[1] = tile[32 + (iy * 4 + ix) * 2];
-                o[2] = tile[32 + (iy * 4 + ix) * 2 + 1];
-                break;
-            case 8: /* C4 */
-                v = tile[iy * 4 + ix / 2];
-                v = (ix & 1) ? (v & 15) : (v >> 4);
-                tlut_color(tlut_off, tlut_fmt, v, o);
-                break;
-            case 9: /* C8 */
-                tlut_color(tlut_off, tlut_fmt, tile[iy * 8 + ix], o);
-                break;
-            case 10: /* C14X2 */
-                v = ((unsigned)tile[(iy * 4 + ix) * 2] << 8) | tile[(iy * 4 + ix) * 2 + 1];
-                tlut_color(tlut_off, tlut_fmt, v & 0x3FFF, o);
-                break;
-            default:
-                o[0] = 255; o[1] = 0; o[2] = 255; o[3] = 255; /* unsupported: magenta */
-                break;
             }
         }
     }
