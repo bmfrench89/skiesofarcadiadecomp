@@ -41,11 +41,20 @@ uint8_t mmio_read8(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
 uint32_t mmio_read32(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
 void mmio_write8(CpuState* s, uint32_t e, uint8_t v) { (void)s; (void)e; (void)v; }
 void mmio_write32(CpuState* s, uint32_t e, uint32_t v) { (void)s; (void)e; (void)v; }
+uint16_t mmio_read16(CpuState* s, uint32_t e) { (void)s; (void)e; return 0; }
+void mmio_write16(CpuState* s, uint32_t e, uint16_t v) { (void)s; (void)e; (void)v; }
+
+/* tick.c's other ends: the frame count and the report hook. */
+static unsigned g_frames;
+unsigned gx_frame_count(void) { return g_frames; }
+void hle_on_report(void (*fn)(void)) { (void)fn; }
+void fn_8023F704(CpuState* s);
 
 /* mods.exe MODSDIR DOLFILE, then commands on stdin:
  *   set ADDR VALUE     store a word       setb ADDR VALUE   store a byte
  *   frame              one frame end      get ADDR          print a word
- *   report             mod_report()       describe          mod_describe() */
+ *   report             mod_report()       describe          mod_describe()
+ *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88 */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -61,7 +70,8 @@ int main(int argc, char** argv)
     while (scanf("%63s", cmd) == 1) {
         if (!strcmp(cmd, "set") && scanf("%x %x", &a, &v) == 2) mem_w32(&s, a, v);
         else if (!strcmp(cmd, "setb") && scanf("%x %x", &a, &v) == 2) mem_w8(&s, a, (uint8_t)v);
-        else if (!strcmp(cmd, "frame")) mod_frame(&s, frame++);
+        else if (!strcmp(cmd, "frame")) { mod_frame(&s, frame++); g_frames = frame; }
+        else if (!strcmp(cmd, "safe")) { s.lr = 0x801DCB88u; fn_8023F704(&s); }
         else if (!strcmp(cmd, "get") && scanf("%x", &a) == 1) printf("%08X=%08X\n", a, mem_r32(&s, a));
         else if (!strcmp(cmd, "report")) { fflush(stdout); mod_report(); fflush(stderr); }
         else if (!strcmp(cmd, "describe")) printf("describe [%s]\n", mod_describe());
@@ -99,6 +109,7 @@ def driver(tmp_path_factory):
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "mod.c"),
+            str(ROOT / "runtime" / "tick.c"),
             str(out / "driver.c"),
             "/Fo" + str(out) + os.sep,
             "/Fe" + str(exe),
@@ -340,3 +351,195 @@ def test_the_example_mod_parses_under_the_documented_grammar():
 def test_the_switch_is_documented():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "`SOA_MODS=" in readme
+
+
+# --------------------------------------------------------------------------
+# M3: mod.dll on SoaModApi. Each test DLL is built here from one source with
+# a few switches, against runtime/soa_mod.h, the header a mod author uses.
+# --------------------------------------------------------------------------
+
+DLL_SOURCE = r"""
+#include "soa_mod.h"
+#include <stdio.h>
+#include <string.h>
+
+#ifndef RC
+#define RC 0
+#endif
+#ifndef INIT
+#define INIT soa_mod_init
+#endif
+
+static const SoaModApi* A;
+static char b[160];
+
+static void fe(void* u) { uint32_t v; (void)u; if (A->read32(0x80346D28, &v)) A->write32(0x80346D28, v + 1); }
+static void sp(void* u) { (void)u; snprintf(b, sizeof b, "safe point, scene %u", A->scene()); A->log(b); }
+static void ml(void* u, uint32_t map) { (void)u; snprintf(b, sizeof b, "map loaded %08X", map); A->log(b); }
+static void sc(void* u, uint32_t f, uint32_t t) { (void)u; snprintf(b, sizeof b, "scene %u -> %u", f, t); A->log(b); }
+
+__declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
+{
+    uint32_t v = 0;
+    uint8_t c = 0;
+    float x = 0.0f;
+    A = api;
+    snprintf(b, sizeof b, "init version %u size %u", version, api->size);
+    api->log(b);
+    /* refused: code, the hardware window, unaligned, past RAM, a bulk write over code, below RAM */
+    snprintf(b, sizeof b, "refusals %d%d%d%d%d%d", api->write32(0x80003100u, 1), api->write32(0xCC008000u, 1),
+             api->read32(0x80346D2Au, &v), api->read32(0x81800000u, &v),
+             api->write_bytes(0x800030F0u, "abcdefghijklmnopqrst", 20), api->read8(0x7FFFFFFFu, &c));
+    api->log(b);
+    /* big-endian, as the console keeps it; floats as their bits */
+    api->write32(0x80346D20u, 0x11223344u);
+    api->read8(0x80346D20u, &c);
+    api->write_f32(0x80346D24u, 1.5f);
+    api->read32(0x80346D24u, &v);
+    api->read_f32(0x80346D24u, &x);
+    snprintf(b, sizeof b, "bytes %02X float %08X %.2f", c, v, x);
+    api->log(b);
+    api->write32(0x80310BBCu, 2u); /* flag 1025: bit 1 of the word at 0x80310B3C + 32 * 4 */
+    snprintf(b, sizeof b, "flags %d %d", api->story_flag(1025), api->story_flag(1024));
+    api->log(b);
+    api->on_frame_end(fe, NULL);
+    api->on_safe_point(sp, NULL);
+    api->on_map_loaded(ml, NULL);
+    api->on_scene_change(sc, NULL);
+    return RC;
+}
+"""
+
+
+def dll(tmp_path: Path, name: str, *defines: str, patches: str | None = None) -> Path:
+    """A mod folder holding mod.ini and a mod.dll built from DLL_SOURCE."""
+    from soa import toolchain
+
+    d = mod(tmp_path, name, patches=patches)
+    (d / "mod_src.c").write_text(DLL_SOURCE, encoding="utf-8")
+    proc = toolchain.cl(
+        [
+            *toolchain.CFLAGS,
+            "/LD",
+            "/I",
+            str(ROOT / "runtime"),
+            *(f"/D{x}" for x in defines),
+            str(d / "mod_src.c"),
+            "/Fo" + str(d) + os.sep,
+            "/Fe" + str(d / "mod.dll"),
+        ],
+        cwd=d,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    return d
+
+
+@needs_msvc
+def test_a_mod_dll_loads_and_the_api_refuses_what_a_patch_would(driver, tmp_path):
+    """The same refusals as a patches.txt line, made at the call: code,
+    the hardware window, unaligned, outside RAM, a bulk write over code.
+    Memory is big-endian as the console keeps it."""
+    dll(tmp_path, "native")
+    out, err = play(driver, tmp_path, "get 80346D20")
+    assert "loaded 1" in out, err
+    assert "loaded native (" in err and "and mod.dll" in err, err
+    assert "[mod] native: init version 1 size " in err, err
+    assert "[mod] native: refusals 000000" in err, err
+    assert "[mod] native: bytes 11 float 3FC00000 1.50" in err, err
+    assert "[mod] native: flags 1 0" in err, err
+    assert "80346D20=11223344" in out, out
+
+
+@needs_msvc
+def test_the_callbacks_fire_where_they_say(driver, tmp_path):
+    """on_frame_end from the frame hook; on_safe_point, a scene change, and a
+    map load -- the field running after a load state -- from the top of the
+    loop. A reload of the same map after a battle is a load too."""
+    dll(tmp_path, "native")
+
+    def at(scene, state, number=116, letter="a"):
+        return (
+            f"set 803475cc {scene:x} set 80311aec {state:x} "
+            f"set 80311ac0 {number:x} setb 80311ac8 {ord(letter):x} safe "
+        )
+
+    script = (
+        "set 80346d28 5 frame frame get 80346d28 "
+        + at(6, 3)  # loading
+        + at(6, 8)  # running: a map load
+        + at(6, 8)  # still running: nothing
+        + at(7, 9)  # battle: a scene change
+        + at(6, 5)  # the field reloading
+        + at(6, 8)  # running again: the same map, loaded again
+        + "report"
+    )
+    out, err = play(driver, tmp_path, script)
+    assert "80346D28=00000007" in out, out  # two frame ends, each adding one
+    loads = [line for line in err.splitlines() if "map loaded" in line]
+    assert loads == ["[mod] native: map loaded 00007461"] * 2, err
+    assert "[mod] native: scene 6 -> 7" in err and "[mod] native: scene 7 -> 6" in err, err
+    assert err.count("[mod] native: safe point") == 6, err
+    assert "[mod] the safe point saw 2 map load(s)" in err, err
+    assert "[mod] native mod.dll: 4 callback(s)" in err, err
+
+
+@needs_msvc
+def test_a_dll_that_refuses_itself_takes_its_callbacks_and_patches_with_it(driver, tmp_path):
+    dll(tmp_path, "shy", "RC=3", patches=PATCH)
+    out, err = play(driver, tmp_path, "set 803475cc 6 set 80346d28 1234 frame safe get 80346d28")
+    assert "loaded 0" in out, err
+    assert "its soa_mod_init refused, returning 3" in err, err
+    assert "80346D28=00001234" in out and "safe point" not in err, err
+
+
+@needs_msvc
+def test_a_dll_without_the_export_is_refused(driver, tmp_path):
+    dll(tmp_path, "mute", "INIT=something_else")
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "it exports no soa_mod_init" in err, err
+
+
+@needs_msvc
+def test_a_dll_mod_is_named_in_the_recording_with_its_bytes(driver, tmp_path):
+    """The hash covers mod.dll, so a rebuilt DLL is a different mod to a
+    recording made with the old one."""
+    d = dll(tmp_path, "native")
+    first, _ = play(driver, tmp_path, "describe")
+    (d / "mod.dll").write_bytes((d / "mod.dll").read_bytes() + b"\0")
+    second, _ = play(driver, tmp_path, "describe")
+    h1 = first.split("describe [mods=native:")[1][:8]
+    h2 = second.split("describe [mods=native:")[1][:8]
+    assert h1 != h2, (first, second)
+
+
+@needs_msvc
+def test_the_example_dll_builds_and_loads(driver, tmp_path):
+    """examples/mods/map-log is the template a mod author copies: it has to
+    build against runtime/soa_mod.h and load under this port."""
+    from soa import toolchain
+
+    d = tmp_path / "map-log"
+    d.mkdir()
+    ini = (ROOT / "examples" / "mods" / "map-log" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    proc = toolchain.cl(
+        [
+            *toolchain.CFLAGS,
+            "/LD",
+            "/I",
+            str(ROOT / "runtime"),
+            str(ROOT / "examples" / "mods" / "map-log" / "mod.c"),
+            "/Fo" + str(d) + os.sep,
+            "/Fe" + str(d / "mod.dll"),
+        ],
+        cwd=d,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    script = (
+        "set 803475cc 6 set 80311aec 3 safe set 80311aec 8 set 80311ac0 74 setb 80311ac8 61 safe"
+    )
+    out, err = play(driver, tmp_path, script)
+    assert "loaded 1" in out, err
+    assert "[mod] map-log: map-log loaded" in err and "[mod] map-log: entered a116a" in err, err

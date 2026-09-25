@@ -27,6 +27,10 @@ out/
 *.obj
 *.exe
 *.pdb
+# a mod's build (mods/*/mod.dll and what the linker leaves beside it)
+*.dll
+*.exp
+*.lib
 *.ilk
 CMakeCache.txt
 CMakeFiles/

@@ -39,7 +39,7 @@ opening to reaching the whole game by jumping, and every step is in
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 750 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 756 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -71,7 +71,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 750 |
+| Python tests | 756 |
 | Self-test cases | 74 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -334,11 +334,15 @@ and 8 workers burn 8.4-8.9 cores at any load), **S3** (the encounter
 accelerator fights only where the story allows), **M1** (`SOA_MODS`, data
 patches; `mods/encounters-off` stops random battles) and **M2** (`tick.c`: a
 safe point at the top of the main loop, and `SOA_UNCAP=N` lets the frame end's
-spin go after one field). Next: **H11** (idle workers sleep instead of
-spinning -- the eight cores H3 measured; the edit is drafted and dry-run),
-then **M3** (native `mod.dll` on a versioned API). **H8** needs the owner at a
-window for fifteen minutes whenever convenient. The list below still stands
-beside it.
+spin go after one field), **H11**'s workers' half (idle rasterizer workers
+sleep: the title costs 1.2 cores instead of 8.8, at the same fps measured
+interleaved) and **M3a** (native `mod.dll` mods on `runtime/soa_mod.h`;
+`examples/mods/map-log` is the template). Next: **M3b** (`pad_filter` in
+`si.c`), **M3c** (the renderer's texture and projection filters), H11's other
+half (the guest idle loop still spins on one core), then M4 and M5. **H8**
+needs the owner at a window for fifteen minutes whenever convenient. **Measure
+speed interleaved**: this machine drifts 15% within a session on identical
+code (FINDINGS "H11"). The list below still stands beside it.
 
 The question this project was stuck on for a week -- can anything reach the
 rest of the game -- is answered: every warpable map has loaded, the story's

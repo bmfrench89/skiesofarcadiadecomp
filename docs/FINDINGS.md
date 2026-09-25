@@ -1910,3 +1910,37 @@ hour ago is not a baseline: the same code moved 15% within a session.
 
 Not done: the other half of H11, the guest's idle loop, which still spins on
 the guest thread -- most of the 1.2 cores the title now costs.
+
+
+**M3a: native mods load as `mod.dll`, and their callbacks fire where they
+say.** 2026-09-25, `build/m3-*.log`. A mod folder may now hold a `mod.dll`
+beside, or instead of, its `patches.txt`: once `mod.ini`'s name, API and DOL
+SHA-1 check out, the port loads it by full path and calls its exported
+`soa_mod_init` with `SoaModApi` (`runtime/soa_mod.h`, version 1: big-endian
+guest memory that refuses what a patch line would -- code, the hardware
+window, unaligned, outside RAM; the scene, field state, committed map, story
+flags and frame; `on_frame_end`, `on_safe_point`, `on_map_loaded`,
+`on_scene_change`; a log line under the mod's name). A DLL that exports no
+`soa_mod_init`, or whose `soa_mod_init` declines, is refused whole, its
+callbacks and patches taken back. The recording names it with a hash that
+covers the DLL's bytes. `on_map_loaded` is the field running (state 8) after a
+load state (3 or 5), which every warp and every return from a battle passes
+through, so a reload of the same map counts.
+
+`examples/mods/map-log` (the template: it logs map entries and scene changes
+and changes nothing), built with `cl /LD` and run with
+`SOA_MODS=examples/mods`:
+
+| run | safe points (tick) | `on_safe_point` calls | field load lines in the trace | `on_map_loaded` calls |
+|---|---|---|---|---|
+| title scenario, 2000 frames | 1,999 | 1,999 | 1 (`a299a`) | 1 |
+| forced battle on `a101b`, 6500 frames | 6,499 | 6,499 | 3 (`a299a`, `a101b`, `a101b` again after the battle) | 3 |
+
+The scene changes it logged tell the game's shape at a glance: 0 -> 2 -> 3
+through the boot, 6 (the field: the title's demo) at frame 369, 3 at the New
+Game or Continue, 6 on `a101b`, 7 for the battle from frame 3349 and 6 again
+at 5117. With mods unset the self test (74), `title --check` and the replay
+are unchanged and no `[mod]` line prints.
+
+Still M3's: `pad_filter` (M3b, in `si.c`) and the renderer's texture and
+projection filters (M3c).

@@ -31,9 +31,14 @@
  * is not a 32-bit number; an unknown trigger, condition or mod.ini key; an
  * API other than this one; and a DOL other than the one the mod names.
  *
+ * A mod may instead, or as well, hold a mod.dll: native code on the versioned
+ * API in soa_mod.h (M3), loaded once the mod.ini checks pass and refused whole,
+ * with its callbacks taken back, if its soa_mod_init declines.
+ *
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
 #include "mod.h"
+#include "soa_mod.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +58,7 @@
 #define MAP_NUMBER 0x80311AC0u
 #define MAP_LETTER 0x80311AC8u
 #define FIELD_RUNNING 8u
+#define STORY_FLAGS 0x80310B3Cu
 
 enum { T_EVERY_FRAME, T_ONCE, T_MAP_LOAD };
 static const char* const k_trigger[] = {"every_frame", "once", "on_map_load"};
@@ -69,8 +75,10 @@ typedef struct {
 typedef struct {
     char dir[64];   /* the folder's name: what the recording names */
     char name[96];  /* what mod.ini calls it */
-    uint32_t hash;  /* FNV-1a of mod.ini and patches.txt, for the recording */
+    uint32_t hash;  /* FNV-1a of mod.ini, patches.txt and mod.dll, for the recording */
     unsigned first, count;
+    void* dll;          /* the loaded mod.dll, or NULL */
+    unsigned callbacks; /* what it registered */
 } Mod;
 
 static Mod g_mods[MOD_MAX];
@@ -79,6 +87,7 @@ static Patch g_patches[PATCH_MAX];
 static unsigned g_patch_n;
 static uint32_t g_last_map = 0xFFFFFFFFu;
 static char g_describe[300]; /* fits si.c's config line; later mods are left off */
+static unsigned long long g_maps_loaded;
 
 /* ---- SHA-1, for the DOL a mod names ------------------------------------ */
 
@@ -336,14 +345,228 @@ static int next_line(const char** text, char* line)
     return 1;
 }
 
+/* ---- native mods: mod.dll on SoaModApi (PLAN M3) ------------------------ */
+
+#define CB_MAX 64
+enum { CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_KINDS };
+
+typedef struct {
+    void* fn;
+    void* user;
+    int mod;
+    unsigned long long calls;
+} Callback;
+
+static Callback g_cb[CB_KINDS][CB_MAX];
+static int g_cb_n[CB_KINDS];
+static CpuState* g_s;
+static uint32_t g_text[7][2]; /* the DOL's code sections, [lo, hi): no mod writes there */
+static int g_cur_mod = -1;    /* whose callback, or whose init, is running: log names it */
+static char g_cur_dir[64];
+static uint32_t g_last_scene;
+static int g_seen_scene, g_loading;
+
+unsigned gx_frame_count(void);
+int tick_on_safe_point(void (*fn)(CpuState*));
+
+/* RAM, aligned to the width, and for a write not the game's code. */
+static int api_ok(uint32_t addr, uint32_t n, uint32_t align, int write)
+{
+    int i;
+    if (!g_s || addr < 0x80000000u || addr >= 0x80000000u + MEM1_SIZE || n > 0x80000000u + MEM1_SIZE - addr)
+        return 0;
+    if (align > 1 && (addr & (align - 1))) return 0;
+    if (write)
+        for (i = 0; i < 7; i++)
+            if (g_text[i][1] > g_text[i][0] && addr < g_text[i][1] && addr + n > g_text[i][0]) return 0;
+    return 1;
+}
+
+static int api_read8(uint32_t a, uint8_t* o) { if (!api_ok(a, 1, 1, 0)) return 0; *o = mem_r8(g_s, a); return 1; }
+static int api_read16(uint32_t a, uint16_t* o) { if (!api_ok(a, 2, 2, 0)) return 0; *o = mem_r16(g_s, a); return 1; }
+static int api_read32(uint32_t a, uint32_t* o) { if (!api_ok(a, 4, 4, 0)) return 0; *o = mem_r32(g_s, a); return 1; }
+static int api_read_f32(uint32_t a, float* o)
+{
+    uint32_t v;
+    if (!api_read32(a, &v)) return 0;
+    memcpy(o, &v, 4);
+    return 1;
+}
+static int api_read_bytes(uint32_t a, void* o, uint32_t n)
+{
+    if (!api_ok(a, n, 1, 0)) return 0;
+    memcpy(o, mem_ptr(g_s, a), n);
+    return 1;
+}
+static int api_write8(uint32_t a, uint8_t v) { if (!api_ok(a, 1, 1, 1)) return 0; mem_w8(g_s, a, v); return 1; }
+static int api_write16(uint32_t a, uint16_t v) { if (!api_ok(a, 2, 2, 1)) return 0; mem_w16(g_s, a, v); return 1; }
+static int api_write32(uint32_t a, uint32_t v) { if (!api_ok(a, 4, 4, 1)) return 0; mem_w32(g_s, a, v); return 1; }
+static int api_write_f32(uint32_t a, float v)
+{
+    uint32_t u;
+    memcpy(&u, &v, 4);
+    return api_write32(a, u);
+}
+static int api_write_bytes(uint32_t a, const void* in, uint32_t n)
+{
+    if (!api_ok(a, n, 1, 1)) return 0;
+    memcpy(mem_ptr(g_s, a), in, n);
+    return 1;
+}
+
+static uint32_t api_scene(void) { return g_s ? mem_r32(g_s, SCENE_ID) : 0; }
+static uint32_t api_field_state(void) { return g_s ? mem_r32(g_s, FIELD_STATE) : 0; }
+static uint32_t api_map(void) { return g_s ? (mem_r32(g_s, MAP_NUMBER) << 8) | mem_r8(g_s, MAP_LETTER) : 0; }
+static int api_story_flag(uint32_t n)
+{
+    uint32_t w;
+    if (!api_read32(STORY_FLAGS + (n / 32) * 4, &w)) return 0;
+    return (int)((w >> (n % 32)) & 1);
+}
+static uint32_t api_frame(void) { return gx_frame_count(); }
+
+static int api_register(int kind, void* fn, void* user)
+{
+    if (!fn || g_cb_n[kind] == CB_MAX) return 0;
+    g_cb[kind][g_cb_n[kind]].fn = fn;
+    g_cb[kind][g_cb_n[kind]].user = user;
+    g_cb[kind][g_cb_n[kind]].mod = g_cur_mod;
+    g_cb_n[kind]++;
+    return 1;
+}
+static int api_on_frame_end(void (*fn)(void*), void* user) { return api_register(CB_FRAME_END, (void*)fn, user); }
+static int api_on_safe_point(void (*fn)(void*), void* user) { return api_register(CB_SAFE_POINT, (void*)fn, user); }
+static int api_on_map_loaded(void (*fn)(void*, uint32_t), void* user)
+{
+    return api_register(CB_MAP_LOADED, (void*)fn, user);
+}
+static int api_on_scene_change(void (*fn)(void*, uint32_t, uint32_t), void* user)
+{
+    return api_register(CB_SCENE_CHANGE, (void*)fn, user);
+}
+
+static void api_log(const char* line)
+{
+    fprintf(stderr, "[mod] %s: %s\n", g_cur_mod >= 0 && g_cur_mod < g_mod_n ? g_mods[g_cur_mod].dir : g_cur_dir,
+            line ? line : "");
+}
+
+static const SoaModApi g_api = {
+    sizeof(SoaModApi), SOA_MOD_API_VERSION,
+    api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
+    api_write8, api_write16, api_write32, api_write_f32, api_write_bytes,
+    api_scene, api_field_state, api_map, api_story_flag, api_frame,
+    api_on_frame_end, api_on_safe_point, api_on_map_loaded, api_on_scene_change,
+    api_log,
+};
+
+/* The top of the main loop (tick.c): the safe point, then what it derives --
+ * a scene change, and a map loaded, which is the field running (state 8)
+ * after a load state (3 or 5) was seen: every story warp, name warp and
+ * return from a battle passes through both (FINDINGS "How the story's own
+ * warps run"), so a reload of the same map is a load too. */
+static void mod_safe_point(CpuState* s)
+{
+    uint32_t scene = mem_r32(s, SCENE_ID), state = mem_r32(s, FIELD_STATE);
+    int i;
+    for (i = 0; i < g_cb_n[CB_SAFE_POINT]; i++) {
+        g_cur_mod = g_cb[CB_SAFE_POINT][i].mod;
+        g_cb[CB_SAFE_POINT][i].calls++;
+        ((void (*)(void*))g_cb[CB_SAFE_POINT][i].fn)(g_cb[CB_SAFE_POINT][i].user);
+    }
+    if (g_seen_scene && scene != g_last_scene)
+        for (i = 0; i < g_cb_n[CB_SCENE_CHANGE]; i++) {
+            g_cur_mod = g_cb[CB_SCENE_CHANGE][i].mod;
+            g_cb[CB_SCENE_CHANGE][i].calls++;
+            ((void (*)(void*, uint32_t, uint32_t))g_cb[CB_SCENE_CHANGE][i].fn)(g_cb[CB_SCENE_CHANGE][i].user,
+                                                                               g_last_scene, scene);
+        }
+    g_last_scene = scene;
+    g_seen_scene = 1;
+    if (state == 3 || state == 5) {
+        g_loading = 1;
+    } else if (state == FIELD_RUNNING && g_loading) {
+        uint32_t map = (mem_r32(s, MAP_NUMBER) << 8) | mem_r8(s, MAP_LETTER);
+        g_loading = 0;
+        g_maps_loaded++;
+        for (i = 0; i < g_cb_n[CB_MAP_LOADED]; i++) {
+            g_cur_mod = g_cb[CB_MAP_LOADED][i].mod;
+            g_cb[CB_MAP_LOADED][i].calls++;
+            ((void (*)(void*, uint32_t))g_cb[CB_MAP_LOADED][i].fn)(g_cb[CB_MAP_LOADED][i].user, map);
+        }
+    }
+    g_cur_mod = -1;
+}
+
+/* mod.dll, when there is one: loaded by full path, its soa_mod_init called
+ * with the API; anything it registered is taken back if it refuses. 1 on
+ * success, 0 (having said why) otherwise. */
+static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
+{
+#ifdef _WIN32
+    char full[MAX_PATH];
+    HMODULE h;
+    SoaModInit init;
+    int before[CB_KINDS], k, rc;
+    size_t n = 0;
+    char* bytes = slurp_text(path, &n);
+    if (!bytes) return -1; /* no mod.dll: nothing to load */
+    *dll_hash = fnv1a(2166136261u, bytes, n);
+    free(bytes);
+    if (!GetFullPathNameA(path, sizeof full, full, NULL)) {
+        refuse(w, "cannot resolve %s%s", path, "");
+        return 0;
+    }
+    h = LoadLibraryExA(full, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!h) {
+        char code[16];
+        snprintf(code, sizeof code, "%lu", (unsigned long)GetLastError());
+        refuse(w, "Windows would not load it (error %s)%s", code, "");
+        return 0;
+    }
+    init = (SoaModInit)(void (*)(void))GetProcAddress(h, "soa_mod_init");
+    if (!init) {
+        FreeLibrary(h);
+        refuse(w, "it exports no soa_mod_init%s%s", "", "");
+        return 0;
+    }
+    for (k = 0; k < CB_KINDS; k++) before[k] = g_cb_n[k];
+    g_cur_mod = g_mod_n;
+    snprintf(g_cur_dir, sizeof g_cur_dir, "%s", m->dir);
+    rc = init(&g_api, SOA_MOD_API_VERSION);
+    g_cur_mod = -1;
+    if (rc != 0) {
+        char code[16];
+        for (k = 0; k < CB_KINDS; k++) g_cb_n[k] = before[k];
+        FreeLibrary(h);
+        snprintf(code, sizeof code, "%d", rc);
+        refuse(w, "its soa_mod_init refused, returning %s%s", code, "");
+        return 0;
+    }
+    m->dll = (void*)h;
+    for (k = 0; k < CB_KINDS; k++) m->callbacks += (unsigned)(g_cb_n[k] - before[k]);
+    return 1;
+#else
+    size_t n = 0;
+    char* bytes = slurp_text(path, &n);
+    (void)m;
+    (void)dll_hash;
+    if (!bytes) return -1;
+    free(bytes);
+    refuse(w, "mod.dll needs Windows%s%s", "", "");
+    return 0;
+#endif
+}
+
 static void load_one(CpuState* s, const char* root, const char* dir, const char* dol_sha1,
                      const uint8_t* dol, size_t dol_size)
 {
-    char path[600], ppath[600], line[LINE_MAX_LEN], *tok[8];
+    char path[600], ppath[600], dpath[600], line[LINE_MAX_LEN], *tok[8];
     char *ini, *patches;
     const char* t;
     size_t ini_n = 0, patches_n = 0;
-    int have_api = 0;
+    int have_api = 0, dll;
+    unsigned dll_hash = 0;
     Where w;
     Mod m;
     unsigned before = g_patch_n;
@@ -352,6 +575,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     snprintf(m.dir, sizeof m.dir, "%s", dir);
     snprintf(path, sizeof path, "%s/%s/mod.ini", root, dir);
     snprintf(ppath, sizeof ppath, "%s/%s/patches.txt", root, dir);
+    snprintf(dpath, sizeof dpath, "%s/%s/mod.dll", root, dir);
     ini = slurp_text(path, &ini_n);
     if (!ini) return; /* not a mod: the caller only asks about folders */
     w.path = path;
@@ -405,30 +629,36 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     if (w.failed) { free(ini); return; }
 
     patches = slurp_text(ppath, &patches_n);
-    if (!patches) {
+    if (patches) {
         w.path = ppath;
-        refuse(&w, "no patches.txt, so it would do nothing (M1 loads data patches only)%s%s", "", "");
-        free(ini);
-        return;
+        for (t = patches; next_line(&t, line) && !w.failed;) {
+            w.line++;
+            parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
+        }
+        if (!w.failed && g_patch_n == before) {
+            w.line = 0;
+            refuse(&w, "no patches in it%s%s", "", "");
+        }
     }
-    w.path = ppath;
-    for (t = patches; next_line(&t, line) && !w.failed;) {
-        w.line++;
-        parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
-    }
-    if (!w.failed && g_patch_n == before) {
+    dll = -1;
+    if (!w.failed) {
+        w.path = dpath;
         w.line = 0;
-        refuse(&w, "no patches in it%s%s", "", "");
+        dll = load_dll(&w, dpath, &m, &dll_hash);
+        if (dll < 0 && !patches) {
+            w.path = path;
+            refuse(&w, "no patches.txt and no mod.dll beside it, so it would do nothing%s%s", "", "");
+        }
     }
     if (w.failed) {
         g_patch_n = before; /* refused whole */
     } else {
-        m.hash = fnv1a(fnv1a(2166136261u, ini, ini_n), patches, patches_n);
+        m.hash = fnv1a(fnv1a(2166136261u, ini, ini_n), patches ? patches : "", patches_n) ^ dll_hash;
         m.first = before;
         m.count = g_patch_n - before;
         g_mods[g_mod_n++] = m;
-        fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es), api %d, the DOL it names\n", m.name, root, dir,
-                m.count, MOD_API);
+        fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
+                m.count, m.dll ? " and mod.dll" : "", MOD_API);
     }
     free(ini);
     free(patches);
@@ -472,6 +702,12 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
 #endif
     qsort(names, (size_t)n, sizeof names[0], cmp_name);
     sha1_hex(dol, dol_size, sha);
+    g_s = s;
+    if (dol_size >= 0x100)
+        for (i = 0; i < 7; i++) {
+            g_text[i][0] = be32p(dol + 0x48 + i * 4);
+            g_text[i][1] = g_text[i][0] + be32p(dol + 0x90 + i * 4);
+        }
     for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
     g_describe[0] = '\0';
     for (i = 0; i < g_mod_n; i++) {
@@ -480,6 +716,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
         if (k < 0 || (size_t)k >= sizeof g_describe - used) break;
         used += (size_t)k;
     }
+    if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE]) tick_on_safe_point(mod_safe_point);
     fprintf(stderr, "[mod] SOA_MODS=%s: %d mod(s) loaded, %u patch(es)\n", dir, g_mod_n, g_patch_n);
     return g_mod_n;
 }
@@ -492,7 +729,8 @@ void mod_frame(CpuState* s, unsigned frame)
     uint8_t letter;
     int loaded;
     unsigned i;
-    if (!g_patch_n) return;
+    int c;
+    if (!g_patch_n && !g_cb_n[CB_FRAME_END]) return;
     scene = mem_r32(s, SCENE_ID);
     state = mem_r32(s, FIELD_STATE);
     number = mem_r32(s, MAP_NUMBER);
@@ -512,6 +750,12 @@ void mod_frame(CpuState* s, unsigned frame)
         p->applied++;
         p->fired = 1;
     }
+    for (c = 0; c < g_cb_n[CB_FRAME_END]; c++) {
+        g_cur_mod = g_cb[CB_FRAME_END][c].mod;
+        g_cb[CB_FRAME_END][c].calls++;
+        ((void (*)(void*))g_cb[CB_FRAME_END][c].fn)(g_cb[CB_FRAME_END][c].user);
+    }
+    g_cur_mod = -1;
 }
 
 const char* mod_describe(void) { return g_describe; }
@@ -519,8 +763,20 @@ const char* mod_describe(void) { return g_describe; }
 void mod_report(void)
 {
     int m;
+    if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE])
+        fprintf(stderr, "[mod] the safe point saw %llu map load(s)\n", g_maps_loaded);
     for (m = 0; m < g_mod_n; m++) {
         unsigned i;
+        if (g_mods[m].dll) {
+            unsigned long long calls[CB_KINDS] = {0};
+            int k, c;
+            for (k = 0; k < CB_KINDS; k++)
+                for (c = 0; c < g_cb_n[k]; c++)
+                    if (g_cb[k][c].mod == m) calls[k] += g_cb[k][c].calls;
+            fprintf(stderr, "[mod] %s mod.dll: %u callback(s); called at %llu frame end(s), %llu safe point(s), "
+                            "%llu map load(s), %llu scene change(s)\n", g_mods[m].dir, g_mods[m].callbacks,
+                    calls[CB_FRAME_END], calls[CB_SAFE_POINT], calls[CB_MAP_LOADED], calls[CB_SCENE_CHANGE]);
+        }
         for (i = g_mods[m].first; i < g_mods[m].first + g_mods[m].count; i++) {
             const Patch* p = &g_patches[i];
             if (p->applied)

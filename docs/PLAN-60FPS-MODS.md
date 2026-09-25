@@ -480,7 +480,7 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 - With it off, 23/23, `title --check` and the full self test pass, including case 73.
 - It replaces H3's `SOA_UNCAP`.
 
-**M3. Native mod code: `mod.dll` and `SoaModApi`** — *several days, `--link`.*
+**M3. Native mod code: `mod.dll` and `SoaModApi`** — *M3a done 2026-09-25: `mod.dll` loading, `SoaModApi` v1 (`runtime/soa_mod.h`) with memory, state, log and four callbacks, `examples/mods/map-log`; over the title and a forced battle its `on_safe_point` calls equal the safe points and its `on_map_loaded` calls the field load lines. `pad_filter` (M3b) and the renderer filters (M3c) remain. FINDINGS "M3a".*
 The core of native PC mods, right after the loader and the safe point.
 - **Loading:** an optional `mod.dll` in a mod's folder, loaded with `LoadLibrary`, exporting `int soa_mod_init(const SoaModApi*, uint32_t ver)`.
 - **`SoaModApi` v1 provides:**
