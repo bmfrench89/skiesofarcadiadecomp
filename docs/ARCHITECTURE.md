@@ -38,7 +38,7 @@ in the port. `config/hle.txt` decides which functions the running port uses
 **Threads in the process.** One guest CPU thread, which owns every device
 model and parses the graphics command stream; that thread's guest threads
 live on host fibers underneath it. Then the rasterizer's worker pool
-(`SOA_THREADS`, default half the CPUs, capped at 16), the UI thread when a
+(`SOA_THREADS`, default three quarters of the logical CPUs, capped at 16), the UI thread when a
 window is open, the watchdog, and the profiler's sampler.
 
 ---

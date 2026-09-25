@@ -69,6 +69,10 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   raster-bound (Part L 3000: 27 fps), because retraces now arrive on time; the
   Dangral base is raster-bound and gains 1%, which is H15's to change.
   `SOA_GXR_DRAIN=1` is the fallback if a scene draws wrong.
+- **The pixel path is a quarter faster, and the pool bigger (H15a-c).** The
+  TEV shapes and the blend most pixels use run directly, the helpers inline,
+  about 59 -> 46 ns a fragment; the default worker count is three quarters of
+  the CPUs. The Dangral base, 17.7 fps drawn every frame in H1, runs at ~27.
 - **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
   encounter accelerator that fights only where the story allows.
 

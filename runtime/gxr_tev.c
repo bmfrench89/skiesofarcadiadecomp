@@ -796,8 +796,17 @@ static int konst_value(unsigned sel, int channel)
     return 0;
 }
 
-static inline int compare(unsigned mode, int a, int b);
-static int alpha_passes(const TevSetup* T, int alpha);
+/* The per-fragment helpers, inlined whether MSVC would or not: the worker
+ * profile found sample_level, wrap and the alpha compare as calls of their
+ * own (H15c). */
+#ifdef _MSC_VER
+#define TEX_INLINE static __forceinline
+#else
+#define TEX_INLINE static inline
+#endif
+
+TEX_INLINE int compare(unsigned mode, int a, int b);
+TEX_INLINE int alpha_passes(const TevSetup* T, int alpha);
 
 /* Whether the alpha compare passes every alpha a fragment can have (H15a),
  * which is what lets depth be tested before the TEV: a fragment that fails
@@ -942,13 +951,13 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
 
 /* ---- sampling ----------------------------------------------------------- */
 
-static inline int fast_floor(float f)
+TEX_INLINE int fast_floor(float f)
 {
     int i = (int)f;
     return f < (float)i ? i - 1 : i;
 }
 
-static inline int wrap(int i, int size, int mask, unsigned mode)
+TEX_INLINE int wrap(int i, int size, int mask, unsigned mode)
 {
     switch (mode) {
     case 0: return i < 0 ? 0 : (i >= size ? size - 1 : i);
@@ -967,7 +976,7 @@ static inline int wrap(int i, int size, int mask, unsigned mode)
 
 static int g_notex = -1;
 
-static inline void sample_level(const TexCfg* C, int l, float u, float v, uint8_t out[4])
+TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t out[4])
 {
     const uint8_t* img = C->level[l];
     int w = C->lw[l], h = C->lh[l];
@@ -995,7 +1004,7 @@ static inline void sample_level(const TexCfg* C, int l, float u, float v, uint8_
 }
 
 /* lod: log2 of texels per pixel at this pixel, from the rasterizer. */
-static inline void sample(const TexCfg* C, float s, float t, float lod, uint8_t out[4])
+TEX_INLINE void sample(const TexCfg* C, float s, float t, float lod, uint8_t out[4])
 {
     int l = 0;
     float u, v;
@@ -1025,7 +1034,7 @@ static inline void sample(const TexCfg* C, float s, float t, float lod, uint8_t 
 static inline int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 static inline int clamp_s11(int v) { return v < -1024 ? -1024 : (v > 1023 ? 1023 : v); }
 
-static inline int compare(unsigned mode, int a, int b)
+TEX_INLINE int compare(unsigned mode, int a, int b)
 {
     switch (mode) {
     case 0: return 0;
@@ -1045,7 +1054,7 @@ int g_tev_narrate; /* set by the renderer's SOA_GXR_PIXEL hook: print every stag
  * tex[]: texture coordinates per texcoord slot (s, t, q). */
 /* Alpha compare (PE_ALPHA_COMPARE, GXSetAlphaCompare): the pixel path and
  * alpha_always both ask here, so they cannot disagree. */
-static int alpha_passes(const TevSetup* T, int alpha)
+TEX_INLINE int alpha_passes(const TevSetup* T, int alpha)
 {
     int p0 = compare(T->acomp0, alpha, T->aref0), p1 = compare(T->acomp1, alpha, T->aref1);
     switch (T->alogic) {

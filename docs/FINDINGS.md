@@ -2555,3 +2555,38 @@ oversubscribe sixteen logical CPUs and the guest thread -- the critical path
 -- loses its core. The default is not changed by this entry: a finer sweep
 (10 to 14) and a check that the lighter Part L 3000 run does not lose come
 first, and are the next entry.
+
+
+**H15c, third stage, and the worker count: the Dangral base at 27 fps.**
+2026-09-25, `build/soa-h15c1.exe` against `build/soa-h15c3.exe`,
+`build/threads-*.log`, `build/threads3000-*.log`. The third stage is two
+things the profile named. The pixel loop visited both colour channels and all
+eight texture coordinates on every pixel, testing each for use; it now visits
+the ones the draw uses, listed once a triangle, with the arithmetic untouched.
+And the per-fragment helpers -- `shade`, `depth_test`, `blend_pixel`,
+`fog_apply` in `gxr.c`; `sample`, `sample_level`, `wrap`, the alpha compare in
+`gxr_tev.c` -- were calls of their own, which `static inline` had not made them
+otherwise, so they are `__forceinline`. Replay 23/23 with every hash
+unchanged, and the differential test of the fast paths passes. At one thread,
+interleaved: 54.2 / 50.5 -> **46.5 / 45.5 ns a fragment** (-12%; the early
+game and the cutscene 20-30%, the sky and the field inside this session's
+noise). With the first two stages, H15c has taken the set from about 59 ns to
+about 46.
+
+The worker-count sweep, finer and on the stage-two build (Dangral window of
+H1's Part L 9000 run, interleaved 12, 10, 14, 14, 10, 12):
+
+| workers | fps | p50 | p99 | CPU |
+|---|---|---|---|---|
+| 10 | 25.6 / 25.2 | 40.4 / 40.6 ms | 49.2 / 57.3 | 2,655 / 2,690 s |
+| **12** | **27.2 / 26.8** | **36.9 / 36.0 ms** | 59.0 / 61.6 | 2,816 / 2,881 s |
+| 14 | 23.7 / 23.7 | 40.7 / 41.1 ms | 74.8 / 69.0 | 3,264 / 3,260 s |
+
+and the lighter Part L 3000 run does not lose from twelve: 28.4 / 27.7 fps
+against 27.9 / 27.3 at eight, for 18% more CPU. **The default is now three
+quarters of the logical CPUs** (12 of 16 here; 6 of 8; capped at 16), from
+half. It was measured on this one 16-thread handheld only; `SOA_THREADS`
+still overrides it, and a machine with fewer cores to spare for the guest
+thread may want less. Together with H14 and H15a-c, the Dangral base H1
+measured at 17.7 fps drawn every frame now runs at about 27, close to the
+game's 30 fps cap.

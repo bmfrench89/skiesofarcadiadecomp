@@ -906,7 +906,16 @@ static void pixel_prepare(const uint32_t* bp, PixelCfg* px)
 
 /* Fog blends the TEV output toward the fog colour by a function of eye
  * distance recovered from the 24-bit screen z, as the pixel engine does. */
-static inline void fog_apply(const PixelCfg* px, uint8_t out[4], float depth)
+/* The per-fragment helpers, inlined whether MSVC would or not: the worker
+ * profile found shade, blend_pixel and depth_test as calls of their own, a
+ * call each per fragment (H15c). */
+#ifdef _MSC_VER
+#define PIXEL_INLINE static __forceinline
+#else
+#define PIXEL_INLINE static inline
+#endif
+
+PIXEL_INLINE void fog_apply(const PixelCfg* px, uint8_t out[4], float depth)
 {
     float ze, f;
     int fi, i;
@@ -945,7 +954,7 @@ static void to_screen(const RasterCfg* rc, Vertex* v)
 
 /* ---- pixels --------------------------------------------------------------- */
 
-static inline void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t src[4])
+PIXEL_INLINE void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t src[4])
 {
     uint8_t* dst = g_efb[y][x];
     int out[4], i;
@@ -993,7 +1002,7 @@ static inline void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t s
     if (px->alpha_upd) dst[3] = (uint8_t)sa;
 }
 
-static inline int depth_test(const PixelCfg* px, int x, int y, float depth)
+PIXEL_INLINE int depth_test(const PixelCfg* px, int x, int y, float depth)
 {
     uint32_t z = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f));
     uint32_t cur = g_efb_z[y][x];
@@ -1007,7 +1016,7 @@ static inline int depth_test(const PixelCfg* px, int x, int y, float depth)
     return pass;
 }
 
-static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][4], float depth)
+PIXEL_INLINE void shade(const DrawCmd* D, int x, int y, const int col[2][4], const float tex[8][4], float depth)
 {
     uint8_t out[4];
     int alpha_ok = 1;
@@ -1098,6 +1107,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
      * rather than whatever the stack held, which made the frame depend on how
      * many worker threads were rasterizing. */
     float tex[8][4];
+    int col[2][4], chn[2], act[8], nch, nact;
 
     if (area == 0.0f) return;
     if (g_cull_flip) area = -area;
@@ -1150,6 +1160,18 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
         }
     }
 
+    /* The colour channels and texture coordinates the draw interpolates,
+     * listed once so the pixel loop below visits only those. */
+    {
+        int j;
+        nch = nact = 0;
+        for (j = 0; j < 2; j++)
+            if ((D->nchan >> j) & 1) chn[nch++] = j;
+        for (j = 0; j < 8; j++)
+            if (ti[j] >= 0) act[nact++] = j;
+        memset(col, 0, sizeof col);
+    }
+
     for (y = miny; y <= maxy; y++) {
         float py = (float)y + 0.5f;
         float av[MAX_ATTR];
@@ -1189,21 +1211,24 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
         for (x = xs; x <= xe; x++) {
             float w = av[wi] != 0.0f ? 1.0f / av[wi] : 0.0f;
             float w255 = w * 255.0f;
-            int col[2][4];
-            for (i = 0; i < 2; i++) {
-                if (!((D->nchan >> i) & 1)) { col[i][0] = col[i][1] = col[i][2] = col[i][3] = 0; continue; }
+            int j;
+            /* Only the channels and coordinates this draw uses, found once a
+             * triangle below (H15c); the rest of col[] was zeroed there and
+             * stays zero, as the per-pixel test here used to leave it. */
+            for (j = 0; j < nch; j++) {
+                i = chn[j];
                 for (k = 0; k < 4; k++) {
                     int cv = (int)(av[ci[i] + k] * w255 + 0.5f);
                     col[i][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
                 }
             }
-            for (i = 0; i < 8; i++) {
-                if (ti[i] < 0) continue;
+            for (j = 0; j < nact; j++) {
+                i = act[j];
                 tex[i][0] = av[ti[i]] * w; tex[i][1] = av[ti[i] + 1] * w; tex[i][2] = av[ti[i] + 2] * w;
                 tex[i][3] = lod[i];
                 lod[i] += dlod[i];
             }
-            shade(D, x, y, col, tex, av[di]);
+            shade(D, x, y, (const int (*)[4])col, (const float (*)[4])tex, av[di]);
             for (n = 0; n < nattr; n++) av[n] += attr[n].a;
         }
     }
@@ -1892,7 +1917,12 @@ static void workers_start(void)
     if (n <= 0) {
         SYSTEM_INFO si;
         GetSystemInfo(&si);
-        n = (int)si.dwNumberOfProcessors / 2;
+        /* Three quarters of the logical CPUs (FINDINGS "H15c"). On the
+         * 16-thread machine this was measured on, 12 workers ran the Dangral
+         * base at 27 fps against 25 at 10, 24 at 14 and 19 at the old half;
+         * the rest of the machine is the guest thread, the audio and the
+         * window, and fifteen workers took the guest thread's core. */
+        n = (int)si.dwNumberOfProcessors * 3 / 4;
         if (n < 1) n = 1;
     }
     if (n > MAX_THREADS) n = MAX_THREADS;

@@ -17,7 +17,8 @@ run. [V]/V marks what was read from quoted instructions, file:line or logs; [I]/
 - `gen/soa.exe` was linked 2026-09-22 21:30.
 - The translated `gen/chunk_*.obj` files date from 2026-09-18 05:37–05:39. They are older than their `.c` files (09-22 21:30).
 - They were built at /O2. `dumpbin /disasm gen/chunk_013.obj`, function `fn_80232E38`, shows `cmovne` and values kept in registers, which /Od does not produce.
-- The renderer starts 8 worker threads by default, half the logical CPUs (`gxr.c:1454`).
+- The renderer starts 8 worker threads by default, half the logical CPUs (`gxr.c:1454`). (Three quarters, 12, since
+  2026-09-25: FINDINGS "H15c".)
 
 **Terms used below:**
 - A **fragment** is a candidate pixel the rasterizer processes. Fragments = pixels shaded + failed alpha test + failed depth test, from the `[gxr]` counter line.

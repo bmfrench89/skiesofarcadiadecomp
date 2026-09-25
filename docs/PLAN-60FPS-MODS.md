@@ -350,7 +350,7 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 *Done:* replay 23/23, and ns per fragment before and after.
 
-**H15c. Specialise the fragment function per draw** — *several days. Two stages done 2026-09-25: the one-stage TEV shapes most pixels use and the source-alpha blend run directly, -17% ns a fragment at one thread, every hash unchanged, a differential test against the general path. The attribute stepping and the sampler are next. FINDINGS "H15c".*
+**H15c. Specialise the fragment function per draw** — *several days. Three stages done 2026-09-25: the one-stage TEV shapes most pixels use and the source-alpha blend run directly, the pixel loop visits only the attributes a draw uses, and the per-fragment helpers are inlined -- about 59 -> 46 ns a fragment at one thread, every hash unchanged, a differential test against the general path. With the worker count at three quarters of the CPUs, the Dangral base runs at about 27 fps (H1: 17.7). The sampler is next. FINDINGS "H15c".*
 
 *Done:* C4's criterion of 1.5× on the heaviest captures, replay 23/23, and ns per fragment.
 
