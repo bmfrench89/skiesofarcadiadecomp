@@ -790,7 +790,7 @@ All in window.c, on the UI thread that already owns the window and presents.
 | `autotext` | `SOA_AUTOTEXT` | unset or 0 off; `on` or 1 = 45 frames; N ≥ 2 frames | yes | P11 |
 | `rumble` | `SOA_RUMBLE` | 0–100 | no | M18 |
 | `fullscreen`, `scaler` | `SOA_FULLSCREEN`, `SOA_SCALER` | 0/1; integer/fit(/sharp) | no | H19a, P5a |
-| `unfocused` | `SOA_UNFOCUSED` | run/mute(/pause) | no | M5b, M19 |
+| `unfocused` | `SOA_UNFOCUSED` | run/mute/pause (pause since M19) | no | M5b, M19 |
 | `coop` | `SOA_COOP` | party slots | yes | P10b |
 | `gamma`, `colorblind`, `colorblind_mode`, `flash_limit`, `crt` | `SOA_GAMMA`, … | as 3.13 | no | P5a |
 | `deflicker` | `SOA_DEFLICKER` | 0/1 | no | P5b |
@@ -861,7 +861,8 @@ Test-only variables (not in `k_settings`): `SOA_ENCOUNTERS_TEST`, `SOA_AUTOTEXT_
   (CH1, M11a) are not in the recording until milestone 2. If you play co-op or toggle turbo with
   `SOA_PAD_RECORD` on and something breaks, the recording will not reproduce it.
 - **M19 changes the clock of every run.** A mistake there changes game timing everywhere. Mitigations:
-  - every gap is logged, and ordinary runs must log none (M19's Done);
+  - every gap is logged, and ordinary runs on an unloaded host must log none (M19's Done). A heavily
+    loaded host can starve the guest past the 250 ms rule and log a real gap (fe7e48f's first run);
   - `SOA_CLOCK_GAP_MS=0` turns the rule off;
   - `SOA_CLOCK=utc` restores the old source for one release.
 
@@ -1284,7 +1285,12 @@ so they check the layout and sizes, not the pixels. That is the owner's check.*
   - The contract holds (the window is not part of headless checks).
 
 **M5b. A first run without a terminal** — *a day; `--link`; prerequisites none (`unfocused = pause`
-needs M19). **Owner.***
+needs M19). **Owner.** Landed as 9642613, but for the owner's check; every Done case and all three
+mutations held, and a mute mutation too. **Found by measuring:** reopening stderr and stdout on the log
+and then calling `FreeConsole` left the log empty, and two separate opens of one file overwrote each
+other's lines. The order that works is `FreeConsole`, then `freopen` of stderr, then `_dup2` of stderr's
+descriptor onto stdout (`settings_console_to_log`, with a comment). `unfocused` takes run, mute and,
+since M19, pause.*
 - Files: `runtime/settings.c`, `runtime/main.c`, `runtime/aram.c`, `runtime/window.c`, `runtime/si.c`
   (`si_set_path_root`), `runtime/audio_out.c`, `runtime/selftest.c`, `.gitignore`,
   `tools/tests/test_settings.py`, `tools/tests/test_padrec.py`, README.md.
@@ -1323,7 +1329,10 @@ needs M19). **Owner.***
     - with `unfocused = mute`, alt-tab away: the game goes silent and ignores the pad.
 
 **M19. A clock that survives sleep and speed changes** — *several days; `--link`; prerequisites none.
-**Owner.***
+**Owner.** Landed as fe7e48f, but for the owner's check. The stall run gave 70.0 guest seconds against
+80.0 wall, and its mutation 79.9 against 79.9; title and a 12,000-frame battle logged no gap, and
+`speed --check` passed. Two corrections to the Done below came from the run: the gap line is at frame
+601, and "no gaps" holds on an unloaded host only (see the last Done line).*
 - Files: `runtime/clock.c` (new), `runtime/hle.c`, `runtime/tick.c`, `runtime/dsp.c`, `runtime/main.c`
   (`SOA_STALL`), `runtime/window.c` (power events, `unfocused = pause`), `runtime/selftest.c`,
   `tools/tests/test_clock.py` (new), README.md.
@@ -1339,7 +1348,8 @@ needs M19). **Owner.***
   - One headless run, `python tools/scenario.py run title --check --env SOA_STALL=600:10
     --log build/scenario-m19.log` (10 s, under the 20 s headless watchdog):
     - it passes the four checks;
-    - the log has one `[clock]` gap line at frame 600 counting 0 s;
+    - the log has one `[clock]` gap line at frame 601 counting 0 s (the stall runs in frame 600's hook,
+      and the next read belongs to 601);
     - the `[run]` line's guest seconds are at least 9 s below its wall seconds minus the logged origin
       offset.
 
@@ -1347,7 +1357,11 @@ needs M19). **Owner.***
     wall seconds minus the origin offset within 0.5 s.
   - **No gaps in ordinary runs:** `python tools/scenario.py run title --check` and `python
     tools/scenario.py run battle` without `SOA_STALL` each log zero `[clock]` gap lines and `[run]`'s gap
-    count 0. A nonzero count fails: a normal host stall must not trip the rule.
+    count 0, **on an unloaded host**. A nonzero count fails. The first stall run went alongside a
+    compiler and logged two extra gaps (0.5 s at frame 1, 0.8 s at frame 951), when the guest thread
+    really was starved that long; a quiet rerun logged only the stalled one [V run, FINDINGS "M19: a clock that survives sleep"]. So
+    run this check with nothing heavy beside it, and read a gap in a loaded run as the host's, not the
+    clock's.
   - Self test, a new case: with the DMA running, an epoch bump makes the next `dsp_poll` deliver one
     block and resynchronise, not a burst.
   - The contract holds; `python tools/scenario.py run speed --check` (at `SOA_SPEED=10`) still passes.

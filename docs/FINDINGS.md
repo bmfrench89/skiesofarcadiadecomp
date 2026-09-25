@@ -3431,3 +3431,37 @@ and a peek that writes nothing); the self test's new case (above) and its
 mutation; `test_profiler.py`'s clock driver now reads the timebase every 10
 ms, as a guest does, where it used to read once and sleep 1.2 s -- which is
 now, correctly, a gap.
+
+
+**P3: `.gci` import and export.** 2026-09-25, from a worker in a worktree,
+merged as its own commit. `python tools/cardformat.py export CARD --name
+NAME` writes a save as Dolphin keeps it -- the 0x40-byte directory entry,
+then its blocks along the chain -- and `import CARD IN.gci` puts one onto a
+card: a new image by default, or `--in-place` after writing a dated `.bak`
+and only while no `soa.exe` has the card open. Blocks are allocated from the
+table's last-allocated + 1, as the card library does [I, recalled from the
+SDK, not disassembled]; the new directory and table go into the slot the
+mount would read as older, with a check code one past the other's, and the
+newer slot is left byte for byte as it was -- the card library's own
+alternation, which keeps the previous state as the backup. Every refusal the
+spec lists holds and writes nothing (another game or maker, a size that
+disagrees with the entry, no blocks, too few free blocks, no free entry, a
+name already there without `--replace`, a card that does not mount READY),
+and what was written is read back from disk and must mount READY, leave the
+kept slot unchanged and export back as the file imported.
+
+The tests are synthetic (cards the tool formats, entries over random
+blocks): import to READY, export equal to the input but for the start block,
+a round trip into a second card, two imports on disjoint chains, the slot
+rule under four check-code layouts -- a fresh card, one update on, the two
+pairs picking different slots, and codes across 0x7FFF and 0xFFFF -- and
+each refusal, "too few blocks" on the 4 Mbit geometry and "no free entry"
+on a 16 Mbit card holding 127 files. Writing into the newer slot, and
+leaving the check code as it was, each fail all four slot cases. **One
+thing it found:** a directory whose check code is 0x7FFF gets 0x8000 as the
+rule says, and the mount's signed comparison then reads the new copy as the
+older -- the import would be invisible. The command writes it, then exits 1
+and says why; the game's own 32,768th save would meet the same. The export
+name, `<maker>-<game>-<name>.gci`, follows Dolphin's naming as remembered,
+unchecked against its source. Importing a Dolphin save and loading it, and
+loading a port save in Dolphin, are the owner's checks (session B).

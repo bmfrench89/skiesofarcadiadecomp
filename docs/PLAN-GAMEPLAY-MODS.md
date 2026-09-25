@@ -1333,13 +1333,13 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
     - with the strength at 0, headless (no window), and while `SOA_PAD` or `SOA_PAD_FILE` drives input, no write gives a nonzero call;
     - pause, focus loss and exit each give a zero-speed call while the motor is on.
   - That the game keeps those bits off while its own Rumble option is off is the game's behaviour, and already true today. It is why the port needs no gate for that option; it is not this Done.
-- **M19. A clock that survives sleep and speed changes** — *several days. Specified as comfort-pack M19 (3.10).*
+- **M19. A clock that survives sleep and speed changes** — *several days. Specified as comfort-pack M19 (3.10); done (fe7e48f), but for the owner's check.*
   - Game time follows `timespec_get(TIME_UTC)` (`hle.c`, checked here): not monotonic, and it keeps running through sleep.
   - Changing speed mid-run would jump it.
   - Base it on `QueryPerformanceCounter`, re-anchor on every speed change, treat any wall jump over about 250 ms as paused time, cap the audio catch-up, and pause at the safe point.
   - A test knob, `SOA_STALL=<frame>:<seconds>`, new with M19: at that frame the game thread sleeps once for that many seconds, which is how a suspend looks to it. It is not `SOA_GXR_STALL` (`gxr.c:168`), which only holds a rasterizer worker back by microseconds.
   - *Done:* with `SOA_STALL=600:30`, game time advances by under about 1 s across the stall. The mutation keeps the knob and drops the jump rule: the same stall then advances game time by about 30 s [I].
-- **M5 amendment: a first run without a terminal** — *hours. Specified as comfort-pack M5b (3.9).*
+- **M5 amendment: a first run without a terminal** — *hours. Specified as comfort-pack M5b (3.9); done (9642613), but for the owner's check.*
   - Resolve every path against `soa.ini`'s folder: the card path is relative (`exi.c:90`, checked here), so a launch from `gen\` makes a fresh blank card.
   - Default to a rendered window when `soa.ini` exists, and hide the console.
   - A setting, off by default, that ignores the gamepad and mutes audio while the window is unfocused, so a launcher or Armoury Crate in front no longer drives the game. Today only the keyboard waits for focus (`window.c:404`); the pad is read whatever has it (`:433`), on purpose (`:389-392`), so the default stays as it is.
