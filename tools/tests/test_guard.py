@@ -317,10 +317,11 @@ MOD_INI = b"manifest = 2\nid = m\nversion = 1\nname = m\napi = 1\ndol_sha1 = 0\n
 
 
 def test_a_dump_in_a_mod_folder_is_refused_whatever_it_is_named(tmp_path, monkeypatch, capsys):
-    """A compressed game file renamed to .txt: the suffix list cannot see it,
-    and the content check has to. The same bytes outside a mod folder are not
-    this check's to judge."""
-    dump = b"AKLZ~?Qd=\xcc\xcc\x00\x00\x00\x00\x00\x01\x00\x00" + bytes(range(256))
+    """Binary bytes with no signature the tree check knows -- a raw table
+    dump, say -- renamed to .txt: the suffix list cannot see it, and a mod
+    folder, which holds only text, refuses it. The same bytes outside a mod
+    folder are not this rule's to judge."""
+    dump = b"\x00\x02\x01\xf4\x00\x64\x00\x00" + bytes(range(256))
     repo = scratch_repo(
         tmp_path / "repo",
         {
@@ -338,27 +339,40 @@ def test_a_dump_in_a_mod_folder_is_refused_whatever_it_is_named(tmp_path, monkey
     assert "patches.txt" not in err and "docs/sample.txt" not in err, err
 
 
-def test_a_whole_table_in_a_mod_folder_is_refused_and_its_edits_are_not(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize(
+    "head, what",
+    [
+        (b"AKLZ~?Qd\x00\x01", "the game's compression (AKLZ)"),
+        (b"GCIX\x00\x00\x00\x08", "a GVR texture"),
+        (b"GEAE8P\x00\xff", "the game's code at offset 0"),
+        (b"\x89PNG\r\n\x1a\n\x00\x00", "a PNG"),
+        (b"DDS \x7c\x00\x00\x00", "a DDS texture"),
+        (b"OggS\x00\x02", "Ogg audio"),
+        (b"fLaC\x00\x00", "FLAC audio"),
+        (b"ID3\x04\x00\x00", "MP3 audio"),
+        (b"RIFF\x24\x00\x00\x00WAVEfmt ", "WAV audio"),
+    ],
+    ids=["aklz", "gvr", "card", "png", "dds", "ogg", "flac", "mp3", "wav"],
+)
+def test_binary_game_data_is_refused_whatever_it_is_named(
+    tmp_path, monkeypatch, capsys, head, what
 ):
-    header = b"id\tmax_hp\n# a comment is not a row\n"
-    edits = header + b"".join(b"%d\t%d\n" % (i, 100 + i) for i in range(guard.MOD_TABLE_ROWS))
-    column = edits + b"999\t1\n"
     repo = scratch_repo(
-        tmp_path / "repo",
-        {
-            "mods/a/mod.ini": MOD_INI,
-            "mods/a/enemies.tsv": edits,
-            "mods/b/mod.ini": MOD_INI,
-            "mods/b/sub/enemies.tsv": column,
-        },
+        tmp_path / "repo", {"notes/readme.txt": head + bytes(64), "src/ok.c": b"int x;\n"}
     )
     monkeypatch.chdir(repo)
     monkeypatch.setattr(guard, "ROOT", repo, raising=False)
     assert guard.main() == 1
     err = capsys.readouterr().err
-    assert f"mods/b/sub/enemies.tsv: {guard.MOD_TABLE_ROWS + 1} rows" in err, err
-    assert "mods/a/enemies.tsv" not in err, err
+    assert f"notes/readme.txt: begins as {what}" in err, err
+    assert "ok.c" not in err, err
+
+
+def test_text_that_names_a_signature_is_not_refused():
+    """tools/soa/aklz.py names AKLZ~?Qd; a file with no NUL in its first 8 KB
+    is text, whatever it begins with."""
+    assert guard.signature_of(b"AKLZ~?Qd is the magic this module reads\n") is None
+    assert guard.signature_of((ROOT / "tools" / "soa" / "aklz.py").read_bytes()) is None
 
 
 def test_this_repository_mod_folders_pass_the_content_check():

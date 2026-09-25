@@ -69,11 +69,11 @@ python tools/guard.py
 guard: 161 tracked files, no game data
 ```
 
-Catches game data about to enter the repository: 41 forbidden extensions
-(`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`, `.gci`, …), sixteen directory
+Catches game data about to enter the repository: 43 forbidden extensions
+(`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`, `.gci`, …), eighteen directory
 names that must never be tracked (`extracted/`, `gen/`, `build/`, `vendor/`,
-`scratch/`, `packs/`, `photos/`, …), any tracked file over 2 MiB, and in a mod
-folder any file that is not text or a table of more than 64 rows. It lists `git ls-files`, so it
+`scratch/`, `packs/`, `photos/`, …), any tracked file over 2 MiB, a binary file that
+begins as game data whatever it is named, and in a mod folder any file that is not text. It lists `git ls-files`, so it
 sees what would be committed, not what is lying around.
 
 **On failure:** do not "fix" it by renaming the file. Move it out of the tree.
@@ -254,13 +254,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-878 passed in 173.02s
+887 passed in 171.05s
 ```
 
-878 tests in 51 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `859 passed, 1 skipped` without
+887 tests in 51 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `868 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `624 passed, 254 skipped` without MSVC.
+module-level skip), `633 passed, 254 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather

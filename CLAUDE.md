@@ -7,9 +7,10 @@ hand-decompiled C in `src/` matched byte for byte against the original. Plan of 
 how it fits together [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Every rule here was
 broken here first, with its reason attached, because one without its reason is argued away.
 
-**No game data enters this repository, ever.** `tools/guard.py` refuses 41 extensions,
-16 directory names and anything in a mod folder that is not text, and CI rescans all
-history: a later commit cannot undo a leak.
+**No game data enters this repository, ever.** `tools/guard.py` refuses 43 extensions,
+18 directory names, a binary file that begins as game data whatever its name, and
+anything in a mod folder that is not text; CI rescans all history: a later commit cannot
+undo a leak.
 
 ## Before you push
 

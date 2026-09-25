@@ -55,9 +55,12 @@ FORBIDDEN_SUFFIXES = {
     ".wav",
     ".png",
     # What mods, packs and saves would carry (2026-09-25, PLAN-GAMEPLAY-MODS
-    # T0): a memory-card save exported whole, texture-pack images, the game's
-    # table and archive data, and audio in the formats a music pack would use.
+    # T0): a memory-card save exported whole in the three formats Dolphin and
+    # GCMM write, texture-pack images, the game's table and archive data, and
+    # audio in the formats a music pack would use.
     ".gci",
+    ".gcs",
+    ".sav",
     ".dds",
     ".dat",
     ".ogg",
@@ -80,10 +83,13 @@ FORBIDDEN_DIRS = {
     "dist",
     "scratch",
     # Where packs, dumps, host blobs, photos and tool output go (T0): texture
-    # packs and dumps are the game's images, a host blob is a save's mod data,
-    # and a photo is a capture with a 24 MB RAM image.
+    # packs and dumps are the game's images -- Dolphin lays packs out under
+    # load/ and dumps under dump/ -- a host blob is a save's mod data, and a
+    # photo is a capture with a 24 MB RAM image.
     "packs",
+    "load",
     "dumps",
+    "dump",
     "blobs",
     "photos",
     "out",
@@ -92,9 +98,25 @@ FORBIDDEN_DIRS = {
 # A mod in this repository is text (PLAN-GAMEPLAY-MODS.md, rule 3): its edits,
 # keyed by entry, and its wholly new entries, with every binary built on the
 # player's machine from their own disc. So in a folder holding a mod.ini a file
-# that is not UTF-8 text is refused, whatever its name says it is, and a table
-# longer than this is a column of the game's own data rather than edits to it.
-MOD_TABLE_ROWS = 64
+# that is not UTF-8 text is refused, whatever its name says it is. Whether a
+# table is edits or a whole column of the game's is T5's to judge, once it has
+# written the columns down.
+
+# How game data begins, for a binary file anywhere in the tree whose name does
+# not give it away (T0): renaming defeats a suffix list, and does not defeat
+# this. A file with no NUL in its first 8 KB is text and is not judged --
+# tools/soa/aklz.py and these documents name the signatures.
+SIGNATURES = (
+    (b"AKLZ~?Qd", "the game's compression (AKLZ)"),
+    (b"GCIX", "a GVR texture"),
+    (b"GBIX", "a GVR texture"),
+    (b"GEAE8P", "the game's code at offset 0: a card file or a disc header"),
+    (b"\x89PNG\r\n\x1a\n", "a PNG"),
+    (b"DDS ", "a DDS texture"),
+    (b"OggS", "Ogg audio"),
+    (b"fLaC", "FLAC audio"),
+    (b"ID3", "MP3 audio"),
+)
 
 # A tracked text file this large is almost certainly not source.
 MAX_TRACKED_BYTES = 2 * 1024 * 1024
@@ -170,22 +192,39 @@ HISTORY_EXEMPT = frozenset(
 )
 
 
+def signature_of(head: bytes) -> str | None:
+    """What game data ``head`` (a file's first bytes) begins as, if it is
+    binary and begins as any: None for text or for anything else."""
+    if b"\0" not in head[:8192]:
+        return None
+    for magic, what in SIGNATURES:
+        if head.startswith(magic):
+            return what
+    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
+        return "WAV audio"
+    return None
+
+
 def content_problems(root: Path, files: list[str]) -> list[str]:
-    """The content check (T0): in every folder holding a tracked mod.ini, a
-    file that is not text -- a dump, whatever it is named -- and a table of
-    more than MOD_TABLE_ROWS rows. Rows are the lines of a .tsv or .csv that
-    are neither blank nor comments, less the first, which is the header."""
+    """The content check (T0). Every tracked file: binary and beginning as
+    game data begins, whatever it is named. And in every folder holding a
+    tracked mod.ini: any file that is not UTF-8 text."""
     mods = {Path(rel).parent for rel in files if Path(rel).name.lower() == "mod.ini"}
     problems = []
     for rel in files:
         path = Path(rel)
+        if not (root / path).is_file():
+            continue
+        with open(root / path, "rb") as fh:
+            head = fh.read(8192)
+        what = signature_of(head)
+        if what:
+            problems.append(f"{rel}: begins as {what} -- game data, whatever it is named")
+            continue
         if not any(folder == path.parent or folder in path.parents for folder in mods):
             continue
-        if not (root / path).exists():
-            continue
-        data = (root / path).read_bytes()
         try:
-            text = data.decode("utf-8")
+            text = (root / path).read_bytes().decode("utf-8")
         except UnicodeDecodeError:
             text = None
         if text is None or "\0" in text:
@@ -193,16 +232,6 @@ def content_problems(root: Path, files: list[str]) -> list[str]:
                 f"{rel}: not text, in a mod folder -- a mod here is text, and its binaries are "
                 "built from the player's own disc (PLAN-GAMEPLAY-MODS.md rule 3)"
             )
-            continue
-        if path.suffix.lower() in (".tsv", ".csv"):
-            rows = [
-                ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
-            ]
-            if len(rows) - 1 > MOD_TABLE_ROWS:
-                problems.append(
-                    f"{rel}: {len(rows) - 1} rows, over {MOD_TABLE_ROWS} -- a mod holds its edits and new "
-                    "entries, not a whole column of the game's table (rule 3)"
-                )
     return problems
 
 
