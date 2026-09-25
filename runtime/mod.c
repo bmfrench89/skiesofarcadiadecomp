@@ -1008,7 +1008,9 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     /* The recording's line: every mod by name and hash while they fit -- a
      * manifest 2 mod as id@version, a version 1 mod by its folder -- 24 bytes
      * kept back so the rest can still be named, as a count and one hash over
-     * all of them, rather than cut off mid-entry or dropped. */
+     * all of them, rather than cut off mid-entry or dropped. The hash takes
+     * each by the same name the line would have given it, so a manifest 2
+     * mod past the line is still keyed by id and not by where it sits. */
     g_describe[0] = '\0';
     for (i = 0; i < g_mod_n; i++) {
         size_t room = sizeof g_describe - 24 - used;
@@ -1025,7 +1027,12 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     if (i < g_mod_n) {
         uint32_t rest = 2166136261u;
         int left = g_mod_n - i;
-        for (; i < g_mod_n; i++) rest = fnv1a(fnv1a(rest, g_mods[i].dir, strlen(g_mods[i].dir)), (const char*)&g_mods[i].hash, 4);
+        for (; i < g_mod_n; i++) {
+            char key[sizeof g_mods[i].id + sizeof g_mods[i].version + 1];
+            if (g_mods[i].id[0]) snprintf(key, sizeof key, "%s@%s", g_mods[i].id, g_mods[i].version);
+            else snprintf(key, sizeof key, "%s", g_mods[i].dir);
+            rest = fnv1a(fnv1a(rest, key, strlen(key)), (const char*)&g_mods[i].hash, 4);
+        }
         snprintf(g_describe + used, sizeof g_describe - used, "%s+%d more:%08x", used ? "," : "mods=", left, rest);
     }
     if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE]) tick_on_safe_point(mod_safe_point);

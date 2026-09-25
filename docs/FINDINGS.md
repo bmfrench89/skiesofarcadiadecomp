@@ -2970,6 +2970,13 @@ one in the recording, fifteen refusals, an `x_` key loaded, a duplicate
 id -- and three breakages (duplicate ids allowed, `x_` keys refused, the
 recording naming by folder) each turn it red. That `api` below the port's
 own loads cannot be shown until the port speaks 2.
+*Amended 2026-09-25:* the review of this entry found the recording line's
+`+N more:HASH` tail -- the mods that do not fit -- still hashing each mod
+by its folder, so renaming the folder of a manifest 2 mod past the line
+made a replay claim another configuration while the same rename in the
+line's head changed nothing. The tail now hashes each mod by the name the
+head would give it; a test renames a tail folder under twelve long ids and
+the line holds, and keyed by folder again (the mutation) it moves.
 
 
 **P11's spike: the message window's state word, read in a run.** 2026-09-25,

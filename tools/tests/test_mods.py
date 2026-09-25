@@ -998,3 +998,23 @@ def test_a_manifest_2_without_api_is_told_what_is_missing(driver, tmp_path):
     mod(tmp_path, "m", ini=V2.replace("api = 1\n", ""))
     out, err = play(driver, tmp_path)
     assert "loaded 0" in out and "no `api = `" in err and "no `api = 1`" not in err, err
+
+
+@needs_msvc
+def test_a_manifest_2_mod_past_the_recording_line_is_keyed_by_id_not_folder(driver, tmp_path):
+    """The `+N more` hash takes each mod by the name the line would have
+    given it: renaming the folder of a manifest 2 mod that did not fit --
+    same id, version and bytes, same place in the load order -- leaves the
+    line as it was, as renaming one that fits does. Keyed by folder (the
+    mutation), a recording replayed after the rename would claim another
+    configuration."""
+    ids = [f"a-manifest-two-mod-with-a-rather-long-id-{i:02d}" for i in range(12)]
+    for i, mid in enumerate(ids):
+        mod(tmp_path, f"m{i:02d}", ini=V2.replace("id = enc", f"id = {mid}"))
+    out, _ = play(driver, tmp_path, "describe")
+    before = next(x for x in out.splitlines() if x.startswith("describe ["))
+    assert "more:" in before and ids[-1] not in before, before
+    (tmp_path / "m11").rename(tmp_path / "m11-renamed")
+    out, _ = play(driver, tmp_path, "describe")
+    after = next(x for x in out.splitlines() if x.startswith("describe ["))
+    assert after == before, (before, after)

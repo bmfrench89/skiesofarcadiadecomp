@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 20 bindings in `config/hle.txt` |
-| Python tests | 910 in 52 files (276 need MSVC and skip without it) |
+| Python tests | 911 in 52 files (277 need MSVC and skip without it) |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
