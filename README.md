@@ -123,7 +123,7 @@ $env:SOA_SELFTEST = '1'
 gen\soa.exe extracted
 ```
 
-That runs 80 checks over the translated C library, the device models, the card
+That runs 81 checks over the translated C library, the device models, the card
 and SRAM, the AX mixer and the software renderer — including the 12
 hand-decompiled functions the port runs natively, compared against their
 recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
@@ -162,8 +162,13 @@ why the run prints how far it has drifted.
 
 ### A settings file, for starting it without a terminal
 
-`gen\soa.ini`, beside the executable, holds the switches a player would set,
-one `key = value` a line (`#` starts a comment):
+`soa.ini` in the repository's root folder (the one holding `gen\` and
+`runtime\`; the file beside the executable, `gen\soa.ini`, is read if there
+is none there) holds the switches a player would set, one `key = value` a
+line (`#` starts a comment). With a `soa.ini`, double-clicking `gen\soa.exe`
+is enough: relative paths in it mean the root folder, the card defaults to
+`build\cards\slotA.raw` and the disc to `extracted` there, the game is drawn,
+and the console's log goes to `build\logs\` instead of a window:
 
 ```ini
 disc = C:\Games\Skies\extracted   # the extracted disc, used when none is given
@@ -174,7 +179,7 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b`, `autotext`, `rumble`, `fullscreen` and `scaler`, each standing for the switch below. A key
+`encounters_hold_b`, `autotext`, `rumble`, `fullscreen`, `scaler` and `unfocused`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys and
 `autotext`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys and `autotext` are read by the mods
@@ -221,6 +226,8 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
 | `SOA_THREADS=n` | rasterizer worker threads, default three quarters of the logical CPUs (12 of 16), which was fastest in the heaviest field scene measured (FINDINGS "H15c") |
 | `SOA_NOSOUND=1` | no audio device |
+| `SOA_UNFOCUSED=run\|mute` | with another window in front: `run` (the default) carries on as before; `mute` silences the game and ignores the pad until the window is back in front (`unfocused`, M5b) |
+| `SOA_ROOT=dir` / `SOA_SETTINGS=file` | for tests: the port root (by default the exe's folder, or the parent of the `gen` folder beside `runtime\`), and a `soa.ini` to read in place of `<root>\soa.ini` |
 | `SOA_RUMBLE=0..100` | how hard the pad rumbles when the game asks (PADControlMotor), as a share of full; default 100, 0 is off. The motor turns only with a window open and no `SOA_PAD` script or `SOA_PAD_FILE` replay driving the input, and stops when the window loses focus or closes and at the end of a run (PLAN-GAMEPLAY-MODS M18) |
 | `SOA_WAV=file.wav` | also write everything the game plays to a WAV file (works headless and with `SOA_NOSOUND`) |
 | `SOA_WATCHDOG=s` | stop after s seconds with no video frame and print a report (default 20 headless, off when a window is open; 0 disables) |
@@ -256,7 +263,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1009 tests; any that need a dump skip themselves
+python -m pytest                     # 1017 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

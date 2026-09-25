@@ -94,6 +94,35 @@ static void wav_append(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     }
 }
 
+/* Silence while another window is in front (`unfocused = mute`, M5b): the
+ * samples handed to the device are zeroed, and the WAV and the meter still
+ * hear the game. The test sink (the self test's) takes the samples in place
+ * of the device, so the check needs no audio hardware. */
+static volatile int g_muted;
+static void (*g_test_sink)(const int16_t* lr, unsigned frames);
+
+void audio_set_muted(int on)
+{
+    g_muted = on;
+}
+
+void audio_set_test_sink(void (*fn)(const int16_t* lr, unsigned frames))
+{
+    g_test_sink = fn;
+}
+
+/* Big-endian right/left pairs to little-endian left/right, or zeros. */
+static void to_device(const uint8_t* be_rl, unsigned n, int16_t* out)
+{
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        int16_t r = (int16_t)(((uint16_t)be_rl[4 * i] << 8) | be_rl[4 * i + 1]);
+        int16_t l = (int16_t)(((uint16_t)be_rl[4 * i + 2] << 8) | be_rl[4 * i + 3]);
+        out[2 * i] = g_muted ? 0 : l;
+        out[2 * i + 1] = g_muted ? 0 : r;
+    }
+}
+
 void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
 {
     WAVEHDR* h;
@@ -106,6 +135,13 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
         if (v > g_peak) g_peak = v;
     }
     wav_append(be_rl, bytes, rate);
+    if (g_test_sink) {
+        static int16_t test[BLOCK_BYTES / 2];
+        n = (bytes > BLOCK_BYTES ? BLOCK_BYTES : bytes) / 4;
+        to_device(be_rl, n, test);
+        g_test_sink(test, n);
+        return;
+    }
     if (g_ready < 0) g_ready = audio_open(rate);
     if (!g_ready) return;
     if (bytes > BLOCK_BYTES) bytes = BLOCK_BYTES;
@@ -114,12 +150,7 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     if (h->dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_wo, h, sizeof *h);
     out = (int16_t*)g_buf[g_next];
     n = bytes / 4;
-    for (i = 0; i < n; i++) {
-        int16_t r = (int16_t)(((uint16_t)be_rl[4 * i] << 8) | be_rl[4 * i + 1]);
-        int16_t l = (int16_t)(((uint16_t)be_rl[4 * i + 2] << 8) | be_rl[4 * i + 3]);
-        out[2 * i] = l;
-        out[2 * i + 1] = r;
-    }
+    to_device(be_rl, n, out);
     h->dwBufferLength = n * 4;
     h->dwFlags = 0;
     if (waveOutPrepareHeader(g_wo, h, sizeof *h) == MMSYSERR_NOERROR && waveOutWrite(g_wo, h, sizeof *h) == MMSYSERR_NOERROR) {
@@ -145,5 +176,7 @@ void audio_report(void)
 #else
 #include <stdint.h>
 void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate) { (void)be_rl; (void)bytes; (void)rate; }
+void audio_set_muted(int on) { (void)on; }
+void audio_set_test_sink(void (*fn)(const int16_t* lr, unsigned frames)) { (void)fn; }
 void audio_report(void) {}
 #endif

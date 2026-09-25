@@ -32,6 +32,8 @@ const char* settings_load(void);
 const char* settings_recorded(char* out, size_t cap);
 void settings_record_as(const char* key, const char* value);
 void settings_check_mods(int (*loaded)(const char* id));
+int settings_root_for(const char* exe, char* out, size_t cap);
+int should_hide_console(unsigned procs, unsigned stderr_type);
 static const char* g_loaded; /* the one mod id "loaded", from argv */
 static int loaded(const char* id) { return g_loaded && !strcmp(id, g_loaded); }
 int main(int argc, char** argv)
@@ -42,6 +44,16 @@ int main(int argc, char** argv)
     const char* disc;
     unsigned i;
     char rec[320];
+    if (argc > 2 && !strcmp(argv[1], "root")) {
+        char out[1024];
+        settings_root_for(argv[2], out, sizeof out);
+        printf("root %s\n", out);
+        return 0;
+    }
+    if (argc > 3 && !strcmp(argv[1], "hide")) {
+        printf("hide %d\n", should_hide_console((unsigned)atoi(argv[2]), (unsigned)atoi(argv[3])));
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[1], "mods")) {
         /* after mods load: argv[2] is the id loaded ("-" for none) */
         g_loaded = strcmp(argv[2], "-") ? argv[2] : NULL;
@@ -126,7 +138,7 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_THREADS": "6",
         "SOA_MODS": "C:\\Games\\mods",
         "SOA_CARD": "C:\\Games\\card.raw",
-        "SOA_PAD_RECORD": "play.pad",
+        "SOA_PAD_RECORD": str(driver.parent / "play.pad"),  # relative in soa.ini: the root's (M5b)
         "SOA_NOSOUND": "1",
         "SOA_UNCAP": "3300",
         "SOA_SEED": "12345",
@@ -261,3 +273,84 @@ def test_a_mod_setting_without_its_mod_says_so_and_is_not_recorded(driver):
     assert rec == "", rec  # the mod refuses HALF and runs at the game's rate, so none is recorded
     rec, err = mods(driver, "some-other-mod", SOA_ENCOUNTERS="off")
     assert rec == "" and "no mod with id `encounter-rate`" in err, (rec, err)
+
+
+# --------------------------------------------------------------------------
+# M5b: the port root, relative paths, the defaults a soa.ini brings
+# --------------------------------------------------------------------------
+
+
+def at_root(driver, root, *args, **env_set):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env["SOA_ROOT"] = str(root)
+    env.update(env_set)
+    proc = subprocess.run(
+        [str(driver), *args], capture_output=True, text=True, env=env, timeout=60, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    got = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+    disc = next(
+        (ln.split(" ", 1)[1] for ln in proc.stdout.splitlines() if ln.startswith("disc ")), None
+    )
+    return disc, got, proc.stdout, proc.stderr
+
+
+@needs_msvc
+def test_relative_paths_in_soa_ini_are_the_root_s(driver, tmp_path):
+    """A double-click starts in gen\\, so a relative path in soa.ini means the
+    root; an absolute one is kept; the environment keeps its own meaning."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "soa.ini").write_text(
+        "card = saves\\a.raw\nrecord = C:\\abs\\p.pad\nmods = m\ndisc = d\n", encoding="utf-8"
+    )
+    disc, got, _, _ = at_root(driver, root)
+    assert got["SOA_CARD"] == str(root / "saves" / "a.raw"), got
+    assert got["SOA_PAD_RECORD"] == "C:\\abs\\p.pad", got
+    assert got["SOA_MODS"] == str(root / "m") and disc == str(root / "d"), (got, disc)
+    _, got, _, _ = at_root(driver, root, SOA_CARD="rel\\c.raw")
+    assert got["SOA_CARD"] == "rel\\c.raw", got
+
+
+@needs_msvc
+def test_a_soa_ini_brings_defaults_under_the_root_and_none_without(driver, tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    disc, got, _, _ = at_root(driver, root)
+    assert disc == "-" and got["SOA_CARD"] == "-" and got["SOA_RENDER"] == "-", (disc, got)
+    (root / "soa.ini").write_text("nosound = 1\n", encoding="utf-8")
+    disc, got, _, _ = at_root(driver, root)
+    assert got["SOA_CARD"] == str(root / "build" / "cards" / "slotA.raw"), got
+    assert got["SOA_RENDER"] == "1" and disc == str(root / "extracted"), (got, disc)
+    assert got["SOA_MODS"] == "-", got  # no mod-backed key: no mods folder
+    _, got, _, _ = at_root(driver, root, SOA_RENDER="0")
+    assert got["SOA_RENDER"] == "0", got
+    (root / "soa.ini").write_text("encounters = half\n", encoding="utf-8")
+    _, got, _, _ = at_root(driver, root)
+    assert got["SOA_MODS"] == str(root / "mods"), got
+
+
+@needs_msvc
+def test_the_root_is_the_parent_of_gen_beside_runtime(driver, tmp_path):
+    (tmp_path / "r" / "runtime").mkdir(parents=True)
+    (tmp_path / "x").mkdir()
+
+    def root_of(exe):
+        _, _, out, _ = at_root(driver, tmp_path, "root", str(exe))
+        return next(ln[5:] for ln in out.splitlines() if ln.startswith("root "))
+
+    assert root_of(tmp_path / "r" / "gen" / "soa.exe") == str(tmp_path / "r")
+    assert root_of(tmp_path / "r" / "gen" / "clang" / "soa.exe") == str(tmp_path / "r")
+    assert root_of(tmp_path / "other" / "soa.exe") == str(tmp_path / "other")
+    assert root_of(tmp_path / "x" / "gen" / "soa.exe") == str(
+        tmp_path / "x" / "gen"
+    )  # no runtime\\ beside it
+
+
+@needs_msvc
+@pytest.mark.parametrize("procs, kind, hide", [(1, 2, 1), (1, 3, 0), (1, 1, 0), (2, 2, 0)])
+def test_the_console_goes_only_when_it_is_the_run_s_own(driver, tmp_path, procs, kind, hide):
+    """(1, char) only: a pipe (3) or a file (1) is a reader, and two processes
+    on the console is a terminal."""
+    _, _, out, _ = at_root(driver, tmp_path, "hide", str(procs), str(kind))
+    assert f"hide {hide}" in out, out

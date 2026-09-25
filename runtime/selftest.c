@@ -1928,6 +1928,44 @@ static int motor_selftest(CpuState* s, char* got, size_t cap)
     return check("rumble motor from OUTBUF", got, bad ? "agreement" : got);
 }
 
+/* Silence with another window in front (M5b, `unfocused = mute`): what
+ * audio_push_block hands the device, through the test sink, is zeros while
+ * muted and the block's samples -- left then right, little-endian -- once
+ * not. */
+void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate);
+void audio_set_muted(int on);
+void audio_set_test_sink(void (*fn)(const int16_t* lr, unsigned frames));
+
+static int16_t g_heard[16];
+static unsigned g_heard_n;
+static void hear(const int16_t* lr, unsigned frames)
+{
+    unsigned i;
+    g_heard_n = frames;
+    for (i = 0; i < 2 * frames && i < 16; i++) g_heard[i] = lr[i];
+}
+
+static int mute_selftest(CpuState* s, char* got, size_t cap)
+{
+    /* four frames of right, left: 0x1234,0x0567 / -2,3 / 0x7FFF,-0x8000 / 1,-1 */
+    static const uint8_t block[16] = {0x12, 0x34, 0x05, 0x67, 0xFF, 0xFE, 0x00, 0x03,
+                                      0x7F, 0xFF, 0x80, 0x00, 0x00, 0x01, 0xFF, 0xFF};
+    static const int16_t want[8] = {0x0567, 0x1234, 3, -2, -0x8000, 0x7FFF, -1, 1};
+    unsigned i, zeros = 0, same = 0;
+    (void)s;
+    audio_set_test_sink(hear);
+    audio_set_muted(1);
+    audio_push_block(block, sizeof block, 32000);
+    for (i = 0; i < 8; i++) zeros += g_heard[i] == 0;
+    audio_set_muted(0);
+    audio_push_block(block, sizeof block, 32000);
+    for (i = 0; i < 8; i++) same += g_heard[i] == want[i];
+    audio_set_test_sink(NULL);
+    snprintf(got, cap, "muted %u of 8 zero, unmuted %u of 8 the block's, %u frames", zeros, same, g_heard_n);
+    return check("unfocused mute zeroes the device", got,
+                 "muted 8 of 8 zero, unmuted 8 of 8 the block's, 4 frames");
+}
+
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
  * dispatched like any translated call, with every register set to a pattern
  * first. The length comes back in r3, and every register -- r1, r2, r13, the
@@ -2086,6 +2124,7 @@ int selftest(CpuState* s)
     failures += seed_selftest(s, got, sizeof got);
     failures += encounter_selftest(s, got, sizeof got);
     failures += motor_selftest(s, got, sizeof got);
+    failures += mute_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

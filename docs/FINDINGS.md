@@ -3342,3 +3342,54 @@ cursor and Alt+Enter not pressing START are the owner's check (session A).
 the twin over a grid of clients, and its two mutations fail: width and
 height swapped in the fit fails three cases, a plain `round(hz / 30)` fails
 85 and 144 Hz.
+
+
+**M5b: a first run without a terminal.** 2026-09-25, `build/logs/`. A
+double-click starts `gen\soa.exe` in `gen\`, where every relative path the
+port uses -- the card, the disc, `soa.ini`'s own -- meant something else,
+and its console showed a wall of log. Now:
+- **the port root** is the exe's folder, or the parent of the nearest folder
+  named `gen` that sits beside `runtime\` (so `gen\clang\soa.exe` finds the
+  same one); `SOA_ROOT` overrides it for tests;
+- **soa.ini** is `<root>\soa.ini`, then the one beside the exe (the log says
+  which when both exist); `SOA_SETTINGS=<path>` names a file;
+- **its relative paths** (`disc`, `mods`, `card`, `record`) are the root's;
+  the environment keeps its own meaning;
+- **when a file was read**, the card defaults to `<root>\build\cards\slotA.raw`,
+  the disc to `<root>\extracted`, `mods` to `<root>\mods` when a mod-backed
+  key is set, and `render` to 1; with no file nothing changes, and every
+  check runs with none;
+- **the console goes and the log stays** only when the process owns its
+  console and stderr is that console: the log is then
+  `<root>\build\logs\soa-YYYYMMDD-HHMMSS.log`, whose first line names it;
+- a recording names a card under the root by its path from the root;
+  aram.c's census reads the disc main.c settled on, not `argv[1]`; and
+  `unfocused = mute` silences the game and ignores the pad while another
+  window is in front (the samples handed to the device are zeroed; the WAV
+  and the meter still hear the game).
+
+The order of the log redirect was found by measuring, in a small program
+started the way Explorer starts one: reopening stderr and stdout on the file
+and then freeing the console left the file empty; two opens of one file
+kept two offsets, and stderr's next line overwrote stdout's. What works is
+the console freed first, then stderr reopened on the file and stdout pointed
+at the same descriptor -- every line, in order.
+
+Live: started from `%TEMP%` by `Start-Process` with a test `soa.ini` naming
+only `nosound = 1` and `SOA_FRAMES=600`, the run wrote
+`build\logs\soa-20260925-185448.log` (first line naming it), its `[exi]
+memory card` line names `<root>\build\cards\slotA.raw`, the disc was
+`<root>\extracted`, and neither `gen\build\` nor `%TEMP%\build\` appeared.
+Started under a new console with stderr a pipe (`CREATE_NEW_CONSOLE`), the
+`[run]` report came down the pipe and no log file appeared. Checks:
+`test_settings.py` (relative paths under the root, absolute kept, the
+environment as given; the defaults only with a file; the root rule for
+`gen\soa.exe`, `gen\clang\soa.exe` and an exe elsewhere; the console
+decision for (1, char) only), each of the spec's three mutations failing --
+resolving against the current directory, dropping the handle-type test,
+looking only at the exe's own folder's name; `test_padrec.py` (a card under
+the root named relative to it, one elsewhere as given); the self test's new
+case (muted, the device gets zeros; unmuted, the block's samples), which a
+mute that does not reach the samples (tried) fails. The double-click with
+the owner's own `soa.ini`, and `unfocused = mute` on alt-tab, are the owner's
+checks (session A).

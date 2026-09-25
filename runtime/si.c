@@ -32,6 +32,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "soa_mod.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -327,9 +328,34 @@ void si_set_config_extra(const char* extra)
         fprintf(stderr, "[pad] the config line was cut at %zu bytes of %zu\n", sizeof g_cfg_extra - 1, n);
 }
 
+/* The port root (M5b): a card under it is named relative to it in the
+ * config line, so a recording made from a double-click and one replayed from
+ * the root by scenario.py agree, and no personal absolute path enters a .pad
+ * file. A setter, so si.c still links alone. */
+static char g_path_root[1024];
+
+void si_set_path_root(const char* root)
+{
+    snprintf(g_path_root, sizeof g_path_root, "%s", root ? root : "");
+}
+
+static const char* under_path_root(const char* path)
+{
+    size_t n = strlen(g_path_root), i;
+    if (!n) return path;
+    for (i = 0; i < n; i++) {
+        char a = path[i], b = g_path_root[i];
+        if (a == '/') a = '\\';
+        if (b == '/') b = '\\';
+        if (tolower((unsigned char)a) != tolower((unsigned char)b)) return path;
+    }
+    return path[n] == '\\' || path[n] == '/' ? path + n + 1 : path;
+}
+
 static void pad_config(char* out, size_t cap)
 {
-    const char* card = env_or("SOA_CARD", "build/cards/slotA.raw");
+    const char* card_path = env_or("SOA_CARD", "build/cards/slotA.raw");
+    const char* card = under_path_root(card_path);
     /* SOA_UNCAP changes how many frames a second of guest time holds, which
      * is what a recording is keyed by; named only when on, so a recording
      * made without it keeps the line it always had. */
@@ -337,7 +363,7 @@ static void pad_config(char* out, size_t cap)
     int un = uncap && *uncap && strcmp(uncap, "0") != 0;
     snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s%s%s",
              env_or("SOA_RENDER", "-"), env_or("SOA_WINDOW", "-"), env_or("SOA_SPEED", "1"),
-             env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card),
+             env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card_path),
              un ? " uncap=" : "", un ? uncap : "", g_cfg_extra[0] ? " " : "", g_cfg_extra);
 }
 

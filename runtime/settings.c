@@ -17,6 +17,14 @@
  * Checks never read it: SOA_SETTINGS=0 turns it off, and scenario.py,
  * perfbench.py and the self test all run with the file off, so a player's
  * settings can never move a check.
+ *
+ * A first run without a terminal (M5b): the port root is the exe's folder,
+ * or the parent of the nearest folder named gen that sits beside runtime\ --
+ * the repository every player builds in -- and soa.ini is <root>\soa.ini
+ * first, then the one beside the exe. Its relative paths are the root's, not
+ * the current directory's (a double-click starts in gen\), and when a file
+ * was read the card, the disc, the mods folder and rendering have defaults
+ * under the root. The environment keeps its own meaning throughout.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <ctype.h>
@@ -24,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#include <io.h>
 #include <windows.h>
 #endif
 
@@ -41,7 +50,7 @@ typedef struct {
 static const Setting k_settings[] = {
     {"render", "SOA_RENDER", "1 draws the game"},
     {"window", "SOA_WINDOW", "0 or 1: force the window off or on"},
-    {"scale", "SOA_SCALE", "window scale, default 2"},
+    {"scale", "SOA_SCALE", "the window's starting size in multiples of 640x480; by default the largest that fits"},
     {"threads", "SOA_THREADS", "rasterizer threads"},
     {"mods", "SOA_MODS", "a folder of mods"},
     {"card", "SOA_CARD", "the memory card image for slot A"},
@@ -55,6 +64,7 @@ static const Setting k_settings[] = {
      1, "encounter-rate", "0|1"},
     {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)"},
     {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)"},
+    {"unfocused", "SOA_UNFOCUSED", "run (the default) or mute: with another window in front, mute ignores the pad and silences the game"},
     {"rumble", "SOA_RUMBLE", "0 to 100: how hard the pad rumbles when the game asks; default 100, 0 is off"},
     {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
      "autotext", NULL},
@@ -62,6 +72,7 @@ static const Setting k_settings[] = {
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 
 static char g_disc[1024];
+static int g_loaded; /* a soa.ini was read: the root's defaults apply */
 
 static void set_env(const char* name, const char* value)
 {
@@ -80,23 +91,191 @@ static void trim(char* s)
     if (i) memmove(s, s + i, n - i + 1);
 }
 
-/* Where soa.ini lives: beside the executable. */
-static int settings_path(char* out, size_t cap)
+/* The keys whose values are paths: relative in soa.ini means under the root. */
+static const char* const k_path_keys[] = {"mods", "card", "record"};
+
+static char* last_sep(char* s)
+{
+    char* a = strrchr(s, '\\');
+    char* b = strrchr(s, '/');
+    return a > b ? a : b;
+}
+
+static int is_dir(const char* p)
 {
 #ifdef _WIN32
-    char exe[1024];
-    char* slash;
-    DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
-    if (!n || n >= sizeof exe) return 0;
-    slash = strrchr(exe, '\\');
-    if (!slash) slash = strrchr(exe, '/');
-    if (slash) slash[1] = '\0';
-    else exe[0] = '\0';
-    snprintf(out, cap, "%ssoa.ini", exe);
+    DWORD a = GetFileAttributesA(p);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    FILE* f = fopen(p, "r");
+    if (f) fclose(f);
+    return f != NULL;
+#endif
+}
+
+static int file_exists(const char* p)
+{
+    FILE* f = fopen(p, "rb");
+    if (f) fclose(f);
+    return f != NULL;
+}
+
+/* Two paths spelled alike, case aside (Windows paths ignore case). */
+static int same_text(const char* a, const char* b)
+{
+    while (*a && tolower((unsigned char)*a) == tolower((unsigned char)*b)) a++, b++;
+    return tolower((unsigned char)*a) == tolower((unsigned char)*b);
+}
+
+static int is_absolute(const char* p)
+{
+    return p[0] == '\\' || p[0] == '/' || (p[0] && p[1] == ':');
+}
+
+/* The port root for an executable at `exe`: the parent of the nearest
+ * ancestor folder named gen whose parent holds runtime\ -- so gen\soa.exe
+ * and gen\clang\soa.exe find the same root -- else the exe's own folder. */
+int settings_root_for(const char* exe, char* out, size_t cap)
+{
+    char dir[1024], cur[1024], probe[1100];
+    char* sep;
+    snprintf(dir, sizeof dir, "%s", exe);
+    sep = last_sep(dir);
+    if (!sep) {
+        snprintf(out, cap, ".");
+        return 1;
+    }
+    *sep = '\0';
+    snprintf(cur, sizeof cur, "%s", dir);
+    while ((sep = last_sep(cur)) != NULL) {
+        const char* name = sep + 1;
+        if ((name[0] == 'g' || name[0] == 'G') && (name[1] == 'e' || name[1] == 'E') && (name[2] == 'n' || name[2] == 'N') &&
+            !name[3]) {
+            *sep = '\0';
+            snprintf(probe, sizeof probe, "%s/runtime", cur);
+            if (is_dir(probe)) {
+                snprintf(out, cap, "%s", cur);
+                return 1;
+            }
+            continue;
+        }
+        *sep = '\0';
+    }
+    snprintf(out, cap, "%s", dir);
+    return 1;
+}
+
+static char g_root[1024];
+
+/* The port root: SOA_ROOT when set (tests), else settings_root_for the exe. */
+const char* settings_root(void)
+{
+    if (!g_root[0]) {
+        const char* env = getenv("SOA_ROOT");
+        if (env && *env) snprintf(g_root, sizeof g_root, "%s", env);
+        else {
+#ifdef _WIN32
+            char exe[1024];
+            DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
+            if (n && n < sizeof exe) settings_root_for(exe, g_root, sizeof g_root);
+            else snprintf(g_root, sizeof g_root, ".");
+#else
+            snprintf(g_root, sizeof g_root, ".");
+#endif
+        }
+    }
+    return g_root;
+}
+
+/* `rel` joined to the root, unless it is absolute. */
+static void under_root(const char* rel, char* out, size_t cap)
+{
+    if (is_absolute(rel)) snprintf(out, cap, "%s", rel);
+    else snprintf(out, cap, "%s\\%s", settings_root(), rel);
+}
+
+/* Which soa.ini: SOA_SETTINGS naming a file (tests); else <root>\soa.ini,
+ * then the one beside the exe. 0 when there is none to read. */
+static int settings_path(char* out, size_t cap)
+{
+    const char* env = getenv("SOA_SETTINGS");
+    char beside[1024];
+    if (env && *env) {
+        snprintf(out, cap, "%s", env);
+        return 1;
+    }
+    snprintf(out, cap, "%s\\soa.ini", settings_root());
+#ifdef _WIN32
+    {
+        char exe[1024];
+        char* sep;
+        DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
+        if (!n || n >= sizeof exe) return file_exists(out);
+        sep = last_sep(exe);
+        if (sep) sep[1] = '\0';
+        else exe[0] = '\0';
+        snprintf(beside, sizeof beside, "%ssoa.ini", exe);
+    }
+#else
+    snprintf(beside, sizeof beside, "soa.ini");
+#endif
+    if (file_exists(out)) {
+        if (file_exists(beside) && !same_text(beside, out))
+            fprintf(stderr, "[settings] %s is used; the one beside the exe, %s, is not\n", out, beside);
+        return 1;
+    }
+    snprintf(out, cap, "%s", beside);
+    return file_exists(out);
+}
+
+/* Whether to hide the console and send the log to a file (M5b): only when
+ * the process owns its console (one process on it: started from Explorer or
+ * a front end, not a terminal) and stderr is that console (a character
+ * device, not a pipe or a file: scenario.py reading the port through a pipe
+ * from a parent with no console also gets a console of its own). */
+int should_hide_console(unsigned procs, unsigned stderr_type)
+{
+    return procs == 1 && stderr_type == 2 /* FILE_TYPE_CHAR */;
+}
+
+/* When should_hide_console says so: stderr and stdout to
+ * <root>\build\logs\soa-YYYYMMDD-HHMMSS.log, unbuffered (every stop path
+ * leaves through _exit), and the console freed. `path` gets the file. */
+int settings_console_to_log(char* path, size_t cap)
+{
+#ifdef _WIN32
+    DWORD procs[4];
+    DWORD n = GetConsoleProcessList(procs, 4);
+    SYSTEMTIME t;
+    char dir[1100];
+    if (!should_hide_console((unsigned)n, (unsigned)GetFileType(GetStdHandle(STD_ERROR_HANDLE)))) return 0;
+    GetLocalTime(&t);
+    snprintf(dir, sizeof dir, "%s\\build", settings_root());
+    CreateDirectoryA(dir, NULL);
+    snprintf(dir, sizeof dir, "%s\\build\\logs", settings_root());
+    CreateDirectoryA(dir, NULL);
+    snprintf(path, cap, "%s\\soa-%04u%02u%02u-%02u%02u%02u.log", dir, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+             t.wSecond);
+    {
+        /* Writable before the console goes, or the run would have nowhere to say so. */
+        FILE* f = fopen(path, "w");
+        if (!f) return 0;
+        fclose(f);
+    }
+    /* In this order, measured: the console freed first, then stderr reopened
+     * on the file and stdout pointed at the same descriptor. Two opens of one
+     * file keep two offsets and overwrite each other's lines, and reopening
+     * with the console still attached lost every line after FreeConsole. */
+    FreeConsole();
+    if (!freopen(path, "w", stderr)) return 0;
+    _dup2(_fileno(stderr), _fileno(stdout));
+    setvbuf(stderr, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     return 1;
 #else
-    snprintf(out, cap, "soa.ini");
-    return 1;
+    (void)path;
+    (void)cap;
+    return 0;
 #endif
 }
 
@@ -182,6 +361,7 @@ const char* settings_load(void)
     unsigned lineno = 0, applied = 0, overridden = 0;
     if (off && !strcmp(off, "0")) return NULL;
     if (!settings_path(path, sizeof path)) return NULL;
+    g_loaded = 1;
     f = fopen(path, "r");
     if (!f) return NULL;
     while (fgets(line, sizeof line, f)) {
@@ -201,7 +381,7 @@ const char* settings_load(void)
         trim(key);
         trim(value);
         if (!strcmp(key, "disc")) {
-            snprintf(g_disc, sizeof g_disc, "%s", value);
+            under_root(value, g_disc, sizeof g_disc);
             continue;
         }
         for (i = 0; i < N_SETTINGS; i++)
@@ -218,10 +398,38 @@ const char* settings_load(void)
                     k_settings[i].env, getenv(k_settings[i].env));
             continue;
         }
-        set_env(k_settings[i].env, value);
+        {
+            char path_value[1200];
+            size_t k;
+            for (k = 0; k < sizeof k_path_keys / sizeof k_path_keys[0]; k++)
+                if (!strcmp(key, k_path_keys[k]) && *value) {
+                    under_root(value, path_value, sizeof path_value);
+                    value = path_value;
+                    break;
+                }
+            set_env(k_settings[i].env, value);
+        }
         applied++;
     }
     fclose(f);
+    {
+        /* Defaults under the root, for a file that did not name them. */
+        char p[1200];
+        size_t i;
+        int mod_key = 0;
+        if (!getenv("SOA_CARD")) {
+            under_root("build\\cards\\slotA.raw", p, sizeof p);
+            set_env("SOA_CARD", p);
+        }
+        if (!g_disc[0]) under_root("extracted", g_disc, sizeof g_disc);
+        for (i = 0; i < N_SETTINGS; i++)
+            if (k_settings[i].mod && getenv(k_settings[i].env) && *getenv(k_settings[i].env)) mod_key = 1;
+        if (mod_key && !getenv("SOA_MODS")) {
+            under_root("mods", p, sizeof p);
+            set_env("SOA_MODS", p);
+        }
+        if (!getenv("SOA_RENDER")) set_env("SOA_RENDER", "1");
+    }
     fprintf(stderr, "[settings] %s: %u setting(s) applied, %u overridden by the environment%s%s\n", path, applied,
             overridden, g_disc[0] ? "; disc " : "", g_disc);
     return g_disc[0] ? g_disc : NULL;

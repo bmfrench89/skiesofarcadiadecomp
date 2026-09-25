@@ -162,9 +162,19 @@ extern int __argc;
 extern char** __argv;
 #endif
 
-/* The same rule main.c uses to find the extracted disc. */
+/* The extracted disc's directory, as main.c settled it -- the command line,
+ * soa.ini's `disc`, or the default (M5b) -- so the census reads the disc the
+ * run is using. Before main.c says, the old rule. */
+static char g_data_dir[1024];
+
+void aram_set_data_dir(const char* dir)
+{
+    snprintf(g_data_dir, sizeof g_data_dir, "%s", dir ? dir : "");
+}
+
 static const char* src_data_dir(void)
 {
+    if (g_data_dir[0]) return g_data_dir;
 #if defined(_MSC_VER)
     if (__argc > 1 && __argv[1] && __argv[1][0] != '-') return __argv[1];
 #endif

@@ -53,3 +53,6 @@ venv/
 
 # scratch outputs (decoded captures, rendered frames) never belong in the tree
 scratch/
+
+# a player's settings: personal absolute paths (M5b)
+/soa.ini

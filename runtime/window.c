@@ -94,6 +94,9 @@ static WINDOWPLACEMENT g_placement;
 static volatile int g_resized;     /* WM_SIZE seen: the swap chain follows at the loop */
 static int g_client_w, g_client_h; /* the client as WM_SIZE last said, 0x0 minimised */
 static ULONGLONG g_mouse_at;       /* the last mouse movement, for hiding the cursor */
+static int g_unfocused_mute;       /* `unfocused = mute` (M5b) */
+static volatile int g_away;        /* another window is in front */
+void audio_set_muted(int on);
 #define WM_APP_FULLSCREEN (WM_APP + 1)
 
 static void note_present(void)
@@ -320,6 +323,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     switch (m) {
     case WM_ACTIVATEAPP:
         if (!w) si_motor_stop(); /* the person looked away: nothing buzzes on the desk */
+        g_away = !w;
+        if (g_unfocused_mute) audio_set_muted(g_away); /* and, asked, nothing plays or reads the pad */
         return DefWindowProc(h, m, w, l);
     case WM_CLOSE:
     case WM_DESTROY:
@@ -556,6 +561,10 @@ static unsigned __stdcall ui_thread(void* arg)
         const char* p = getenv("SOA_PRESENTER");
         const char* fs = getenv("SOA_FULLSCREEN");
         const char* sc = getenv("SOA_SCALER");
+        const char* uf = getenv("SOA_UNFOCUSED");
+        if (uf && !strcmp(uf, "mute")) g_unfocused_mute = 1;
+        else if (uf && *uf && strcmp(uf, "run"))
+            fprintf(stderr, "[window] SOA_UNFOCUSED=%s is not run or mute; run\n", uf);
         RECT cr;
         DEVMODEA dm;
         double hz;
@@ -734,8 +743,9 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
             memset(&xs, 0, sizeof xs);
         }
     }
-    g_pad_xbuttons = g_pad_slot >= 0 ? xs.Gamepad.wButtons : 0;
-    if (g_pad_slot >= 0) {
+    if (g_unfocused_mute && g_away) memset(&xs, 0, sizeof xs); /* unfocused = mute: the pad is not read */
+    g_pad_xbuttons = g_pad_slot >= 0 && !(g_unfocused_mute && g_away) ? xs.Gamepad.wButtons : 0;
+    if (g_pad_slot >= 0 && !(g_unfocused_mute && g_away)) {
         const XINPUT_GAMEPAD* g = &xs.Gamepad;
         if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
         if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;

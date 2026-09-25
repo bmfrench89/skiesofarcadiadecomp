@@ -115,6 +115,10 @@ void gxr_set_output(const char* p) { (void)p; }
 void watch_init(void) {}
 void window_start(void) {}
 int window_toggle_fullscreen(void) { return 0; }
+const char* settings_root(void) { return "."; }
+int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; return 0; }
+void si_set_path_root(const char* root) { (void)root; }
+void aram_set_data_dir(const char* dir) { (void)dir; }
 void gx_set_frame_limit(unsigned f) { (void)f; }
 void gx_set_frame_hook(void (*fn)(CpuState*, unsigned)) { (void)fn; }
 unsigned gx_frame_count(void) { return 0; }

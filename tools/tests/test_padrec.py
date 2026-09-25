@@ -48,6 +48,7 @@ void si_report(void);
 int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
 int si_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 void si_set_config_extra(const char* extra);
+void si_set_path_root(const char* root);
 void si_set_chord_handler(void (*fn)(int chord, unsigned frame));
 uint32_t si_host_buttons(void);
 
@@ -96,6 +97,7 @@ int main(int argc, char** argv)
     unsigned f, k;
     si_set_chord_handler(chord);
     g_live = argc > 1 && strcmp(argv[1], "record") == 0;
+    if (getenv("DRIVER_ROOT")) si_set_path_root(getenv("DRIVER_ROOT")); /* main.c's settings_root (M5b) */
     if (getenv("DRIVER_EXTRA")) {
         /* What main.c hands over -- recorded settings and the mod list -- as
          * this many bytes: big=aaa...END. */
@@ -448,3 +450,34 @@ def test_a_chord_is_a_comment_in_the_recording_and_not_replayed(driver, tmp_path
     again, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=40)
     assert "chord" not in again and "host" not in again, again
     assert reports(again) == reports(live), (live, again)
+
+
+@needs_msvc
+def test_a_card_under_the_root_is_named_relative_to_it(driver, tmp_path):
+    """M5b: a recording names a card under the port root by its path from
+    the root, so a double-click's recording and scenario.py's replay agree;
+    a card elsewhere is named as given."""
+    rec = tmp_path / "rooted.pad"
+    (tmp_path / "cards").mkdir()
+    card = tmp_path / "cards" / "c.raw"
+    run(
+        driver,
+        tmp_path,
+        "record",
+        {"SOA_PAD_RECORD": str(rec), "SOA_CARD": str(card), "DRIVER_ROOT": str(tmp_path)},
+        last=5,
+    )
+    assert " card=cards\\c.raw:" in rec.read_text(), rec.read_text()
+    elsewhere = tmp_path / "elsewhere.pad"
+    run(
+        driver,
+        tmp_path,
+        "record",
+        {
+            "SOA_PAD_RECORD": str(elsewhere),
+            "SOA_CARD": str(card),
+            "DRIVER_ROOT": str(tmp_path / "nothere"),
+        },
+        last=5,
+    )
+    assert f" card={card}:" in elsewhere.read_text(), elsewhere.read_text()

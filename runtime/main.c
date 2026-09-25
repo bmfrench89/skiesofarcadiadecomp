@@ -55,6 +55,10 @@ void mod_set_host_buttons(uint32_t (*fn)(void));
  * replaced by the slice that builds its action -- H19a fullscreen, M11a
  * turbo, M8 the menu -- so CH1 depends on none of them. */
 int window_toggle_fullscreen(void); /* window.c, H19a */
+const char* settings_root(void); /* settings.c, M5b */
+int settings_console_to_log(char* path, size_t cap);
+void si_set_path_root(const char* root);
+void aram_set_data_dir(const char* dir);
 
 static void on_chord(int chord, unsigned frame)
 {
@@ -1151,9 +1155,17 @@ int main(int argc, char** argv)
      * names the disc when the command line does not. Never for the self test;
      * the scripted checks turn it off with SOA_SETTINGS=0. */
     if (!getenv("SOA_SELFTEST")) {
-        const char* disc = settings_load();
+        const char* disc;
+        char log[1200];
+        /* Started from Explorer or a front end, the console is its own: send
+         * the log to a file under the root and let the console go (M5b). */
+        if (settings_console_to_log(log, sizeof log))
+            fprintf(stderr, "[boot] this run's log is %s (started without a terminal)\n", log);
+        disc = settings_load();
         if (disc && !(argc > 1 && argv[1][0] != '-')) dir = disc;
+        si_set_path_root(settings_root());
     }
+    aram_set_data_dir(dir);
     s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
     mem_poke(&s);

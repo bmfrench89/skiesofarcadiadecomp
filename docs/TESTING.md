@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1009 passed in 208.78s
+1017 passed in 189.35s
 ```
 
-1009 tests in 54 files, none of which reads the disc. They cover the Python
+1017 tests in 54 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -50,13 +50,14 @@ its own and run it, some of the C as well:
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
-| `test_padrec.py` | 27 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing; the host buttons (`lb`, `view`, `ls`, `rs`) and their chords, which never reach the report, fire once a frame, and are comments in a recording; 600 bytes of recorded settings and mods reach the `# config` line whole, and 800 are cut with a line that says so |
+| `test_padrec.py` | 28 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing; the host buttons (`lb`, `view`, `ls`, `rs`) and their chords, which never reach the report, fire once a frame, and are comments in a recording; and a card under the port root named relative to it; 600 bytes of recorded settings and mods reach the `# config` line whole, and 800 are cut with a line that says so |
 | `test_emit.py` | 22 | the emitter; the last cases compile the emitted C with MSVC and run it |
 | `test_gxr_overlap.py` | 21 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
+| `test_settings.py` | 18 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them; and M5b's root: relative paths in soa.ini under the port root, its defaults only with a file, the root found beside `runtime` from `gen` and `gen\clang`, and the console handed to a log only when it is the run's own |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
@@ -75,7 +76,6 @@ its own and run it, some of the C as well:
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
 | `test_toolchain_inputs.py` | 11 | what a fresh checkout can check and with which compiler; every `src/**/*.c` is in `units.txt` |
-| `test_settings.py` | 11 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them |
 | `test_gxr_copy_filter.py` | 9 | what the EFB copy's vertical filter does to a pixel, including that the SDK's filter-off weights are the exact identity |
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
@@ -104,10 +104,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1009 passed` |
-| no capstone — **what CI installs** | `990 passed, 1 skipped` |
-| no MSVC | `690 passed, 319 skipped` |
-| neither — **the Ubuntu CI leg** | `671 passed, 320 skipped` |
+| everything (MSVC + capstone) | `1017 passed` |
+| no capstone — **what CI installs** | `998 passed, 1 skipped` |
+| no MSVC | `690 passed, 327 skipped` |
+| neither — **the Ubuntu CI leg** | `671 passed, 328 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -338,7 +338,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (80 cases)
+## 3. The self test (81 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -371,7 +371,7 @@ cannot open nodisc/sys/fst.bin
 
 That is the reason none of section 3 runs in CI.
 
-The 80 cases, in the order they print:
+The 81 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -387,7 +387,8 @@ The 80 cases, in the order they print:
 | 77 | The race seed at OSGetTick | 1 |
 | 78 | The encounter multiplier as the game works it out | 1 |
 | 79 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
-| 80 | A mod's call into the game: every register as it was | 1 |
+| 80 | `unfocused = mute`: the device gets zeros, then the block again | 1 |
+| 81 | A mod's call into the game: every register as it was | 1 |
 
 ### The memory card (26)
 
@@ -571,6 +572,17 @@ accessory wins fails it: the game gives 05.
 (M18); a counting sink stands in for XInput, and the writes go through
 `si_write` as the game's PADControlMotor makes them. A gate that ignores
 the window fails it (FINDINGS "M18").
+
+### Silence with another window in front (1)
+
+```
+[selftest] unfocused mute zeroes the device ok    got "muted 8 of 8 zero, unmuted 8 of 8 the block's, 4 frames"
+```
+
+`audio_set_muted(1)` and a nonzero block pushed: the samples the device
+would get, through audio_out.c's test sink, are all zero; unmuted, they are
+the block's, left then right. A mute that does not reach those samples
+fails it (FINDINGS "M5b").
 
 ---
 
@@ -1038,7 +1050,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 319 of the 1009 skip without a C compiler; they build one runtime file and run it.
+² 327 of the 1017 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1049,8 +1061,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 671 passed, 320 skipped |
-| **Tests** | windows | the same three — 990 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 671 passed, 328 skipped |
+| **Tests** | windows | the same three — 998 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
