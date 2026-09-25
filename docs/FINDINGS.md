@@ -2425,3 +2425,41 @@ now runs its driver under both protocols, so the drain inside a draw's setup
 exists. Lines and points are still drawn by one worker across every row, a
 race with other workers' triangles that predates H14 and that no capture
 reaches (no capture draws a line); making them row-owned is left for later.
+
+
+**H15a and H15b: three divisions and a test moved; 3-4% off the pixel path,
+not a pixel changed.** 2026-09-25, `build/soa-h14.exe` against
+`build/soa-h15a.exe`. The plan's two "hours" slices, each an identity by
+construction:
+
+- **Depth before the TEV where alpha cannot reject.** A fragment that fails
+  depth is discarded whichever test runs first, unless the alpha test could
+  have discarded it and saved a depth write. So where the draw's alpha
+  compare passes every alpha, depth now runs first and the TEV never sees the
+  fragment. "Passes every alpha" is decided once a draw by trying all 256
+  through the pixels' own compare function -- not by a table of modes, which
+  is how the plan's trap (the XOR of two always-true compares never passes)
+  gets in -- and cached on the compare register, which draws share.
+- **The perspective divide once a texture coordinate**, not twice a stage:
+  stages sharing a coordinate share its s/q and t/q, the same division.
+- **The sampler's scale once a draw** at level 0, the same expression as the
+  per-sample division it replaces, so the same float; other levels keep the
+  division.
+
+The fragment counters -- shaded, failed alpha, failed depth -- are identical
+on the field, ship, cutscene, sky and battle captures (C4's "within 0.1%"
+met exactly), replay is 23/23 at 1, 2, 3 and 8 threads, and the self test
+passes. `tools/tests/test_gxr_alpha.py` checks sixteen compare combinations
+worked out by hand, the XOR trap among them, and the cache between draws;
+reading XOR as OR, or keying the cache on nothing, turns it red.
+
+Measured with `tools/perfbench.py` (H6's set), interleaved base, new, new,
+base. At 8 threads the set read 89.5 / 97.3 ns a fragment against 86.8 /
+89.5 -- inside the drift, since busy time is printed to 10 ms and eight
+workers contend. At one thread, where a replay's busy time is seconds: 61.1 /
+60.1 against **58.8 / 58.4 ns** (-3.5%), most in the sky (80 → 75) and ship
+(79 → 75) scenes, least in the Dangral base (56 → 54). One thing the one-thread
+figures say that the plan's budget did not: the same fragments cost about
+60 ns on one worker and about 90 on eight. The pool loses a third of its
+per-fragment speed to contention, which H15c/d's budget (61 ns at 8 threads)
+has to beat as well as the arithmetic.

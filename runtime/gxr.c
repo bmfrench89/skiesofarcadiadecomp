@@ -1008,11 +1008,13 @@ static inline void shade(const DrawCmd* D, int x, int y, const int col[2][4], co
                 (float)g_efb_z[y][x] / 16777215.0f, o[0], o[1], o[2], o[3], ok, D->px.blend_en, D->px.z_en, D->px.z_func);
     }
     /* Z before texturing (PE_CONTROL ztop) or after: order matters only for
-     * alpha-tested pixels; test late unless ztop is set. */
-    if (D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+     * alpha-tested pixels, so test late unless ztop is set -- or unless the
+     * draw's alpha test passes every alpha, when the order cannot matter and
+     * testing first spares the TEV every fragment depth would discard (H15a). */
+    if ((D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
     tev_pixel(&D->tev, col, tex, out, &alpha_ok);
     if (!alpha_ok) { g_rej_alpha++; return; }
-    if (!D->px.ztop && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
+    if (!(D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) { g_rej_depth++; return; }
     fog_apply(&D->px, out, depth);
     blend_pixel(&D->px, x, y, out);
     g_pixels++;

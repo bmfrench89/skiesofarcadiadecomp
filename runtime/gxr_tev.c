@@ -772,6 +772,27 @@ static int konst_value(unsigned sel, int channel)
     return 0;
 }
 
+static inline int compare(unsigned mode, int a, int b);
+static int alpha_passes(const TevSetup* T, int alpha);
+
+/* Whether the alpha compare passes every alpha a fragment can have (H15a),
+ * which is what lets depth be tested before the TEV: a fragment that fails
+ * depth is then discarded whichever order the two run in. Decided by trying
+ * all 256, through the same function the pixels use, rather than by reasoning
+ * about the modes -- the XOR of two always-true compares is always false, and
+ * that is the kind of case a table of modes gets wrong. The answer depends on
+ * the compare register alone, and draws share it, so the last one is kept. */
+static int alpha_always(const TevSetup* T, uint32_t ac)
+{
+    static uint32_t last_ac = 0xFFFFFFFFu;
+    static int last;
+    int a;
+    if ((ac & 0xFFFFFFu) == last_ac) return last;
+    last_ac = ac & 0xFFFFFFu;
+    for (last = 1, a = 0; a < 256 && last; a++) last = alpha_passes(T, a);
+    return last;
+}
+
 void tev_prepare(const uint32_t* bp, TevSetup* T)
 {
     unsigned st, i, j;
@@ -783,6 +804,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
     for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) T->reg_init[i][j] = g_tev_reg[i][j];
     T->aref0 = ac & 0xFF; T->aref1 = (ac >> 8) & 0xFF;
     T->acomp0 = (ac >> 16) & 7; T->acomp1 = (ac >> 19) & 7; T->alogic = (ac >> 22) & 3;
+    T->alpha_always = alpha_always(T, ac);
 
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
@@ -853,6 +875,10 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
          * scales by SU0). */
         C->scale_s = (float)((bp[0x30 + 2 * S->texcoord] & 0xFFFF) + 1);
         C->scale_t = (float)((bp[0x31 + 2 * S->texcoord] & 0xFFFF) + 1);
+        /* sample()'s factors at level 0, once a draw rather than a division a
+         * sample (H15b): the same expression, so the same float. */
+        C->su0 = C->scale_s * (float)C->lw[0] / (float)C->w;
+        C->sv0 = C->scale_t * (float)C->lh[0] / (float)C->h;
     }
     /* The caller owns the setup from here: it queues the draw without letting
      * anything flush in between, and once queued the queue's own rule covers
@@ -930,8 +956,13 @@ static inline void sample(const TexCfg* C, float s, float t, float lod, uint8_t 
         if (l >= C->nlevels) l = C->nlevels - 1;
         if (l < 0) l = 0;
     }
-    u = s * (C->scale_s * (float)C->lw[l] / (float)C->w);
-    v = t * (C->scale_t * (float)C->lh[l] / (float)C->h);
+    if (l == 0) {
+        u = s * C->su0;
+        v = t * C->sv0;
+    } else {
+        u = s * (C->scale_s * (float)C->lw[l] / (float)C->w);
+        v = t * (C->scale_t * (float)C->lh[l] / (float)C->h);
+    }
     sample_level(C, l, u, v, out);
 }
 
@@ -958,11 +989,36 @@ int g_tev_narrate; /* set by the renderer's SOA_GXR_PIXEL hook: print every stag
 
 /* Runs the stages for one pixel. ras[]: rasterized channel colors 0..255;
  * tex[]: texture coordinates per texcoord slot (s, t, q). */
+/* Alpha compare (PE_ALPHA_COMPARE, GXSetAlphaCompare): the pixel path and
+ * alpha_always both ask here, so they cannot disagree. */
+static int alpha_passes(const TevSetup* T, int alpha)
+{
+    int p0 = compare(T->acomp0, alpha, T->aref0), p1 = compare(T->acomp1, alpha, T->aref1);
+    switch (T->alogic) {
+    case 0: return p0 && p1;
+    case 1: return p0 || p1;
+    case 2: return p0 != p1;
+    default: return p0 == p1;
+    }
+}
+
 void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], uint8_t out[4], int* alpha_pass)
 {
-    unsigned st;
+    unsigned st, m;
     int bank[BANK_SIZE];
     int i;
+    /* The perspective divide, once a texture coordinate rather than twice a
+     * stage (H15a): stages that share a coordinate share its s and t, and the
+     * division is the same one, so the result is the same float. */
+    float sd[8], td[8];
+    for (m = T->used_tex, i = 0; m; m >>= 1, i++) {
+        if (m & 1) {
+            const float* tc = tex[i];
+            float q = tc[2];
+            sd[i] = q != 0.0f ? tc[0] / q : tc[0];
+            td[i] = q != 0.0f ? tc[1] / q : tc[1];
+        }
+    }
     memcpy(bank, T->reg_init, sizeof(int) * 16);
     bank[BANK_ONE] = 255; bank[BANK_HALF] = 128; bank[BANK_ZERO] = 0;
     bank[BANK_TEX] = bank[BANK_TEX + 1] = bank[BANK_TEX + 2] = bank[BANK_TEX + 3] = 0;
@@ -974,11 +1030,7 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], ui
         int* dc = &bank[S->cdest * 4];
 
         if (S->texen) {
-            const float* tc = tex[S->texcoord];
-            float q = tc[2];
-            float s = q != 0.0f ? tc[0] / q : tc[0];
-            float tt = q != 0.0f ? tc[1] / q : tc[1];
-            sample(&T->tex[S->texmap], s, tt, tc[3], tmp);
+            sample(&T->tex[S->texmap], sd[S->texcoord], td[S->texcoord], tex[S->texcoord][3], tmp);
             for (i = 0; i < 4; i++) bank[BANK_TEX + i] = tmp[S->tswap[i]];
         }
         if (S->chan < 2) {
@@ -1049,14 +1101,5 @@ void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], ui
 
     for (i = 0; i < 4; i++) out[i] = (uint8_t)clamp255(bank[i]);
 
-    /* Alpha compare (PE_ALPHA_COMPARE, GXSetAlphaCompare). */
-    {
-        int p0 = compare(T->acomp0, out[3], T->aref0), p1 = compare(T->acomp1, out[3], T->aref1);
-        switch (T->alogic) {
-        case 0: *alpha_pass = p0 && p1; break;
-        case 1: *alpha_pass = p0 || p1; break;
-        case 2: *alpha_pass = p0 != p1; break;
-        default: *alpha_pass = p0 == p1; break;
-        }
-    }
+    *alpha_pass = alpha_passes(T, out[3]);
 }

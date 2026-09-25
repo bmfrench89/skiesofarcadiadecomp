@@ -178,9 +178,13 @@ evaluated at both ends of the span (`span_lod`) and interpolated across it.
 `runtime/gxr.c` · `shade` is one fragment:
 
 1. if PE_CONTROL `ztop` is set, the depth test runs *first*
-   (`depth_test`);
-2. `runtime/gxr_tev.c` · `tev_pixel` runs the stages. Each enabled stage
-   divides its texture coordinate by `q`, samples
+   (`depth_test`) -- and so it does when the draw's alpha compare passes
+   every alpha (`TevSetup.alpha_always`, decided once a draw by trying all
+   256), since then the order cannot change a pixel and the TEV is spared
+   every fragment depth would discard (PLAN-60FPS-MODS H15a);
+2. `runtime/gxr_tev.c` · `tev_pixel` runs the stages. Each texture
+   coordinate a stage uses is divided by `q` once, and each enabled stage
+   samples
    (`sample` → `sample_level`: wrap or clamp or mirror, bilinear, mip level
    from the interpolated LOD), applies the swap tables, and evaluates the
    colour and alpha ops into a bank of four registers. Then the two alpha
@@ -188,7 +192,7 @@ evaluated at both ends of the span (`span_lod`) and interpolated across it.
 3. a failed alpha test returns here, counted per worker. It is not a rare
    path: `build/boot_window.log` reports 792,513,505 fragments shaded
    against 69,749,462 that failed alpha and 269,041 that failed depth;
-4. if `ztop` was not set, the depth test runs now;
+4. if it did not run first, the depth test runs now;
 5. `fog_apply` blends toward the fog colour by eye distance recovered from
    the screen z;
 6. `blend_pixel` does the blend or the logic op or neither, and `col_upd` /
@@ -589,7 +593,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 842 tests, none of which needs a disc (anything that
+- `tools/tests/` — 844 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

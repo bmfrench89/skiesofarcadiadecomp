@@ -340,13 +340,13 @@ Either order the workers against their neighbours' rows, or snapshot the three s
 
 **H15. The pixel path down to 61 ns per fragment** — *four slices, each measured on H6's set. Absorbs C4. After H10.*
 
-**H15a. C4's cheap pair** — *hours.*
+**H15a. C4's cheap pair** — *done 2026-09-25: depth before the TEV where the alpha compare passes every alpha (decided by trying all 256), the divide once a coordinate; counters identical, 23/23. With H15b, -3.5% ns a fragment at one thread. FINDINGS "H15a and H15b".*
 - Test depth before the TEV where the alpha test cannot reject, minding the trap that XOR of two always-true comparisons is always false.
 - Resolve the perspective divide once per texture coordinate, not twice per stage (`gxr_tev.c:787`).
 
 *Done:* C4's criterion (`failed depth` within 0.1%, all 23 diffs at zero), plus ns per fragment for each capture before and after.
 
-**H15b. Hoist the per-sample division** — *hours.* The division is at `gxr_tev.c:741`.
+**H15b. Hoist the per-sample division** — *done 2026-09-25: level 0's factor once a draw, the same expression. FINDINGS "H15a and H15b".* The division was at `gxr_tev.c:741`.
 
 *Done:* replay 23/23, and ns per fragment before and after.
 

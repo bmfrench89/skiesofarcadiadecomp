@@ -110,6 +110,7 @@ typedef struct {
     int linear, mip;        /* bilinear within a level; pick a level by lod */
     float lod_bias, min_lod, max_lod;
     float scale_s, scale_t;
+    float su0, sv0; /* scale_s * lw[0] / w and scale_t * lh[0] / h: sample()'s factors at level 0, once a draw (H15b) */
 } TexCfg;
 
 typedef struct {
@@ -120,6 +121,7 @@ typedef struct {
     unsigned used_chan;  /* bit per rasterized channel read */
     int aref0, aref1;
     unsigned acomp0, acomp1, alogic;
+    int alpha_always; /* the alpha compare passes every alpha 0-255, so depth can be tested first (H15a) */
     int reg_init[4][4];
 } TevSetup;
 
