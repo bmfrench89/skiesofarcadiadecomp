@@ -13,7 +13,7 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 20 bindings in `config/hle.txt` |
-| Python tests | 911 in 52 files (277 need MSVC and skip without it) |
+| Python tests | 946 in 52 files (277 need MSVC and skip without it) |
 | Native code compiled by CI | all 22 `runtime/*.c`, the nine MSL twins against libc, and a renderer-only binary (A1) |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
@@ -1002,14 +1002,15 @@ no DSP interpreter by design, and reporting the card unlocked makes the SDK
 skip the challenge — the test is `lbz r0, 20(r1)` then `rlwinm r0, r0, 0,
 25, 25` at 0x802489AC inside the mount. Nothing left to do.
 
-**Band decomposition, content-sniffing in the guard, per-file splits for
-game and middleware.** The first assumes setup is wastefully duplicated
+**Band decomposition and per-file splits for game and middleware.**
+(Content-sniffing in the guard, parked here once, landed with
+PLAN-GAMEPLAY-MODS T0 and T0c: signatures, card images by their directory,
+and history read for content.) The first assumes setup is wastefully duplicated
 across workers, and it partly is: rows interleave every Nth (`gxr.c:1156`)
 and the average triangle runs 58 to 232 pixels — 8 to 20 rows — so most
 workers own rows in most triangles. Bands trade that for load imbalance, so
-it waits on A4 showing setup is a measurable share. The second defends
-against a case nobody has come close to hitting. The third is several days
-for the SDK libraries and a separate week-plus for game and middleware.
+it waits on A4 showing setup is a measurable share. The second is several
+days for the SDK libraries and a separate week-plus for game and middleware.
 
 ---
 

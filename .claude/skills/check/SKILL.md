@@ -70,16 +70,19 @@ guard: 161 tracked files, no game data
 ```
 
 Catches game data about to enter the repository: 43 forbidden extensions
-(`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`, `.gci`, …), eighteen directory
+wherever they sit in a name (`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`,
+`.gci`, …, and `slotA.raw.bak`), eighteen directory
 names that must never be tracked (`extracted/`, `gen/`, `build/`, `vendor/`,
 `scratch/`, `packs/`, `photos/`, …), any tracked file over 2 MiB, a binary file that
-begins as game data whatever it is named, and in a mod folder any file that is not text. It lists `git ls-files`, so it
+begins as game data whatever it is named (a card image by the save in its
+directory), and in a mod folder any file that is not text. It lists `git ls-files`, so it
 sees what would be committed, not what is lying around.
 
 **On failure:** do not "fix" it by renaming the file. Move it out of the tree.
-CI also scans every blob in the whole history, so a file committed and deleted
-again still fails, and rewriting history is the only cure — much more expensive
-than not committing it.
+CI also scans every blob in the whole history (names, directories and
+content, through `python tools/guard.py --history`), so a file committed and
+deleted again still fails, renamed or not, and rewriting history is the only
+cure — much more expensive than not committing it.
 
 **The trap on the other side of this rule:** `.gitignore` line 15 is a bare
 `game/`, which matches at any depth, and the guard treats it as a game-data
@@ -254,13 +257,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-911 passed in 205.30s
+946 passed in 179.05s
 ```
 
-911 tests in 52 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `892 passed, 1 skipped` without
+946 tests in 52 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `927 passed, 1 skipped` without
 capstone (what CI installs — the 19 cross-validation tests collapse into one
-module-level skip), `634 passed, 277 skipped` without MSVC.
+module-level skip), `669 passed, 277 skipped` without MSVC.
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather

@@ -629,7 +629,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 **T0. The guard and the content check** — *hours.*
 - **Suffixes:** `.gci`, `.dds`, `.dat`, `.ogg`, `.flac`, `.mp3` and `.opus`.
 - **Directories:** the pack, blob, photo and `out` directories.
-- **A content check** that refuses dump headers and full-column enemy tables in a mod folder.
+- **A content check** that refuses dump headers in a mod folder. The full-column enemy-table refusal moved to T5 (4041dfc): a row count was only a guess at "a whole column", and would refuse data-driven mods.
 - **Also** update CI's regex copy (`ci.yml:34`) and `test_guard`. CLAUDE.md says 34 refused extensions while TESTING.md:155 and the check skill (`.claude/skills/check/SKILL.md:72`) say 28; fix every copy in the same change.
 
 *Done:* `test_guard` refuses each suffix and directory, and a mutation test proves the content check fails on a dump.
@@ -717,7 +717,9 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
   - `.ect` weights that do not sum to 100.
 - It **warns** on event ids ≥ 248, which use the default voice bank.
 
-*Done:* every `.enp` and the `.evp` round-trip; each refusal has a mutation test; a changed max HP shows at actor +24 by peek.
+*Done:*
+- every `.enp` and the `.evp` round-trip; each refusal has a mutation test; a changed max HP shows at actor +24 by peek;
+- `tools/guard.py` refuses a full-column enemy table in a mod folder, judged by this schema's columns (moved from T0), and a mutation test proves the check fails on one.
 
 **T6. Content checks** — *days.*
 - `tools/contentcheck.py`, which is `soak.py`'s runner with a script:
