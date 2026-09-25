@@ -2891,3 +2891,26 @@ At one thread, over the whole perfset, interleaved in two blocks:
 frames 38.7-41.4 -> 35.9-38.7, the sky 57.7 -> 51.3-57.7 (the busy clock's
 10 ms grain is coarse on a 1.6 M-fragment frame). Replay 23/23 with every
 hash unchanged; the self test.
+
+
+**H15d, tried and dropped: the rasterizer's per-pixel attributes in SIMD.**
+2026-09-25, `build/soa-h15d2.exe` and `build/soa-h15d3.exe` against
+`build/soa-h15d1.exe`. The rasterizer's own per-pixel work is the largest
+single share of the workers' time (18% in the Dangral window), and most of
+it looks vectorisable bit for bit: the vertex colours' multiply, add,
+truncating conversion and clamp, the texture coordinates' multiplies, and
+the step from one pixel to the next are the same operations in a lane as
+alone. Built so (SSE4.1, with a differential test of 320,000 random pixels
+-- colours out of range, w zero, NaNs -- that agreed bit for bit and went red
+under two breakages), with every hash unchanged: at one thread it was 5%
+**slower** (39.5 -> 41.5 ns a fragment, interleaved), and with the padding
+the four-float loads need cut to four floats a row, no faster (39.25 against
+39.35). What costs in that loop is the division for 1/w and the branches
+around it, which a lane does not change, and the triangles are small enough
+that anything added per row or per triangle is paid on few pixels. Reverted;
+the differential test went with it. What stays from the attempt:
+`SOA_GXR_NOSIMD` took any set value, an empty one included, as "off" -- now
+only a non-zero one does -- and the report says when the pixel path ran
+without SIMD, which is how a run shows the switch reached it (the replay
+sweep strips every `SOA_` variable, so a sweep "with" it is the sweep
+without it).

@@ -149,9 +149,9 @@ int main(void)
     long long n = 0, bad = 0;
     int t, p, i;
     simd_decide();
-    printf("[fastpath] simd %d\n", g_simd);
+    printf("[fastpath] simd %d\n", g_gxr_simd);
     for (i = 0; i < (int)sizeof img; i++) img[i] = (uint8_t)rnd();
-    for (t = 0; t < 3000 && g_simd > 0; t++) {
+    for (t = 0; t < 3000 && g_gxr_simd > 0; t++) {
         TexCfg C;
         memset(&C, 0, sizeof C);
         if (rnd() % 2) { C.lw[0] = 1 << (rnd() % 7); C.lh[0] = 1 << (rnd() % 7); }
@@ -162,9 +162,9 @@ int main(void)
             float u = ((float)(int)(rnd() % 20001) - 10000.0f) / 100.0f, v = ((float)(int)(rnd() % 20001) - 10000.0f) / 100.0f;
             uint8_t o1[4], o2[4];
             if (p % 7 == 0) { u = (float)(int)(rnd() % 201) - 100.0f; v = (float)(int)(rnd() % 201) - 100.5f; }
-            g_simd = 1; sample_level(&C, 0, u, v, o1);
-            g_simd = 0; sample_level(&C, 0, u, v, o2);
-            g_simd = 1;
+            g_gxr_simd = 1; sample_level(&C, 0, u, v, o1);
+            g_gxr_simd = 0; sample_level(&C, 0, u, v, o2);
+            g_gxr_simd = 1;
             n++;
             if (memcmp(o1, o2, 4) && ++bad <= 5)
                 printf("MISMATCH %dx%d wrap %u/%u at %g,%g: %d,%d,%d,%d vs %d,%d,%d,%d\n", C.lw[0], C.lh[0], C.wrap_s, C.wrap_t,

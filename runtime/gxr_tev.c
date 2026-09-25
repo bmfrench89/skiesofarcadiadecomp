@@ -24,20 +24,21 @@
 static CpuState* g_s;
 static uint8_t g_tmem[1u << 20];
 
-/* SSE4.1 for the sampler's integer SIMD (H15d): 1 when this CPU has it and
+/* SSE4.1 for the pixel path's SIMD (H15d): 1 when this CPU has it and
  * SOA_GXR_NOSIMD is not set, 0 otherwise. Decided on the producer, in
  * tev_prepare, before any worker samples; the scalar path is the fallback and
  * the reference, and the two agree bit for bit (test_gxr_fastpath.py). */
-static int g_simd = -1;
+static int g_gxr_simd = -1;
 
 static void simd_decide(void)
 {
-    g_simd = 0;
+    g_gxr_simd = 0;
 #ifdef TEX_SIMD
     {
         int r[4];
+        const char* off = getenv("SOA_GXR_NOSIMD");
         __cpuid(r, 1);
-        g_simd = ((r[2] >> 19) & 1) && !getenv("SOA_GXR_NOSIMD");
+        g_gxr_simd = ((r[2] >> 19) & 1) && !(off && atoi(off));
     }
 #endif
 }
@@ -909,6 +910,7 @@ long long tex_draw_fence(void)
  * SOA_TEXVERIFY caught. */
 void tex_report(void)
 {
+    if (g_gxr_simd == 0) fprintf(stderr, "[gxr] the pixel path ran without SIMD (SOA_GXR_NOSIMD, or a CPU without SSE4.1)\n");
     if (!g_lookups) return;
     fprintf(stderr, "[gxr] textures: %llu lookups, %llu hashed (%.1f MB), %llu decoded (%llu new, %llu rewritten, %llu for more levels, %llu dropped and made again, %llu of those unchanged), %u evicted from %d entries (%d used); %llu palette loads touched %llu decodes",
             g_lookups, g_hashes, (double)g_hash_bytes / 1e6, g_decodes, g_dec_new, g_dec_rewritten, g_dec_levels,
@@ -1081,7 +1083,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
      * the maps this draw has already resolved. */
     for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
     g_tex_fence = 0;
-    if (g_simd < 0) simd_decide();
+    if (g_gxr_simd < 0) simd_decide();
     g_building = T;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
@@ -1175,7 +1177,7 @@ TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t o
         const uint8_t* p11 = img + ((size_t)yb * w + xb) * 4;
         int i;
 #ifdef TEX_SIMD
-        if (g_simd > 0) {
+        if (g_gxr_simd > 0) {
             /* The loop below, four channels at a time (H15d): a lane is a
              * channel. The horizontal pass is one multiply-add of the texel
              * pair by (256 - ax, ax) -- 255 * 256 fits a signed 16-bit lane --
