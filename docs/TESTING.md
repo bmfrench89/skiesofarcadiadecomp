@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-769 passed in 112.13s
+776 passed in 112.58s
 ```
 
-769 tests in 44 files, none of which reads the disc. They cover the Python
+776 tests in 45 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -75,6 +75,7 @@ its own and run it, some of the C as well:
 | `test_symbols.py` | 9 | the symbol database |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
+| `test_settings.py` | 7 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, and every scripted check sets it |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -94,10 +95,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `769 passed` |
-| no capstone — **what CI installs** | `750 passed, 1 skipped` |
-| no MSVC | `590 passed, 179 skipped` |
-| neither — **the Ubuntu CI leg** | `571 passed, 180 skipped` |
+| everything (MSVC + capstone) | `776 passed` |
+| no capstone — **what CI installs** | `757 passed, 1 skipped` |
+| no MSVC | `592 passed, 184 skipped` |
+| neither — **the Ubuntu CI leg** | `573 passed, 185 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -955,7 +956,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 179 of the 769 skip without a C compiler; they build one runtime file and run it.
+² 184 of the 776 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -966,8 +967,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 571 passed, 180 skipped |
-| **Tests** | windows | the same three — 750 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 573 passed, 185 skipped |
+| **Tests** | windows | the same three — 757 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

@@ -39,7 +39,7 @@ opening to reaching the whole game by jumping, and every step is in
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 769 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 776 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -71,7 +71,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 769 |
+| Python tests | 776 |
 | Self-test cases | 74 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -341,7 +341,7 @@ interleaved) and **M3a** (native `mod.dll` mods on `runtime/soa_mod.h`;
 what the game reads) and **M3c**'s projection filter (a wider view, checked on
 the 23 pinned captures under `--replay`, which loads mods) and its texture
 provider (any texture replaced by content hash, at any size). Next: H11's other half (the guest idle loop still spins on one core), then
-M4 (`call_guest`) and M5 (settings). **H8** needs the owner at a window for
+M4 (`call_guest`). M5, `soa.ini` beside the exe, is done but for the owner's check. **H8** needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this
 machine drifts 15% within a session on identical code (FINDINGS "H11"). The
 live title is no frame-hash oracle -- two unmodded runs differ on 22 of 40

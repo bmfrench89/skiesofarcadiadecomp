@@ -2058,3 +2058,22 @@ Each has a test that fails without its fix, bar the lock (a race of
 microseconds) and the load order (the one `main.c` move), which the title run
 with `examples/mods/map-log` covers: the same safe points and map load as
 before. The self test, `title --check` and the replay are unchanged.
+
+
+**M5: a settings file, so the port starts without a terminal.** 2026-09-25.
+`runtime/settings.c` reads `soa.ini` beside `soa.exe` before any switch is
+read: `disc` names the extracted directory, and `render`, `window`, `scale`,
+`threads`, `mods`, `card`, `record`, `nosound` and `uncap` each set their
+switch where the environment has not -- a variable set in the environment
+wins, and the port says so; a key it does not know is named with its line. The
+self test never reads it, and `scenario.py`'s runs and replays and
+`perfbench.py` run with `SOA_SETTINGS=0`.
+
+Checked by running it: with `gen/soa.ini` naming only the disc and `nosound`,
+`soa.exe` started with no arguments from `build/` found the disc through the
+file, booted and ran 300 frames. With a `soa.ini` that turned on everything --
+`render`, `window`, `scale`, `threads`, `mods`, a card path, a recording path,
+`nosound`, `uncap` -- `title --check` still held 4 of 4, and nothing of the
+file reached the run: no `[settings]`, `[mod]` or `[uncap]` line, no
+recording written. With no file, nothing changes. The owner's own check --
+turning an enhancement on and off without a terminal -- is still the owner's to make.

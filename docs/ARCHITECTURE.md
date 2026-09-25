@@ -335,6 +335,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `window.c` | host plumbing | The Win32 window on its own thread, and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
+| `settings.c` | host plumbing | `soa.ini` beside `soa.exe` (M5): the switches a player would set, and the disc, applied where the environment is silent; off for every check (`SOA_SETTINGS=0`) | A player's file could move a check if a script forgot `SOA_SETTINGS=0`; `test_settings.py` holds that each one sets it |
 | `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
 | `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, and all 12 decompiled functions against their recompiled twins over 200 random rounds | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
 
@@ -489,7 +490,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 769 tests, none of which needs a disc (anything that
+- `tools/tests/` — 776 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

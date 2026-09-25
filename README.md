@@ -146,6 +146,26 @@ seconds (a load) reaches neither the game nor the file, and the replay only
 keeps step with the recording while frames arrive at the same rate, which is
 why the run prints how far it has drifted.
 
+### A settings file, for starting it without a terminal
+
+`gen\soa.ini`, beside the executable, holds the switches a player would set,
+one `key = value` a line (`#` starts a comment):
+
+```ini
+disc = C:\Games\Skies\extracted   # the extracted disc, used when none is given
+render = 1
+scale = 3
+mods = C:\Games\Skies\mods
+```
+
+The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
+`record` (`SOA_PAD_RECORD`), `nosound` and `uncap`, each standing for the
+switch below. A variable set in the environment always wins over the file, and
+the port says so; a key it does not know is reported with its line and ignored.
+The checks -- `scenario.py`'s runs and replays, `perfbench.py` and the self
+test -- run with the file off (`SOA_SETTINGS=0`), so a player's settings never
+move one.
+
 ### Useful environment variables
 
 Set these the way your shell sets environment variables: `$env:NAME = 'value'`
@@ -198,7 +218,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 769 tests; any that need a dump skip themselves
+python -m pytest                     # 776 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

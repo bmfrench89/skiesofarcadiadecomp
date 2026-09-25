@@ -36,6 +36,7 @@ STUBS = """
 void fn_80003140(CpuState* s) { (void)s; }
 void hle_report(void) {}
 void hle_clock_start(void) {}
+const char* settings_load(void) { return 0; }
 void hle_frame_mark(void) {}
 void hle_frametime_restart(unsigned frame) { (void)frame; }
 void hle_on_report(void (*fn)(void)) { (void)fn; }

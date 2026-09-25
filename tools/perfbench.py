@@ -126,7 +126,7 @@ def run(runs: int, threads: int, exe: Path = EXE, root: Path = SET) -> int:
                     capture_output=True,
                     text=True,
                     cwd=ROOT,
-                    env={**os.environ, "SOA_THREADS": str(threads)},
+                    env={**os.environ, "SOA_THREADS": str(threads), "SOA_SETTINGS": "0"},
                     timeout=300,
                     check=False,
                 )

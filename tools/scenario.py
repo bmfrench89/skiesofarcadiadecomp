@@ -858,6 +858,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # shell would quietly make the run mean something else.
     full = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     full.update(env)
+    # Nor may a player's soa.ini beside the exe (runtime/settings.c, PLAN M5).
+    full["SOA_SETTINGS"] = "0"
     # The capture path and the memory card write into directories they expect to
     # exist already (gx.c frame_end, exi.c). A scenario that captures says where
     # with SOA_FIFO_DIR, and refuse_capture_into_corpus() above has already made
@@ -962,6 +964,7 @@ def replay_once(exe: Path, base: Path, threads: int) -> tuple[int, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env["SOA_HASH"] = "1"
     env["SOA_THREADS"] = str(threads)
+    env["SOA_SETTINGS"] = "0"  # a player's soa.ini must not move a pinned hash
     proc = subprocess.run(
         [str(exe), "--replay", str(base)],
         cwd=ROOT,

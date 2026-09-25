@@ -38,6 +38,7 @@ unsigned gx_frame_count(void);
 void gxr_draw_every_frame(void);
 int irq_in_handler(void);
 void hle_clock_start(void);
+const char* settings_load(void); /* settings.c */
 /* Set while gx.c is inside the command-stream parse. The sampler reads it
  * because a clock pair there would cost more than the parse. */
 extern int g_gx_parsing;
@@ -1104,6 +1105,14 @@ int main(int argc, char** argv)
     /* Before anything else this process does, so that "wall seconds" in the
      * report means the run and not the part of it that asked first. */
     hle_clock_start();
+    /* The player's soa.ini beside the exe (settings.c, PLAN M5), before any
+     * switch is read: it fills in only what the environment has not set, and
+     * names the disc when the command line does not. Never for the self test;
+     * the scripted checks turn it off with SOA_SETTINGS=0. */
+    if (!getenv("SOA_SELFTEST")) {
+        const char* disc = settings_load();
+        if (disc && !(argc > 1 && argv[1][0] != '-')) dir = disc;
+    }
     s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
     mem_poke(&s);

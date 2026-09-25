@@ -517,7 +517,7 @@ Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only,
 - A call made from the frame end or from a handler is refused with a message.
 - A DLL built against M3's API still loads.
 
-**M5. User-facing settings** — *a day, `--link`. **Owner:** checks it without a terminal.*
+**M5. User-facing settings** — *done 2026-09-25 but for the owner's check: `soa.ini` beside the exe (`runtime/settings.c`), the environment wins, unknown keys named, the checks run with `SOA_SETTINGS=0`; a file turning everything on leaves `title --check` 4/4. **Owner:** turn one on and off without a terminal. FINDINGS "M5".*
 - A settings file beside the exe holds every switch a player would use: mods, the presenter, `SOA_INTERP`, widescreen, the texture pack, and the battle speed-up. It is edited by hand or from M8's settings page; a separate launcher is built only if the owner wants one.
 - Environment variables override the file.
 - Scenario runs, the self test and `nightly.py` ignore the file, so a player's settings can never move a check.
