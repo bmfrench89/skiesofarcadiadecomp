@@ -36,6 +36,28 @@ opening to reaching the whole game by jumping, and every step is in
 - `tools/sct.py` disassembles the field scripts that decide all of the above;
   `docs/research/` holds four read-only investigations it grew out of.
 
+On 2026-09-24/25 the plan of record became `docs/PLAN-60FPS-MODS.md`, and
+these of its slices are done, each with a FINDINGS entry of the same name:
+
+- **The mod framework is in (M1-M5).** `SOA_MODS=<dir>` loads data-patch mods
+  (`patches.txt`) and native `mod.dll` mods on a versioned API
+  (`runtime/soa_mod.h`): guest memory with refusals, a safe point at the top of
+  the main loop, map and scene callbacks, filters for the controller, the
+  projection and textures, and `call_guest` into the game's own functions.
+  `mods/encounters-off` and `examples/mods/map-log` are the examples; `soa.ini`
+  beside the exe starts the port without a terminal. An adversarial review
+  found eleven defects in the layer, all fixed.
+- **What speed costs, measured (H1-H6, H3, H11).** Drawn every frame the port
+  runs 18-26 fps in heavy scenes; the logic is per frame, so 60 fps has to be
+  interpolation (H2); every 3D draw matches the frame before it (H4); the
+  guest could run the opening at 50 images a second and a battle at 104, the
+  renderer draws them at 19 and 48 (H3). Idle render workers now sleep: the
+  title costs 1.2 cores instead of 8.8 (H11).
+- **A paced presenter (H8)** is built; the owner's display runs at 85 Hz, where
+  30 fps cannot be paced evenly.
+- **Soaks are judged, not eyeballed (S1-S3):** `tools/soak.py check`, and an
+  encounter accelerator that fights only where the story allows.
+
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
