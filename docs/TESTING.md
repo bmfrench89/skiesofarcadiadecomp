@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-846 passed in 137.21s
+847 passed in 204.01s
 ```
 
-846 tests in 51 files, none of which reads the disc. They cover the Python
+847 tests in 51 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -79,10 +79,10 @@ its own and run it, some of the C as well:
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_settings.py` | 7 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, and every scripted check sets it |
+| `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
-| `test_gxr_texcache.py` | 6 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, and a TLUT load's dropped decode is rebuilt in place |
 | `test_gxr_lifetimes.py` | 6 | the lifetime rules the renderer's queue lives by — the texture use-after-free of 2026-09-17 — under H14's fences and again under `SOA_GXR_DRAIN=1`, where a draw's setup still drains for a queued copy |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
@@ -101,10 +101,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `846 passed` |
-| no capstone — **what CI installs** | `827 passed, 1 skipped` |
-| no MSVC | `613 passed, 233 skipped` |
-| neither — **the Ubuntu CI leg** | `594 passed, 234 skipped` |
+| everything (MSVC + capstone) | `847 passed` |
+| no capstone — **what CI installs** | `828 passed, 1 skipped` |
+| no MSVC | `613 passed, 234 skipped` |
+| neither — **the Ubuntu CI leg** | `594 passed, 235 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -984,7 +984,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 233 of the 846 skip without a C compiler; they build one runtime file and run it.
+² 234 of the 847 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -995,8 +995,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 234 skipped |
-| **Tests** | windows | the same three — 827 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 594 passed, 235 skipped |
+| **Tests** | windows | the same three — 828 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

@@ -152,19 +152,47 @@ static void t_bp(void)
     CHECK(g_tex_epoch == e0 + 3, "an unrelated BP write moved the epoch");
 }
 
-/* A TLUT load drops the decodes that read its palette but keeps their keys:
- * the next lookup decodes again into the same entry, the index untouched. */
+/* A dropped decode keeps its key: the next lookup decodes again into the
+ * same entry, the index untouched. */
 static void t_dropped(void)
 {
     const TexEntry *a, *b;
     int used;
     a = texture(TEXA(0), 8, 8, 8, 0, 0, 1); /* C4, palette at TMEM 0 */
     used = g_cache_used;
-    tmem_load_tlut(&S, 0x80200000u, 0, 32);
-    CHECK(a->rgba == NULL, "the TLUT load did not drop the C4 decode");
+    tex_invalidate_all();
+    CHECK(a->rgba == NULL, "tex_invalidate_all did not drop the C4 decode");
     b = texture(TEXA(0), 8, 8, 8, 0, 0, 1);
     CHECK(b == a && b->rgba && g_cache_used == used, "a dropped entry was not reused in place");
+    CHECK(g_dec_dropped == 1 && g_dec_same == 1, "counted %llu dropped, %llu unchanged", g_dec_dropped, g_dec_same);
     check_index("after a drop");
+}
+
+/* A TLUT load sends the palettised decodes it overlaps to be hashed again,
+ * and the hash covers the palette: the same palette loaded again keeps the
+ * decode, and a different one in the same place is decoded again -- all
+ * inside one epoch, where nothing else would notice. */
+static void t_palette(void)
+{
+    const TexEntry* e;
+    const uint8_t* rgba;
+    unsigned long long d0;
+    uint8_t* pal = S.mem + 0x200000; /* IA8 entry 0, which every index of a zeroed C4 texture reads */
+    pal[0] = 0xFF;
+    pal[1] = 0x40;
+    tmem_load_tlut(&S, 0x80200000u, 0, 32);
+    e = texture(TEXA(0), 8, 8, 8, 0, 0, 1);
+    CHECK(e->rgba && e->level[0][0] == 0x40, "first decode %02X", e->rgba ? e->level[0][0] : 0);
+    rgba = e->rgba;
+    d0 = g_decodes;
+    tmem_load_tlut(&S, 0x80200000u, 0, 32);
+    e = texture(TEXA(0), 8, 8, 8, 0, 0, 1);
+    CHECK(g_decodes == d0 && e->rgba == rgba, "the same palette loaded again was decoded again (%llu)", g_decodes - d0);
+    pal[1] = 0x90;
+    tmem_load_tlut(&S, 0x80200000u, 0, 32);
+    e = texture(TEXA(0), 8, 8, 8, 0, 0, 1);
+    CHECK(g_decodes == d0 + 1 && e->level[0][0] == 0x90, "a changed palette was not decoded again (texel %02X)", e->level[0][0]);
+    check_index("after palette loads");
 }
 
 int main(int argc, char** argv)
@@ -178,6 +206,7 @@ int main(int argc, char** argv)
     else if (!strcmp(argv[1], "verify")) t_verify();
     else if (!strcmp(argv[1], "bp")) t_bp();
     else if (!strcmp(argv[1], "dropped")) t_dropped();
+    else if (!strcmp(argv[1], "palette")) t_palette();
     else return 2;
     printf("[texcache] %s: %d failure(s)\n", argv[1], fails);
     fflush(stdout);
@@ -185,7 +214,7 @@ int main(int argc, char** argv)
 }
 """
 
-CASES = ("index", "lru", "epoch", "verify", "bp", "dropped")
+CASES = ("index", "lru", "epoch", "verify", "bp", "dropped", "palette")
 
 
 @pytest.fixture(scope="module")

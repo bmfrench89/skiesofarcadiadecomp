@@ -15,7 +15,9 @@ samples a texture a queued EFB copy has not written yet, and a flush recycles
 the queue, the vertex arena and the texture graveyard. The first test below
 drives exactly that shape; before the fix it drew the wrong command. The second
 piles up more freed textures between two drains than any fixed-size list would
-hold, which is what a mass TLUT invalidation does with a full queue.
+hold, which is what a mass invalidation of the cache does with a full queue --
+a TLUT load did that until 2026-09-25, when it began sending textures to be
+hashed again instead, and ``tex_invalidate_all`` still does.
 
 Built the way ``test_gxr_tripwires.py`` builds it: the renderer on its own, a
 synthetic command stream, no disc and no game data.
@@ -165,18 +167,18 @@ int main(void)
 
     /* ---- more freed textures between two drains than any fixed list holds ----
      * Seven hundred queued draws, each sampling a texture the cache has never
-     * seen, walk the cache over: every draw past the 256th throws one decoded
-     * texture out, and all of them are waiting for a drain that has not come.
-     * Then one TLUT load invalidates every palettised entry at once -- the path
-     * that runs from a BP write, with nothing on it that asks whether this is a
-     * good moment -- and adds another 256. Every one of those buffers is still
-     * named by a draw in the queue that a worker has not finished. */
-    bp_w(&s, 0x64, (0x00100000u >> 5) & 0x1FFFFFu);
+     * seen, fill 700 of its 1,024 entries. Then every decode is dropped at once
+     * -- from outside any draw, so nothing on the path asks whether this is a
+     * good moment: the draw path drains when the graveyard reaches GRAVE_SOFT,
+     * a mass invalidation does not. A TLUT load was that path until it began
+     * sending textures to be hashed again instead; tex_invalidate_all still is.
+     * Every one of those buffers is still named by a draw in the queue that a
+     * worker has not finished. */
     for (i = 0; i < 700; i++) {
         use_texture(&s, 0x00400000u + (uint32_t)i * 64u, 9, 8, 8); /* C8, a new one every draw */
         quad(&s, 8.0f, 8.0f, 10.0f, 10.0f, RED);
     }
-    bp_w(&s, 0x65, 0x004000u); /* load 512 bytes of TLUT at TMEM 0 */
+    tex_invalidate_all();
     use_texture(&s, 0x00300000u, 4, 32, 32);
     quad(&s, 500.0f, 300.0f, 560.0f, 360.0f, GREEN);
     gxr_flush();
@@ -248,7 +250,7 @@ def test_the_draw_that_waited_for_a_copy_is_the_draw_that_runs(output):
 
 @needs_msvc
 def test_freed_textures_outlast_any_fixed_size_list(output):
-    """Seven hundred queued draws and one mass TLUT invalidation put far more
+    """Seven hundred queued draws and one mass invalidation put far more
     decoded textures in the graveyard than the 512 the old fixed array held,
     and the ones past 512 were freed on the spot while those draws still
     pointed at them. Nothing may be freed early now, so the count is free to go

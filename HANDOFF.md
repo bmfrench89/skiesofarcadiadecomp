@@ -79,7 +79,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 846 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 847 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -111,7 +111,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 846 |
+| Python tests | 847 |
 | Self-test cases | 75 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -386,16 +386,18 @@ positions only, so colour and texture animation steps at 30 Hz, slightly).
 **H12**, **H14** and **H15a-c** are done too (texture hashing once an epoch;
 fences instead of drains around copies; the pixel path a quarter faster; 12
 workers by default; FINDINGS "H12", "H14", "H15c"), and the Dangral base runs
-at about 27 fps drawn every frame. The bottleneck there has moved: with 12
-workers they wait two thirds of the time (`SOA_HOSTPROF=1` shows it), and the
-guest thread is the critical path -- per frame about 26 ms of guest code and
-parse, 4-5 ms decoding textures (about 40 decodes a frame; a tile-order walk
-took 15% off, FINDINGS "Texture decode by tile") and 4 ms of vertex setup,
-against the 33 ms the 30 fps cap allows. So next: find how much of that
-decoding is of copies (the plan's H14 step 6, copy images, would skip it), H16
-(vertex setup onto the workers), H13 (guest-thread speed), then H11's other
-half (the guest idle loop still spins on one core); H15d (SIMD spans) waits
-until the workers are the bottleneck again. M4 (`call_guest`) is done, and M5,
+at about 27 fps drawn every frame. Texture decoding is 80-90% smaller since
+(palette loads no longer throw decodes out; FINDINGS "Palette loads"), and
+the frame rate did not move: neither thread is the bottleneck -- the workers
+idle half the time, the guest thread 40% in the game's idle loop -- and what
+holds the frame is the order between them, a draw sampling a texture copied
+earlier in the frame waiting on the guest thread for the workers to finish
+everything before that copy. So next: copy images (the plan's H14 step 6: the
+copy's texture made in the pool, the sampling draw fenced there), then H13
+(guest-thread speed; `SOA_HOSTPROF=1` now samples the guest thread too), H16
+(vertex setup onto the workers) and H11's other half (the guest idle loop
+still spins on one core); H15d (SIMD spans) waits until the workers are the
+bottleneck again. M4 (`call_guest`) is done, and M5,
 `soa.ini` beside the exe, is done but for the owner's check. **H8**'s presenter is built (DXGI flip model);
 the owner's display runs at 85 Hz, where 30 fps cannot be paced evenly -- set 60 or 120 Hz first. It needs the owner at a window for
 fifteen minutes whenever convenient. **Measure speed interleaved**: this

@@ -2593,11 +2593,13 @@ game's 30 fps cap.
 
 
 **Texture decode by tile.** 2026-09-25, `build/soa-h15c3.exe` against
-`build/soa-dec.exe`, `build/exeab-3000-*.log`. With H15c done the host
-profiler (`SOA_HOSTPROF=1`, `build/hostprof2-L9000.log`) shows the twelve
-workers idle about two thirds of the Dangral window: the guest thread is the
-critical path, and of its time decoding textures is the largest piece the
-renderer owns. `decode_level` walked the texture in raster order and found
+`build/soa-dec.exe`, `build/exeab-3000-*.log`. With H15c done the twelve
+workers are idle about half the Dangral window (the `[gxr] workers:` line of
+`build/hostprof2-L9000.log`), and of the guest thread's time decoding
+textures is the largest piece the renderer owns, 13%. (This entry first said
+the guest thread was the critical path. It is not: 30% of its time is the
+game's idle loop, `SelectThread` in the same log's profile -- see "Palette
+loads" below.) `decode_level` walked the texture in raster order and found
 each texel's tile, row and column with four divisions by the format's tile
 size, which the compiler cannot know. It now walks tile by tile, and within a
 tile row by row, so each texel is read from the same byte and written to the
@@ -2616,3 +2618,57 @@ divisions were therefore not most of what decoding costs, and the rest --
 which formats, how much is the palette lookup, how much is re-decoding the
 same copy every frame -- is unmeasured; the copies' own path (H14 step 6,
 copy images, which skips decoding a copy entirely) is the larger lever.
+
+
+**Palette loads: every decode they threw out came back unchanged.**
+2026-09-25, `build/envab-3000-*.log`, `build/envab-9000-*.log`. The tile walk
+above took 15% off decoding; why there was so much decoding was elsewhere. A
+TLUT load (BP 0x65, `tmem_load_tlut`) threw out the decode of every
+palettised texture whose palette lay within 32 KB of it, so the next draw to
+sample one decoded it again -- and the game loads palettes about 20 times a
+frame in the early Part L run and 51 in the Dangral base, over and over into
+the same places. The texture's hash already covers its palette (32 bytes for
+C4, 512 for C8), so a load now only sends the entries it overlaps to be
+hashed again at their next lookup, and a texture is decoded again only if its
+palette did change. The report's `textures:` line now says why each decode
+happened. Before, in H1's Part L runs:
+
+| run | decodes | made again after a palette load | of those, unchanged |
+|---|---|---|---|
+| Part L 3000 | 82,545 | 35,667 | 35,667 |
+| Part L 9000 | 358,495 | 305,617 | 305,617 |
+
+Every one. Interleaved, the drop (kept behind a temporary switch for the
+measurement, now gone) against the re-hash; the Dangral window is frames
+3000-9000 of the 9000 run:
+
+| run | build | fps | producer decode | producer wait | guest idle loop | CPU |
+|---|---|---|---|---|---|---|
+| Part L 3000 | drop | 28.6 / 28.4 | 7.35 / 7.58 s | 0.75 / 0.87 s | | 537 / 536 s |
+| | re-hash | 28.4 / 28.6 | 0.55 / 0.53 s | 1.72 / 1.50 s | | 521 / 509 s |
+| Dangral | drop | 25.7 / 27.8 | 35.8 / 33.1 s | 28.0 / 21.6 s | 32.6 / 36.4% | 2,562 / 2,492 s |
+| | re-hash | 26.5 / 27.2 | 7.6 / 7.0 s | 40.7 / 38.7 s | 39.5 / 40.6% | 2,416 / 2,410 s |
+
+Decoding falls 79-93% and the process 3-5% of its CPU, and **the frame rate
+does not move**. Where the Dangral base's saved 3 ms a frame went is in the
+same table: the producer's wait at the copies' hazard (25.2 / 20.1 -> 39.8 /
+38.1 s, `waits:` line) and the game's own idle loop. So the guest thread was
+never the critical path there (the entry above said it was, and is
+corrected), and the workers are idle half the time too. What holds the frame
+is the order between them: a draw that samples a texture copied earlier in
+the frame waits, on the guest thread, for the workers to finish everything
+drawn before that copy, and the workers then wait for the draws the guest
+builds after it. That is the plan's copy images (H14 step 6): make the copy's
+texture in the pool and fence the sampling draw there, so the guest thread
+goes on. Whether that raises the frame rate, or only moves the wait into the
+workers, is the thing to measure.
+
+Checks: the texture-cache test gains a case -- the same palette loaded again
+keeps the decode, a different one in the same place is decoded again, inside
+one epoch -- which fails with the mark taken out ("a changed palette was not
+decoded again"). The lifetime test's burst of freed textures came from a
+palette load, which no longer frees anything; it now comes from
+`tex_invalidate_all`, the one mass invalidation left, and the test's note that
+700 draws walk a 256-entry cache over (it has held 1,024 since H12) is gone.
+Replay 23/23 at 1, 2, 3 and 8 threads with every hash unchanged; the self
+test.

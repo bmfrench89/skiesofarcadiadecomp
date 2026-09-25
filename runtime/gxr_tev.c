@@ -56,6 +56,11 @@ typedef struct {
 static uint64_t g_tex_epoch = 1;
 static int g_tex_verify = -1;
 static unsigned long long g_lookups, g_hashes, g_hash_bytes, g_decodes, g_missed;
+/* Why each decode happened, for the report: a key first seen, its bytes or
+ * palette rewritten, more mip levels wanted, or a decode dropped and made
+ * again -- and how many of those came out as they were. */
+static unsigned long long g_dec_new, g_dec_rewritten, g_dec_levels, g_dec_dropped, g_dec_same;
+static unsigned long long g_tlut_loads, g_tlut_marked;
 
 void tex_epoch_advance(void)
 {
@@ -258,12 +263,10 @@ static uint64_t source_hash(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h,
     if (!g_s || (addr & MEM_MASK) + bytes > MEM1_SIZE) return 0;
     hsh = hash_range(0x243F6A8885A308D3ull, mem_ptr(g_s, addr), bytes);
     if (fmt == 8 || fmt == 9 || fmt == 10) {
-        /* The palette decides the pixels as much as the indices do. A TLUT
-         * reloaded in place is already caught by tmem_load_tlut, which throws
-         * out every entry whose palette a load overlaps, so this is the
-         * second of two mechanisms -- but it is 32 bytes for the C4 textures
-         * this game actually uses, and it is the one that does not depend on
-         * the invalidation staying complete. */
+        /* The palette decides the pixels as much as the indices do, and
+         * this is what notices a new one: tmem_load_tlut only sends the
+         * entries a load overlaps to be hashed again. 32 bytes for C4, 512
+         * for C8, the whole 32 KB table for C14X2. */
         uint32_t n = fmt == 8 ? 32 : (fmt == 9 ? 512 : 32768);
         uint32_t off = tlut_off & ((1u << 20) - 1);
         if (off + n > sizeof g_tmem) n = (uint32_t)(sizeof g_tmem - off);
@@ -277,14 +280,20 @@ void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes
     int i;
     if (tmem_off + bytes > sizeof g_tmem || (src & MEM_MASK) + bytes > MEM1_SIZE) return;
     memcpy(g_tmem + tmem_off, mem_ptr(s, src), bytes);
-    /* Palettised textures decoded through this range are stale now. This runs
-     * from a BP write and not from a draw, so it can throw out every slot in
-     * the cache at a moment nothing chose, with a queue full of draws that
-     * still point at them; the graveyard absorbs that because it grows. */
+    g_tlut_loads++;
+    /* Palettised textures decoded through this range may be stale now, so
+     * their next lookup hashes them again (epochs start at 1), and the hash
+     * covers the palette bytes the decode reads: only a texture whose palette
+     * did change is decoded again. The game loads the same palettes over and
+     * over. This used to throw the decodes out, and in H1's Part L run every
+     * one of the 35,667 made again that way came out as it was -- 93% of the
+     * decode time (FINDINGS "Palette loads"). The range is still the widest
+     * a palette can be, since a mark costs a hash and not a decode. */
     for (i = 0; i < g_cache_used; i++) {
         TexEntry* e = &g_cache[i];
         if (e->rgba && (e->fmt == 8 || e->fmt == 9 || e->fmt == 10) && e->tlut_off < tmem_off + bytes && e->tlut_off + 32768 > tmem_off) {
-            tex_free_later(e->rgba); e->rgba = NULL; /* the key stays: the index still finds it */
+            e->hashed = 0;
+            g_tlut_marked++;
         }
     }
 }
@@ -717,21 +726,28 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
         if (e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
             tex_free_later(e->rgba);
             g_decodes++;
+            if (e->hash != hsh) g_dec_rewritten++;
+            else g_dec_levels++;
             TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
             e->hash = hsh;
             maybe_replace(e);
         }
         return e;
     }
-    /* Not cached, or cached under this key with its decode dropped (a TLUT
-     * load, tex_invalidate_all), in which case the entry and its place in
-     * the index are reused. */
+    /* Not cached, or cached under this key with its decode dropped
+     * (tex_invalidate_all, or a decode that could not allocate), in which
+     * case the entry and its place in the index are reused. */
     if (!e) {
         e = tex_take(&key);
         e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
         tex_index_add((int)(e - g_cache));
+        hsh = counted_hash(e);
+        g_dec_new++;
+    } else {
+        hsh = counted_hash(e);
+        g_dec_dropped++;
+        if (hsh == e->hash) g_dec_same++;
     }
-    hsh = counted_hash(e);
     g_decodes++;
     TIMED(T_DECODE, decode_texture(e, nlevels));
     e->hash = hsh;
@@ -746,8 +762,9 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
 void tex_report(void)
 {
     if (!g_lookups) return;
-    fprintf(stderr, "[gxr] textures: %llu lookups, %llu hashed (%.1f MB), %llu decoded, %u evicted from %d entries (%d used)",
-            g_lookups, g_hashes, (double)g_hash_bytes / 1e6, g_decodes, g_evicted, TEX_CACHE, g_cache_used);
+    fprintf(stderr, "[gxr] textures: %llu lookups, %llu hashed (%.1f MB), %llu decoded (%llu new, %llu rewritten, %llu for more levels, %llu dropped and made again, %llu of those unchanged), %u evicted from %d entries (%d used); %llu palette loads touched %llu decodes",
+            g_lookups, g_hashes, (double)g_hash_bytes / 1e6, g_decodes, g_dec_new, g_dec_rewritten, g_dec_levels,
+            g_dec_dropped, g_dec_same, g_evicted, TEX_CACHE, g_cache_used, g_tlut_loads, g_tlut_marked);
     if (g_tex_verify > 0)
         fprintf(stderr, "; SOA_TEXVERIFY: %llu changed inside an epoch\n", g_missed);
     else
