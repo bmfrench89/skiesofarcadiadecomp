@@ -126,6 +126,8 @@ def soak_log(play=ONE_BATTLE, card="build/savetest/work.raw", land="a116a") -> s
         GX,
         "[gxr] 900 triangles, 0 lines, 0 points; 5000 pixels shaded; 0 bad vertex refs; "
         "5 texture copies, 6 screen copies",
+        "[gxr] textures: 2121046 lookups, 149538 hashed (4403.4 MB), 82640 decoded, 0 evicted "
+        "from 1024 entries (731 used)",
         "[exi] 1071 immediate, 385 DMA transfers; card 172032 bytes read, 0 written, 0 interrupts",
     ]
     return "\n".join(lines) + "\n"

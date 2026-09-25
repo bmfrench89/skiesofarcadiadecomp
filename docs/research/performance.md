@@ -203,6 +203,7 @@ Run one `soa.exe` at a time. Always use a card copy, never `build/cards/slotA.ra
    - Vertex setup (2–4 ms): do it on the workers.
    - Hash each texture once per frame instead of once per lookup (about 2 ms median, up to 12).
    - Grow the texture cache past 256 slots.
+   - (Both done in H12, 2026-09-25: FINDINGS "H12".)
    - Hours to days.
 5. **Make the guest thread faster** (needed for 60 logic updates a second).
    - Specialise the paired-single load and store for this binary's six constant GQRs. `cpu.h:441` already notes this; every `psq_l`/`psq_st` currently calls `ldexp` (`cpu.h:467`, `cpu.h:500`). The object code for `fn_802A21C4` makes 24 `ldexp`, 24 `psq_load`, 34 `psq_store1` and 12 `fma` calls.

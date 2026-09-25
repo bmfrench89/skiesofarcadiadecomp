@@ -2451,6 +2451,9 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
      * is drawn, so nothing is drawn wrong. */
     if (gxr_enabled()) bp_tripwire(bp, reg, v);
     if (reg >= 0xE0 && reg <= 0xE7) { tev_register_written(reg, v); return; }
+    /* The texture-cache invalidate, and every EFB copy: texture memory may
+     * have changed, so a texture is hashed again at its next use (H12). */
+    if (reg == 0x66 || reg == 0x52) tex_epoch_advance();
     if (reg == 0x65) { /* TLUT load (GXLoadTlut): source from 0x64, tmem address and size here */
         uint32_t src = (bp[0x64] & 0x1FFFFFu) << 5;
         uint32_t tmem = (v & 0x3FFu) << 9, bytes = ((v >> 10) & 0x7FFu) << 5;
@@ -2467,6 +2470,7 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
 /* Defined in gxr_tev.c. A diagnostic for the report below rather than part of
  * the renderer's interface, so it is declared here and not in gxr.h. */
 int tex_graveyard_peak(void);
+void tex_report(void);
 
 void gxr_report(void)
 {
@@ -2535,4 +2539,5 @@ void gxr_report(void)
                 (unsigned long long)g_prepare_flushes);
     if (tex_graveyard_peak())
         fprintf(stderr, "[gxr] %d decoded textures waited to be freed at once, at the most\n", tex_graveyard_peak());
+    tex_report();
 }

@@ -87,9 +87,10 @@ Unknown bytes are reported once and resynchronised one byte at a time — the
 to `runtime/gxr.c` · `gxr_bp_written`, which routes the handful that need
 more than shadowing: `0xE0`–`0xE7` are TEV colour registers
 (`runtime/gxr_tev.c` · `tev_register_written`), `0x65` is a palette load
-(`tmem_load_tlut`), `0x52` is an EFB copy (step 9 below), and `0x45` with bit 1
-is `GXDrawDone`, which flushes the queue because the CPU is about to read
-what was drawn.
+(`tmem_load_tlut`), `0x52` is an EFB copy (step 9 below), `0x66` is the
+texture-cache invalidate, which with every copy moves the texture epoch
+(step 6), and `0x45` with bit 1 is `GXDrawDone`, which flushes the queue
+because the CPU is about to read what was drawn.
 
 ### 4. A draw becomes vertices
 
@@ -125,7 +126,11 @@ Still on the guest thread, `gxr_draw_inner`:
 
 - `runtime/gxr_tev.c` · `tev_prepare` resolves the combiner — stages,
   input selectors, konst, swap tables, alpha compare — and decodes and
-  caches every texture the stages sample (`texture`, `decode_texture`);
+  caches every texture the stages sample (`texture`, `decode_texture`).
+  The cache holds 1,024 decodes, found through an index, and hashes a
+  texture's source bytes at most once a *texture epoch*, which moves on the
+  game's texture-cache invalidate (BP 0x66), on every EFB copy and on a
+  replay's RAM load (PLAN-60FPS-MODS H12);
 - `pixel_prepare` and `raster_prepare` snapshot blend, logic op, depth,
   fog, the viewport and the scissor, so a later register write cannot
   change a queued draw;
@@ -547,7 +552,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 813 tests, none of which needs a disc (anything that
+- `tools/tests/` — 819 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

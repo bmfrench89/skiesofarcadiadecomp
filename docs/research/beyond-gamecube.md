@@ -678,7 +678,8 @@ the stream, not the chunk.
 - **Textures.** The decoder covers every GX format, C14X2 and CMPR included (`gxr_tev.c:346-423`), with
   `MAX_MIPS` 11 (`gxr.h:78`). Sizes come from the GX registers, so up to 1024² [I, from the width of the GX
   register fields].
-- **Texture cache.** 256 slots of decoded RGBA8 (`gxr_tev.c:44`); H12 plans to grow it.
+- **Texture cache.** 256 slots of decoded RGBA8 (`gxr_tev.c:44`); H12 plans to grow it. (1,024 since H12,
+  2026-09-25.)
 - **The port adds no limit tighter than GX's.** Replacement textures (M9) are host-side, of any size, and are
   sampled through `lw/w`.
 - **Geometry.** There is no polygon budget: a 4,096-command ring and a 48 MB vertex arena simply flush when full

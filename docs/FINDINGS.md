@@ -2208,3 +2208,88 @@ view-space midpoint (screen x 368), not the screen-space one (384). Four
 deliberate breakages of the lerp and the copy rule (weights swapped, w not
 lerped, the clear dropped, copies not skipped) each fail the test written for
 them.
+
+
+**H12: a texture is hashed once an epoch, not on every lookup, and the cache
+holds 1,024.** 2026-09-25, `build/h12ab-*.log`, `build/h12ab-speed4-*.log`,
+`build/h12-verify-*.log`. Every texture lookup used to hash all of the
+texture's source bytes and compare against each of 256 cache slots. Over the
+35 captures in `build/fifo` and `build/perfset` that was 16-39 MB hashed a
+frame in the heavy scenes, one texture up to thirty times over, where the
+distinct textures come to 0.8-2.0 MB. Now each entry remembers the *epoch* its
+hash was taken in, and a lookup in the same epoch trusts it. The epoch moves on
+everything that can change texture memory under the renderer:
+
+- **BP 0x66**, the texture-cache invalidate that `GXInvalidateTexAll` and
+  `GXInvalidateTexRegion` write, which the hardware itself needs before it will
+  sample texels the CPU rewrote. The game writes it twice a frame (four times
+  when it copies to texture), in every capture;
+- **every EFB copy**, to a texture or to the screen, so every frame end too;
+- **a replay's RAM load**, which replaces memory with no BP write.
+
+The cache grew from 256 entries to 1,024, found through an open-addressed index
+(the old scan of every entry would be 4.5 million compares a frame at 1,024).
+The hash function is unchanged, as M9 needs.
+
+**What it saves**, on H1's 3000-frame Part L run drawn every frame, measured
+interleaved (new, base, new, base):
+
+| | prepare | decode | fps | p50 | CPU |
+|---|---|---|---|---|---|
+| base | 3.86 / 3.91 ms | 2.76 / 2.74 ms | 24.7 / 24.7 | 36.3 / 36.1 ms | 657 / 657 s |
+| H12 | 0.21 / 0.21 ms | 2.70 / 2.72 ms | 24.3 / 24.3 | 37.5 / 37.6 ms | 615 / 623 s |
+| base, `SOA_SPEED=4` | 3.88 / 3.82 ms | 2.49 / 2.45 ms | 35.9 / 36.0 | 27.0 / 27.3 ms | 613 / 622 s |
+| H12, `SOA_SPEED=4` | 0.21 / 0.21 ms | 2.59 / 2.53 ms | 37.0 / 37.2 | 23.5 / 23.8 ms | 595 / 591 s |
+
+Prepare falls from 3.9 ms a frame to 0.21, so prepare and decode together fall
+from 6.6 ms to 2.9: the plan's "at least halved" is met. Decode is unchanged,
+as it should be: the same 82,600 decodes, none of them an eviction, all of them
+textures whose bytes did change (copies to texture and the game's own rewrites
+between frames).
+
+**Where the saved time goes.** With the clock out (`SOA_SPEED=4`) it is
+throughput: 3.2% more frames a second and 3% less CPU. At real speed the paced
+run's frame rate *fell* 1.6% in both pairs, 24.7 to 24.3. The producer's wait
+for the workers rose by 8.6 s, about what prepare saved, because the run is
+raster-bound at the drains around every filtered copy (H14): a faster producer
+reaches each drain sooner and waits there longer. And the guest received fewer
+retraces: a mean VI period of 19.40 ms against 18.96. Prepare's cost was spread
+over hundreds of per-draw slices, and the guest can take a retrace between any
+two of them. The drain's wait is one block of host code, and a retrace that
+comes due during it is delivered late, the lost time never made up (`irq.c`'s
+late-retrace rule). That reading is consistent with the numbers but was not
+measured directly. Any producer speedup will show the same until H14 removes
+the drains or H9 locks the VI, and paced fps should be re-measured after
+either.
+
+**The risk, measured.** The rule cannot see a texture the CPU or a DMA rewrites
+*within* an epoch, with no invalidate, copy or frame end between two uses. The
+hardware would not see that rewrite either unless the texture had left its
+cache, so a game that does it is relying on luck; but it had to be measured,
+not assumed. `SOA_TEXVERIFY=1` hashes every lookup as before and counts each
+texture whose bytes changed inside an epoch. Over four live scenes, 24,500
+frames and 2.57 million lookups, it counted none:
+
+| scene | frames | lookups | changed inside an epoch |
+|---|---|---|---|
+| `title --check` | 2,000 | 25,873 | 0 |
+| Part L, drawn every frame | 3,000 | 2,118,255 | 0 |
+| `opening` | 7,500 | 153,484 | 0 |
+| `battle` | 12,000 | 274,868 | 0 |
+
+That is evidence about those scenes and not the whole game (CLAUDE.md). The
+switch stays in the port for the next scene someone suspects. The `battle` run
+filled all 1,024 entries and evicted 88, one or two at a time; the thrash
+warning (256 in one frame) did not fire in any run.
+
+**Checks.** Replay is 23/23 with every hash unchanged at 1, 2, 3 and 8 threads.
+`tools/midpoint.py` passes all five pairs with the same images. The self test
+and `title --check` pass. `tools/tests/test_gxr_texcache.py` includes
+`gxr_tev.c` whole: the index stays whole through 30,000 lookups over three
+times its keys; LRU order; hashing once an epoch and again after it moves;
+`SOA_TEXVERIFY` catching a rewrite; the epoch-moving BP writes; a TLUT load's
+dropped decode rebuilt in place. Five deliberate breakages were each caught:
+algorithm R off by one, an evicted key left in the index, never hashing again,
+BP 0x66 ignored, a TLUT load forgetting the key. An adversarial review found
+one defect, now fixed: `tools/soak.py` would have raised the new `[gxr]
+textures:` report line as a question in every rendering soak.

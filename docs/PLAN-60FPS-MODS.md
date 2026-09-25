@@ -288,7 +288,7 @@ About ten host threads stay busy while the game waits. The guest idle hook shoul
 - Retraces per frame stay at 2.0–2.1.
 - `title --check` and replay 23/23 are unchanged.
 
-**H12. Texture hashing and the cache** — *a day, `--link`.*
+**H12. Texture hashing and the cache** — *done 2026-09-25: a texture is hashed once an epoch (BP 0x66, every EFB copy, a replay's RAM load), and the cache holds 1,024 behind an index. Prepare 3.9 → 0.21 ms a frame, prepare + decode 6.6 → 2.9 on H1's Part L run; +3.2% throughput with the clock out; paced fps −1.6%, the saved time waiting at H14's drains. `SOA_TEXVERIFY` found no rewrite inside an epoch in 2.57 M lookups over four scenes. FINDINGS "H12".*
 - Hash each texture once per frame, not on every lookup: that costs a median of 2.2 ms a frame, up to 12 ms.
 - Grow the texture cache past 256 slots; 54 runs report it thrashing.
 - **Risk:** a texture rewritten within a frame, by a copy to texture or by the CPU between draws, must still be re-hashed [I].

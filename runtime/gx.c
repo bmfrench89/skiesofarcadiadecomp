@@ -252,6 +252,7 @@ void gxr_draw(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, un
 void gxr_report(void);
 void gxr_reset_efb(void);
 void gxr_flush(void);
+void tex_epoch_advance(void);
 
 static void load_bp(CpuState* s, uint32_t v)
 {
@@ -547,6 +548,9 @@ static int load_capture(CpuState* s, const char* base, int with_ram, uint8_t** f
         if (!f) { fprintf(stderr, "[gx] cannot open %s\n", path); return 1; }
         if (fread(s->mem, 1, MEM1_SIZE, f) != MEM1_SIZE) { fprintf(stderr, "[gx] short RAM file\n"); fclose(f); return 1; }
         fclose(f);
+        /* Every byte of memory replaced, with no BP write to say so: hash each
+         * texture again at its next use (gxr_tev.c, the texture epoch). */
+        tex_epoch_advance();
     }
 
     snprintf(path, sizeof path, "%s.fifo", base);

@@ -33,14 +33,34 @@ void tex_set_memory(CpuState* s)
 /* ---- texture cache ------------------------------------------------------ */
 
 typedef struct {
-    uint32_t addr, fmt, w, h, tlut_off, tlut_fmt;
-    uint8_t* rgba; /* every level, consecutively; level 0 first */
+    uint32_t addr, fmt, w, h, tlut_off, tlut_fmt; /* the key, kept when the decode is dropped */
+    uint8_t* rgba; /* every level, consecutively; level 0 first; NULL once dropped */
     const uint8_t* level[MAX_MIPS];
     int lw[MAX_MIPS], lh[MAX_MIPS], nlevels;
     uint64_t stamp;
     uint64_t hash;
+    uint64_t hashed; /* the epoch the hash was taken in */
     int replaced; /* a mod's image stands in for the decode: one level, any size */
 } TexEntry;
+
+/* The texture epoch (PLAN-60FPS-MODS H12). A texture's source bytes are
+ * hashed at most once an epoch, and the epoch moves on everything that can
+ * change texture memory under the renderer: the game's own texture-cache
+ * invalidate (BP 0x66, which GXInvalidateTexAll and GXInvalidateTexRegion
+ * write, and which the hardware needs before it will sample texels the CPU
+ * rewrote), every EFB copy, to a texture or to the screen, and so every frame
+ * end. Hashing on every lookup read 16-39 MB a frame in the heavy captures,
+ * one texture thirty times over; once an epoch it is the 0.8-2.0 MB of
+ * distinct textures, a few times a frame. SOA_TEXVERIFY=1 hashes on every
+ * lookup as before and counts the rewrites the epochs would have missed. */
+static uint64_t g_tex_epoch = 1;
+static int g_tex_verify = -1;
+static unsigned long long g_lookups, g_hashes, g_hash_bytes, g_decodes, g_missed;
+
+void tex_epoch_advance(void)
+{
+    g_tex_epoch++;
+}
 
 /* A mod's texture provider (PLAN-60FPS-MODS M3c), asked once per decode with
  * the texture's source hash -- its bytes, and its palette for the indexed
@@ -57,8 +77,17 @@ void gxr_set_texture_provider(int (*fn)(uint64_t hash, uint32_t fmt, uint32_t w,
     g_tex_provider = fn;
 }
 
-#define TEX_CACHE 256
+/* 1,024 entries (H12). With 256, H1's Part L run threw out 64 in one frame
+ * (frame 2071, a menu's 24x24 glyphs) and the heaviest captured frame wants
+ * 266. Found through an index and not by comparing every entry, which 256
+ * could afford and 1,024 cannot: at 4,400 lookups a frame that scan would be
+ * 4.5 million compares. An entry keeps its key when its decode is dropped, so
+ * the index forgets a key only at an eviction. */
+#define TEX_CACHE 1024
+#define TEX_INDEX 2048 /* a power of two, twice the entries */
 static TexEntry g_cache[TEX_CACHE];
+static int g_cache_used;           /* entries ever given a key; the rest are fresh */
+static int16_t g_index[TEX_INDEX]; /* entry number + 1, by key, linear probing; 0 is empty */
 static uint64_t g_stamp;
 /* Decoded textures thrown out to make room: the run's total, and how many in
  * the frame g_evict_frame names. The tripwire below is about the second. */
@@ -135,7 +164,7 @@ void tex_graveyard_empty(void)
 void tex_invalidate_all(void)
 {
     int i;
-    for (i = 0; i < TEX_CACHE; i++) { tex_free_later(g_cache[i].rgba); g_cache[i].rgba = NULL; g_cache[i].addr = 0; }
+    for (i = 0; i < g_cache_used; i++) { tex_free_later(g_cache[i].rgba); g_cache[i].rgba = NULL; }
 }
 
 /* Bytes a texture occupies in memory, from its tiled layout. */
@@ -211,8 +240,9 @@ static uint64_t hash_range(uint64_t h, const uint8_t* p, uint32_t n)
  * or a megabyte, so the larger the texture the smaller the fraction of it
  * that was ever looked at -- one in four thousand for a 1 MB sky.
  *
- * This runs on every texture lookup, once per map per draw on the guest
- * thread, so what it costs was measured rather than assumed. Against the old
+ * This ran on every texture lookup, once per map per draw on the guest
+ * thread, until H12 made it once an epoch (above); what it costs was
+ * measured rather than assumed. Against the old
  * sample, per lookup: a 24x24 I4 glyph (288 bytes) 13 ns instead of 47,
  * because 288 contiguous bytes are five cache lines where 64 spread words
  * were up to 64 of them; a 64x64 CMPR texture (8 KB, seven of every eight
@@ -251,10 +281,10 @@ void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes
      * from a BP write and not from a draw, so it can throw out every slot in
      * the cache at a moment nothing chose, with a queue full of draws that
      * still point at them; the graveyard absorbs that because it grows. */
-    for (i = 0; i < TEX_CACHE; i++) {
+    for (i = 0; i < g_cache_used; i++) {
         TexEntry* e = &g_cache[i];
         if (e->rgba && (e->fmt == 8 || e->fmt == 9 || e->fmt == 10) && e->tlut_off < tmem_off + bytes && e->tlut_off + 32768 > tmem_off) {
-            tex_free_later(e->rgba); e->rgba = NULL; e->addr = 0;
+            tex_free_later(e->rgba); e->rgba = NULL; /* the key stays: the index still finds it */
         }
     }
 }
@@ -511,42 +541,99 @@ static void maybe_replace(TexEntry* e)
     e->replaced = 1;
 }
 
-static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt, int nlevels)
+/* ---- the index ----------------------------------------------------------- */
+
+static uint32_t tex_home(const TexEntry* e)
+{
+    uint64_t k = ((uint64_t)e->addr << 32) ^ ((uint64_t)e->fmt << 28) ^ ((uint64_t)e->w << 16) ^ e->h ^
+                 ((uint64_t)e->tlut_off << 7) ^ ((uint64_t)e->tlut_fmt << 60);
+    k ^= k >> 33;
+    k *= HASH_P2;
+    k ^= k >> 29;
+    return (uint32_t)k & (TEX_INDEX - 1);
+}
+
+static int same_key(const TexEntry* a, const TexEntry* b)
+{
+    return a->addr == b->addr && a->fmt == b->fmt && a->w == b->w && a->h == b->h && a->tlut_off == b->tlut_off &&
+           a->tlut_fmt == b->tlut_fmt;
+}
+
+static TexEntry* tex_find(const TexEntry* key)
+{
+    uint32_t i;
+    for (i = tex_home(key); g_index[i]; i = (i + 1) & (TEX_INDEX - 1))
+        if (same_key(&g_cache[g_index[i] - 1], key)) return &g_cache[g_index[i] - 1];
+    return NULL;
+}
+
+static void tex_index_add(int n)
+{
+    uint32_t i = tex_home(&g_cache[n]);
+    while (g_index[i]) i = (i + 1) & (TEX_INDEX - 1);
+    g_index[i] = (int16_t)(n + 1);
+}
+
+/* Entry n's key out of the index, closing the gap behind it (Knuth's
+ * algorithm R) so every other key is still found by walking forward from its
+ * home: a key moves back into the hole unless its home lies cyclically in
+ * (hole, where it is]. */
+static void tex_index_remove(int n)
+{
+    uint32_t i = tex_home(&g_cache[n]), j, home;
+    while (g_index[i] != n + 1) i = (i + 1) & (TEX_INDEX - 1);
+    for (j = i;;) {
+        g_index[i] = 0;
+        for (;;) {
+            j = (j + 1) & (TEX_INDEX - 1);
+            if (!g_index[j]) return;
+            home = tex_home(&g_cache[g_index[j] - 1]);
+            if (!(i <= j ? (i < home && home <= j) : (i < home || home <= j))) break;
+        }
+        g_index[i] = g_index[j];
+        i = j;
+    }
+}
+
+/* ---- lookup --------------------------------------------------------------- */
+
+static uint64_t counted_hash(const TexEntry* e)
+{
+    g_hashes++;
+    g_hash_bytes += texture_bytes(e->fmt, e->w, e->h);
+    return source_hash(e->addr, e->fmt, e->w, e->h, e->tlut_off);
+}
+
+/* SOA_TEXVERIFY found a texture whose bytes changed inside one epoch: without
+ * it the renderer would have gone on drawing the old decode. */
+static void missed_rewrite(const TexEntry* e)
+{
+    if (++g_missed <= 8)
+        fprintf(stderr, "[gxr] SOA_TEXVERIFY: texture %08X (%ux%u fmt %u) changed in frame %u with no texture-cache invalidate, copy or frame end since it was hashed; without SOA_TEXVERIFY the old decode would have been drawn\n",
+                e->addr, e->w, e->h, e->fmt, gx_frame_count());
+}
+
+/* Where a texture not in the cache goes: a fresh entry, else one whose decode
+ * was dropped, else the least recently used -- with its key out of the index. */
+static TexEntry* tex_take(const TexEntry* key)
 {
     int i, victim = 0;
     uint64_t oldest = ~0ull;
-    uint64_t hsh;
-    gxr_texture_hazard(addr, texture_bytes(fmt, w, h));
-    hsh = source_hash(addr, fmt, w, h, tlut_off);
+    TexEntry* e;
+    if (g_cache_used < TEX_CACHE) return &g_cache[g_cache_used++];
     for (i = 0; i < TEX_CACHE; i++) {
-        TexEntry* e = &g_cache[i];
-        if (e->rgba && e->addr == addr && e->fmt == fmt && e->w == w && e->h == h && e->tlut_off == tlut_off && e->tlut_fmt == tlut_fmt) {
-            e->stamp = ++g_stamp;
-            /* rewritten in place, or more levels wanted -- which a replaced
-             * texture, one level by design, never is, or it would be decoded
-             * again on every draw */
-            if (e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
-                tex_free_later(e->rgba);
-                TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
-                e->hash = hsh;
-                maybe_replace(e);
-            }
-            return e;
-        }
-        if (e->stamp < oldest) { oldest = e->stamp; victim = i; }
+        if (!g_cache[i].rgba) { victim = i; break; }
+        if (g_cache[i].stamp < oldest) { oldest = g_cache[i].stamp; victim = i; }
     }
+    e = &g_cache[victim];
     {
-        TexEntry* e = &g_cache[victim];
-        /* An empty slot is a first use; taking one that still holds a decode
-         * means the working set no longer fits, and that texture is decoded
-         * again the next time a draw wants it. What says the cache is too
-         * small is the rate, not the total: the heaviest captured frame wants
-         * 266 textures against these 256 slots and costs ten evictions, and
-         * at ten a frame a running total reaches 256 in under a second of
-         * ordinary play, so a total would report the cutscene the corpus was
-         * captured from as thrash. Count per frame instead and speak at a
-         * quarter of the cache in one frame, which is six times the heaviest
-         * frame we have measured. */
+        /* Taking an entry that still holds a decode means the working set no
+         * longer fits, and that texture is decoded again the next time a draw
+         * wants it. What says the cache is too small is the rate, not the
+         * total: the heaviest captured frame wants 266 textures, and at a few
+         * evictions a frame a running total climbs in ordinary play, so a
+         * total would report a scene the cache holds as thrash. Count per
+         * frame instead and speak at a quarter of the cache in one frame. */
         if (e->rgba) {
             unsigned frame = gx_frame_count();
             if (frame != g_evict_frame) { g_evict_frame = frame; g_evicted_in_frame = 0; }
@@ -557,18 +644,76 @@ static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t
                     said = 1;
                     fprintf(stderr, "[gxr] texture cache: %u decoded textures thrown out of %d slots in frame %u (%u this run), the last %08X (%ux%u fmt %u) to make room for %08X (%ux%u fmt %u); the working set does not fit and textures are being decoded repeatedly\n",
                             g_evicted_in_frame, TEX_CACHE, frame, g_evicted, e->addr, e->w, e->h,
-                            e->fmt, addr, w, h, fmt);
+                            e->fmt, key->addr, key->w, key->h, key->fmt);
                 }
             }
         }
-        tex_free_later(e->rgba);
-        e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
-        TIMED(T_DECODE, decode_texture(e, nlevels));
-        e->hash = hsh;
-        maybe_replace(e);
+    }
+    tex_free_later(e->rgba);
+    e->rgba = NULL;
+    tex_index_remove(victim);
+    return e;
+}
+
+static const TexEntry* texture(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, uint32_t tlut_off, uint32_t tlut_fmt, int nlevels)
+{
+    TexEntry key, *e;
+    uint64_t hsh;
+    gxr_texture_hazard(addr, texture_bytes(fmt, w, h));
+    if (g_tex_verify < 0) g_tex_verify = getenv("SOA_TEXVERIFY") != NULL;
+    g_lookups++;
+    key.addr = addr; key.fmt = fmt; key.w = w; key.h = h; key.tlut_off = tlut_off; key.tlut_fmt = tlut_fmt;
+    e = tex_find(&key);
+    if (e && e->rgba) {
         e->stamp = ++g_stamp;
+        if (e->hashed != g_tex_epoch || g_tex_verify) {
+            hsh = counted_hash(e);
+            if (e->hashed == g_tex_epoch && hsh != e->hash) missed_rewrite(e);
+            e->hashed = g_tex_epoch;
+        } else {
+            hsh = e->hash;
+        }
+        /* rewritten in place, or more levels wanted -- which a replaced
+         * texture, one level by design, never is, or it would be decoded
+         * again on every draw */
+        if (e->hash != hsh || (!e->replaced && e->nlevels < nlevels)) {
+            tex_free_later(e->rgba);
+            g_decodes++;
+            TIMED(T_DECODE, decode_texture(e, nlevels > e->nlevels ? nlevels : e->nlevels));
+            e->hash = hsh;
+            maybe_replace(e);
+        }
         return e;
     }
+    /* Not cached, or cached under this key with its decode dropped (a TLUT
+     * load, tex_invalidate_all), in which case the entry and its place in
+     * the index are reused. */
+    if (!e) {
+        e = tex_take(&key);
+        e->addr = addr; e->fmt = fmt; e->w = w; e->h = h; e->tlut_off = tlut_off; e->tlut_fmt = tlut_fmt;
+        tex_index_add((int)(e - g_cache));
+    }
+    hsh = counted_hash(e);
+    g_decodes++;
+    TIMED(T_DECODE, decode_texture(e, nlevels));
+    e->hash = hsh;
+    e->hashed = g_tex_epoch;
+    maybe_replace(e);
+    e->stamp = ++g_stamp;
+    return e;
+}
+
+/* For gxr_report (declared there): what the cache did, and what
+ * SOA_TEXVERIFY caught. */
+void tex_report(void)
+{
+    if (!g_lookups) return;
+    fprintf(stderr, "[gxr] textures: %llu lookups, %llu hashed (%.1f MB), %llu decoded, %u evicted from %d entries (%d used)",
+            g_lookups, g_hashes, (double)g_hash_bytes / 1e6, g_decodes, g_evicted, TEX_CACHE, g_cache_used);
+    if (g_tex_verify > 0)
+        fprintf(stderr, "; SOA_TEXVERIFY: %llu changed inside an epoch\n", g_missed);
+    else
+        fprintf(stderr, "\n");
 }
 
 /* ---- per-draw setup ------------------------------------------------------ */

@@ -123,6 +123,7 @@ void tex_invalidate_all(void);
 void tex_graveyard_empty(void); /* frees textures no queued draw can reference any more */
 int tex_graveyard_full(void);
 void tex_set_memory(CpuState* s);
+void tex_epoch_advance(void); /* texture memory may have changed: hash each texture again at its next use */
 void tmem_load_tlut(CpuState* s, uint32_t src, uint32_t tmem_off, uint32_t bytes);
 
 extern uint8_t g_efb[EFB_H][EFB_W][4];
