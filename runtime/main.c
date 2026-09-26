@@ -12,6 +12,7 @@
 #include "cpu.h"
 #include "gxr.h"
 #include "mod.h"
+#include "picture.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1152,6 +1153,67 @@ static void usage(void)
             "The rest of the switches, and the keyboard mapping, are in README.md.\n");
 }
 
+/* P5a: with any picture key set, `--replay <base>` also writes
+ * <base>.picture.png -- the frame through the filters and the scaler, as a
+ * window would show it, at SOA_PICTURE_SIZE (default 1920x1080) -- so every
+ * filter can be opened without a window. Never <base>.png, which is the
+ * frame the hashes pin. */
+static int replay_picture(const char* base)
+{
+    PicFilters pf;
+    PicFilterState* st;
+    char why[160], path[1024];
+    const char* size = getenv("SOA_PICTURE_SIZE");
+    const char* sc = getenv("SOA_SCALER");
+    const char* keys[4] = {getenv("SOA_GAMMA"), getenv("SOA_COLORBLIND"), getenv("SOA_COLORBLIND_MODE"), getenv("SOA_FLASH_LIMIT")};
+    int w, h, x, y, k, used = 0, n = 0, dw = 1920, dh = 1080, rc = 1;
+    const uint8_t* rgba = gxr_screen(&w, &h);
+    uint8_t *frame, *out;
+    size_t i;
+    /* any key set, at any value: identity values make the picture the
+     * frame, which is how the picture path itself is checked */
+    for (k = 0; k < 4; k++) used |= keys[k] && *keys[k];
+    if (!used) return 0;
+    if (!picture_filters_parse(&pf, keys[0], keys[1], keys[2], keys[3], why, sizeof why)) fprintf(stderr, "[picture] %s\n", why);
+    if (!rgba || w < 1 || h < 1) return 1;
+    if (size && *size && (sscanf(size, "%dx%d%n", &dw, &dh, &n) != 2 || size[n] || dw < 1 || dh < 1 || dw > 16384 || dh > 16384)) {
+        fprintf(stderr, "[picture] SOA_PICTURE_SIZE=%s is not WxH; no picture written\n", size);
+        return 1;
+    }
+    if (sc && *sc && strcmp(sc, "fit") && strcmp(sc, "integer"))
+        fprintf(stderr, "[picture] SOA_SCALER=%s is not integer or fit; integer\n", sc);
+    frame = (uint8_t*)malloc((size_t)w * h * 4);
+    out = (uint8_t*)malloc((size_t)dw * dh * 4);
+    st = picture_filters_new(&pf);
+    if (frame && out && st) {
+        for (y = 0; y < h; y++) /* RGBA at the EFB's stride to BGRA, as the window presents it */
+            for (x = 0; x < w; x++) {
+                const uint8_t* s = rgba + ((size_t)y * EFB_W + x) * 4;
+                uint8_t* d = frame + ((size_t)y * w + x) * 4;
+                d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255;
+            }
+        picture_filter(st, frame, w, h, 0.0);
+        picture_scale(frame, w, h, out, dw, dh, sc && !strcmp(sc, "fit") ? PICTURE_FIT : PICTURE_INTEGER);
+        for (i = 0; i < (size_t)dw * dh; i++) { /* and back, with the bars opaque */
+            uint8_t t = out[4 * i];
+            out[4 * i] = out[4 * i + 2];
+            out[4 * i + 2] = t;
+            out[4 * i + 3] = 255;
+        }
+        picture_filters_name(&pf, why, sizeof why);
+        snprintf(path, sizeof path, "%s.picture.png", base);
+        rc = !png_write_rgba(path, out, dw, dh, dw * 4);
+        if (!rc) fprintf(stderr, "[picture] wrote %s (%dx%d; %s)\n", path, dw, dh, why);
+        else fprintf(stderr, "[picture] cannot write %s\n", path);
+    } else {
+        fprintf(stderr, "[picture] out of memory for a %dx%d picture; none written\n", dw, dh);
+    }
+    picture_filters_free(st);
+    free(frame);
+    free(out);
+    return rc;
+}
+
 int main(int argc, char** argv)
 {
     const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";
@@ -1302,10 +1364,14 @@ int main(int argc, char** argv)
         /* Render one captured frame (see gx.c frame capture) to <base>.png,
          * or a consecutive pair and the image between them (H10). */
         char png[1024];
+        int rc;
         snprintf(png, sizeof png, "%s.png", argv[2]);
         gxr_enable(1);
         gxr_set_output(png);
-        return argc > 3 ? gx_replay_pair(&s, argv[2], argv[3]) : gx_replay(&s, argv[2]);
+        if (argc > 3) return gx_replay_pair(&s, argv[2], argv[3]);
+        rc = gx_replay(&s, argv[2]);
+        if (rc == 0 && replay_picture(argv[2])) rc = 1; /* no picture of a capture that did not load */
+        return rc;
     }
     {
         /* A window when rendering for a person: SOA_RENDER is set and neither

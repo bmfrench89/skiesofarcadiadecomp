@@ -86,6 +86,8 @@ int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; ret
 void si_set_path_root(const char* root) { (void)root; }
 void aram_set_data_dir(const char* dir) { (void)dir; }
 void aram_census_prepare(void) {}
+const uint8_t* gxr_screen(int* w, int* h) { *w = 0; *h = 0; return NULL; }
+int png_write_rgba(const char* path, const uint8_t* rgba, int w, int h, int stride) { (void)path; (void)rgba; (void)w; (void)h; (void)stride; return 0; }
 int clock_pause_requested(void) { return 0; }
 void si_set_pad2_source(int (*fn)(uint16_t*, uint8_t*, uint8_t*, uint8_t*)) { (void)fn; }
 int si_read_pad(unsigned port, void* out) { (void)port; (void)out; return 0; }
@@ -199,6 +201,7 @@ def build(tmp_path):
             str(ROOT / "runtime" / "main.c"),
             str(ROOT / "runtime" / "mod.c"),
             str(ROOT / "runtime" / "tick.c"),
+            str(ROOT / "runtime" / "picture.c"),
             str(tmp_path / "stubs.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),

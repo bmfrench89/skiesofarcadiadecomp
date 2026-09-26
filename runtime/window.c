@@ -81,6 +81,11 @@ static int g_drift_started;
 static UINT g_interval = 2;     /* refreshes each frame is held */
 static double g_refresh_ms = 0; /* the display's refresh period, as DWM measures it */
 static unsigned g_present_failed, g_resize_failed;
+static PicFilterState* g_filters; /* P5a: gamma, colour-blind, flash limit; NULL with none set */
+static LONGLONG* g_pw;            /* QPC ticks of each present's own work, the frame to the back buffer */
+static size_t g_pw_n, g_pw_cap;
+static LONGLONG g_pw_t0;
+static SRWLOCK g_times_lock = SRWLOCK_INIT; /* g_pt and g_pw: the window appends, the report reads */
 
 /* ---- the window that fits (H19a) ------------------------------------------
  * The client is any size now: the picture goes in it by picture_layout --
@@ -107,10 +112,14 @@ static void note_present(void)
 {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
+    AcquireSRWLockExclusive(&g_times_lock);
     if (g_pt_n == g_pt_cap) {
         size_t cap = g_pt_cap ? g_pt_cap * 2 : 4096;
         LONGLONG* p = (LONGLONG*)realloc(g_pt, cap * sizeof *g_pt);
-        if (!p) return;
+        if (!p) {
+            ReleaseSRWLockExclusive(&g_times_lock);
+            return;
+        }
         g_pt = p;
         g_pt_cap = cap;
     }
@@ -120,6 +129,29 @@ static void note_present(void)
         g_guest0 = irq_retrace_count();
         g_drift_started = 1;
     }
+    ReleaseSRWLockExclusive(&g_times_lock);
+}
+
+/* The present's own work, from the frame read to the back buffer written --
+ * the conversion, P5a's filters, the scaler, the upload -- and not the wait
+ * for the display, for the report's p99 and max. */
+static void note_present_work(void)
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    AcquireSRWLockExclusive(&g_times_lock);
+    if (g_pw_n == g_pw_cap) {
+        size_t cap = g_pw_cap ? g_pw_cap * 2 : 4096;
+        LONGLONG* p = (LONGLONG*)realloc(g_pw, cap * sizeof *g_pw);
+        if (!p) {
+            ReleaseSRWLockExclusive(&g_times_lock);
+            return;
+        }
+        g_pw = p;
+        g_pw_cap = cap;
+    }
+    g_pw[g_pw_n++] = now.QuadPart - g_pw_t0;
+    ReleaseSRWLockExclusive(&g_times_lock);
 }
 
 /* The display's refresh period, from DWM's own measurement: what the sync
@@ -140,8 +172,17 @@ static int cmp_ll(const void* a, const void* b)
     return (x > y) - (x < y);
 }
 
-/* The histogram, in refreshes of the display, and the drift. */
+/* The histogram, in refreshes of the display, and the drift; the report
+ * runs on whichever thread stops the run, so it reads under the lock. */
+static void present_report_locked(void);
 static void present_report(void)
+{
+    AcquireSRWLockExclusive(&g_times_lock);
+    present_report_locked();
+    ReleaseSRWLockExclusive(&g_times_lock);
+}
+
+static void present_report_locked(void)
 {
     double period_ms = g_refresh_ms > 0.0 ? g_refresh_ms : 1000.0 / 60.0;
     size_t i, n = g_pt_n > 1 ? g_pt_n - 1 : 0;
@@ -165,6 +206,25 @@ static void present_report(void)
             bins[2], bins[3], bins[4], 1000.0 * (double)d[n / 2] / (double)g_qpf.QuadPart,
             1000.0 * (double)d[(n * 99) / 100] / (double)g_qpf.QuadPart);
     free(d);
+    n = g_pw_n;
+    if (n && (d = (LONGLONG*)malloc(n * sizeof *d)) != NULL) {
+        /* P5a: the present's own work, which the filters add to (a copy:
+         * the window may still be presenting) */
+        memcpy(d, g_pw, n * sizeof *d);
+        qsort(d, n, sizeof *d, cmp_ll);
+        fprintf(stderr, "[present] the work of a present, the frame to the back buffer%s: p50 %.2f ms, p99 %.2f ms, max %.2f ms over %zu\n",
+                g_filters ? " with the picture's filters" : "", 1000.0 * (double)d[n / 2] / (double)g_qpf.QuadPart,
+                1000.0 * (double)d[(n * 99) / 100] / (double)g_qpf.QuadPart, 1000.0 * (double)d[n - 1] / (double)g_qpf.QuadPart, n);
+        free(d);
+    }
+    if (g_filters) {
+        unsigned long long frames, held;
+        double most;
+        picture_filter_counts(g_filters, &frames, &held, &most);
+        fprintf(stderr, "[picture] %llu frame(s) filtered; the flash limiter held %llu back, and at most %.2f%% of the "
+                        "picture flashed more than three times in a second (the limit is under 25%%)\n",
+                frames, held, 100.0 * most);
+    }
     fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
     if (g_drift_started && g_pt_n > 1) {
         /* the guest's VI against the wall clock, and so against the display:
@@ -228,20 +288,15 @@ static void dxgi_present(int w, int h)
 {
     ID3D11Texture2D* bb = NULL;
     PicRect r = picture_layout(w, h, g_bw, g_bh, g_scaler);
-    int y, x;
     if (g_bw < 1 || g_bh < 1 || r.w < 1 || r.h < 1) return;
-    memset(g_scaled, 0, (size_t)g_bw * g_bh * 4);
-    for (y = 0; y < r.h; y++) {
-        const uint32_t* src = (const uint32_t*)(g_bgra + (size_t)((long long)y * h / r.h) * w * 4);
-        uint32_t* dst = (uint32_t*)(g_scaled + ((size_t)(r.y + y) * g_bw + r.x) * 4);
-        for (x = 0; x < r.w; x++) dst[x] = src[(long long)x * w / r.w];
-    }
+    picture_scale(g_bgra, w, h, g_scaled, g_bw, g_bh, g_scaler);
     if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) {
         g_present_failed++;
         return;
     }
     ID3D11DeviceContext_UpdateSubresource(g_ctx, (ID3D11Resource*)bb, 0, NULL, g_scaled, (UINT)g_bw * 4, 0);
     ID3D11Texture2D_Release(bb);
+    note_present_work();
     if (FAILED(IDXGISwapChain1_Present(g_sc, g_interval, 0))) g_present_failed++;
     note_present();
 }
@@ -445,19 +500,40 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
 }
 
-static void present(void)
+/* The frame on screen: a new one from the renderer (`fresh`), converted and
+ * through P5a's filters, or the one already shown, again at a new client
+ * size -- which the flash limiter must not see twice. */
+static void present(int fresh)
 {
-    int w, h, x, y;
-    const uint8_t* src = gxr_screen(&w, &h);
-    if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
-    for (y = 0; y < h; y++) {
-        const uint8_t* s = src + (size_t)y * EFB_W * 4;
-        uint8_t* d = g_bgra + (size_t)y * w * 4;
-        for (x = 0; x < w; x++) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; s += 4; d += 4; }
+    LARGE_INTEGER t0;
+    QueryPerformanceCounter(&t0);
+    g_pw_t0 = t0.QuadPart;
+    if (fresh || !g_shown_w) {
+        int w, h, x, y;
+        const uint8_t* src = gxr_screen(&w, &h);
+        if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
+        for (y = 0; y < h; y++) {
+            const uint8_t* s = src + (size_t)y * EFB_W * 4;
+            uint8_t* d = g_bgra + (size_t)y * w * 4;
+            for (x = 0; x < w; x++) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; s += 4; d += 4; }
+        }
+        /* P5a's filters, on the frame at its own size, timed at the
+         * display's clock so the flash limiter counts seconds as shown */
+        if (g_filters) {
+            static unsigned logged;
+            double a = picture_filter(g_filters, g_bgra, w, h, (double)t0.QuadPart / (double)g_qpf.QuadPart);
+            if (a < 1.0 && logged++ < 20)
+                fprintf(stderr, "[picture] frame %ld: held back from a flash, shown %.0f%% of the way%s\n", gxr_presented(),
+                        100.0 * a, logged == 20 ? " (the last of these lines)" : "");
+        }
+        g_shown_w = w; g_shown_h = h;
     }
-    g_shown_w = w; g_shown_h = h;
-    if (g_dxgi) dxgi_present(w, h);
-    else InvalidateRect(g_hwnd, NULL, FALSE);
+    if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
+    else {
+        InvalidateRect(g_hwnd, NULL, FALSE);
+        UpdateWindow(g_hwnd); /* the paint -- its scale -- inside the time taken, as DXGI's is */
+        note_present_work();
+    }
 }
 
 /* SOA_WINDOW_TEST=fs@300,win@600,size:1000x700@900 (H19a's check): at each
@@ -597,6 +673,17 @@ static unsigned __stdcall ui_thread(void* arg)
         if (sc && !strcmp(sc, "fit")) g_scaler = PICTURE_FIT;
         else if (sc && *sc && strcmp(sc, "integer"))
             fprintf(stderr, "[window] SOA_SCALER=%s is not integer or fit; integer\n", sc);
+        {
+            PicFilters pf;
+            char why[160];
+            if (!picture_filters_parse(&pf, getenv("SOA_GAMMA"), getenv("SOA_COLORBLIND"), getenv("SOA_COLORBLIND_MODE"),
+                                       getenv("SOA_FLASH_LIMIT"), why, sizeof why))
+                fprintf(stderr, "[picture] %s\n", why);
+            if (picture_filters_any(&pf) && (g_filters = picture_filters_new(&pf)) != NULL) {
+                picture_filters_name(&pf, why, sizeof why);
+                fprintf(stderr, "[picture] %s\n", why);
+            }
+        }
         if (!(p && !strcmp(p, "gdi"))) {
             g_dxgi = dxgi_start(g_hwnd, cr.right, cr.bottom);
             if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
@@ -666,11 +753,11 @@ static unsigned __stdcall ui_thread(void* arg)
             g_resized = 0;
             if (g_client_w > 0 && g_client_h > 0) { /* minimised is 0x0: no resize, no present */
                 if (g_dxgi) dxgi_resize(g_client_w, g_client_h);
-                if (g_shown_w) present(); /* the last frame again, at the new size */
+                if (g_shown_w) present(0); /* the last frame again, at the new size */
             }
         }
         if (logged_resize) window_line(now);
-        if (now != last) { last = now; present(); }
+        if (now != last) { last = now; present(1); }
         MsgWaitForMultipleObjects(0, NULL, FALSE, 8, QS_ALLINPUT);
     }
 }

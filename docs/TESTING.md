@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1065 passed in 215.99s
+1070 passed in 232.10s
 ```
 
-1065 tests in 56 files, none of which reads the disc. They cover the Python
+1070 tests in 56 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -79,6 +79,7 @@ its own and run it, some of the C as well:
 | `test_gxr_copy_filter.py` | 10 | what the EFB copy's vertical filter does to a pixel, including that the SDK's filter-off weights are the exact identity, and that `SOA_DEFLICKER=0` (P5b) makes the screen copy the identity and leaves texture copies filtered |
 | `test_matchcheck.py` | 9 | how an object's symbol is matched to a function in the executable |
 | `test_symbols.py` | 9 | the symbol database |
+| `test_picture.py` | 9 | `runtime/picture.c`, built alone (H19a): `picture_layout` gives the spec's rectangles at 1920x1080, 1280x800 and 2560x1600 in both modes and agrees with a Python twin over a grid of clients, always inside the client; `present_interval` holds 60, 85, 120 and 144 Hz to 2, 1, 4 and 1, and at turbo's 60 images a second (M11a) to 1, 1, 2 and 1; both mutations (width and height swapped, a plain round) fail, the plain round at 60 fps on 144 Hz alone; the twin's log check passes a good windowed run and fails each rule broken; and P5a's filters: the matrices equal to 3.13's text to six places in picture.c and the twin, each colour-blind model within a step of a Python twin of the spec's formulas over 91 colours, grey to grey, gamma 1.0 no change and 2.2 its table, a bad key refused by name with the others left on; the flash limiter, fed whole frames and every pixel counted independently, keeping the spec's 5 Hz, faster flashes, a stepped flash, swapping halves, a flash over a gradient, an overlay pulse over a busy picture, a band sweep and a small flash under a quarter of the picture, and leaving 2 Hz, a fifth of the frame, a small step and bright changes untouched; `picture_scale` where the layout says; the replay identity check's PNG decoder under all five row filters; and eight mutations each failing |
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
@@ -94,7 +95,6 @@ its own and run it, some of the C as well:
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
-| `test_picture.py` | 4 | `runtime/picture.c`, built alone (H19a): `picture_layout` gives the spec's rectangles at 1920x1080, 1280x800 and 2560x1600 in both modes and agrees with a Python twin over a grid of clients, always inside the client; `present_interval` holds 60, 85, 120 and 144 Hz to 2, 1, 4 and 1, and at turbo's 60 images a second (M11a) to 1, 1, 2 and 1; both mutations (width and height swapped, a plain round) fail, the plain round at 60 fps on 144 Hz alone; and the twin's log check passes a good windowed run and fails each rule broken |
 | `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
@@ -106,10 +106,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1065 passed` |
-| no capstone — **what CI installs** | `1046 passed, 1 skipped` |
-| no MSVC | `724 passed, 341 skipped` |
-| neither — **the Ubuntu CI leg** | `705 passed, 342 skipped` |
+| everything (MSVC + capstone) | `1070 passed` |
+| no capstone — **what CI installs** | `1051 passed, 1 skipped` |
+| no MSVC | `725 passed, 345 skipped` |
+| neither — **the Ubuntu CI leg** | `706 passed, 346 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -1079,7 +1079,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 341 of the 1065 skip without a C compiler; they build one runtime file and run it.
+² 345 of the 1070 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1090,8 +1090,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 705 passed, 342 skipped |
-| **Tests** | windows | the same three — 1046 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 706 passed, 346 skipped |
+| **Tests** | windows | the same three — 1051 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

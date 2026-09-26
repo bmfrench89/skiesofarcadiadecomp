@@ -110,6 +110,13 @@ uint32_t g_efb_z[EFB_H][EFB_W];
 
 static int g_enabled = -1;
 static unsigned g_snap_every; /* SOA_SNAP=n; frames are numbered by gx_frame_count() so the PNG names agree with SOA_FRAMES and SOA_PAD */
+static unsigned g_snap_from, g_snap_to = ~0u; /* SOA_SNAP=n@A-B: only frames A to B */
+
+/* Whether SOA_SNAP writes this frame: every nth, inside its range. */
+static int snap_frame(unsigned frame)
+{
+    return g_snap_every && frame >= g_snap_from && frame <= g_snap_to && (frame % g_snap_every) == 0;
+}
 static int g_draw_every;      /* a window is open: draw every frame, snapshots or not */
 static char g_png_path[512];
 static uint64_t g_tris, g_lines, g_points, g_clipped, g_verts_bad;
@@ -224,6 +231,11 @@ int gxr_enabled(void)
         const char* snap = getenv("SOA_SNAP");
         g_enabled = env && atoi(env) ? 1 : 0;
         g_snap_every = snap ? (unsigned)atoi(snap) : 0;
+        if (snap && strchr(snap, '@') && sscanf(strchr(snap, '@') + 1, "%u-%u", &g_snap_from, &g_snap_to) != 2) {
+            fprintf(stderr, "[gxr] SOA_SNAP=%s: the range is not A-B; every frame\n", snap);
+            g_snap_from = 0;
+            g_snap_to = ~0u;
+        }
         g_cull_flip = getenv("SOA_CULLFLIP") ? 1 : 0;
         if (getenv("SOA_GXR_PIXEL")) sscanf(getenv("SOA_GXR_PIXEL"), "%d,%d", &g_dbg_x, &g_dbg_y);
         g_debug = getenv("SOA_GXR_DEBUG") ? atoi(getenv("SOA_GXR_DEBUG")) : 0;
@@ -2381,7 +2393,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
      * worth rasterizing; the game then runs at full speed between them. A
      * window (g_draw_every) or a replay (g_png_path) wants every frame it
      * shows, whatever the interval says. */
-    if (g_snap_every && !g_draw_every && !g_png_path[0] && (gx_frame_count() % g_snap_every) != 0) return;
+    if (g_snap_every && !g_draw_every && !g_png_path[0] && !snap_frame(gx_frame_count())) return;
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
 
@@ -3083,7 +3095,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         int want = 0;
         unsigned frame = gx_frame_count(); /* the front end increments it after this copy, so this is the frame being presented */
         if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
-        else if (g_snap_every && (frame % g_snap_every) == 0) { ensure_frames_dir(); snprintf(path, sizeof path, "%s/%04u.png", frames_dir(), frame); want = 1; }
+        else if (snap_frame(frame)) { ensure_frames_dir(); snprintf(path, sizeof path, "%s/%04u.png", frames_dir(), frame); want = 1; }
         /* The PNG and the hash both describe the finished frame, so wait here
          * for the rows of this copy every other worker owns. The hash is taken
          * from the same buffer the PNG is written from and at the same point,

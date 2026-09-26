@@ -3618,3 +3618,102 @@ presenter logs `[window] frame 9812: turbo on, each frame held 1 refresh(es)`. T
 1 either way, so the switch changes nothing here that can be seen; the 60 Hz
 and 120 Hz rows are held by `test_picture.py`, whose plain-round mutation
 fails at 144 Hz alone.
+
+
+**P5a, the filters: gamma, colour blindness, and a flash limiter.**
+2026-09-25, `build/scenario-p5a-*.log`, `build/frames/0880.png`-`0940.png`.
+The native half of the spec's 3.13. `runtime/picture.c` filters the frame at
+its own 640x480 before the scaler, in window.c's present and in `--replay`:
+the colour-blind model in linear light, then gamma, then the flash limiter on
+what the two made. `sharp` and `crt` wait on `docs/specs/display.md`, as the
+planning session asked. The nearest-neighbour scaler moved into picture.c
+unchanged (`picture_scale`), so the replay's picture and the window's are
+one code.
+
+- **Colour blindness** is Machado, Oliveira and Fernandes (2009) at severity
+  1 in linear light; correction is daltonize's `rgb + C (rgb - sim)`, folded
+  into one matrix per kind. `test_picture.py` holds the three matrices to
+  3.13's own text to six places, in picture.c and in its Python twin, so one
+  typo in both cannot pass; all six kind-and-mode pairs to the twin over 91
+  colours within a step a channel; grey to grey. Gamma 1.0 changes no byte
+  and 2.2 takes mid-grey 128 to 186. A bad value in one key is refused by
+  name and leaves the others on -- in the first cut a typo in gamma switched
+  the flash limiter off.
+- **The flash limiter** counts WCAG's general flash for each pixel. A pixel
+  keeps the luminance it last turned at (before its first turn, the lowest
+  and highest it has shown); a move of 0.1 or more from there, the other way,
+  with the darker below 0.8, is half a flash, and the opposite half inside a
+  second ends one. A pixel that ends a fourth flash inside a second is over
+  the limit for a second after. When the pixels over it, with those that
+  would end a fourth now, would cover a quarter of the frame, the frame is
+  blended toward the one shown before by the most that keeps them under a
+  quarter; the search looks only at the pixels at risk, and the frame it
+  picks is checked whole. The report gives the largest share of the picture
+  that was ever over the limit.
+- **The tests feed whole frames and count every pixel independently.** The
+  spec's 5 Hz, black and white in turn at 30 and 60 a second, a flash built
+  of steps of 0.075, two halves swapping, the spec's 5 Hz over a gradient, a
+  white overlay pulsing over a busy picture, a flash sweeping down in bands,
+  and a flash of 0.12 about a pixel's first light: each flashes over more
+  than a quarter of the picture as given and under a quarter as shown. Two
+  flashes a second, a fifth of the frame, a step under 0.1 and a change
+  among bright values are shown untouched. Eight mutations each fail: the
+  colour model in sRGB, gamma inverted, a limiter that never acts (the 5 Hz
+  gets through) and one that always acts (the 2 Hz is touched), a fourth
+  flash let through, a fifth of the frame counted as enough, flashes measured
+  frame to frame, the quarter judged a frame at a time, and a pixel that
+  forgets its first extremes.
+- **It took three designs; two were wrong.** The first judged each frame
+  against the one before -- half a flash was a quarter of the pixels moving
+  0.1 the same way. In a window over the title it held 8 frames of the
+  opening's cloud whiteout at 980-998, opened from captures: cloud moving
+  past makes a quarter of the pixels lighter and another quarter darker in
+  the same frame. It also missed a flash spread over several frames and two
+  halves that swap. The second counted each pixel from its last turn but
+  judged the quarter one frame at a time. An adversarial review -- three
+  reviewers, each finding put to a skeptic: 14 findings, all confirmed --
+  showed it let just under a quarter of the pixels end a fourth flash on
+  every frame, different pixels each time: the spec's 5 Hz over a gradient
+  left 72% of the picture flashing six times a second, a white overlay over a
+  busy picture 100%, and a flash sweeping down in bands was never held. The
+  tests had missed it because every flashing pixel in them was the same.
+- **What it does to the game.** In a window over the title scenario the
+  third design holds 114 frames from frame 909, during the opening's flight
+  through cloud, most of them shown 1% of the way. That is the rule as
+  written: the frames 880-940, snapshotted unfiltered (`SOA_SNAP=1@880-940`,
+  a range new here) and measured the same way by the test module's own code,
+  have up to 66% of the picture flashing more than three times a second --
+  50% over cells of 40 pixels, 25% over twelve cells of 160. The frame's
+  mean luminance moves only between 0.29 and 0.48, so the flashing is
+  regional, cloud and blue sky passing fast. Whether a limiter should damp
+  that is the owner's call in session B; it is off unless set.
+- **Also from the review:** a resize no longer shows the limiter the same
+  frame twice; the replay writes the picture whenever a key is set, at any
+  value, and not after a replay that failed; `SOA_PICTURE_SIZE` with anything
+  after WxH is refused and a bad `SOA_SCALER` is named; the report reads the
+  present's timings under a lock; the GDI path's paint is inside its time.
+- **The replay** (3.13's Done): on copies of the title (0300), a field (4500)
+  and a battle (11900) outside `build/fifo`, every key at its identity value
+  with `SOA_PICTURE_SIZE=640x480` gives a `.picture.png` with the same pixels
+  as the `.png` by `python tools/tests/test_picture.py --same`, and
+  `gamma = 1.01` makes them differ. Opened: the battle simulated for
+  deuteranopia (the red damage figure and green bar to yellow, the green
+  enemy to grey-olive) and for tritanopia (the blues to teal, the deck to
+  pink); the field corrected for deuteranopia (a 2x picture centred in
+  1920x1080) and for protanopia (the crest's maroon to purple, the crystals
+  to green); the title at gamma 1.8, which barely moves on a card of white,
+  black and red.
+- **The cost, and the budget not met.** The present's own work, the frame to
+  the back buffer, at 2x over the title: p50 2.89 ms and p99 4.40 with no
+  filter; p50 5.82 and p99 12.80 with gamma 1.2, deutan correction and the
+  flash limit. Fullscreen at the display's 3440x1440: p50 6.85, p99 10.08
+  with none; p50 10.26, p99 17.65 with all three. 3.13's budget is p99 under
+  6 ms at the device's resolution, and the present misses it before any
+  filter: the scaler writes the whole back buffer on the CPU and uploads it
+  every frame. That is the presenter's to fix, with display.md's `sharp` and
+  a scaler on the GPU; the filters' own 3 ms at p50 can go to SIMD or a
+  worker then.
+
+Also here: README's list of `soa.ini` keys had not named M11a's `turbo`,
+and nothing noticed; `test_settings.py` now holds that list to every key
+`settings.c` reads.

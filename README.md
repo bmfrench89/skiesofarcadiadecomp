@@ -179,9 +179,9 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b`, `autotext`, `rumble`, `fullscreen`, `scaler`, `unfocused` and `deflicker`, each standing for the switch below. A key
-that changes what the game does (`seed`, the two `encounters` keys and
-`autotext`) is also written into a pad recording's `# config` line when it is
+`encounters_hold_b`, `autotext`, `rumble`, `fullscreen`, `scaler`, `unfocused`, `deflicker`, `turbo`, `gamma`, `colorblind`, `colorblind_mode` and `flash_limit`, each standing for the switch below. A key
+that changes what the game does (`seed`, the two `encounters` keys,
+`autotext` and `turbo`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys and `autotext` are read by the mods
 `encounter-rate` and `autotext`, not by the port, so they need `mods =
 ...\mods` too; set without it, the port says the key does nothing. A variable set in the environment always wins over the file, and
@@ -233,7 +233,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
-| `SOA_SNAP=n` | write `build/frames/NNNN.png` every n frames; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
+| `SOA_SNAP=n` / `SOA_SNAP=n@A-B` | write `build/frames/NNNN.png` every n frames, or every nth from frame A to B; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
 | `SOA_PAD2=frame:buttons,...` | a script for controller port 2 in `SOA_PAD`'s grammar, for checks: port 2 is read by mods (`read_pad` in `runtime/soa_mod.h`, for couch co-op) and never by the game, which still sees one controller. In play, port 2 is the next connected XInput pad after port 1's (P10a) |
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `+` combines (`1800:a+sup`), `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames; `lb`, `view`, `ls` and `rs` are the host buttons, which never reach the game (`1700:view+lb` is the fullscreen chord) |
@@ -252,6 +252,10 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FRAMETIME_FROM=N` | start the `[frametime]` record at frame `N` without uncapping: a capped run's figures for the same stretch an uncapped one reports |
 | `SOA_FIFO_DUMP=n,n` | capture those frame numbers; each lands as `NNNN.fifo`/`.regs`/`.ram`, zero-padded to four digits, for `gen\soa.exe --replay build/fifo/NNNN` |
 | `SOA_FIFO_DIR=path` | where those captures go (default `build/fifo`, the corpus `config/fifo_manifest.tsv` pins; capture somewhere else) |
+| `SOA_GAMMA=g` | the picture lighter (above 1) or darker (below), 0.5 to 2.5: each channel through `255 (v/255)^(1/g)` (PLAN-GAMEPLAY-MODS P5a) |
+| `SOA_COLORBLIND=off\|protan\|deutan\|tritan`, `SOA_COLORBLIND_MODE=correct\|simulate` | colours corrected for that colour blindness -- the daltonize redistribution of what Machado's model (2009, severity 1) says is lost -- or, with `simulate`, shown as it would see them; worked in linear light, then gamma (P5a) |
+| `SOA_FLASH_LIMIT=1` | no more than a quarter of the picture flashing more than three times in any second, as WCAG 2.3.1 and Xbox guideline 118 count flashes, pixel by pixel: a move of relative luminance of 0.1 or more from where the pixel last turned, the darker below 0.8, then the opposite move. A pixel that ends a fourth flash in a second counts against the quarter for a second after, and a frame that would take the pixels over it to a quarter is blended toward the one shown before, as far as it can go without (P5a). The log names each frame held (the first 20); the report counts them and gives the largest share of the picture that was over. It damps the opening's fast flight through cloud (FINDINGS "P5a") |
+| `SOA_PICTURE_SIZE=WxH` | the size of the `<base>.picture.png` that `--replay <base>` writes when any of the keys above is set, at any value: the frame through them and the scaler, as a window that size would show it (default 1920x1080). With every key at its identity value and `640x480` it is the frame itself, pixel for pixel -- `python tools/tests/test_picture.py --same <base>.png <base>.picture.png` says so. `<base>.png` stays the frame the hashes pin. In a window the `[picture]` line names the filters in effect, and the report gives the present's own work, the frame to the back buffer, at p50, p99 and max (`[present] the work of a present`) |
 | `SOA_THREADS=n` | rasterizer worker threads, default three quarters of the logical CPUs (12 of 16), which was fastest in the heaviest field scene measured (FINDINGS "H15c") |
 | `SOA_NOSOUND=1` | no audio device |
 | `SOA_UNFOCUSED=run\|mute\|pause` | with another window in front: `run` (the default) carries on as before; `mute` silences the game and ignores the pad until the window is back in front (M5b); `pause` holds the game, and its clock with it, until then (M19) |
@@ -294,7 +298,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1065 tests; any that need a dump skip themselves
+python -m pytest                     # 1070 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

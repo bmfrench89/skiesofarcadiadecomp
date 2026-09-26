@@ -12,6 +12,7 @@ written beside that driver, which is where settings.c looks.
 """
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -186,7 +187,17 @@ def test_every_check_runs_with_the_file_off():
 
 
 def test_the_file_is_documented():
-    assert "soa.ini" in (ROOT / "README.md").read_text(encoding="utf-8")
+    """README's list of soa.ini keys names every key settings.c reads: M11a's
+    `turbo` was missing from it for a commit, and nothing said so."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "soa.ini" in readme
+    src = (ROOT / "runtime" / "settings.c").read_text(encoding="utf-8")
+    table = src[src.index("static const Setting k_settings[] = {") :]
+    keys = re.findall(r'^\s*\{"(\w+)", "SOA_\w+"', table[: table.index("\n};")], re.M)
+    assert len(keys) > 20, keys
+    start = readme.index("The keys are `disc`")
+    listed = readme[start : readme.index("each standing for the switch below", start)]
+    assert [k for k in keys if f"`{k}`" not in listed] == []
 
 
 def recorded(exe, *in_effect, **env_set) -> str:

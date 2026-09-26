@@ -113,7 +113,9 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   the deflicker off for the display copy (P5b: `SOA_DEFLICKER=0`); and turbo
   up to 2x in battles and the sky (M11a: `SOA_TURBO`, View+RS), which reaches
   2x in a window only with M11a-skip, since drawn every frame a battle at
-  turbo makes about 43 images a second here. `examples/mods/encounters-off` moved out of
+  turbo makes about 43 images a second here; and the picture's filters
+  (P5a: gamma, colour-blind correction or simulation, a flash limiter;
+  the `sharp` and `crt` scalers wait on `docs/specs/display.md`). `examples/mods/encounters-off` moved out of
   `mods/` for the slider. **Waiting on the owner (sessions A and B in
   PLAN-NEXT):** the pad rumbling in a battle; a pad in slot 1 or 2 playing;
   F11, Alt+Enter, the chord, resizing and the cursor in a window; a
@@ -134,7 +136,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1065 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1070 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -167,7 +169,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1065 |
+| Python tests | 1070 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
