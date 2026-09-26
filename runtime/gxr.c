@@ -206,6 +206,10 @@ static void stall(int id, int kind)
  * The oracle for the fences, and the fallback. */
 static int g_legacy;
 static int g_token_wait; /* SOA_GXR_TOKENWAIT=1: a draw token waits for the copies before it (see gxr_bp_written) */
+/* SOA_DEFLICKER=0 (P5b): the display copy without the game's deflicker, for
+ * a sharper picture on a progressive display. Texture copies keep the
+ * game's weights: they are the game's own effects, not the picture. */
+static int g_deflicker = 1;
 
 int gxr_enabled(void)
 {
@@ -213,6 +217,8 @@ int gxr_enabled(void)
         read_stalls(getenv("SOA_GXR_STALL"));
         g_legacy = getenv("SOA_GXR_DRAIN") && atoi(getenv("SOA_GXR_DRAIN")) ? 1 : 0;
         g_token_wait = getenv("SOA_GXR_TOKENWAIT") && atoi(getenv("SOA_GXR_TOKENWAIT")) ? 1 : 0;
+        g_deflicker = !(getenv("SOA_DEFLICKER") && !strcmp(getenv("SOA_DEFLICKER"), "0"));
+        if (!g_deflicker) fprintf(stderr, "[gxr] SOA_DEFLICKER=0: the screen copy is not deflickered; texture copies are\n");
         if (g_legacy) fprintf(stderr, "[gxr] SOA_GXR_DRAIN: copies are drained around, as before H14\n");
         const char* env = getenv("SOA_RENDER");
         const char* snap = getenv("SOA_SNAP");
@@ -2936,6 +2942,11 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * set that does not total 64 takes the filtered path and is scaled, rather
      * than being waved through as "near enough to the identity". */
     copy_filter(bp[0x53], bp[0x54], &f_up, &f_mid, &f_dn);
+    if (to_screen && !g_deflicker) { /* P5b: the identity, so the unfiltered path and its fences */
+        f_up = 0;
+        f_mid = 64;
+        f_dn = 0;
+    }
     filtered = !(f_up == 0 && f_dn == 0 && f_mid == 64);
     /* Copy Y-scale (BP 4E) is 1.8 fixed point over the whole 24-bit field,
      * and 000100 is the identity -- all the game has ever programmed, and it

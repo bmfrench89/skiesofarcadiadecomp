@@ -3483,3 +3483,22 @@ channel 1 answering nothing with SOA_PAD2 set -- which marking channel 1
 present, tried, fails); `test_mods.py` (`read_pad(2)` as si.c gives it,
 ports 1 and 3 nothing, and map-log built against the header before the
 append still loads).
+
+
+**P5b: deflicker off.** 2026-09-25, `build/p5b-fifo/`. The game copies
+every frame to the screen through its deflicker filter (16/32/16 over three
+rows, FINDINGS "C3"), made for an interlaced television; on a progressive
+display it only softens. `SOA_DEFLICKER=0` (`deflicker = 0`) collapses the
+screen copy's kernel to the identity before the copy decides whether it is
+filtered, so it takes the unfiltered path and its fences; copies to
+textures -- the game's own effects -- keep its weights. Checks:
+`test_gxr_copy_filter.py` has, with the switch set, the display copy under
+the game's weights equal the identity copy byte for byte and a texture copy
+under the game's weights still differ from the identity; applying the
+switch to texture copies (tried) fails the second. `python
+tools/scenario.py replay` is 23/23 with the switch unset (the sweep drops
+`SOA_*`), and with it set every one of the 23 captures, replayed from a copy
+outside `build/fifo`, hashes differently from its manifest line; the
+battle's 12000, the cutscene's 4500 and the logo's 0300 were opened: the
+battle's text and edges sharper than the deflickered frame beside it, the
+others clean.

@@ -116,11 +116,48 @@ static void line_case(CpuState* s, const char* name, uint32_t f0, uint32_t f1, i
     profile(name, row, span);
 }
 
+/* A texture copy of the same rectangle, RGBA8 to memory, and an FNV-1a of
+ * what it wrote (P5b: SOA_DEFLICKER=0 leaves texture copies filtered). */
+static void tex_case(CpuState* s, const char* name, uint32_t f0, uint32_t f1)
+{
+    const uint32_t dest = 0x80400000u;
+    const uint8_t* p;
+    uint32_t h = 2166136261u;
+    size_t i, n = (size_t)COPY_W * COPY_H * 4;
+    bp_w(s, 0x53, f0); bp_w(s, 0x54, f1);
+    efb_fill(0);
+    efb_white_row(240);
+    bp_w(s, 0x49, 0);
+    bp_w(s, 0x4A, ((uint32_t)(COPY_H - 1) << 10) | (COPY_W - 1));
+    bp_w(s, 0x4D, 0x28);
+    bp_w(s, 0x4B, (dest & 0x1FFFFFFFu) >> 5);
+    bp_w(s, 0x52, 0x000063u); /* RGBA8 to memory, no clear */
+    gxr_flush();
+    p = mem_ptr(s, dest);
+    for (i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    printf("[tex] %s: %08X\n", name, h);
+}
+
 int main(void)
 {
     static CpuState s;
     s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
     if (!s.mem) return 2;
+    if (getenv("DRIVER_DEFLICKER")) {
+        /* SOA_DEFLICKER=0 set by the test: the screen and texture copies
+         * under the game's weights and under the identity. */
+        _putenv("SOA_RENDER=1");
+        _putenv("SOA_SNAP=");
+        if (!gxr_enabled()) return 3;
+        gxr_reset_efb();
+        line_case(&s, "screen-game", 0x30A208u, 0x00820Au, 240, 3);
+        line_case(&s, "screen-off", 0x595000u, 0x000015u, 240, 3);
+        tex_case(&s, "tex-game", 0x30A208u, 0x00820Au);
+        tex_case(&s, "tex-off", 0x595000u, 0x000015u);
+        gxr_flush();
+        fprintf(stderr, "[driver] done\n");
+        return 0;
+    }
     _putenv("SOA_RENDER=1");
     _putenv("SOA_SNAP=");
     _putenv("SOA_GXR_DRAWS=");
@@ -296,3 +333,30 @@ def test_the_filtered_copy_does_not_depend_on_the_thread_count(runs, threads):
     gives those to other workers. If the copy did not drain the queue first,
     these would differ."""
     assert pixels(runs[threads]) == pixels(runs[1]), f"SOA_THREADS={threads} differs from 1"
+
+
+def tex(text, name):
+    for line in text.splitlines():
+        if line.startswith(f"[tex] {name}:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"no [tex] {name} line in:\n{text}")
+
+
+@needs_msvc
+def test_deflicker_off_leaves_the_screen_copy_unfiltered_and_texture_copies_alone(tmp_path):
+    """P5b: with SOA_DEFLICKER=0 the display copy under the game's weights is
+    the identity copy, byte for byte, and a texture copy under the game's
+    weights still differs from the identity -- the game's own effects keep
+    their filter. Applying the switch to texture copies fails the second."""
+    exe = build(tmp_path)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env.update(SOA_THREADS="2", SOA_DEFLICKER="0", DRIVER_DEFLICKER="1")
+    proc = subprocess.run(
+        [str(exe)], capture_output=True, text=True, env=env, cwd=tmp_path, timeout=300, check=False
+    )
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 0 and "[driver] done" in text, text
+    assert "SOA_DEFLICKER=0: the screen copy is not deflickered" in text, text
+    assert case(text, "screen-game") == case(text, "screen-off"), text
+    assert case(text, "screen-game") == [0, 0, 0, 255, 0, 0, 0], text
+    assert tex(text, "tex-game") != tex(text, "tex-off"), text

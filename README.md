@@ -179,7 +179,7 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b`, `autotext`, `rumble`, `fullscreen`, `scaler` and `unfocused`, each standing for the switch below. A key
+`encounters_hold_b`, `autotext`, `rumble`, `fullscreen`, `scaler`, `unfocused` and `deflicker`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys and
 `autotext`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys and `autotext` are read by the mods
@@ -227,6 +227,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_RENDER=1` | render (and open the window) |
 | `SOA_SCALE=n` | the window's starting size, n times 640x480; by default the largest whole multiple whose window fits the monitor's work area |
 | `SOA_FULLSCREEN=1` | start in borderless fullscreen (`fullscreen = 1`); F11, Alt+Enter and View+LB toggle it |
+| `SOA_DEFLICKER=0` | the picture without the game's deflicker: the copy to the screen blends each row with the rows above and below it, which suits an interlaced television and softens a progressive display; `0` copies it unfiltered (`deflicker = 0`, P5b). The game's own copies to textures keep their filter. A replay with it set hashes differently from the manifest, by design |
 | `SOA_SCALER=integer\|fit` | how the picture fills the window (`scaler`): `integer`, the default, the largest whole multiple of 640x480, sharp, with black bars; `fit`, the largest 4:3 that fits, nearest neighbour, uneven pixels (H19a) |
 | `SOA_WINDOW_TEST=fs@N,win@N,size:WxH@N` | a check's knob: at each presented frame named, fullscreen, windowed or a client size, then one `[window] frame F: client WxH, image WxH at +X+Y, ...` line; `python tools/tests/test_picture.py <log>` checks those lines (H19a) |
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
@@ -292,7 +293,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1062 tests; any that need a dump skip themselves
+python -m pytest                     # 1063 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes
