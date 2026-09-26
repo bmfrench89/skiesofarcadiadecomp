@@ -23,6 +23,17 @@ static uint8_t g_buf[BLOCKS][BLOCK_BYTES];
 static int g_next, g_ready = -1;
 static unsigned g_rate;
 static uint64_t g_pushed, g_dropped;
+/* Drops come in runs: a burst after a stall the clock counted, which the
+ * queue cannot hold, is one run; a device slower than its rate is many
+ * short ones. The report tells them apart. */
+static uint64_t g_drop_runs, g_drop_run, g_drop_longest;
+static void note_drop(int dropped)
+{
+    if (!dropped) { g_drop_run = 0; return; }
+    g_dropped++;
+    if (!g_drop_run++) g_drop_runs++;
+    if (g_drop_run > g_drop_longest) g_drop_longest = g_drop_run;
+}
 
 static int audio_open(unsigned rate)
 {
@@ -54,6 +65,11 @@ static int audio_open(unsigned rate)
 /* Queue one AI DMA block (big-endian R/L pairs). */
 static int g_peak;
 static uint64_t g_blocks_seen;
+/* The rate blocks arrive at in wall time, for turbo's check (M11a): at any
+ * game speed the DSP should feed 128,000 bytes a second, and 2x audio is a
+ * clock running fast. */
+static uint64_t g_rate_bytes;
+static LARGE_INTEGER g_rate_first, g_rate_last;
 
 /* SOA_WAV=path: every block also goes to a WAV file (stereo 16-bit, little-endian),
  * so a headless run's sound can be listened to or compared afterwards. */
@@ -129,6 +145,9 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     unsigned i, n;
     int16_t* out;
     g_blocks_seen++;
+    if (!g_rate_first.QuadPart) QueryPerformanceCounter(&g_rate_first);
+    else g_rate_bytes += bytes; /* the bytes after the first block, over the time since it */
+    QueryPerformanceCounter(&g_rate_last);
     for (i = 0; i + 1 < bytes; i += 2) { /* a meter, so silence is visible in the report */
         int v = (int16_t)(((uint16_t)be_rl[i] << 8) | be_rl[i + 1]);
         if (v < 0) v = -v;
@@ -146,7 +165,7 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     if (!g_ready) return;
     if (bytes > BLOCK_BYTES) bytes = BLOCK_BYTES;
     h = &g_hdr[g_next];
-    if (!(h->dwFlags & WHDR_DONE)) { g_dropped++; return; } /* the device is behind; drop */
+    if (!(h->dwFlags & WHDR_DONE)) { note_drop(1); return; } /* the device is behind; drop */
     if (h->dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_wo, h, sizeof *h);
     out = (int16_t*)g_buf[g_next];
     n = bytes / 4;
@@ -156,16 +175,28 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     if (waveOutPrepareHeader(g_wo, h, sizeof *h) == MMSYSERR_NOERROR && waveOutWrite(g_wo, h, sizeof *h) == MMSYSERR_NOERROR) {
         g_pushed++;
         g_next = (g_next + 1) % BLOCKS;
+        note_drop(0);
     } else {
         h->dwFlags = WHDR_DONE;
-        g_dropped++;
+        note_drop(1);
     }
 }
 
 void audio_report(void)
 {
-    fprintf(stderr, "[audio] %llu DMA blocks, peak sample %d%s; %llu played, %llu dropped\n", (unsigned long long)g_blocks_seen, g_peak,
+    fprintf(stderr, "[audio] %llu DMA blocks, peak sample %d%s; %llu played, %llu dropped", (unsigned long long)g_blocks_seen, g_peak,
             g_ready > 0 ? "" : " (no output device)", (unsigned long long)g_pushed, (unsigned long long)g_dropped);
+    if (g_dropped)
+        fprintf(stderr, " in %llu run(s), the longest %llu", (unsigned long long)g_drop_runs, (unsigned long long)g_drop_longest);
+    fprintf(stderr, "\n");
+    if (g_rate_last.QuadPart > g_rate_first.QuadPart) {
+        LARGE_INTEGER f;
+        double secs;
+        QueryPerformanceFrequency(&f);
+        secs = (double)(g_rate_last.QuadPart - g_rate_first.QuadPart) / (double)f.QuadPart;
+        fprintf(stderr, "[audio] %llu bytes over %.1f s of wall time between the first block and the last: %.0f bytes a second\n",
+                (unsigned long long)g_rate_bytes, secs, (double)g_rate_bytes / secs);
+    }
     if (g_wav) { /* finish the file: the header carries the data size */
         wav_header(g_wav, g_wav_rate, g_wav_bytes);
         fclose(g_wav);

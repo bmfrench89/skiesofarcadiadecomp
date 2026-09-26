@@ -1967,9 +1967,9 @@ static int mute_selftest(CpuState* s, char* got, size_t cap)
 }
 
 /* The audio DMA across a clock epoch (M19): a deadline left eight blocks
- * behind -- a host stall's wake -- is caught up one block a poll while the
- * epoch holds, and after an epoch change the next poll delivers one block
- * and starts the deadline again from now, so the one after delivers none. */
+ * behind is caught up one block a poll, and an epoch change -- which brings
+ * no backlog of its own, since the clock does not count a gap -- does not
+ * throw the owed blocks away: the polls after it keep delivering. */
 int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v);
 void dsp_poll(CpuState* s);
 uint64_t dsp_dma_blocks(void);
@@ -2006,7 +2006,32 @@ static int epoch_selftest(CpuState* s, char* got, size_t cap)
     audio_set_test_sink(NULL);
     snprintf(got, cap, "same epoch %llu of 4 polls, new epoch %llu then %llu", (unsigned long long)burst,
              (unsigned long long)resync, (unsigned long long)after);
-    return check("audio DMA across a clock epoch", got, "same epoch 4 of 4 polls, new epoch 1 then 0");
+    return check("audio DMA across a clock epoch", got, "same epoch 4 of 4 polls, new epoch 1 then 1");
+}
+
+/* The audio DMA's pace: AIInitDMA writes the length with the enable bit kept,
+ * once a block, while the engine runs. That write sets the next block and
+ * nothing else; taking it as a restart put every block a delivery late and
+ * the audio 5% slow (FINDINGS "The AI DMA's pace"). Three blocks owed before
+ * the write are all still owed after it. */
+static int rearm_selftest(CpuState* s, char* got, size_t cap)
+{
+    uint64_t b0, owed;
+    int i;
+    audio_set_test_sink(quiet);
+    while (clock_advance_at(clock_host_ns()) < 20000000ull) {}
+    dsp_write(s, 0xCC005030u, 2, 0x0000);
+    dsp_write(s, 0xCC005032u, 2, 0x4000);
+    dsp_write(s, 0xCC005036u, 2, 0x8000u | 0x04u);   /* on: 1 ms blocks, the first due in 1 ms */
+    dsp_dma_backdate(3);                              /* two blocks late and a third due */
+    dsp_write(s, 0xCC005036u, 2, 0x8000u | 0x04u);   /* AIInitDMA's write, the engine running */
+    b0 = dsp_dma_blocks();
+    for (i = 0; i < 3; i++) dsp_poll(s);
+    owed = dsp_dma_blocks() - b0;
+    dsp_write(s, 0xCC005036u, 2, 0x0000);
+    audio_set_test_sink(NULL);
+    snprintf(got, cap, "%llu of 3 owed blocks played after a running write", (unsigned long long)owed);
+    return check("audio DMA keeps its pace through AIInitDMA", got, "3 of 3 owed blocks played after a running write");
 }
 
 /* A mod's call into the game (PLAN M4): mod_call_guest on strlen's entry,
@@ -2169,6 +2194,7 @@ int selftest(CpuState* s)
     failures += motor_selftest(s, got, sizeof got);
     failures += mute_selftest(s, got, sizeof got);
     failures += epoch_selftest(s, got, sizeof got);
+    failures += rearm_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);

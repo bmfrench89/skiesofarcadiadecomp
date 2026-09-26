@@ -8,12 +8,14 @@
  * sleep woke to a clock a minute ahead -- the game's play time jumped, and
  * every deadline that had come due in the gap fired at once. Now guest time
  * accumulates speed x the host's monotonic time between reads, and a gap
- * between two reads longer than the threshold (SOA_CLOCK_GAP_MS, default 250;
- * 0 turns the rule off) counts as no time at all: the host was asleep, or
- * stopped in a debugger, and the game should not see it. The guest thread
- * reads the timebase every few microseconds while it runs, so an ordinary
- * run has no gap near 250 ms. Each gap, speed change and pause bumps an
- * epoch, which dsp.c watches to resynchronise its audio DMA.
+ * between two reads longer than the threshold (SOA_CLOCK_GAP_MS, default
+ * 2000; 0 turns the rule off) counts as no time at all: the host was asleep,
+ * or stopped in a debugger, and the game should not see it. The default was
+ * 250 ms and was measured too tight: the port's own work on the guest
+ * thread -- a snapshot frame drawn after 99 undrawn ones, under a loaded
+ * host -- stalled it 0.3-1.8 s, and those count as time, as they always did
+ * (FINDINGS "M19, followed up"). Each gap, speed change and pause bumps an
+ * epoch.
  *
  * Guest time is monotonic by construction: a host step backwards counts as
  * nothing. Pause (clock_pause) excludes its span too; tick.c's safe point
@@ -39,7 +41,7 @@
 static int g_started;
 static uint64_t g_last_host_ns, g_guest_ns, g_origin_host_ns;
 static unsigned g_speed = 1;
-static uint64_t g_gap_ns = 250000000ull;
+static uint64_t g_gap_ns = 2000000000ull;
 static volatile unsigned g_epoch;
 static unsigned long long g_gaps;
 static uint64_t g_excluded_ns;
@@ -167,7 +169,7 @@ void clock_reset(void)
     g_started = 0;
     g_last_host_ns = g_guest_ns = g_origin_host_ns = 0;
     g_speed = 1;
-    g_gap_ns = 250000000ull;
+    g_gap_ns = 2000000000ull;
     g_epoch = 0;
     g_gaps = 0;
     g_excluded_ns = 0;

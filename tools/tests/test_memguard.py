@@ -85,6 +85,7 @@ const char* settings_root(void) { return "."; }
 int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; return 0; }
 void si_set_path_root(const char* root) { (void)root; }
 void aram_set_data_dir(const char* dir) { (void)dir; }
+void aram_census_prepare(void) {}
 int clock_pause_requested(void) { return 0; }
 void si_set_pad2_source(int (*fn)(uint16_t*, uint8_t*, uint8_t*, uint8_t*)) { (void)fn; }
 int si_read_pad(unsigned port, void* out) { (void)port; (void)out; return 0; }

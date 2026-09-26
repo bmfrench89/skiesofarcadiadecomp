@@ -172,6 +172,16 @@ void aram_set_data_dir(const char* dir)
     snprintf(g_data_dir, sizeof g_data_dir, "%s", dir ? dir : "");
 }
 
+/* Build the census now rather than at the first ARAM DMA: it reads the
+ * head of every file on the disc, 0.3-1.1 s under load, and main.c calls
+ * this before the game starts, where no clock is running (M19). */
+static void src_build(void);
+
+void aram_census_prepare(void)
+{
+    if (!g_src_ready) src_build();
+}
+
 static const char* src_data_dir(void)
 {
     if (g_data_dir[0]) return g_data_dir;

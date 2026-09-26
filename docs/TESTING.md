@@ -339,7 +339,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (82 cases)
+## 3. The self test (83 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -372,7 +372,7 @@ cannot open nodisc/sys/fst.bin
 
 That is the reason none of section 3 runs in CI.
 
-The 82 cases, in the order they print:
+The 83 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -389,8 +389,9 @@ The 82 cases, in the order they print:
 | 78 | The encounter multiplier as the game works it out | 1 |
 | 79 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
 | 80 | `unfocused = mute`: the device gets zeros, then the block again | 1 |
-| 81 | The audio DMA across a clock epoch: one block, then the deadline from now | 1 |
-| 82 | A mod's call into the game: every register as it was | 1 |
+| 81 | The audio DMA across a clock epoch: the owed blocks still come | 1 |
+| 82 | The audio DMA's pace through the game's running writes | 1 |
+| 83 | A mod's call into the game: every register as it was | 1 |
 
 ### The memory card (26)
 
@@ -589,14 +590,27 @@ fails it (FINDINGS "M5b").
 ### The audio DMA across a clock epoch (1)
 
 ```
-[selftest] audio DMA across a clock epoch ok    got "same epoch 4 of 4 polls, new epoch 1 then 0"
+[selftest] audio DMA across a clock epoch ok    got "same epoch 4 of 4 polls, new epoch 1 then 1"
 ```
 
-A DMA deadline left eight blocks behind, as a host stall would leave it, is
-caught up a block a poll while the clock's epoch holds; after an epoch
-change (M19) the next poll plays one block and starts the deadline again
-from now, so the poll after plays none. Without the resync (tried) it keeps
-catching up: `new epoch 1 then 1`.
+A DMA deadline left eight blocks behind is caught up a block a poll, and
+an epoch change (M19) does not throw the owed blocks away: the clock counts
+no gap, so an epoch brings no backlog of its own, and restarting the
+deadline there only dropped blocks (FINDINGS "M19, followed up"). Restarting
+it (tried) gives `new epoch 1 then 0`.
+
+### The audio DMA's pace (1)
+
+```
+[selftest] audio DMA keeps its pace through AIInitDMA ok    got "3 of 3 owed blocks played after a running write"
+```
+
+The game writes the DMA's length once a block while the engine runs, keeping
+the enable bit (`fn_802416E4`, AIInitDMA's shape). That write sets the next
+block and nothing else: three blocks owed before it are all played after
+it. Taking it as a restart, as the port did until 2026-09-25, plays none of
+them -- `0 of 3` (tried) -- and every block came a delivery late, the audio
+5% slow (FINDINGS "The AI DMA's pace").
 
 ---
 

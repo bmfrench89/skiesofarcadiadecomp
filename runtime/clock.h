@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 /* The speed (SOA_SPEED), the gap threshold in ms (0 off, -1 keep the
- * default 250), and a function told of each gap, for the log. */
+ * default 2000), and a function told of each gap, for the log. */
 void clock_configure(unsigned speed, long gap_ms, void (*gap_note)(double gap_s));
 
 uint64_t clock_host_ns(void);                  /* the host's monotonic time */

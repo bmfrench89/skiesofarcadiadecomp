@@ -156,7 +156,7 @@ memory card. Headless it runs about ten times real time.
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
 | Python tests | 1063 |
-| Self-test cases | 82 |
+| Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 

@@ -3502,3 +3502,73 @@ outside `build/fifo`, hashes differently from its manifest line; the
 battle's 12000, the cutscene's 4500 and the logo's 0300 were opened: the
 battle's text and edges sharper than the deflickered frame beside it, the
 others clean.
+
+
+**M19, followed up: 2 s, the census before the clock, and no DMA resync.**
+2026-09-25, `build/m11a/`, `build/scenario-m11a*.log`. M11a's runs, made on
+a host loaded by another session's research, showed M19's 250 ms threshold
+to be too tight. Two kinds of the port's own work stall the guest thread
+past it without its reading the clock:
+- **the ARAM census**, which read the head of every one of the disc's 5,552
+  files at the first ARAM DMA -- 0.3-1.1 s at frame 1 in all four ceiling
+  runs. It is built now before the game's first instruction, where no clock
+  runs (`aram_census_prepare`);
+- **a snapshot frame**, drawn after 99 undrawn ones with `SOA_SNAP=100`:
+  seven gaps of 0.3-1.8 s at frames 4101 to 7501, one frame after a
+  hundred, in the turbo battle run -- eight with the census's, 6.4 s in
+  all.
+
+The default is 2,000 ms now: past every stall of the port's own measured
+here, and still far below a sleep; the stall check's 10 s is caught as
+before. The audio DMA also no longer restarts its deadline at an epoch
+change: the clock counts no gap, so an epoch brings no backlog of its own,
+and the restart only threw away blocks owed from before it.
+
+What that cost is smaller than the first reading said. The turbo battle
+logged 116,247 bytes of audio a wall second where 128,000 is right, but its
+wall seconds held the 6.4 s the clock excluded; per guest second it was
+118,005, and the same run with both changes 119,550. The rest of the gap was
+in every run, turbo or not -- the plain battle gave 121,475 -- and had
+another cause (the next entry). The self test's epoch case now holds the
+owed blocks delivered across an epoch; restarting fails it.
+
+
+**The AI DMA's pace: a write while the engine runs is not a restart.**
+2026-09-25, `build/scenario-aidma*.log`, `build/scenario-aictl.log`. The
+audio reached the device 5% slow in every run: the plain battle scenario,
+13,500 frames over 457.1 guest seconds, played 86,743 AI DMA blocks of 640
+bytes -- 189.8 a second where 200 are due, 121,475 bytes a second where
+128,000 are. The blocks were at the right pitch; there were just too few of
+them, so a device fed 95% of what it plays spent the rest waiting. M2's
+"output near 30,000 samples a wall second" (above) was this, measured and
+passed as the audio being as it was: the first reading against the rate
+itself was M11a's, which needs it for turbo.
+
+The cause was `dsp_write`'s control register. Every write with the enable
+bit set started the deadline again from now. The game makes one such write
+each block, from `fn_802416E4`: interrupts off, the start address, then
+`0x5036 = (0x5036 & 0x8000) | length >> 5`, keeping bit 15, interrupts back
+on -- AIInitDMA's shape. `fn_8024176C`, the next function, sets bit 15 and
+is the start. The sound driver's setup, `fn_802851E0`, hands `fn_802850C4`
+to `fn_802416A0` (AIRegisterDMACallback's shape) and calls `fn_802416E4`
+once with a 640-byte buffer; after that `fn_802850C4`, the DMA callback,
+calls it at every AIDINT to queue the next buffer. So each block's clock
+began when the callback ran, not when the last block ended: every block a
+delivery late. The title scenario now reports it -- `[dsp] AI DMA control
+writes: 1 start(s), 13982 while running (the first with LR 80241704), 0
+stop(s)` against 13,982 blocks -- one write a block while running, one
+start.
+
+A write while running now sets the length for the next block and leaves the
+deadline alone; only a write that turns the engine on starts it. The battle
+scenario plays 91,716 blocks over 458.6 s, 128,000 bytes a second, and the
+title 128,000 too. The self test's pace case holds three owed blocks
+through a running write; the old rule plays none of them.
+
+With the device fed as fast as it plays, a stall the clock counts now
+overfills its 24-block queue: the battle dropped 77 blocks in 10 runs, the
+longest 34 (170 ms) -- 208 in the run before, which did not count runs --
+and the title 39 in 3 and, run again, 12 in 4. Runs, not single blocks
+spread over the run, which is what a device slower than its rate would give.
+The old pace never dropped anything because the queue was always empty. The
+report counts the runs now.

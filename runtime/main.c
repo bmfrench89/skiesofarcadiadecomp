@@ -59,6 +59,7 @@ const char* settings_root(void); /* settings.c, M5b */
 int settings_console_to_log(char* path, size_t cap);
 void si_set_path_root(const char* root);
 void aram_set_data_dir(const char* dir);
+void aram_census_prepare(void); /* aram.c: its disc reads before the clock starts (M19) */
 void tick_set_hold(int (*held)(void)); /* tick.c; M19's pause */
 int clock_pause_requested(void);
 void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]));
@@ -1335,6 +1336,10 @@ int main(int argc, char** argv)
         print_mode(want, rendering, scripted, frames, snap, secs);
         if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
     }
+    /* The ARAM census reads the head of every file on the disc, which took
+     * 0.3-1.1 s at the first ARAM DMA under load; here, before the game's
+     * first instruction, it is not time the game's clock sees. */
+    aram_census_prepare();
     ENTRY_FN(&s);
 
     fprintf(stderr, "[boot] entry point returned\n");

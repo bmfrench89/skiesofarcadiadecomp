@@ -59,9 +59,8 @@ static uint64_t g_mails_in, g_mails_out, g_cmdlists, g_unknown;
 static uint32_t g_dma_start;
 static uint16_t g_dma_ctrl;
 static uint64_t g_dma_due, g_dma_period, g_dma_blocks_done;
-
-unsigned clock_epoch(void);
-static unsigned g_dma_epoch;
+static uint64_t g_ctl_starts, g_ctl_running, g_ctl_stops; /* the control writes, by kind */
+static uint32_t g_ctl_running_lr; /* LR at the first running write: 80241704, in fn_802416E4 */
 
 static uint64_t tb_now(CpuState* s)
 {
@@ -199,13 +198,27 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     case 0x32: g_dma_start = (g_dma_start & 0xFFFF0000u) | ((uint32_t)v & 0xFFFFu); return 1;
     case 0x36: {
         uint32_t blocks = (uint32_t)v & 0x7FFFu;
+        int was_on = (g_dma_ctrl & 0x8000u) != 0;
         g_dma_ctrl = (uint16_t)v;
         if (v & 0x8000u) {
             /* 32 bytes per block; 128 bytes per millisecond of 16-bit stereo at 32 kHz. */
             g_dma_period = (uint64_t)blocks * 32u * TB_HZ / 128000u;
             if (!g_dma_period) g_dma_period = 1;
-            g_dma_due = tb_now(s) + g_dma_period;
-            g_dma_epoch = clock_epoch();
+            /* Starting, the first block plays from now. Running, a write
+             * only sets the next block: the one playing ends when it ends.
+             * The game makes one every block, from fn_802416E4 (AIInitDMA's
+             * shape: it keeps bit 15 and sets the length), so taking each as
+             * a restart put every block a delivery late and the audio 5%
+             * slow -- 121,475 bytes a second where 128,000 are due, the
+             * device starved (FINDINGS "The AI DMA's pace"). */
+            if (!was_on) {
+                g_dma_due = tb_now(s) + g_dma_period;
+                g_ctl_starts++;
+            } else if (!g_ctl_running++) {
+                g_ctl_running_lr = s->lr;
+            }
+        } else if (was_on) {
+            g_ctl_stops++;
         }
         return 1;
     }
@@ -214,22 +227,16 @@ int dsp_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
 }
 
 /* Called from the delivery point: a block that has finished playing raises
- * AIDINT, and the engine keeps looping the block until it is disabled.
- * After the clock's epoch changes -- a host gap, a pause, a speed change
- * (M19) -- the next block is the last one owed: the deadline starts again
- * from now instead of catching up block by block. Only then, so a run at
- * SOA_SPEED=10, where the DMA legitimately runs behind, keeps its count. */
+ * AIDINT, and the engine keeps looping the block until it is disabled. A
+ * deadline behind is caught up a block a poll, across a clock epoch too: the
+ * clock does not count a gap (M19), so an epoch brings no backlog of its own,
+ * and restarting the deadline there only threw away blocks owed from before
+ * it (FINDINGS "M19, followed up"). */
 void dsp_poll(CpuState* s)
 {
     if ((g_dma_ctrl & 0x8000u) && g_dma_period && tb_now(s) >= g_dma_due) {
         uint32_t bytes = (g_dma_ctrl & 0x7FFFu) * 32u;
-        unsigned epoch = clock_epoch();
-        if (epoch != g_dma_epoch) {
-            g_dma_epoch = epoch;
-            g_dma_due = tb_now(s) + g_dma_period;
-        } else {
-            g_dma_due += g_dma_period;
-        }
+        g_dma_due += g_dma_period;
         g_dma_blocks_done++;
         /* the block the DAC just played */
         if (bytes && (g_dma_start & MEM_MASK) + bytes <= MEM1_SIZE)
@@ -258,4 +265,7 @@ void dsp_report(void)
             "[dsp] booted=%d; %llu mails in, %llu out, %llu command lists; %llu AI DMA blocks played\n",
             g_booted, (unsigned long long)g_mails_in, (unsigned long long)g_mails_out,
             (unsigned long long)g_cmdlists, (unsigned long long)g_dma_blocks_done);
+    fprintf(stderr, "[dsp] AI DMA control writes: %llu start(s), %llu while running (the first with LR %08X), %llu stop(s)\n",
+            (unsigned long long)g_ctl_starts, (unsigned long long)g_ctl_running, g_ctl_running_lr,
+            (unsigned long long)g_ctl_stops);
 }
