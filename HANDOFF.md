@@ -108,11 +108,23 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   double-click, with `soa.ini` at the repository root, relative paths and
   defaults under it, and the log in `build\logs\` (M5b); and the tools reading
   the disc image, so the 1.42 GB of loose files can go (I2:
-  `extract.py --prune-loose`). `examples/mods/encounters-off` moved out of
-  `mods/` for the slider. **Waiting on the owner (session A in PLAN-NEXT):**
-  the pad rumbling in a battle; a pad in slot 1 or 2 playing; F11, Alt+Enter,
-  the chord, resizing and the cursor in a window; a double-click with a real
-  `soa.ini`; `unfocused = mute` on alt-tab; and the prune itself.
+  `extract.py --prune-loose`); a clock that survives sleep, with `unfocused =
+  pause` (M19); `.gci` import and export (P3); a second pad for mods (P10a);
+  the deflicker off for the display copy (P5b: `SOA_DEFLICKER=0`); and turbo
+  up to 2x in battles and the sky (M11a: `SOA_TURBO`, View+RS), which reaches
+  2x in a window only with M11a-skip, since drawn every frame a battle at
+  turbo makes about 43 images a second here. `examples/mods/encounters-off` moved out of
+  `mods/` for the slider. **Waiting on the owner (sessions A and B in
+  PLAN-NEXT):** the pad rumbling in a battle; a pad in slot 1 or 2 playing;
+  F11, Alt+Enter, the chord, resizing and the cursor in a window; a
+  double-click with a real `soa.ini`; `unfocused = mute` on alt-tab; the
+  prune itself; a Dolphin save imported and one exported back; and turbo's
+  feel.
+- **The audio plays at its rate (2026-09-25).** Until then every run fed the
+  device 5% slow -- 189.8 blocks of 5 ms a second where 200 are due -- because
+  the port took the game's once-a-block DMA length write as a restart. Fed at
+  its rate, the device's 120 ms queue now drops a burst after a host stall
+  instead of starving all the time (FINDINGS "The AI DMA's pace").
 - **Recorded display lists run at recording (C5a).** The game records lists
   every frame and the port parses them as they are recorded, so every list
   called is empty; 28.5% of the opening's draws happen that way. C5b is the
@@ -122,7 +134,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1063 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1065 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -155,7 +167,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1063 |
+| Python tests | 1065 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |

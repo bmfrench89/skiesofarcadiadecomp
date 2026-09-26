@@ -3572,3 +3572,49 @@ and the title 39 in 3 and, run again, 12 in 4. Runs, not single blocks
 spread over the run, which is what a device slower than its rate would give.
 The old pace never dropped anything because the queue was always empty. The
 report counts the runs now.
+
+
+**M11a: turbo up to 2x, in battles and the sky.** 2026-09-25,
+`build/m11a/*.log`, `build/scenario-m11a*.log`. `SOA_TURBO=battle|sky|both`
+(`turbo`, recorded) lets the frame end's spin go after one field while the
+game is in a battle -- scene 7, or scene 6 on a map of 500 or more, the ship
+battles -- or in the sky, the sky-mode word `0x80347464` at 1. tick.c decides
+at the loop's safe point and keeps the answer for the frame; View+RS flips it
+from the next one. The window follows it: `present_interval(hz, 60)` while
+on, `(hz, 30)` off, the rule H19a gave the normal case in both (60 Hz: 1
+against 2; 85 Hz: 1 and 1; 120 Hz: 2 against 4; 144 Hz: 1 and 1).
+
+**The first step, the ceilings (comfort-pack 3.14).** Uncapped, headless, at
+`SOA_SPEED=4` so the pacing is not the limit:
+
+| | guest alone (snapshot mode) | drawn every frame |
+|---|---|---|
+| battle, frames 9950-11898 | 104.9 a second, p95 14.3 ms | 35.0 a second, p95 48.2 ms |
+| sky, frames 3100-4998 (the world map, from `card-partK`) | 110.9, p95 12.1 ms | 37.6, p95 43.9 ms |
+
+The guest makes more than 60 at p95 in both, so H13 stays closed. Drawn
+every frame neither comes near 60: the renderer is the limit. Those four
+runs shared the host with another session's research. A windowed run on a
+quieter host drew more and still fell well short: the battle at turbo, in a
+window at 85 Hz, made 42.9 images a second (p95 35.0 ms), and the game's
+frame counter advanced 0.717 a retrace where 1 is 2x. So turbo in a window
+is about 1.4x today. Only snapshot runs, which draw one frame in a hundred, reach 2x. The full
+2x in a window is M11a-skip, which 3.14 left to this measurement.
+
+**The check** (`tools/tests/test_turbo.py <log>`) holds a turbo battle to a
+same-run contrast: the counter at one a retrace over the battle and one per
+two over the field before it, each within 5%; the battle over inside the run;
+and the audio at 128,000 bytes a wall second within 3%, because turbo must not
+speed the music. The battle scenario at `SOA_TURBO=battle` passes it: 0.974
+over frames 9810-11878, 2,069 frames at turbo, 0.499 over the field, 128,000
+bytes a second, no clock gaps. The same run without turbo fails it (0.495 in
+the battle), and so does `SOA_SPEED=2`, whose audio doubles. The check's
+audio rule is what found the AI DMA's pace (the entry above): before that
+fix every run, turbo or not, failed it at 121,475.
+
+The chord: a run pressing View+RS at frame 1900 logs `[chord] frame 1900:
+view+rs -> turbo on`, then `[turbo] frame 1900: on`. In a window the
+presenter logs `[window] frame 9812: turbo on, each frame held 1 refresh(es)`. This display runs at 85 Hz, where the interval is
+1 either way, so the switch changes nothing here that can be seen; the 60 Hz
+and 120 Hz rows are held by `test_picture.py`, whose plain-round mutation
+fails at 144 Hz alone.

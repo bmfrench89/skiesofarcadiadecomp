@@ -96,6 +96,8 @@ static int g_client_w, g_client_h; /* the client as WM_SIZE last said, 0x0 minim
 static ULONGLONG g_mouse_at;       /* the last mouse movement, for hiding the cursor */
 static int g_unfocused_mute;       /* `unfocused = mute` (M5b) */
 static int g_unfocused_pause;      /* `unfocused = pause` (M19) */
+int tick_turbo_now(void);          /* M11a: 60 images a second while on */
+static int g_turbo_shown;          /* the turbo state g_interval was chosen for */
 void clock_pause(int on);
 static volatile int g_away;        /* another window is in front */
 void audio_set_muted(int on);
@@ -635,6 +637,15 @@ static unsigned __stdcall ui_thread(void* arg)
             DispatchMessage(&msg);
         }
         now = gxr_presented();
+        if (tick_turbo_now() != g_turbo_shown) {
+            /* At turbo the game makes up to 60 images a second, and holding each
+             * for two refreshes at 60 Hz would show only 30 of them (M11a). */
+            double hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
+            g_turbo_shown = tick_turbo_now();
+            g_interval = present_interval(hz, g_turbo_shown ? 60 : 30);
+            fprintf(stderr, "[window] frame %ld: turbo %s, each frame held %u refresh(es)\n", now,
+                    g_turbo_shown ? "on" : "off", g_interval);
+        }
         if (g_act_i < g_act_n && now >= g_acts[g_act_i].frame) {
             const WindowAct* a = &g_acts[g_act_i++];
             if (a->kind == 0) set_fullscreen(1);

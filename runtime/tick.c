@@ -39,6 +39,8 @@
 #endif
 #include "cpu.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define RETRACE_COUNT 0x80347A64u      /* r13 - 27836 */
 #define FRAME_START_FIELDS 0x8034768Cu /* r13 - 28820 */
@@ -51,6 +53,68 @@ static int g_safe_n, g_reported;
 static unsigned g_unlock_from; /* 0: locked */
 static unsigned long long g_safe_points, g_released;
 
+/* ---- turbo (M11a): up to 2x in battles or in the sky --------------------
+ * SOA_TURBO=battle|sky|both arms it (`turbo`, recorded); the View+RS chord
+ * toggles it, from the next safe point. Evaluated at the safe point and kept
+ * for the frame: when on, the frame end's spin goes after one field, as
+ * SOA_UNCAP's does, so the game runs up to twice as fast. battle is scene 7,
+ * and scene 6 on a map of 500 or more (the ship battles); sky is the sky-mode
+ * word, 1 on the world map and the ship-piloted maps. */
+#define SCENE_ID 0x803475CCu
+#define MAP_NUMBER 0x80311AC0u
+#define SKY_MODE 0x80347464u
+enum { TURBO_BATTLE = 1, TURBO_SKY = 2 };
+unsigned gx_frame_count(void);
+static int g_turbo_mode = -1; /* the SOA_TURBO bits, -1 before it is read */
+static int g_turbo_armed, g_turbo_now;
+static volatile int g_turbo_toggle;
+static unsigned long long g_turbo_frames;
+
+static void turbo_read(void)
+{
+    const char* v = getenv("SOA_TURBO");
+    g_turbo_mode = 0;
+    if (!v || !*v) return;
+    if (!strcmp(v, "battle")) g_turbo_mode = TURBO_BATTLE;
+    else if (!strcmp(v, "sky")) g_turbo_mode = TURBO_SKY;
+    else if (!strcmp(v, "both")) g_turbo_mode = TURBO_BATTLE | TURBO_SKY;
+    else fprintf(stderr, "[turbo] SOA_TURBO=%s is not battle, sky or both; off\n", v);
+    g_turbo_armed = g_turbo_mode != 0;
+    if (g_turbo_armed) fprintf(stderr, "[turbo] armed for %s: up to 2x there\n", v);
+}
+
+/* The chord (main.c): flip turbo from the next safe point. The answer is
+ * what it will be. */
+int tick_turbo_toggle(void)
+{
+    if (g_turbo_mode < 0) turbo_read();
+    g_turbo_toggle = 1;
+    return !g_turbo_armed;
+}
+
+/* Whether this frame runs at turbo: for the presenter's sync interval. */
+int tick_turbo_now(void)
+{
+    return g_turbo_now;
+}
+
+static void turbo_evaluate(CpuState* s)
+{
+    uint32_t scene;
+    int mode;
+    if (g_turbo_mode < 0) turbo_read();
+    if (g_turbo_toggle) {
+        g_turbo_toggle = 0;
+        g_turbo_armed = !g_turbo_armed;
+        fprintf(stderr, "[turbo] frame %u: %s\n", gx_frame_count(), g_turbo_armed ? "on" : "off");
+    }
+    mode = g_turbo_mode ? g_turbo_mode : TURBO_BATTLE | TURBO_SKY; /* armed by the chord alone: both */
+    scene = mem_r32(s, SCENE_ID);
+    g_turbo_now = g_turbo_armed && (((mode & TURBO_BATTLE) && (scene == 7 || (scene == 6 && mem_r32(s, MAP_NUMBER) >= 500))) ||
+                                    ((mode & TURBO_SKY) && mem_r32(s, SKY_MODE) == 1));
+    if (g_turbo_now) g_turbo_frames++;
+}
+
 void hle_on_report(void (*fn)(void));
 unsigned gx_frame_count(void);
 
@@ -62,6 +126,8 @@ static void tick_report(void)
                 g_unlock_from, g_released);
     else
         fprintf(stderr, "; the tick is locked, two fields a frame\n");
+    if (g_turbo_mode > 0 || g_turbo_frames)
+        fprintf(stderr, "[turbo] %llu frame(s) at turbo\n", g_turbo_frames);
 }
 
 static void tick_register_report(void)
@@ -115,8 +181,9 @@ void fn_8023F704(CpuState* s)
         int i;
         g_safe_points++;
         hold_while_paused();
+        turbo_evaluate(s);
         for (i = 0; i < g_safe_n; i++) g_safe[i](s);
-    } else if (s->lr == LR_FRAME_END_SPIN && g_unlock_from && gx_frame_count() >= g_unlock_from) {
+    } else if (s->lr == LR_FRAME_END_SPIN && ((g_unlock_from && gx_frame_count() >= g_unlock_from) || g_turbo_now)) {
         g_released++;
         s->gpr[3] = mem_r32(s, FRAME_START_FIELDS) + 1;
         return;

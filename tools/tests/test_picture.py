@@ -165,6 +165,8 @@ SPEC = [
     ((640, 480, 2560, 1600, "fit"), (213, 0, 2133, 1600)),
 ]
 INTERVALS = [((60.0, 30), 2), ((85.0, 30), 1), ((120.0, 30), 4), ((144.0, 30), 1), ((59.94, 30), 2)]
+# at turbo the game makes up to 60 images a second (M11a): the same rule at 60 fps
+INTERVALS_60 = [((60.0, 60), 1), ((85.0, 60), 1), ((120.0, 60), 2), ((144.0, 60), 1)]
 
 
 def layouts(exe, cases):
@@ -179,6 +181,8 @@ def test_the_spec_s_layouts_and_intervals(driver):
     assert layouts(driver, [c for c, _ in SPEC]) == [want for _, want in SPEC]
     got = [int(v) for v in ask(driver, [f"interval {hz} {fps}" for (hz, fps), _ in INTERVALS])]
     assert got == [want for _, want in INTERVALS], got
+    got = [int(v) for v in ask(driver, [f"interval {hz} {fps}" for (hz, fps), _ in INTERVALS_60])]
+    assert got == [want for _, want in INTERVALS_60], got
 
 
 @needs_msvc
@@ -226,6 +230,10 @@ def test_the_mutations_fail(tmp_path):
         85.0,
         144.0,
     ], got
+    # at 60 fps a plain round(hz/60) goes wrong at 144 alone (M11a)
+    got = [int(v) for v in ask(rounded, [f"interval {hz} {fps}" for (hz, fps), _ in INTERVALS_60])]
+    wrong = [hz for ((hz, _), want), g in zip(INTERVALS_60, got, strict=True) if g != want]
+    assert wrong == [144.0], got
 
 
 def good_log() -> str:

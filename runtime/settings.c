@@ -63,6 +63,7 @@ static const Setting k_settings[] = {
     {"encounters_hold_b", "SOA_ENCOUNTERS_HOLD_B", "0: holding B no longer keeps random battles away (mod encounter-rate)",
      1, "encounter-rate", "0|1"},
     {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)"},
+    {"turbo", "SOA_TURBO", "battle, sky or both: up to twice as fast there (View+RS toggles it)", 1, NULL, "battle|sky|both"},
     {"deflicker", "SOA_DEFLICKER", "0 draws the picture without the game's deflicker filter: sharper on a progressive display"},
     {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)"},
     {"unfocused", "SOA_UNFOCUSED", "run (the default), mute or pause: with another window in front, mute ignores the pad and silences the game, pause holds it"},

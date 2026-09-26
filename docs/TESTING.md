@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1063 passed in 242.56s
+1065 passed in 215.99s
 ```
 
-1063 tests in 55 files, none of which reads the disc. They cover the Python
+1065 tests in 56 files, none of which reads the disc. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -94,10 +94,11 @@ its own and run it, some of the C as well:
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
-| `test_picture.py` | 4 | `runtime/picture.c`, built alone (H19a): `picture_layout` gives the spec's rectangles at 1920x1080, 1280x800 and 2560x1600 in both modes and agrees with a Python twin over a grid of clients, always inside the client; `present_interval` holds 60, 85, 120 and 144 Hz to 2, 1, 4 and 1; both mutations (width and height swapped, a plain round) fail; and the twin's log check passes a good windowed run and fails each rule broken |
+| `test_picture.py` | 4 | `runtime/picture.c`, built alone (H19a): `picture_layout` gives the spec's rectangles at 1920x1080, 1280x800 and 2560x1600 in both modes and agrees with a Python twin over a grid of clients, always inside the client; `present_interval` holds 60, 85, 120 and 144 Hz to 2, 1, 4 and 1, and at turbo's 60 images a second (M11a) to 1, 1, 2 and 1; both mutations (width and height swapped, a plain round) fail, the plain round at 60 fps on 144 Hz alone; and the twin's log check passes a good windowed run and fails each rule broken |
 | `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
+| `test_turbo.py` | 2 | the check a turbo run is held to (M11a), `python tools/tests/test_turbo.py <log>`: over the battle the game's frame counter advances one a retrace, over the field before it one per two, the battle ends inside the run, and the audio reached the device at 128,000 bytes a second within 3%; a synthetic log with each rule broken fails its own line |
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
@@ -105,10 +106,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1063 passed` |
-| no capstone — **what CI installs** | `1044 passed, 1 skipped` |
-| no MSVC | `722 passed, 341 skipped` |
-| neither — **the Ubuntu CI leg** | `703 passed, 342 skipped` |
+| everything (MSVC + capstone) | `1065 passed` |
+| no capstone — **what CI installs** | `1046 passed, 1 skipped` |
+| no MSVC | `724 passed, 341 skipped` |
+| neither — **the Ubuntu CI leg** | `705 passed, 342 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -1078,7 +1079,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 341 of the 1063 skip without a C compiler; they build one runtime file and run it.
+² 341 of the 1065 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1089,8 +1090,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 703 passed, 342 skipped |
-| **Tests** | windows | the same three — 1044 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 705 passed, 342 skipped |
+| **Tests** | windows | the same three — 1046 passed, 1 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
