@@ -420,7 +420,10 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-09-30)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L2a**
+stretch, newest first, each with a FINDINGS entry of its name: **L4a**
+(CI's fifth job, `clang-cl`: the three citest scripts and the two
+clang-sensitive pytest modules under LLVM's clang-cl, where a skip fails the
+run; L2a's guard reverted turns it red); **L2a**
 (`runtime/plat.h`, the SIMD blend in every x86-64 build, `perfbench --exe`;
 clang-cl now compiles every runtime file); **L3a's review** (cee8a5b,
 seventeen findings fixed); **L3a**
@@ -436,10 +439,13 @@ slow in every run).
    As with P5a and P10b, most were tests that a wrong plan passed.
 2. ~~L2a~~ -- done, MSVC's pixel path measured unchanged. One Done line
    needed a second compile: Android's x86-64 target has SSE4.1 on, so
-   clang inlines `bilinear_sse41` there (FINDINGS "L2a"). What it unblocks is L4a, CI's clang-cl leg
-   (PLAN-NEXT M4a), and L2. The clang-cl for any of them is the NDK's:
+   clang inlines `bilinear_sse41` there (FINDINGS "L2a").
+   ~~L4a~~, CI's clang-cl leg, is done too: green on a branch, and red there
+   with L2a's guard reverted, both before the merge (FINDINGS "L4a"). **L2**
+   (PLAN-NEXT M4a row 1) is what L2a leaves unblocked. The clang-cl here is the NDK's:
    `$env:SOA_CLANG_CL =
-   'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`.
+   'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`;
+   CI's is LLVM's 20.1.8.
 3. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
    once its spec lands (turbo is about 1.4x in a window until then); and
    `docs/specs/display.md`, which now owns P5a's presenter budget -- p99
@@ -448,8 +454,12 @@ slow in every run).
    `docs/specs/portability.md` hold uncommitted edits made at 13:20, after
    8bd7c79, which this session did not write and left alone. They are the
    planning session's to commit, and when they do, PLAN-NEXT's L2a row and
-   portability's L2a slice should say it landed, and its L3a note that the
-   review ran (FINDINGS "L3a's review", "L2a").
+   M4a's L4a row, and portability's L2a and L4a slices, should say they
+   landed, and its L3a note that the review ran (FINDINGS "L3a's review",
+   "L2a", "L4a"). One figure in them is off: comfort-pack's M11a note says
+   windowed turbo reaches "about 1.2x", which is 35.0 images a second over
+   30 from the loaded host; FINDINGS "M11a" measured about 1.4x on a quiet
+   one (0.717 a retrace at 85 Hz), as item 3 says.
 
 **Traps met in this stretch, each now in the author's memory too:** a check
 chain piped through `tail` hides a failing step -- run it under

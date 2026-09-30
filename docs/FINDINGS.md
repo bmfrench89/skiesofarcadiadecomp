@@ -3931,3 +3931,39 @@ MSVC. `perfbench.py run --exe` benchmarks a saved build.
   SIMD" and a91622f21a14d5bb, the manifest's hash; without the switch the
   line is absent and the hash the same. Replay 23/23 at 1, 2, 3 and 8
   threads; the self test passes.
+
+**L4a: CI's clang-cl leg.** 2026-09-30. `ci.yml` has a fifth job, `clang-cl`
+("Runtime compiles (clang-cl)", portability.md 3.12): `compile_runtime.py`,
+`dc_check.py` and `render_check.py` with `--cc clang-cl`, then
+`test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`. The
+runner's clang-cl is LLVM's 20.1.8, in `C:\Program Files\LLVM\bin`, found on
+`PATH`; the job's first step prints which and its version, and fails if there
+is none.
+- **Green before the merge:**
+  [run 36766285607](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/36766285607)
+  on the branch `l4a-clang-cl`. 28 of 28 runtime files, all nine routines,
+  both render checks (the unasserted second-frame hash 63a57c77609efd77, the
+  same as MSVC's and the NDK clang-cl's), and 5 passed with none skipped.
+- **The mutation, red:**
+  [run 36766296154](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/36766296154)
+  on the branch `l4a-mutation`, which is that commit with `gxr_tev.c` as it
+  was at 5af18b3^, L2a's guard reverted. The leg fails on `gxr_tev.c` with
+  portability.md 2.2's three errors (two at :1193, one at :1196):
+  `compile_runtime` 27 of 28, `render_check` stops compiling the renderer,
+  and all three fastpath tests fail to build. `dc_check` stays green, since
+  it builds no renderer, and the MSVC job on the same commit is green. The
+  fastpath step failing is what shows `SOA_CC` reached it: built with MSVC,
+  the reverted file compiles and the same three tests pass (run locally).
+- **A skip would have been a green tick.** Both modules skip where no
+  clang-cl, `llvm-objdump` or SSE4.1 is found, and pytest exits 0 on a skip.
+  `tools/citest/noskip.py` is a pytest plugin (`-p noskip`) under which each
+  skip is named and fails the run. In a default local run, with no clang,
+  the FMA module's two skips exit 1 under it and 0 without.
+- **Every check step runs after a failure** (`if: ${{ !cancelled() }}`), so
+  the mutation run shows all four verdicts instead of stopping at the first.
+- **LLVM 20.1.8's warnings, none of them an error.** Every clang-cl call warns
+  that `-ffp-contract=off` overrides `/fp:precise`'s `-ffp-model=precise` (41
+  times in the job; the NDK's 19.0.1 does not say it). The override is the
+  profile's intent, and the FMA probe passing shows it holds. `strcpy.c`
+  casts a pointer to a 32-bit `unsigned long` three times, the words L4b is
+  for. `gxr.c:2942`'s unused `x0` warns as it does under the NDK.

@@ -195,7 +195,9 @@ instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
 compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
 Since L2a all three pass under the NDK's clang-cl 19.0.1: `compile_runtime.py
 --cc clang-cl` compiles 28 of 28 (until then `gxr_tev.c` failed with clang's
-SSE4.1 always_inline error, portability.md 2.2's).
+SSE4.1 always_inline error, portability.md 2.2's). CI runs all three that way
+on every push, in the clang-cl job (L4a, section 7), which is what reports the
+day a runtime change compiles under MSVC and not under clang.
 
 ```
 python tools/citest/compile_runtime.py
@@ -1104,7 +1106,7 @@ disc directory.
 
 ### What CI can and cannot run
 
-Four job runs on every push and pull request:
+Five job runs on every push and pull request:
 
 | Job | Runner | Does |
 |---|---|---|
@@ -1112,6 +1114,7 @@ Four job runs on every push and pull request:
 | **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 722 passed, 370 skipped at cee8a5b |
 | **Tests** | windows | the same three — 1088 passed, 4 skipped at cee8a5b; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
+| **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
 through `vswhere` and runs `vcvars64.bat` exactly as it does on a developer
@@ -1121,6 +1124,22 @@ check that quietly does nothing is worse than no check. The `native` job also
 installs nothing with pip — `dc_check.py` imports `tools/recompile.py` for one
 helper and that import graph is stdlib-only, which `test_citest.py` asserts
 rather than leaving it to be discovered in CI.
+
+The clang-cl job (portability L4a) is the same three scripts under the second
+compiler, on MSVC's headers, libraries and linker. Its first step prints which
+clang-cl and which version, and fails if there is none. The two pytest modules
+it adds skip, rightly, on a machine with no clang-cl, no `llvm-objdump` or no
+SSE4.1, so the job loads `tools/citest/noskip.py`, a pytest plugin under which
+each skip is named and fails the run. `SOA_CC=clang-cl` is what makes
+`test_gxr_fastpath.py` build with clang-cl; without it the module builds with
+MSVC and passes either way. Every check step runs even after one fails. To
+try the pytest step locally, point `SOA_CLANG_CL` at a clang-cl and put its
+`bin` on `PATH`, because the second FMA probe looks for `clang` there:
+
+```
+$env:SOA_CC = 'clang-cl'; $env:PYTHONPATH = 'tools/citest'
+python -m pytest -p noskip tools/tests/test_toolchain_fp.py tools/tests/test_gxr_fastpath.py
+```
 
 **CI cannot run:** linking `soa.exe`, anything under `gen/`, the device models,
 the guest half of `runtime/selftest.c`, the mwcc byte-for-byte match, the replay
