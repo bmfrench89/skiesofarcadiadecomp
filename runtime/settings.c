@@ -43,7 +43,22 @@ typedef struct {
     int recorded; /* changes what the game does, so a pad recording names it (settings_recorded) */
     const char* mod;     /* read by the DLL mod with this id, not by the port (settings_check_mods) */
     const char* choices; /* "a|b|c": the only values its reader takes; no other is recorded */
+    int (*valid)(const char* v); /* or the test its reader applies, where a list cannot say it */
 } Setting;
+
+/* mods/coop's parse_slots, for the recording: "1" or "1,3", each a party
+ * slot 0 to 3, once. "1, 3" is refused by the mod, so it is not recorded --
+ * and its space would split the config line besides. */
+static int is_slots(const char* v)
+{
+    unsigned seen = 0;
+    for (;;) {
+        if (*v < '0' || *v > '3' || (seen >> (*v - '0') & 1u)) return 0;
+        seen |= 1u << (*v - '0');
+        if (!*++v) return 1;
+        if (*v++ != ',') return 0;
+    }
+}
 
 /* The switches a player would use. Each later enhancement adds its line here,
  * off by default (PLAN M5). */
@@ -74,6 +89,8 @@ static const Setting k_settings[] = {
     {"rumble", "SOA_RUMBLE", "0 to 100: how hard the pad rumbles when the game asks; default 100, 0 is off"},
     {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
      "autotext", NULL},
+    {"coop", "SOA_COOP", "party slots a second pad commands in battle, e.g. 1 or 1,3 (mod coop)", 1, "coop", NULL,
+     is_slots},
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 
@@ -344,7 +361,7 @@ const char* settings_recorded(char* out, size_t cap)
     for (i = 0; i < N_SETTINGS; i++) {
         const char* v = !k_settings[i].recorded ? NULL : g_record_as_set[i] ? g_record_as[i] : getenv(k_settings[i].env);
         int k;
-        if (!v || !*v || !is_choice(k_settings[i].choices, v)) continue;
+        if (!v || !*v || !is_choice(k_settings[i].choices, v) || (k_settings[i].valid && !k_settings[i].valid(v))) continue;
         k = snprintf(out + used, cap - used, "%s%s=%s", used ? " " : "", k_settings[i].key, v);
         if (k < 0 || (size_t)k >= cap - used) {
             out[used] = '\0'; /* no half a value: the replay would read it as a different one */

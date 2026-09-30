@@ -3717,3 +3717,75 @@ one code.
 Also here: README's list of `soa.ini` keys had not named M11a's `turbo`,
 and nothing noticed; `test_settings.py` now holds that list to every key
 `settings.c` reads.
+
+
+**P10b's spike: the battle's command wheel, read.** 2026-09-25,
+`build/scenario-p10spike1.log`-`5.log`, snapshots `build/frames/10230.png`-
+`10520.png`. The battle scenario (the deck fight: Vyse party slot 0, Aika
+slot 1; port 1's script A every 150 frames from 3600) with `SOA_PEEK` of the
+phase word `0x8034733C`, the member choosing `0x80347330` (a word, loaded
+`lwz r13-29680` at `0x8007C7D0`) and the four command words `0x80309174 +
+32 * m`, every frame from 9780, and extra presses on Aika's wheel:
+- **Phase 0 -> 1 at frame 9946 sets every command word to -1**; Vyse's reads
+  3 (Attack) the frame after, before any press: the wheel opens on Attack.
+- **Each member takes two A presses for Attack**, the command and the
+  target; the member word goes 0 -> 1 on Vyse's target A (10200 -> 10201),
+  and phase 1 -> 2 on Aika's (10501). At that edge both words are 3. Aika's
+  word stays -1 until her command A: it is written on the choice, not as the
+  cursor moves.
+- **The wheel, from Attack:** one left is Item (5) and one right Magic (1);
+  two or more rights stop at Focus (0), and five or seven lefts at Run. It
+  does not wrap. Item's and Magic's menus take A without moving on in this
+  battle, so a check whose presses land there stalls; Focus needs no target.
+- **B on Aika's wheel gives the turn back to Vyse** (member 1 -> 0 at
+  10421); B on his does nothing; the wheel opens on Attack again after.
+- Round 2 repeats round 1 from phase 1 at 10944.
+
+
+**P10b: couch co-op in battle.** 2026-09-30, `build/scenario-p10.log`,
+`build/p10.pad`, `build/scenario-p10-mut.log`. `mods/coop` (manifest 2, id
+`coop`) is one `pad_filter`: with `SOA_COOP=1` (or `1,3`: party slots 0-3),
+while a battle takes the party's commands and the member choosing is one of
+those slots, the game's port 1 reads pad 2 (P10a's `read_pad`) in place of
+player 1's. When the turn passes between the pads the incoming pad is read
+as let go -- buttons, sticks and triggers -- until it has no button down.
+Pad 2 absent, port 1 plays everyone, said once. The mod logs each handover,
+each press forwarded from pad 2, and at each phase 1 -> 2 edge every
+member's command type.
+
+- **The live run:** the battle scenario with `SOA_MODS=mods SOA_COOP=1
+  SOA_PAD2=10225:right,10245:right,10270:a,10420:a@150
+  SOA_PAD_RECORD=build/p10.pad`. Pad 2 took Aika's turns at frames 10202,
+  11102 and 12002. On the first its two rights and A chose Focus -- logged
+  `frame 10272 commands: 0=3 1=0 2=-1 3=-1`, and snapshots show her wheel on
+  Focus at 10260 and the Focus banner at 10300 -- where port 1's script
+  chooses Attack (3), as spike run 1 did with the same script; on the next
+  two its A presses chose Attack. `python tools/tests/test_mods.py p10b
+  build/scenario-p10.log build/p10.pad` passes: on pad 2's turns the game
+  read only presses forwarded from pad 2, never port 1's A-every-150;
+  outside them only port 1's recorded presses; Aika's first command was
+  Focus; a direction was forwarded; and the recording still holds port 1's
+  A presses on her turns, taken before the filter. The same run with
+  `SOA_COOP=` (the Done's mutation) fails it: pad 2 never had a turn.
+- **The fake guest** (`test_mods.py`) holds the rest: the filter follows the
+  member and phase words and only in scene 7; a handover passes neutral while
+  the incoming pad holds A until every button is up, and only the next A
+  confirms (without the rule the held A confirms at once); sticks and
+  triggers are neutral in the hold and pad 2's are forwarded whole; pad 2
+  absent leaves port 1 playing; one commands line per 1 -> 2 edge and one
+  line per press; off and refused values filter nothing. Each rule has a
+  mutation that fails it.
+- **An adversarial review** (three reviewers, each finding put to a
+  skeptic; 10 confirmed, 3 refuted) found what those first tests missed,
+  now fixed. Pad 2 was read under `unfocused = mute`, so co-op passed its
+  presses to the game from behind another window; it now reads as let go,
+  still connected. Pad 2's sticks had no dead zone and its triggers passed
+  raw; one mapping (`map_xinput`) now serves both ports. No test looked at
+  sticks or triggers, the scene gate, or how many times a line was logged.
+  A `coop` value the mod refuses was still recorded, and `coop = 1, 3`
+  split the config line at its space: the recorder now applies the mod's
+  own test (`test_settings.py`). README's key list lacked `coop`, which
+  test_settings.py's new key-list test caught first.
+- **Pad 2 is not in recordings yet** (the event track's), so a co-op
+  session does not replay: port 1's recorded presses would take pad 2's
+  turns. The mod says so at its first forward.

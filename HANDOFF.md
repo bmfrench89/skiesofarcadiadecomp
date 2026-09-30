@@ -99,10 +99,11 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   `docs/PLAN-NEXT.md`).** Each slice has a FINDINGS entry of its name:
   manifest 2 for mods; the guard's T0 and T0c (card images and saves under
   any name, history read for content); the race seed (P6: `SOA_SEED`, and
-  settings that change the game written into a recording); two shipped mods,
+  settings that change the game written into a recording); three shipped mods,
   `mods/encounter-rate` (P1a: `SOA_ENCOUNTERS=off|half|normal|double`, hold B
-  for none) and `mods/autotext` (P11 and P11b: `SOA_AUTOTEXT=on`, hold LB to
-  skip), both built by `--link`; rumble (M18); host buttons and pad chords
+  for none), `mods/autotext` (P11 and P11b: `SOA_AUTOTEXT=on`, hold LB to
+  skip) and `mods/coop` (P10b: `SOA_COOP=1`, a second pad chooses party
+  slot 1's commands in battle), all built by `--link`; rumble (M18); host buttons and pad chords
   (CH1: View+LB fullscreen, and port 1 follows the pad to any slot);
   fullscreen, DPI, a resizable letterboxed window (H19a); a first run by
   double-click, with `soa.ini` at the repository root, relative paths and
@@ -120,8 +121,9 @@ these of its slices are done, each with a FINDINGS entry of the same name:
   PLAN-NEXT):** the pad rumbling in a battle; a pad in slot 1 or 2 playing;
   F11, Alt+Enter, the chord, resizing and the cursor in a window; a
   double-click with a real `soa.ini`; `unfocused = mute` on alt-tab; the
-  prune itself; a Dolphin save imported and one exported back; and turbo's
-  feel.
+  prune itself; a Dolphin save imported and one exported back; turbo's
+  feel; two pads through one battle with `SOA_COOP=1`; and whether the flash
+  limiter should damp the opening's flight through cloud.
 - **The audio plays at its rate (2026-09-25).** Until then every run fed the
   device 5% slow -- 189.8 blocks of 5 ms a second where 200 are due -- because
   the port took the game's once-a-block DMA length write as a restart. Fed at
@@ -136,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1070 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1089 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -169,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1070 |
+| Python tests | 1089 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |

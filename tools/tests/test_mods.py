@@ -63,14 +63,17 @@ void fn_8023F704(CpuState* s);
 /* si.c's host buttons (CH1), as the stub the "host" command sets. */
 static uint32_t g_host_now;
 static uint32_t host_stub(void) { return g_host_now; }
-/* si.c's pad 2 (P10a), as the stub the "pad2" command sets: connected, buttons. */
+/* si.c's pad 2 (P10a), as the stub the "pad2" command sets: connected,
+ * buttons; "analog2" sets its sticks and triggers. */
 static int g_pad2_there;
 static unsigned g_pad2_buttons;
+static uint8_t g_pad2_analog[6] = {128, 128, 128, 128, 0, 0};
 static int pad_stub(unsigned port, void* out)
 {
     uint8_t* p = (uint8_t*)out;
     if (port != 2 || !g_pad2_there) return 0;
     p[0] = (uint8_t)g_pad2_buttons; p[1] = (uint8_t)(g_pad2_buttons >> 8);
+    memcpy(p + 2, g_pad2_analog, 6);
     return 1;
 }
 
@@ -94,6 +97,8 @@ void dispatch(CpuState* s, uint32_t a)
  *   report             mod_report()       describe          mod_describe()
  *   safe               the top of the main loop: VIGetRetraceCount from 0x801DCB88
  *   pad F B            a controller read at frame F with buttons B, through the filter
+ *   padall F B         the same with the sticks and triggers off centre, all eight bytes printed
+ *   pad2 B             pad 2 connected, buttons B    analog2 SX SY CX CY LT RT   its sticks, triggers
  *   proj O P0..P5      a new projection (O 1 orthographic), through the filter
  *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider
  *   game               the game's registers at a safe point: r2, r13 its, r14 a mark */
@@ -134,6 +139,21 @@ int main(int argc, char** argv)
         else if (!strcmp(cmd, "irq")) g_irq = 1;
         else if (!strcmp(cmd, "host") && scanf("%x", &v) == 1) g_host_now = v;
         else if (!strcmp(cmd, "pad2") && scanf("%x", &v) == 1) { g_pad2_there = 1; g_pad2_buttons = v; }
+        else if (!strcmp(cmd, "analog2")) {
+            unsigned q[6], k;
+            if (scanf("%x %x %x %x %x %x", &q[0], &q[1], &q[2], &q[3], &q[4], &q[5]) != 6) break;
+            for (k = 0; k < 6; k++) g_pad2_analog[k] = (uint8_t)q[k];
+        }
+        else if (!strcmp(cmd, "padall") && scanf("%u %x", &a, &v) == 2) {
+            /* port 1's read with the person's sticks and triggers off centre: all eight bytes */
+            uint8_t pad[8] = {0, 0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+            int k;
+            pad[0] = (uint8_t)v; pad[1] = (uint8_t)(v >> 8);
+            if (g_pad) g_pad(a, pad);
+            printf("padall %u", a);
+            for (k = 0; k < 8; k++) printf(" %02X", pad[k]);
+            printf("\n");
+        }
         else if (!strcmp(cmd, "game")) { s.gpr[2] = 0x80350000u; s.gpr[13] = 0x8034E720u; s.gpr[14] = 0x14141414u; }
         else if (!strcmp(cmd, "regs")) printf("r14 %08X gqr3 %08X f14 %.1f\n", s.gpr[14], s.gqr[3], s.fpr[14].ps0);
         else if (!strcmp(cmd, "tex")) {
@@ -1015,6 +1035,7 @@ def test_the_shipped_mods_are_manifest_2():
     should: an id and a version, api as a minimum."""
     for folder in (
         "mods/autotext",
+        "mods/coop",
         "mods/encounter-rate",
         "examples/mods/encounters-off",
         "examples/mods/map-log",
@@ -1126,7 +1147,9 @@ def test_every_shipped_mod_is_built_by_link():
     import recompile
 
     srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
-    assert {"mods/autotext", "mods/encounter-rate", "examples/mods/map-log"} <= srcs, srcs
+    assert {"mods/autotext", "mods/coop", "mods/encounter-rate", "examples/mods/map-log"} <= srcs, (
+        srcs
+    )
 
 
 @needs_msvc
@@ -1512,6 +1535,152 @@ def test_the_p11b_check_fails_each_rule_broken():
     assert "a002b committed at 5000" in check_p11b(log(a002b=5000))[0]
 
 
+RE_SI = re.compile(r"^\[si\] frame (\d+) \(retrace \d+\): buttons ([0-9A-Fa-f]{4})")
+RE_COOP = re.compile(r"^\[mod\] coop: frame (\d+) (.*)$")
+FOCUS = 0  # two rights from Attack stop at Focus (FINDINGS "P10b's spike")
+DIRECTIONS = 0x0003  # left, right
+
+
+def recorded_presses(pad: str) -> set[int]:
+    """The frames a recording shows a button of port 1's going down or held
+    in a new combination: every line whose buttons are not "-"."""
+    got = set()
+    for line in pad.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] != "-":
+            got.add(int(parts[0]))
+    return got
+
+
+def recorded_a(pad: str) -> set[int]:
+    got = set()
+    for line in pad.splitlines():
+        if line and not line.startswith("#"):
+            parts = line.split()
+            if len(parts) >= 2 and "a" in parts[1].split("+"):
+                got.add(int(parts[0]))
+    return got
+
+
+def check_p10b(log: str, pad: str) -> list[str]:
+    """P10b's live rules, over the battle scenario run with SOA_COOP=1 (Aika,
+    party slot 1, is pad 2's), a SOA_PAD2 script of two rights and an A on
+    her first turn, and SOA_PAD_RECORD:
+    - on pad 2's turns the game reads only presses forwarded from pad 2,
+      never port 1's A-every-150;
+    - her first command is Focus, which two rights reach and port 1's
+      script never would;
+    - at least one direction was forwarded;
+    - outside pad 2's turns the game reads only presses of port 1's, each
+      where the recording has it -- so a handover back to port 1 passes
+      nothing it was already holding;
+    - the recording still holds port 1's A presses during pad 2's turns: it
+      is taken before the filter."""
+    si, turns, forwarded, commands = [], [], {}, []
+    start = None
+    for line in log.splitlines():
+        m = RE_SI.match(line)
+        if m:
+            si.append((int(m.group(1)), int(m.group(2), 16)))
+            continue
+        m = RE_COOP.match(line)
+        if not m:
+            continue
+        f, what = int(m.group(1)), m.group(2)
+        if what.startswith("handover: slot") and start is None:
+            start = f
+        elif what == "handover: back to port 1" and start is not None:
+            turns.append((start, f))
+            start = None
+        elif what.startswith("pad 2 press "):
+            forwarded[f] = int(what.split()[3], 16)
+        elif what.startswith("commands:"):
+            commands.append((f, dict(kv.split("=") for kv in what.split()[1:])))
+    if start is not None:
+        turns.append((start, 1 << 30))
+
+    def theirs(f: int) -> bool:
+        return any(a <= f < b for a, b in turns)
+
+    port1 = recorded_presses(pad)
+    problems = []
+    if not turns:
+        return ["no handover to pad 2: pad 2 never had a turn"]
+    for f, b in si:
+        if not b:
+            continue
+        if theirs(f) and f not in forwarded:
+            problems.append(
+                f"frame {f}: the game read {b:04X} on pad 2's turn, not a press forwarded from pad 2"
+            )
+        elif not theirs(f) and f not in port1:
+            problems.append(
+                f"frame {f}: the game read {b:04X} outside pad 2's turns, not a press of port 1's"
+            )
+    first = next((c for f, c in commands if f >= turns[0][0]), None)
+    if first is None or int(first.get("1", "-1")) != FOCUS:
+        problems.append(f"Aika's first command was {first and first.get('1')}, not {FOCUS} (Focus)")
+    if not any(b & DIRECTIONS and theirs(f) for f, b in forwarded.items()):
+        problems.append("no direction forwarded from pad 2 on its turns")
+    if not any(theirs(f) for f in recorded_a(pad)):
+        problems.append(
+            "the recording holds no A of port 1's during pad 2's turns: is it taken after the filter?"
+        )
+    return problems
+
+
+def p10b_log(
+    forward_right=True, leak_port1=False, focus=True, leak_back=False, keep_a=True
+) -> tuple[str, str]:
+    """A synthetic run: Vyse's A at 100 and 110, Aika's turn 200-300 with pad
+    2's right at 220 and A at 250, Vyse again from 300."""
+    log = [
+        "[si] frame 100 (retrace 1): buttons 0100",
+        "[si] frame 110 (retrace 1): buttons 0000",
+        "[mod] coop: frame 200 handover: slot 1 to pad 2",
+    ]
+    if forward_right:
+        log += [
+            "[mod] coop: frame 220 pad 2 press 0002 forwarded",
+            "[si] frame 220 (retrace 1): buttons 0002",
+        ]
+        log += ["[si] frame 230 (retrace 1): buttons 0000"]
+    if leak_port1:
+        log += ["[si] frame 240 (retrace 1): buttons 0100"]
+    log += [
+        "[mod] coop: frame 250 pad 2 press 0100 forwarded",
+        "[si] frame 250 (retrace 1): buttons 0100",
+    ]
+    log += ["[si] frame 260 (retrace 1): buttons 0000"]
+    log += [f"[mod] coop: frame 300 commands: 0=3 1={FOCUS if focus else 3} 2=-1 3=-1"]
+    log += ["[mod] coop: frame 300 handover: back to port 1"]
+    if leak_back:
+        log += ["[si] frame 300 (retrace 1): buttons 0100"]
+    log += ["[si] frame 400 (retrace 1): buttons 0100", "[si] frame 410 (retrace 1): buttons 0000"]
+    pad = ["# soa pad recording v2", "100 a #r1", "110 - #r1"]
+    if keep_a:
+        pad += ["240 a #r1", "250 - #r1"]
+    pad += ["400 a #r1", "410 - #r1"]
+    return "\n".join(log), "\n".join(pad)
+
+
+def test_the_p10b_check_fails_each_rule_broken():
+    """The live check's own test: a synthetic run that passes, and each rule
+    broken in turn; with no handover at all (SOA_COOP unset, the Done's
+    mutation) it fails outright."""
+    assert check_p10b(*p10b_log()) == []
+    assert "not a press forwarded from pad 2" in check_p10b(*p10b_log(leak_port1=True))[0]
+    assert "no direction forwarded" in check_p10b(*p10b_log(forward_right=False))[0]
+    assert "not 0 (Focus)" in check_p10b(*p10b_log(focus=False))[0]
+    assert "not a press of port 1's" in check_p10b(*p10b_log(leak_back=True))[0]
+    assert "no A of port 1's" in check_p10b(*p10b_log(keep_a=False))[0]
+    log, pad = p10b_log()
+    no_coop = "\n".join(ln for ln in log.splitlines() if "[mod] coop" not in ln)
+    assert check_p10b(no_coop, pad) == ["no handover to pad 2: pad 2 never had a turn"]
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["p11b"] and len(sys.argv) == 3:
         found = check_p11b(Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace"))
@@ -1519,7 +1688,16 @@ if __name__ == "__main__":
             print(f"[p11b-check] {p}")
         print(f"[p11b-check] {'FAIL' if found else 'ok'}")
         sys.exit(1 if found else 0)
-    sys.exit("usage: python tools/tests/test_mods.py p11b <log>")
+    if sys.argv[1:2] == ["p10b"] and len(sys.argv) == 4:
+        found = check_p10b(
+            Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace"),
+            Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace"),
+        )
+        for p in found:
+            print(f"[p10b-check] {p}")
+        print(f"[p10b-check] {'FAIL' if found else 'ok'}")
+        sys.exit(1 if found else 0)
+    sys.exit("usage: python tools/tests/test_mods.py p11b <log> | p10b <log> <pad recording>")
 
 
 @needs_msvc
@@ -1568,3 +1746,166 @@ def test_a_mod_built_before_read_pad_still_loads(driver, tmp_path):
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     out, err = play(driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe")
     assert "loaded 1" in out and "[mod] map-log: map-log loaded" in err, (out, err)
+
+
+COOP = ROOT / "mods" / "coop"
+
+
+def turn(phase: int, member: int) -> str:
+    """A battle (scene 7) at `phase`, party slot `member` choosing."""
+    return f"set 803475cc 7 set 8034733c {phase:x} set 80347330 {member:x} "
+
+
+def buttons_read(out: str) -> dict[int, int]:
+    """The buttons the game read, by frame."""
+    got = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if parts[:1] == ["pad"]:
+            got[int(parts[1])] = int(parts[2], 16)
+    return got
+
+
+@needs_msvc
+def test_coop_follows_the_member_and_phase_words(driver, tmp_path):
+    """SOA_COOP=1: on slot 0's turn port 1's own A reaches the game; from
+    slot 1's turn the game reads pad 2 -- neutral while pad 2 still holds
+    its left, then pad 2's A and never port 1's; at phase 2 port 1 again,
+    once its B is let go. The handovers, the press forwarded and the
+    commands at the phase edge are logged."""
+    shipped(tmp_path, folder=COOP)
+    script = (
+        turn(1, 0)
+        + "pad2 0 "
+        + reads(1, 2, 0x0100)
+        + turn(1, 1)
+        + "pad2 1 "
+        + reads(3, 4, 0x0100)
+        + "pad2 0 "
+        + reads(5, 5, 0x0100)
+        + "pad2 100 "
+        + reads(6, 6)
+        + "set 80309174 3 set 80309194 4 set 803091b4 ffffffff set 803091d4 ffffffff "
+        + turn(2, 1)
+        + reads(7, 7, 0x0200)
+        + reads(8, 8)
+        + reads(9, 9, 0x0100)
+        + turn(0, 1)  # an edge into phase 2 that is not from phase 1: no commands line
+        + reads(10, 10)
+        + turn(2, 1)
+        + reads(11, 11)
+    )
+    out, err = play(driver, tmp_path, script, SOA_COOP="1")
+    got = buttons_read(out)
+    assert [got[f] for f in range(1, 10)] == [0x100, 0x100, 0, 0, 0, 0x100, 0, 0, 0x100], got
+    assert "[mod] coop: frame 3 handover: slot 1 to pad 2" in err, err
+    assert "[mod] coop: frame 6 pad 2 press 0100 forwarded" in err, err
+    assert "[mod] coop: frame 7 commands: 0=3 1=4 2=-1 3=-1" in err, err
+    assert "[mod] coop: frame 7 handover: back to port 1" in err, err
+    assert err.count("pad 2 is not in recordings yet") == 1, err
+    assert err.count(" commands: ") == 1, err  # the 1 -> 2 edge, and only that
+    assert err.count(" forwarded") == 1, err
+
+
+@needs_msvc
+def test_coop_handover_holds_neutral_while_the_incoming_pad_holds_a(driver, tmp_path):
+    """The turn passes to pad 2 with its A down, a thumb resting on it: the
+    game reads neutral until a read with every button up, and only the next
+    A goes through. Without the handover rule (the mutation) the held A
+    confirms the member's command at once."""
+    script = (
+        turn(1, 0)
+        + "pad2 100 "
+        + reads(1, 5)
+        + turn(1, 1)
+        + reads(6, 15)
+        + "pad2 0 "
+        + reads(16, 16)
+        + "pad2 100 "
+        + reads(17, 18)
+    )
+    shipped(tmp_path / "a", folder=COOP)
+    out, err = play(driver, tmp_path / "a", script, SOA_COOP="1")
+    assert pressed(out) == [17, 18], pressed(out)
+    assert err.count(" forwarded") == 1, err  # an A held over 17-18 is one press
+    src = (COOP / "mod.c").read_text(encoding="utf-8")
+    rule = "        g_hold = 1;\n"
+    assert src.count(rule) == 1
+    shipped(tmp_path / "b", src.replace(rule, "        g_hold = 0;\n"), folder=COOP)
+    out, _ = play(driver, tmp_path / "b", script, SOA_COOP="1")
+    assert pressed(out)[:1] == [6], pressed(out)
+
+
+@needs_msvc
+def test_coop_without_pad_2_port_1_plays_everyone(driver, tmp_path):
+    shipped(tmp_path, folder=COOP)
+    out, err = play(driver, tmp_path, turn(1, 1) + reads(1, 3, 0x0100), SOA_COOP="1")
+    assert pressed(out) == [1, 2, 3], out
+    assert err.count("pad 2 is not connected: port 1 plays every member") == 1, err
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "value, told",
+    [
+        ("", "off (SOA_COOP unset)"),
+        ("4", "SOA_COOP=4 is not party slots 0 to 3"),
+        ("1,1", "SOA_COOP=1,1 is not party slots"),
+        ("1;3", "SOA_COOP=1;3 is not party slots"),
+    ],
+    ids=["unset", "slot-4", "twice", "separator"],
+)
+def test_coop_off_or_refused_never_filters(driver, tmp_path, value, told):
+    shipped(tmp_path, folder=COOP)
+    out, err = play(driver, tmp_path, turn(1, 1) + "pad2 100 " + reads(1, 2), SOA_COOP=value)
+    assert pressed(out) == [] and "unfiltered" in out, out
+    assert told in err, err
+
+
+@needs_msvc
+def test_coop_forwards_all_of_pad_2_and_holds_it_all_neutral(driver, tmp_path):
+    """Sticks and triggers too: during a handover's hold the game reads all of
+    the pad neutral, so port 1's stick cannot turn the next member's wheel;
+    on pad 2's turn it reads all of pad 2 and none of port 1. Mutations: a
+    neutral() that clears only the buttons, and forwarding only pad 2's
+    buttons, each fail."""
+    script = turn(1, 1) + "pad2 100 analog2 1e c8 2a 3b 4c 5d padall 1 0 pad2 0 padall 2 0 "
+    want = ["padall 1 00 00 80 80 80 80 00 00", "padall 2 00 00 1E C8 2A 3B 4C 5D"]
+
+    def reads_of(folder: Path) -> list[str]:
+        out, _ = play(driver, folder, script, SOA_COOP="1")
+        return [ln for ln in out.splitlines() if ln.startswith("padall ")]
+
+    shipped(tmp_path / "a", folder=COOP)
+    assert reads_of(tmp_path / "a") == want
+    src = (COOP / "mod.c").read_text(encoding="utf-8")
+    sticks = (
+        "    pad->stick[0] = pad->stick[1] = 128;\n"
+        "    pad->cstick[0] = pad->cstick[1] = 128;\n"
+        "    pad->trig[0] = pad->trig[1] = 0;\n"
+    )
+    forward = "        *pad = two;\n"
+    assert src.count(sticks) == 1 and src.count(forward) == 1
+    shipped(tmp_path / "b", src.replace(sticks, ""), folder=COOP)
+    assert reads_of(tmp_path / "b")[0] != want[0]
+    shipped(
+        tmp_path / "c", src.replace(forward, "        pad->buttons = two.buttons;\n"), folder=COOP
+    )
+    assert reads_of(tmp_path / "c")[1] != want[1]
+
+
+@needs_msvc
+def test_coop_only_in_a_battle(driver, tmp_path):
+    """Outside scene 7 the phase and member words are leftovers: reading as
+    slot 1's party input in the field (scene 6), port 1 keeps its own pad.
+    Without the scene gate (the mutation) pad 2 takes port 1 there."""
+    script = "set 803475cc 6 set 8034733c 1 set 80347330 1 pad2 0 " + reads(1, 3, 0x0100)
+    shipped(tmp_path / "a", folder=COOP)
+    out, err = play(driver, tmp_path / "a", script, SOA_COOP="1")
+    assert pressed(out) == [1, 2, 3] and "handover" not in err, (out, err)
+    src = (COOP / "mod.c").read_text(encoding="utf-8")
+    gate = "int battle = g_api->scene() == SCENE_BATTLE,"
+    assert src.count(gate) == 1
+    shipped(tmp_path / "b", src.replace(gate, "int battle = 1,"), folder=COOP)
+    out, _ = play(driver, tmp_path / "b", script, SOA_COOP="1")
+    assert pressed(out) != [1, 2, 3], out

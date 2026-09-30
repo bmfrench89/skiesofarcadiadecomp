@@ -804,6 +804,36 @@ int window_toggle_fullscreen(void)
 static ULONGLONG g_pad_probe_at;
 static WORD g_pad_xbuttons; /* the last XInput buttons window_pad read, for window_host */
 
+/* One XInput pad in the game's terms, for port 1 and port 2 alike: the
+ * buttons as si.c packs them, a stick only past its dead zone, a trigger only
+ * past its threshold. The sticks and triggers are left as they are otherwise
+ * (the keyboard's, or centre). Pad 2 once passed its sticks raw -- a resting
+ * stick's drift reached the game when couch co-op handed it pad 2 (P10b). */
+static uint16_t map_xinput(const XINPUT_GAMEPAD* g, int* sx, int* sy, int* cx, int* cy, int* lt, int* rt)
+{
+    uint16_t b = 0;
+    if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
+    if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;
+    if (g->wButtons & XINPUT_GAMEPAD_X) b |= 0x0400;
+    if (g->wButtons & XINPUT_GAMEPAD_Y) b |= 0x0800;
+    if (g->wButtons & XINPUT_GAMEPAD_START) b |= 0x1000;
+    if (g->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) b |= 0x0010;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) b |= 0x0008;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) b |= 0x0004;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) b |= 0x0001;
+    if (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) b |= 0x0002;
+    if (g->bLeftTrigger > 30) { b |= 0x0040; *lt = g->bLeftTrigger; }
+    if (g->bRightTrigger > 30) { b |= 0x0020; *rt = g->bRightTrigger; }
+    if (abs(g->sThumbLX) > 7849 || abs(g->sThumbLY) > 7849) { *sx = 128 + g->sThumbLX / 258; *sy = 128 + g->sThumbLY / 258; }
+    if (abs(g->sThumbRX) > 8689 || abs(g->sThumbRY) > 8689) { *cx = 128 + g->sThumbRX / 258; *cy = 128 + g->sThumbRY / 258; }
+    return b;
+}
+
+static uint8_t stick_byte(int v)
+{
+    return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2])
 {
     XINPUT_STATE xs;
@@ -858,28 +888,12 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
     }
     if (g_unfocused_mute && g_away) memset(&xs, 0, sizeof xs); /* unfocused = mute: the pad is not read */
     g_pad_xbuttons = g_pad_slot >= 0 && !(g_unfocused_mute && g_away) ? xs.Gamepad.wButtons : 0;
-    if (g_pad_slot >= 0 && !(g_unfocused_mute && g_away)) {
-        const XINPUT_GAMEPAD* g = &xs.Gamepad;
-        if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
-        if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;
-        if (g->wButtons & XINPUT_GAMEPAD_X) b |= 0x0400;
-        if (g->wButtons & XINPUT_GAMEPAD_Y) b |= 0x0800;
-        if (g->wButtons & XINPUT_GAMEPAD_START) b |= 0x1000;
-        if (g->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) b |= 0x0010;
-        if (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) b |= 0x0008;
-        if (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) b |= 0x0004;
-        if (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) b |= 0x0001;
-        if (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) b |= 0x0002;
-        if (g->bLeftTrigger > 30) { b |= 0x0040; lt = g->bLeftTrigger; }
-        if (g->bRightTrigger > 30) { b |= 0x0020; rt = g->bRightTrigger; }
-        if (abs(g->sThumbLX) > 7849 || abs(g->sThumbLY) > 7849) { sx = 128 + g->sThumbLX / 258; sy = 128 + g->sThumbLY / 258; }
-        if (abs(g->sThumbRX) > 8689 || abs(g->sThumbRY) > 8689) { cx = 128 + g->sThumbRX / 258; cy = 128 + g->sThumbRY / 258; }
-    }
+    if (g_pad_slot >= 0 && !(g_unfocused_mute && g_away)) b |= map_xinput(&xs.Gamepad, &sx, &sy, &cx, &cy, &lt, &rt);
     *buttons = b;
-    stick[0] = (uint8_t)(sx < 0 ? 0 : sx > 255 ? 255 : sx);
-    stick[1] = (uint8_t)(sy < 0 ? 0 : sy > 255 ? 255 : sy);
-    cstick[0] = (uint8_t)(cx < 0 ? 0 : cx > 255 ? 255 : cx);
-    cstick[1] = (uint8_t)(cy < 0 ? 0 : cy > 255 ? 255 : cy);
+    stick[0] = stick_byte(sx);
+    stick[1] = stick_byte(sy);
+    cstick[0] = stick_byte(cx);
+    cstick[1] = stick_byte(cy);
     trig[0] = (uint8_t)lt;
     trig[1] = (uint8_t)rt;
     return 1;
@@ -887,16 +901,18 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
 
 /* Port 2 (P10a): the next connected XInput pad after port 1's, probed once a
  * second while there is none, and kept until it goes -- read for mods only
- * (si.c's si_read_pad), never shown to the game. Its sticks and triggers as
- * window_pad maps port 1's. */
+ * (si.c's si_read_pad), never shown to the game by the port itself. Mapped
+ * as port 1 is (map_xinput), and like port 1 read as let go under
+ * `unfocused = mute` while another window is in front -- still connected, so
+ * a co-op mod does not hand its turns to port 1. */
 static int g_pad2_slot = -1;
 static ULONGLONG g_pad2_probe_at;
 
 int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2])
 {
     XINPUT_STATE xs;
-    const XINPUT_GAMEPAD* g;
     uint16_t b = 0;
+    int sx = 128, sy = 128, cx = 128, cy = 128, lt = 0, rt = 0;
     if (!g_open) return 0;
     memset(&xs, 0, sizeof xs);
     if (g_pad2_slot >= 0 && (g_pad2_slot == g_pad_slot || XInputGetState((DWORD)g_pad2_slot, &xs) != ERROR_SUCCESS)) {
@@ -913,26 +929,14 @@ int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t 
             return 0;
         }
     }
-    g = &xs.Gamepad;
-    if (g->wButtons & XINPUT_GAMEPAD_A) b |= 0x0100;
-    if (g->wButtons & XINPUT_GAMEPAD_B) b |= 0x0200;
-    if (g->wButtons & XINPUT_GAMEPAD_X) b |= 0x0400;
-    if (g->wButtons & XINPUT_GAMEPAD_Y) b |= 0x0800;
-    if (g->wButtons & XINPUT_GAMEPAD_START) b |= 0x1000;
-    if (g->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) b |= 0x0010;
-    if (g->wButtons & XINPUT_GAMEPAD_DPAD_UP) b |= 0x0008;
-    if (g->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) b |= 0x0004;
-    if (g->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) b |= 0x0001;
-    if (g->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) b |= 0x0002;
-    if (g->bLeftTrigger > 30) b |= 0x0040;
-    if (g->bRightTrigger > 30) b |= 0x0020;
+    if (!(g_unfocused_mute && g_away)) b = map_xinput(&xs.Gamepad, &sx, &sy, &cx, &cy, &lt, &rt);
     *buttons = b;
-    stick[0] = (uint8_t)(128 + g->sThumbLX / 258);
-    stick[1] = (uint8_t)(128 + g->sThumbLY / 258);
-    cstick[0] = (uint8_t)(128 + g->sThumbRX / 258);
-    cstick[1] = (uint8_t)(128 + g->sThumbRY / 258);
-    trig[0] = g->bLeftTrigger;
-    trig[1] = g->bRightTrigger;
+    stick[0] = stick_byte(sx);
+    stick[1] = stick_byte(sy);
+    cstick[0] = stick_byte(cx);
+    cstick[1] = stick_byte(cy);
+    trig[0] = (uint8_t)lt;
+    trig[1] = (uint8_t)rt;
     return 1;
 }
 

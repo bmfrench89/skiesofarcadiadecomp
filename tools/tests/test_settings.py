@@ -286,6 +286,20 @@ def test_a_mod_setting_without_its_mod_says_so_and_is_not_recorded(driver):
     assert rec == "" and "no mod with id `encounter-rate`" in err, (rec, err)
 
 
+@needs_msvc
+@pytest.mark.parametrize(
+    "value, recorded",
+    [("1", "coop=1"), ("1,3", "coop=1,3"), ("0,1,2,3", "coop=0,1,2,3")]
+    + [(v, "") for v in ("1, 3", "4", "1,1", "1,", ",1", "13")],
+)
+def test_coop_is_recorded_only_as_slots_the_mod_takes(driver, value, recorded):
+    """`coop` has no list of values: the recorder applies the mod's own test,
+    so a value mods/coop refuses -- and runs without -- is not recorded, and
+    "1, 3" cannot split the config line at its space."""
+    rec, _ = mods(driver, "coop", SOA_COOP=value)
+    assert rec == recorded, rec
+
+
 # --------------------------------------------------------------------------
 # M5b: the port root, relative paths, the defaults a soa.ini brings
 # --------------------------------------------------------------------------
