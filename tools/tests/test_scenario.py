@@ -845,6 +845,38 @@ def test_bless_from_anywhere_but_the_corpus_is_refused(tmp_path, monkeypatch):
     assert scenario.MANIFEST.read_bytes() == before
 
 
+def test_bless_from_another_build_is_refused(tmp_path, monkeypatch):
+    """The manifest pins what the MSVC build draws. Blessing from
+    gen/clang/soa.exe (portability L3a) would make a clang difference the
+    reference; comparing that build against the manifest still runs."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    monkeypatch.setattr(scenario, "MANIFEST", tmp_path / "fifo_manifest.tsv")
+    for exe in ("gen/soa.exe", "gen/clang/soa.exe"):
+        (tmp_path / exe).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / exe).write_bytes(b"")
+    data = tmp_path / "extracted"
+    (data / "sys").mkdir(parents=True)
+    for rel in scenario.NEEDED_FILES:
+        (data / rel).write_bytes(b"")
+    make_capture(tmp_path / "build" / "fifo", "0100")
+    scenario.write_manifest(scenario.MANIFEST, {"0100": ("aaaa000000000000", "1111111111111111")})
+    before = scenario.MANIFEST.read_bytes()
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, REPLAY_TEXT))
+    args = argparse.Namespace(
+        exe="gen/clang/soa.exe",
+        fifo=str(tmp_path / "build" / "fifo"),
+        threads="1",
+        passes=1,
+        bless=True,
+    )
+    with pytest.raises(ScenarioError, match="pins the MSVC build"):
+        scenario.cmd_replay(args)
+    assert scenario.MANIFEST.read_bytes() == before
+    args.bless = False
+    scenario.cmd_replay(args)
+    assert scenario.MANIFEST.read_bytes() == before
+
+
 def test_replay_says_what_is_missing_rather_than_failing_oddly(tmp_path, monkeypatch):
     monkeypatch.setattr(scenario, "ROOT", tmp_path)
     args = argparse.Namespace(

@@ -3789,3 +3789,34 @@ member's command type.
 - **Pad 2 is not in recordings yet** (the event track's), so a co-op
   session does not replay: port 1's recorded presses would take pad 2's
   turns. The mod says so at its first forward.
+
+
+**L3a: toolchain profiles and `--cc`.** 2026-09-30. `tools/soa/toolchain.py`
+has a `Profile` for msvc, clang-cl, gcc and clang (portability.md 3.9), and
+`recompile.py --cc clang-cl` writes everything -- the C, the objects, the
+exe -- under `gen/clang`, never `gen`, and builds no mod. The msvc profile's
+command lines are the ones recompile.py ran before, held to a golden copy by
+`test_toolchain_profiles.py`; they are now pure functions (`compile_command`,
+`link_command`, `link_plan`), and `--link` runs the plan. One change in
+behaviour: the decompiled units' objects are named from the units, not
+globbed, so a stale object in `gen/decomp` is no longer linked.
+- **The clang-cl found here** is the Android NDK's 19.0.1 (`SOA_CLANG_CL=
+  C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`). It defaults to `lld-link`, which the NDK does not ship, so its
+  links failed with "program not executable"; the profile carries
+  `-fuse-ld=link`, MSVC's linker, on lines that link (`Profile.linker`, a
+  field the spec's table did not have). `/D_CRT_SECURE_NO_WARNINGS=` is
+  defined empty, as the files that define it themselves do, which quiets a
+  redefinition warning in every file.
+- **Measured:** `compile_runtime.py --cc clang-cl` compiles 27 of 28;
+  `gxr_tev.c` fails with the SSE4.1 always_inline error of portability.md
+  2.2, L2a's to fix. `dc_check.py --cc clang-cl` passes, all nine routines;
+  `render_check.py --cc clang-cl` stops at the same `gxr_tev.c` error.
+- **No FMA:** `test_toolchain_fp.py` builds `a*b+c` with `-mfma` under the
+  clang-cl profile -- `vmulss` then `vaddss` -- and without
+  `-ffp-contract=off`, the mutation, `vfmadd213ss`. It skips where no clang
+  and llvm-objdump are found, which is CI until L4a's clang-cl leg.
+- `scenario.py replay --bless --exe gen/clang/soa.exe` is refused: the
+  manifest pins the MSVC build. Removing the guard turns its test red.
+  `title --check` passes (4 of 4), since scenario.py changed.
+- An adversarial review was started and stopped at the owner's request
+  before any finding came back; it is to be run again (HANDOFF).

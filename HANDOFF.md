@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1089 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1099 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1089 |
+| Python tests | 1099 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -416,6 +416,39 @@ do after opening the frame and deciding the new pixel is right, never to make
 a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
+
+## Where the last session stopped (2026-09-30)
+
+Everything below this section is older and still true. Landed in the last
+stretch, newest first, each with a FINDINGS entry of its name: **L3a**
+(toolchain profiles, `--cc clang-cl` into `gen/clang`); **P10b** (couch
+co-op, `mods/coop`, f740207); **P5a** (gamma, colour blindness, the flash
+limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
+**the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
+slow in every run).
+
+**Pick up here, in order:**
+1. **Re-run L3a's adversarial review**, stopped before it reported:
+   `Workflow({scriptPath: "C:\Users\bmfre\.claude\projects\C--Users-bmfre-Documents-Github-SOA\64d41b90-98b9-42ca-ae92-9737807fc558\workflows\scripts\review-l3a-wf_fc9fd7ba-102.js"})`
+   from a Claude session, or review by hand against portability.md 3.9 and
+   the L3a slice. The reviews of P5a and P10b each found real defects (14
+   and 10) that their first tests had missed; assume this one will too.
+2. **L2a** (portability.md, "L2a. The SIMD blend behind an x86-64 guard"):
+   `runtime/plat.h`, `gxr_tev.c`'s guard and `bilinear_sse41`, `perfbench
+   --exe`. The clang-cl its Done needs is the NDK's: `$env:SOA_CLANG_CL =
+   'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`.
+3. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
+   once its spec lands (turbo is about 1.4x in a window until then); and
+   `docs/specs/display.md`, which now owns P5a's presenter budget -- p99
+   10.08 ms fullscreen at 3440x1440 before any filter, against 6 ms.
+4. `docs/specs/comfort-pack.md` has the planning session's uncommitted edit
+   in the working tree (P10b's wording). It is theirs to commit; leave it.
+
+**Traps met in this stretch, each now in the author's memory too:** a check
+chain piped through `tail` hides a failing step -- run it under
+`set -o pipefail` and read CI after each push; `sed -i` in Git Bash turns a
+CRLF file in `runtime/` into LF; a Bash heredoc mangles `\n` inside embedded
+Python; never `git commit --amend` here, another session commits to main.
 
 ## What I would do next
 

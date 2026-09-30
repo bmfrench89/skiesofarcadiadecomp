@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from recompile import native_decomp_sources  # noqa: E402
 from soa import toolchain  # noqa: E402
 
+PROF = toolchain.MSVC  # --cc sets it
+
 HERE = Path(__file__).resolve().parent
 # decomp_shims.c is compiled without the renames on purpose: it is the runtime
 # side of the twin build, and its dc___fill_mem is what mem.c's memset calls.
@@ -35,7 +37,7 @@ SUPPORT = [ROOT / "runtime" / "decomp_shims.c", HERE / "dc_driver.c"]
 
 
 def run_cl(what: str, args: list[str]) -> bool:
-    proc = toolchain.cl(args, cwd=ROOT)
+    proc = toolchain.cc(args, ROOT, PROF)
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if out:
         print(out)
@@ -48,12 +50,21 @@ def run_cl(what: str, args: list[str]) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--units", type=Path, default=ROOT / "config" / "GEAE8P" / "units.txt")
-    ap.add_argument("--out", type=Path, default=ROOT / "build" / "citest" / "decomp")
+    ap.add_argument(
+        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+    )
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    global PROF
+    PROF = toolchain.profile(args.cc)
+    if args.out is None:
+        args.out = (
+            ROOT / "build" / "citest" / ("decomp" if PROF.name == "msvc" else f"decomp-{PROF.name}")
+        )
 
-    cl = toolchain.cl_path()
+    cl = toolchain.compiler_path(PROF)
     if cl is None:
-        print("MSVC not found: no cl.exe from vswhere or the known install paths", file=sys.stderr)
+        print(f"{PROF.name} not found (see tools/soa/toolchain.py compiler_path)", file=sys.stderr)
         return 1
     print(f"compiler: {cl}")
 
@@ -67,12 +78,12 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     if not run_cl(
         "compiling the decompiled units",
-        [*toolchain.CFLAGS, "/c", "/Iinclude", *defines, f"/Fo{args.out}/", *sources],
+        [*PROF.cflags, "/c", "/Iinclude", *defines, f"/Fo{args.out}/", *sources],
     ):
         return 1
     if not run_cl(
         "compiling the driver",
-        [*toolchain.CFLAGS, "/c", f"/Fo{args.out}/", *map(str, SUPPORT)],
+        [*PROF.cflags, "/c", f"/Fo{args.out}/", *map(str, SUPPORT)],
     ):
         return 1
 
@@ -80,7 +91,9 @@ def main() -> int:
     # Named rather than globbed, so a stale object from an earlier run in the
     # same directory cannot slip into the link.
     objs = [args.out / (Path(s).stem + ".obj") for s in [*sources, *SUPPORT]]
-    if not run_cl("linking the driver", [*toolchain.CFLAGS, *map(str, objs), f"/Fe:{exe}"]):
+    if not run_cl(
+        "linking the driver", [*PROF.cflags, *PROF.linker, *map(str, objs), f"/Fe:{exe}"]
+    ):
         return 1
 
     proc = subprocess.run([str(exe)], capture_output=True, text=True, check=False)

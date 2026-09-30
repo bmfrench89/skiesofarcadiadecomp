@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from soa import toolchain  # noqa: E402
 
+PROF = toolchain.MSVC  # --cc sets it
+
 HERE = Path(__file__).resolve().parent
 RUNTIME = ROOT / "runtime"
 # The renderer and the front end that feeds it. No recompiled code, no device
@@ -34,7 +36,7 @@ SOURCES.append(HERE / "render_driver.c")
 
 
 def run_cl(what: str, args: list[str]) -> bool:
-    proc = toolchain.cl(args, cwd=ROOT)
+    proc = toolchain.cc(args, ROOT, PROF)
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if out:
         print(out)
@@ -46,12 +48,21 @@ def run_cl(what: str, args: list[str]) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out", type=Path, default=ROOT / "build" / "citest" / "render")
+    ap.add_argument(
+        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+    )
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    global PROF
+    PROF = toolchain.profile(args.cc)
+    if args.out is None:
+        args.out = (
+            ROOT / "build" / "citest" / ("render" if PROF.name == "msvc" else f"render-{PROF.name}")
+        )
 
-    cl = toolchain.cl_path()
+    cl = toolchain.compiler_path(PROF)
     if cl is None:
-        print("MSVC not found: no cl.exe from vswhere or the known install paths", file=sys.stderr)
+        print(f"{PROF.name} not found (see tools/soa/toolchain.py compiler_path)", file=sys.stderr)
         print("this check must not pass silently, so it fails instead", file=sys.stderr)
         return 1
     print(f"compiler: {cl}")
@@ -59,14 +70,16 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     if not run_cl(
         "compiling the renderer",
-        [*toolchain.CFLAGS, "/c", f"/I{RUNTIME}", f"/Fo{args.out}/", *map(str, SOURCES)],
+        [*PROF.cflags, "/c", f"/I{RUNTIME}", f"/Fo{args.out}/", *map(str, SOURCES)],
     ):
         return 1
     exe = args.out / "render_check.exe"
     # Named rather than globbed, so a stale object from an earlier run in the
     # same directory cannot slip into the link.
     objs = [args.out / (s.stem + ".obj") for s in SOURCES]
-    if not run_cl("linking the renderer", [*toolchain.CFLAGS, *map(str, objs), f"/Fe:{exe}"]):
+    if not run_cl(
+        "linking the renderer", [*PROF.cflags, *PROF.linker, *map(str, objs), f"/Fe:{exe}"]
+    ):
         return 1
 
     proc = subprocess.run([str(exe)], cwd=ROOT, capture_output=True, text=True, check=False)

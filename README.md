@@ -65,6 +65,9 @@ $env:SOA_RENDER = '1'
 gen\soa.exe extracted
 ```
 
+`--cc clang-cl` builds with clang-cl instead, into `gen\clang` and never `gen` (portability L3a;
+`SOA_CLANG_CL` names the compiler; the renderer's SIMD file compiles under it once L2a lands).
+
 **cmd.exe** — the same commands, except for the line that sets the variable:
 
 ```bat
@@ -299,7 +302,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1089 tests; any that need a dump skip themselves
+python -m pytest                     # 1099 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

@@ -1102,6 +1102,15 @@ def cmd_replay(args: argparse.Namespace) -> int:
             "Compare against it without --bless; a new capture joins the corpus by being "
             "copied into build/fifo beside the others, and is blessed from there"
         )
+    # The manifest pins what the MSVC build draws. Another compiler's build
+    # (gen/clang/soa.exe, portability L3a) is held to it, never the source of
+    # it: blessing from there would make a clang difference the reference.
+    if args.bless and exe.resolve() != (ROOT / DEFAULT_EXE).resolve():
+        raise ScenarioError(
+            f"--bless writes {named(MANIFEST)}, which pins the MSVC build ({DEFAULT_EXE}); "
+            f"--exe {args.exe} would pin another build's frames. Compare it against the "
+            "manifest without --bless"
+        )
     # --replay takes the capture as its argument, so main.c falls back to the
     # literal directory "extracted" for the disc it still wants to open.
     missing = missing_inputs(exe, ROOT / DEFAULT_DATA)

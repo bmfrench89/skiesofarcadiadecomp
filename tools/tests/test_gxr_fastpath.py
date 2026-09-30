@@ -220,12 +220,18 @@ int main(void)
 """
 
 
+# SOA_CC picks the toolchain profile (portability L3a): the SIMD path is the
+# part of the renderer that differs by compiler, and L4a's clang-cl leg runs
+# this module with SOA_CC=clang-cl.
+PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
+
+
 def build(tmp, name, driver, sources):
     (tmp / f"{name}.c").write_text(driver, encoding="utf-8")
     exe = tmp / f"{name}.exe"
-    proc = toolchain.cl(
+    proc = toolchain.cc(
         [
-            *toolchain.CFLAGS,
+            *PROFILE.cflags,
             "/I",
             str(RUNTIME),
             *[str(RUNTIME / s) for s in sources],
@@ -233,7 +239,8 @@ def build(tmp, name, driver, sources):
             "/Fo" + str(tmp) + os.sep,
             "/Fe" + str(exe),
         ],
-        cwd=tmp,
+        tmp,
+        PROFILE,
     )
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=300, check=False)
@@ -242,7 +249,8 @@ def build(tmp, name, driver, sources):
 
 
 needs_msvc = pytest.mark.skipif(
-    toolchain.cl_path() is None, reason="no MSVC: the renderer cannot be built here"
+    toolchain.compiler_path(PROFILE) is None,
+    reason=f"no MSVC ({PROFILE.name}): the renderer cannot be built here",
 )
 
 

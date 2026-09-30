@@ -34,10 +34,12 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1089 passed in 314.53s
+1097 passed, 2 skipped in 440.70s
 ```
 
-1089 tests in 56 files, none of which reads the disc. They cover the Python
+1099 tests in 58 files, none of which reads the disc. The two FMA probes of
+`test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), which is
+CI and a default run here; the counts below include those two skips. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -45,7 +47,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
-| `test_scenario.py` | 92 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
+| `test_scenario.py` | 93 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
 | `test_guard.py` | 76 | the game-data guard: its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
@@ -83,6 +85,7 @@ its own and run it, some of the C as well:
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
+| `test_toolchain_profiles.py` | 7 | the toolchain profiles (portability L3a), no compiler run: the msvc profile's --compile, decompiled-unit, link and mod command lines equal a golden copy of what recompile.py ran before profiles; a clang-cl build writes only under gen/clang, runs nowhere else and builds no mod, and pointing it at gen or letting it build the mods fails; the gnu grammar's translation; compile_runtime.py's strict set is the profile's |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -99,6 +102,7 @@ its own and run it, some of the C as well:
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
 | `test_turbo.py` | 2 | the check a turbo run is held to (M11a), `python tools/tests/test_turbo.py <log>`: over the battle the game's frame counter advances one a retrace, over the field before it one per two, the battle ends inside the run, and the audio reached the device at 128,000 bytes a second within 3%; a synthetic log with each rule broken fails its own line |
+| `test_toolchain_fp.py` | 2 | no fused multiply-add from a clang profile (portability 2.8, L3a): a*b+c built with -mfma disassembles as vmulss and vaddss, and without -ffp-contract=off (the mutation) as vfmadd213ss; skips, saying so, where no clang and llvm-objdump are found -- CI and a default run here |
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
@@ -106,10 +110,10 @@ this machine by hiding one at a time:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1089 passed` |
-| no capstone — **what CI installs** | `1070 passed, 1 skipped` |
-| no MSVC | `726 passed, 363 skipped` |
-| neither — **the Ubuntu CI leg** | `707 passed, 364 skipped` |
+| everything (MSVC + capstone) | `1097 passed, 2 skipped` |
+| no capstone — **what CI installs** | `1078 passed, 3 skipped` |
+| no MSVC | `734 passed, 365 skipped` |
+| neither — **the Ubuntu CI leg** | `715 passed, 366 skipped` |
 
 Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -177,6 +181,12 @@ the content check to every path and blob any commit added — in a folder that
 held a `mod.ini` at any point, the text rule too.
 
 ### The three MSVC checks — no disc, no `gen/`
+
+Each takes `--cc clang-cl` (portability L3a) to build with the clang-cl profile
+instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
+compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
+Until L2a, `compile_runtime.py --cc clang-cl` compiles 27 of 28: `gxr_tev.c`
+fails with clang's SSE4.1 always_inline error, portability.md 2.2's.
 
 ```
 python tools/citest/compile_runtime.py
@@ -1079,7 +1089,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 363 of the 1089 skip without a C compiler; they build one runtime file and run it.
+² 363 of the 1099 skip without a C compiler; they build one runtime file and run it.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1090,8 +1100,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 707 passed, 364 skipped |
-| **Tests** | windows | the same three — 1070 passed, 1 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 715 passed, 366 skipped |
+| **Tests** | windows | the same three — 1078 passed, 3 skipped |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

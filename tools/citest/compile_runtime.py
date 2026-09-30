@@ -1,6 +1,6 @@
 """Compile every runtime/*.c on its own, no linking and no generated code.
 
-    python tools/citest/compile_runtime.py [--out build/citest/runtime]
+    python tools/citest/compile_runtime.py [--cc msvc|clang-cl] [--out build/citest/runtime]
 
 The runtime is the part of the port that is actually hand-written C, and
 until this existed nothing built it except the owner's machine, so a syntax
@@ -11,7 +11,10 @@ itself the recompiled symbols it calls. A handful of warnings that mean a call
 does not match the function it names -- the implicit declaration first among
 them -- are promoted to errors here, since nothing links and they are all a
 link step would have caught. Prints one line per file, with the compiler's
-warnings underneath, and exits non-zero if any file fails or MSVC is missing.
+warnings underneath, and exits non-zero if any file fails or the compiler is
+missing. --cc clang-cl builds with the clang-cl profile instead
+(tools/soa/toolchain.py; portability.md 3.9), its own flags and strict set,
+into build/citest/runtime-clang-cl.
 """
 
 from __future__ import annotations
@@ -46,40 +49,47 @@ UNCOVERED: dict[str, str] = {}
 # it is written, a non-void function that falls off its end. They are promoted
 # here rather than added to toolchain.CFLAGS, which has to stay exactly what
 # the real build uses: this check may be stricter than the build, never
-# different from it.
-STRICT = [
-    "/we4013",
-    "/we4020",
-    "/we4024",
-    "/we4028",
-    "/we4029",
-    "/we4047",
-    "/we4133",
-    "/we4700",
-    "/we4716",
-]
+# different from it. The list lives with the profile (toolchain.MSVC.strict:
+# C4013, C4020, C4024, C4028, C4029, C4047, C4133, C4700, C4716), and
+# clang-cl's is the same mistakes in clang's words (implicit declarations,
+# int and pointer conversions, a missing return).
+STRICT = list(toolchain.MSVC.strict)
 
 
-def compile_one(path: Path, out: Path) -> tuple[Path, int, str]:
-    proc = toolchain.cl(
-        [*toolchain.CFLAGS, *STRICT, "/c", f"/I{RUNTIME}", str(path), f"/Fo{out}/"],
-        cwd=ROOT,
+def compile_one(
+    path: Path, out: Path, prof: toolchain.Profile = toolchain.MSVC
+) -> tuple[Path, int, str]:
+    proc = toolchain.cc(
+        [*prof.cflags, *prof.strict, "/c", f"/I{RUNTIME}", str(path), f"/Fo{out}/"],
+        ROOT,
+        prof,
     )
     return path, proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out", type=Path, default=ROOT / "build" / "citest" / "runtime")
+    ap.add_argument(
+        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+    )
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    prof = toolchain.profile(args.cc)
+    if args.out is None:
+        args.out = (
+            ROOT
+            / "build"
+            / "citest"
+            / ("runtime" if prof.name == "msvc" else f"runtime-{prof.name}")
+        )
 
-    cl = toolchain.cl_path()
+    cl = toolchain.compiler_path(prof)
     if cl is None:
-        print("MSVC not found: no cl.exe from vswhere or the known install paths", file=sys.stderr)
+        print(f"{prof.name} not found (see tools/soa/toolchain.py compiler_path)", file=sys.stderr)
         print("this check must not pass silently, so it fails instead", file=sys.stderr)
         return 1
     print(f"compiler: {cl}")
-    print(f"flags:    {' '.join([*toolchain.CFLAGS, *STRICT])} /c /I{RUNTIME}\n")
+    print(f"flags:    {' '.join([*prof.cflags, *prof.strict])} /c /I{RUNTIME}\n")
 
     args.out.mkdir(parents=True, exist_ok=True)
     sources = sorted(RUNTIME.glob("*.c"))
@@ -90,7 +100,7 @@ def main() -> int:
 
     failed: list[Path] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-        for path, rc, out in pool.map(lambda p: compile_one(p, args.out), covered):
+        for path, rc, out in pool.map(lambda p: compile_one(p, args.out, prof), covered):
             print(f"{'ok  ' if rc == 0 else 'FAIL'} {path.name}")
             if rc != 0:
                 failed.append(path)

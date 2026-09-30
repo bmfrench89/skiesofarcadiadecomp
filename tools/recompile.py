@@ -2,12 +2,18 @@
 """Translate the whole DOL to C.
 
     python tools/recompile.py [--dol extracted/sys/main.dol] [--out gen] [--chunk 400]
-                              [--compile] [--limit N]
+                              [--cc msvc|clang-cl|gcc|clang] [--compile] [--link] [--limit N]
 
 Writes gen/functions.h, gen/dispatch.c and gen/chunk_NNN.c (gitignored: they
 are derived from the game binary and are reproduced locally from the user's
 own dump). Prints instruction coverage so what is *not* translated is always
-visible. --compile runs MSVC over every chunk to prove the C is valid.
+visible. --compile runs the compiler over every chunk to prove the C is valid;
+--link links them with runtime/ into soa.exe and builds the mods.
+
+--cc picks a toolchain profile (tools/soa/toolchain.py; portability.md 3.9):
+msvc by default. Another profile writes everything -- the C, the objects, the
+exe -- under its own directory, gen/clang for clang-cl, and never builds the
+mods, so a clang build can never be linked into gen/soa.exe.
 """
 
 import argparse
@@ -57,20 +63,87 @@ def mod_dll_command(src: Path) -> list[str]:
     ]
 
 
-def build_mod_dlls(root: Path = RUNTIME.parent) -> int:
-    """Build every mod.dll, naming each; the number that failed. A DLL a
-    running soa.exe has loaded cannot be replaced, and fails here."""
-    failed = 0
-    for src in mod_dll_sources(root):
-        where = src.parent.relative_to(root) / "mod.dll"
-        proc = toolchain.cl(mod_dll_command(src), cwd=src.parent)
-        if proc.returncode != 0:
-            errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
-            print(f"  FAIL {where}: {errs[0] if errs else proc.stdout[-300:]}", file=sys.stderr)
-            failed += 1
-        else:
-            print(f"built {where}")
-    return failed
+# ---- the command lines, one profile at a time (portability.md 3.9, L3a) ----
+# Pure functions: test_toolchain_profiles.py holds the msvc profile's to a
+# golden copy and checks that clang-cl's write only under gen/clang.
+
+
+def compile_command(p: toolchain.Profile, out: Path, path: Path, optimize: bool) -> list[str]:
+    """--compile's line for one translation unit, run in `out`. Validation
+    compiles at /Od unless --optimize: the point is to prove the C is
+    well-formed, and /O2 over 50 MB of it takes many minutes."""
+    flags = [("/O2" if optimize else "/Od") if f == "/O2" else f for f in p.cflags]
+    return [
+        *flags,
+        "/c",
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        path.name,
+        f"/Fo{path.with_suffix(p.objext).name}",
+    ]
+
+
+def decomp_command(
+    p: toolchain.Profile, out: Path, dc_files: list[str], dc_defines: list[str]
+) -> list[str]:
+    """The native build of the hand-decompiled units, run in the repository root."""
+    return [*p.cflags, "/c", "/Iinclude", *dc_defines, f"/Fo{out / 'decomp'}/", *dc_files]
+
+
+def decomp_objects(p: toolchain.Profile, out: Path, dc_files: list[str]) -> list[Path]:
+    """The objects decomp_command makes: one per unit, named after it."""
+    return sorted(out / "decomp" / (Path(f).stem + p.objext) for f in dc_files)
+
+
+def link_command(p: toolchain.Profile, out: Path, objs: list[Path]) -> list[str]:
+    """The link of runtime/ and the objects into soa.exe, run in the root.
+
+    /Zi and /DEBUG write <out>/soa.pdb without changing the code /O2 makes
+    (/OPT:REF and /OPT:ICF are what /DEBUG would otherwise turn off): the
+    runtime's functions and lines get names, which SOA_HOSTPROF's report and a
+    crash's stack both need. The translated chunks carry no debug information
+    and add only their public names."""
+    sources = [*sorted(RUNTIME.glob("*.c")), *toolchain.runtime_support_sources()]
+    return [
+        *p.cflags,
+        *p.linker,
+        "/Zi",
+        f"/Fd{out}/runtime.pdb",
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        f"/Fo{out}/",
+        f"/Fe:{out / ('soa' + p.exeext)}",
+        *map(str, sources),
+        *map(str, objs),
+        "/link",
+        "/DEBUG",
+        "/OPT:REF",
+        "/OPT:ICF",
+        "/STACK:33554432",  # guest call depth becomes host call depth
+    ]
+
+
+def builds_mods(p: toolchain.Profile) -> bool:
+    """Only the msvc profile builds mods/*/mod.c: the shipped mods are MSVC
+    DLLs for gen/soa.exe, and a clang build must touch nothing outside its
+    own directory (L9 builds mod.so on Linux)."""
+    return p.name == "msvc"
+
+
+def link_plan(
+    p: toolchain.Profile, out: Path, dc_files: list[str], dc_defines: list[str]
+) -> list[tuple[list[str], Path]]:
+    """Every compiler command --link runs, in order, each with its working
+    directory: the decompiled units, the link, then (msvc only) each mod."""
+    objs = sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
+    plan: list[tuple[list[str], Path]] = []
+    if dc_files:
+        plan.append((decomp_command(p, out, dc_files, dc_defines), Path(".")))
+        objs += decomp_objects(p, out, dc_files)
+    plan.append((link_command(p, out, objs), Path(".")))
+    if builds_mods(p):
+        plan += [(mod_dll_command(src), src.parent) for src in mod_dll_sources()]
+    return plan
 
 
 # A definition or declaration starting in column 1; the name is the last
@@ -126,7 +199,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
     ap.add_argument("--config", type=Path, default=Path("config"))
-    ap.add_argument("--out", type=Path, default=Path("gen"))
+    ap.add_argument(
+        "--cc",
+        choices=list(toolchain.PROFILES),
+        default="msvc",
+        help="the toolchain profile; a non-msvc one writes to its own --out (clang-cl: gen/clang)",
+    )
+    ap.add_argument(
+        "--out", type=Path, default=None, help="where the C, objects and exe go (default gen)"
+    )
     ap.add_argument("--chunk", type=int, default=400, help="functions per C file")
     ap.add_argument("--limit", type=int, default=0, help="translate only the first N functions")
     ap.add_argument("--compile", action="store_true", help="compile every chunk with MSVC")
@@ -135,6 +216,10 @@ def main() -> int:
         "--link", action="store_true", help="link the objects with runtime/ into soa.exe"
     )
     args = ap.parse_args()
+    prof = toolchain.profile(args.cc)
+    # A clang build goes to its own directory by default, so it can never be
+    # linked into gen/soa.exe: --link globs whatever objects --out holds.
+    args.out = args.out if args.out is not None else Path(prof.out)
 
     dol = D.parse(args.dol.read_bytes())
     t0 = time.time()
@@ -195,28 +280,19 @@ def main() -> int:
             print(f"    {mn:16} {c:>7,}")
 
     if args.compile:
-        env = toolchain.msvc_env()
-        if env is None:
-            print("\nMSVC not found; skipping compile", file=sys.stderr)
+        if toolchain.compiler_path(prof) is None:
+            print(f"\n{prof.name} not found; skipping compile", file=sys.stderr)
             return 1
         units = [args.out / "dispatch.c", *chunks]
-        # Validation compiles at /Od: the point is to prove the C is
-        # well-formed, and /O2 over 50 MB of it takes many minutes.
-        flags = [("/O2" if args.optimize else "/Od") if f == "/O2" else f for f in toolchain.CFLAGS]
-        print(f"\ncompiling {len(units)} translation units with MSVC ({flags[1]}) ...")
+        level = "/O2" if args.optimize else "/Od"
+        print(
+            f"\ncompiling {len(units)} translation units with {prof.name} ({level}) into {args.out} ..."
+        )
         t0 = time.time()
 
         def build(path: Path):
-            return path, toolchain.cl(
-                [
-                    *flags,
-                    "/c",
-                    f"/I{RUNTIME}",
-                    f"/I{args.out}",
-                    path.name,
-                    f"/Fo{path.with_suffix('.obj').name}",
-                ],
-                cwd=args.out,
+            return path, toolchain.cc(
+                compile_command(prof, args.out, path, args.optimize), args.out, prof
             )
 
         failures = collections.Counter()
@@ -232,11 +308,16 @@ def main() -> int:
             return 1
 
     if args.link:
-        if toolchain.msvc_env() is None:
-            print("\nMSVC not found; skipping link", file=sys.stderr)
+        if prof.style != "msvc":
+            print(
+                f"\n--link builds with msvc or clang-cl; {prof.name}'s link is portability L4b's",
+                file=sys.stderr,
+            )
             return 1
-        objs = sorted(args.out.glob("chunk_*.obj")) + [args.out / "dispatch.obj"]
-        exe = args.out / "soa.exe"
+        if toolchain.compiler_path(prof) is None:
+            print(f"\n{prof.name} not found; skipping link", file=sys.stderr)
+            return 1
+        exe = args.out / ("soa" + prof.exeext)
         t0 = time.time()
         # The hand-decompiled units (src/) are built natively too, every function
         # renamed dc_<name> so they sit beside the C runtime's own strlen and
@@ -247,45 +328,28 @@ def main() -> int:
             print(exc, file=sys.stderr)
             return 1
         if dc_files:
-            ndir = args.out / "decomp"
-            ndir.mkdir(parents=True, exist_ok=True)
-            proc = toolchain.cl(
-                [*toolchain.CFLAGS, "/c", "/Iinclude", *dc_defines, f"/Fo{ndir}/", *dc_files],
-                cwd=".",
-            )
+            (args.out / "decomp").mkdir(parents=True, exist_ok=True)
+        failed_mods = 0
+        for cmd, cwd in link_plan(prof, args.out, dc_files, dc_defines):
+            proc = toolchain.cc(cmd, cwd, prof)
+            if cwd != Path("."):  # a mod.dll, beside its mod.c
+                where = cwd.relative_to(RUNTIME.parent) / "mod.dll"
+                if proc.returncode != 0:
+                    errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
+                    print(
+                        f"  FAIL {where}: {errs[0] if errs else proc.stdout[-300:]}",
+                        file=sys.stderr,
+                    )
+                    failed_mods += 1
+                else:
+                    print(f"built {where}")
+                continue
             if proc.returncode != 0:
                 print(proc.stdout[-2000:], file=sys.stderr)
                 return 1
-            objs += sorted(ndir.glob("*.obj"))
-        # /Zi and /DEBUG write gen/soa.pdb without changing the code /O2 makes
-        # (/OPT:REF and /OPT:ICF are what /DEBUG would otherwise turn off): the
-        # runtime's functions and lines get names, which SOA_HOSTPROF's report
-        # and a crash's stack both need. The translated chunks carry no debug
-        # information and add only their public names.
-        proc = toolchain.cl(
-            [
-                *toolchain.CFLAGS,
-                "/Zi",
-                f"/Fd{args.out}/runtime.pdb",
-                f"/I{RUNTIME}",
-                f"/I{args.out}",
-                f"/Fo{args.out}/",
-                f"/Fe:{exe}",
-                *map(str, sorted(RUNTIME.glob("*.c"))),
-                *map(str, objs),
-                "/link",
-                "/DEBUG",
-                "/OPT:REF",
-                "/OPT:ICF",
-                "/STACK:33554432",  # guest call depth becomes host call depth
-            ],
-            cwd=".",
-        )
-        if proc.returncode != 0:
-            print(proc.stdout[-2000:], file=sys.stderr)
-            return 1
-        print(f"linked {exe} ({time.time() - t0:.1f}s)")
-        if build_mod_dlls():
+            if "/link" in cmd:
+                print(f"linked {exe} ({time.time() - t0:.1f}s)")
+        if failed_mods:
             return 1
     return 0
 
