@@ -610,8 +610,9 @@ that matter:
 - There is no `gfx/` or `audio/` directory. The graphics pipe, the GX
   parser, the TEV and the AX mixer are all in `runtime/`.
 - The runtime is C, not C++20, and there is no CMake, Ninja, SDL3 or Vulkan
-  anywhere in the tree. `tools/recompile.py` drives MSVC directly with the
-  flags in `tools/soa/toolchain.py`.
+  anywhere in the tree. `tools/recompile.py` drives the compiler directly with
+  the flags of a profile in `tools/soa/toolchain.py`: MSVC by default,
+  clang-cl into `gen/clang` with `--cc clang-cl`.
 - The binding table is `config/hle.txt`, not `config/symbols.toml`.
 - §7 proposed a hybrid: HLE the 104 out-of-line GX entry points and decode
   vertices from HLE-tracked format state. What was built is the
@@ -628,7 +629,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1099 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1110 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

@@ -112,7 +112,9 @@ class Profile:
     or "gnu" (gcc and clang; cc() translates the msvc forms). `strict` is the
     warning set compile_runtime.py promotes to errors; `out` the directory a
     build with this profile writes, so a clang build can never be linked into
-    gen/soa.exe. `linker` goes on a command line that links, beside cflags."""
+    gen/soa.exe. `linker` goes on a command line that links, after the
+    sources and objects: GNU ld resolves -lm only against what precedes it,
+    and clang-cl's -fuse-ld=link may sit anywhere before /link."""
 
     name: str
     style: str
@@ -192,8 +194,10 @@ _GNU_FLAGS = (
     "-D_GNU_SOURCE",
     "-Wall",
 )
-GCC = Profile("gcc", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux")
-CLANG = Profile("clang", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux")
+# The pool's threads and libm, as 3.9's table has them.
+_GNU_LINK = ("-pthread", "-lm")
+GCC = Profile("gcc", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux", _GNU_LINK)
+CLANG = Profile("clang", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux", _GNU_LINK)
 PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG)}
 
 
@@ -225,15 +229,17 @@ def compiler_path(p: Profile = MSVC) -> str | None:
     clang-cl: SOA_CLANG_CL, then PATH (the MSVC environment's too), then
     LLVM's installer's folder, then Visual Studio's own; it still needs MSVC's
     environment for headers, libraries and link.exe, so without MSVC it is
-    None. gcc and clang: PATH."""
+    None. A SOA_CLANG_CL that names no file is None too, never the next one
+    found: a typo would otherwise test another clang's version unannounced.
+    gcc and clang: PATH."""
     if p.name == "msvc":
         return cl_path()
     if p.name == "clang-cl":
         if msvc_env() is None:
             return None
         env = os.environ.get("SOA_CLANG_CL", "")
-        if env and Path(env).is_file():
-            return env
+        if env:
+            return env if Path(env).is_file() else None
         found = shutil.which("clang-cl") or shutil.which("clang-cl", path=_msvc_path())
         if found:
             return found
@@ -245,11 +251,18 @@ def compiler_path(p: Profile = MSVC) -> str | None:
 
 
 def gnu_args(args: list[str]) -> list[str]:
-    """The msvc spellings cc() is handed, in gcc's: /D, /I, /Fo, /Fe and /c."""
+    """The msvc spellings cc() is handed, in gcc's: /D, /I, /Fo, /Fe and /c.
+
+    A POSIX absolute path is a file, not a flag, even when it begins like one
+    (/Data/soa/gx.c, /Images/...), so one that exists passes through. Not yet
+    handled: /Fo naming a directory, which every citest driver uses and gcc
+    has no spelling for with several sources; L4b, which first runs gcc."""
     out: list[str] = []
     it = iter(args)
     for a in it:
-        if a in ("/I", "/D"):
+        if a.startswith("/") and os.path.exists(a):
+            out.append(a)
+        elif a in ("/I", "/D"):
             out += [f"-{a[1]}", next(it)]
         elif a.startswith(("/I", "/D")):
             out.append(f"-{a[1]}{a[2:]}")

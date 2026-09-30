@@ -238,6 +238,7 @@ def build(tmp, name, driver, sources):
             str(tmp / f"{name}.c"),
             "/Fo" + str(tmp) + os.sep,
             "/Fe" + str(exe),
+            *PROFILE.linker,  # the NDK clang-cl has no lld-link
         ],
         tmp,
         PROFILE,

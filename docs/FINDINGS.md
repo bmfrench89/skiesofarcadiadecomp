@@ -3806,7 +3806,7 @@ globbed, so a stale object in `gen/decomp` is no longer linked.
   `-fuse-ld=link`, MSVC's linker, on lines that link (`Profile.linker`, a
   field the spec's table did not have). `/D_CRT_SECURE_NO_WARNINGS=` is
   defined empty, as the files that define it themselves do, which quiets a
-  redefinition warning in every file.
+  redefinition warning in each of them (17 of the 28 runtime files).
 - **Measured:** `compile_runtime.py --cc clang-cl` compiles 27 of 28;
   `gxr_tev.c` fails with the SSE4.1 always_inline error of portability.md
   2.2, L2a's to fix. `dc_check.py --cc clang-cl` passes, all nine routines;
@@ -3814,9 +3814,62 @@ globbed, so a stale object in `gen/decomp` is no longer linked.
 - **No FMA:** `test_toolchain_fp.py` builds `a*b+c` with `-mfma` under the
   clang-cl profile -- `vmulss` then `vaddss` -- and without
   `-ffp-contract=off`, the mutation, `vfmadd213ss`. It skips where no clang
-  and llvm-objdump are found, which is CI until L4a's clang-cl leg.
+  and llvm-objdump are found, as in a default run here. CI's Windows
+  runner ships LLVM, so its Tests job runs both ("L3a's review", below).
 - `scenario.py replay --bless --exe gen/clang/soa.exe` is refused: the
   manifest pins the MSVC build. Removing the guard turns its test red.
   `title --check` passes (4 of 4), since scenario.py changed.
 - An adversarial review was started and stopped at the owner's request
-  before any finding came back; it is to be run again (HANDOFF).
+  before any finding came back; it was run again the same day ("L3a's
+  review", below).
+
+**L3a's review.** 2026-09-30, on 8bd7c79. The adversarial review that was
+stopped was run again in three lenses -- does msvc build as before, can the
+tests pass a wrong plan, does it do what 3.9 says -- and each finding was
+checked against the code and against CI before it was fixed. **What MSVC
+builds did not change**: a script rebuilt the parent's `--link` sequence
+against the real `gen/`, `units.txt` and `mods/` and compared it with
+`link_plan`, and all six commands and their working directories were equal.
+Seventeen findings, none of them in what MSVC builds:
+- **The tests could pass a wrong plan.** Twenty-two mutations of
+  `toolchain.py` and `recompile.py` were each run against the tests in a
+  copy of the tree, and each had left them green: `--out` defaulting to `gen`
+  in `main()` (the test built its plan from `CLANG_CL.out` itself), clang-cl's
+  lines taking `CFLAGS` instead of its own (equal for msvc, so the golden
+  copy could not tell), the link dropping `-fuse-ld=link`, the plan dropping
+  the decompiled units' objects or globbing `gen` for its chunks, a compile
+  writing `../chunk_000.obj`, a pdb sent elsewhere through the linker's
+  `/PDB:`, `/fp:fast`, a strict warning removed (the strict-set test compared
+  `compile_runtime.STRICT` with the list it is defined from). The module now
+  holds 3.9's table as literal copies, the whole msvc `--link` plan as a
+  golden copy, and every path of a clang-cl plan from its own working
+  directory, inputs included; all twenty-two fail it.
+- **`test_gxr_fastpath.py` linked without `Profile.linker`**, so under the
+  NDK's clang-cl, which has no lld-link, it would have failed at link the day
+  L2a let `gxr_tev.c` compile. It carries it now.
+- **`--cc clang-cl --out gen` was accepted**, and would have linked a clang-cl
+  runtime with MSVC's chunks into `gen/soa.exe`, which `replay --bless` trusts
+  by its path. `recompile.out_dir` refuses it in any spelling and is where
+  `main()` takes its default from.
+- **A `SOA_CLANG_CL` naming no file** fell through to whatever clang-cl was on
+  `PATH`; it now finds none, so a typo cannot test another clang's version.
+- **The gnu profiles, first used by L4b:** `--compile` swapped only `/O2`, so
+  gcc validated at `-O2` while printing `/Od` (now `-O0`); the profiles lacked
+  3.9's `-pthread -lm`, and every link put the linker flags before the
+  objects, where GNU ld ignores `-lm` (now after them); `gnu_args` read a
+  POSIX path such as `/Data/soa/gx.c` as a `-D` (an existing absolute path now
+  passes through). Left for L4b: `/Fo` naming a directory, which every citest
+  driver uses, has no gcc spelling with several sources.
+- **`link_command` added `runtime_support_sources()` to a glob of every
+  runtime file**, so `plat.c` would have been linked twice once L7 made it;
+  that list is for the tests that link a few runtime files.
+- **Wording:** `--compile` and `--link` printed "msvc" where TESTING.md quotes
+  "MSVC"; the msvc profile prints MSVC's lines again, and others add their
+  directory. `ARCHITECTURE.md` still said recompile.py drives MSVC directly.
+- **Counts.** CI's Windows runner ships LLVM, so its Tests job runs both FMA
+  probes: 1077 passed, 4 skipped at 8bd7c79 against 1067 and 4 at f740207,
+  ten more passing and no more skipped. TESTING.md said they skip on CI, and
+  its table of counts had been worked out from older rows rather than
+  measured. The rows are measured now, MSVC or capstone hidden by a
+  three-line pytest plugin (`-p`) that makes `toolchain.msvc_env` answer None
+  or makes `import capstone` fail as a missing module.

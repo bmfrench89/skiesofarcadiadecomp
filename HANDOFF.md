@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1099 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1110 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1099 |
+| Python tests | 1110 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -428,11 +428,9 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 slow in every run).
 
 **Pick up here, in order:**
-1. **Re-run L3a's adversarial review**, stopped before it reported:
-   `Workflow({scriptPath: "C:\Users\bmfre\.claude\projects\C--Users-bmfre-Documents-Github-SOA\64d41b90-98b9-42ca-ae92-9737807fc558\workflows\scripts\review-l3a-wf_fc9fd7ba-102.js"})`
-   from a Claude session, or review by hand against portability.md 3.9 and
-   the L3a slice. The reviews of P5a and P10b each found real defects (14
-   and 10) that their first tests had missed; assume this one will too.
+1. ~~Re-run L3a's adversarial review~~ -- done the same day: seventeen
+   findings, none in what MSVC builds, all fixed (FINDINGS "L3a's review").
+   As with P5a and P10b, most were tests that a wrong plan passed.
 2. **L2a** (portability.md, "L2a. The SIMD blend behind an x86-64 guard"):
    `runtime/plat.h`, `gxr_tev.c`'s guard and `bilinear_sse41`, `perfbench
    --exe`. The clang-cl its Done needs is the NDK's: `$env:SOA_CLANG_CL =

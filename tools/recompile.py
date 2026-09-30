@@ -68,11 +68,37 @@ def mod_dll_command(src: Path) -> list[str]:
 # golden copy and checks that clang-cl's write only under gen/clang.
 
 
+def out_dir(p: toolchain.Profile, given: Path | None) -> Path:
+    """Where a build goes: --out, or the profile's own directory (clang-cl:
+    gen/clang). A profile other than msvc may not write into msvc's: --link
+    links whatever objects its directory holds, so a clang-cl runtime would
+    join MSVC's chunks in gen/soa.exe, which replay --bless trusts by path."""
+    out = given if given is not None else Path(p.out)
+    if p is not toolchain.MSVC and out.resolve() == Path(toolchain.MSVC.out).resolve():
+        raise ValueError(
+            f"--cc {p.name} --out {given}: {toolchain.MSVC.out} is the msvc build's; "
+            f"leave --out unset for {p.out}"
+        )
+    return out
+
+
+# The optimisation flag in each grammar, and what --compile uses without
+# --optimize.
+_OPT_LEVELS = {"/O2": "/Od", "-O2": "-O0"}
+
+
+def opt_level(p: toolchain.Profile, optimize: bool) -> str:
+    """The level --compile builds the translated C at, in the profile's grammar."""
+    flag = next(f for f in p.cflags if f in _OPT_LEVELS)
+    return flag if optimize else _OPT_LEVELS[flag]
+
+
 def compile_command(p: toolchain.Profile, out: Path, path: Path, optimize: bool) -> list[str]:
     """--compile's line for one translation unit, run in `out`. Validation
-    compiles at /Od unless --optimize: the point is to prove the C is
+    compiles at /Od (-O0) unless --optimize: the point is to prove the C is
     well-formed, and /O2 over 50 MB of it takes many minutes."""
-    flags = [("/O2" if optimize else "/Od") if f == "/O2" else f for f in p.cflags]
+    level = opt_level(p, optimize)
+    flags = [level if f in _OPT_LEVELS else f for f in p.cflags]
     return [
         *flags,
         "/c",
@@ -102,19 +128,22 @@ def link_command(p: toolchain.Profile, out: Path, objs: list[Path]) -> list[str]
     (/OPT:REF and /OPT:ICF are what /DEBUG would otherwise turn off): the
     runtime's functions and lines get names, which SOA_HOSTPROF's report and a
     crash's stack both need. The translated chunks carry no debug information
-    and add only their public names."""
-    sources = [*sorted(RUNTIME.glob("*.c")), *toolchain.runtime_support_sources()]
+    and add only their public names.
+
+    Every runtime file is globbed, so runtime_support_sources() is not added
+    here: it is for the tests that link a few runtime files, and plat.c would
+    otherwise be on this line twice once L7 creates it."""
     return [
         *p.cflags,
-        *p.linker,
         "/Zi",
         f"/Fd{out}/runtime.pdb",
         f"/I{RUNTIME}",
         f"/I{out}",
         f"/Fo{out}/",
         f"/Fe:{out / ('soa' + p.exeext)}",
-        *map(str, sources),
+        *map(str, sorted(RUNTIME.glob("*.c"))),
         *map(str, objs),
+        *p.linker,
         "/link",
         "/DEBUG",
         "/OPT:REF",
@@ -206,20 +235,29 @@ def main() -> int:
         help="the toolchain profile; a non-msvc one writes to its own --out (clang-cl: gen/clang)",
     )
     ap.add_argument(
-        "--out", type=Path, default=None, help="where the C, objects and exe go (default gen)"
+        "--out",
+        type=Path,
+        default=None,
+        help="where the C, objects and exe go (default the profile's: gen, gen/clang, gen/linux)",
     )
     ap.add_argument("--chunk", type=int, default=400, help="functions per C file")
     ap.add_argument("--limit", type=int, default=0, help="translate only the first N functions")
-    ap.add_argument("--compile", action="store_true", help="compile every chunk with MSVC")
+    ap.add_argument("--compile", action="store_true", help="compile every chunk with --cc")
     ap.add_argument("--optimize", action="store_true", help="compile at /O2 instead of /Od")
     ap.add_argument(
         "--link", action="store_true", help="link the objects with runtime/ into soa.exe"
     )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
-    # A clang build goes to its own directory by default, so it can never be
-    # linked into gen/soa.exe: --link globs whatever objects --out holds.
-    args.out = args.out if args.out is not None else Path(prof.out)
+    # A clang build goes to its own directory, so it can never be linked into
+    # gen/soa.exe: --link globs whatever objects --out holds.
+    try:
+        args.out = out_dir(prof, args.out)
+    except ValueError as exc:
+        ap.error(str(exc))
+    # The msvc profile's lines are the ones the docs quote (TESTING.md).
+    shown = "MSVC" if prof is toolchain.MSVC else prof.name
+    into = "" if prof is toolchain.MSVC else f" into {args.out}"
 
     dol = D.parse(args.dol.read_bytes())
     t0 = time.time()
@@ -281,13 +319,11 @@ def main() -> int:
 
     if args.compile:
         if toolchain.compiler_path(prof) is None:
-            print(f"\n{prof.name} not found; skipping compile", file=sys.stderr)
+            print(f"\n{shown} not found; skipping compile", file=sys.stderr)
             return 1
         units = [args.out / "dispatch.c", *chunks]
-        level = "/O2" if args.optimize else "/Od"
-        print(
-            f"\ncompiling {len(units)} translation units with {prof.name} ({level}) into {args.out} ..."
-        )
+        level = opt_level(prof, args.optimize)
+        print(f"\ncompiling {len(units)} translation units with {shown} ({level}){into} ...")
         t0 = time.time()
 
         def build(path: Path):
@@ -315,7 +351,7 @@ def main() -> int:
             )
             return 1
         if toolchain.compiler_path(prof) is None:
-            print(f"\n{prof.name} not found; skipping link", file=sys.stderr)
+            print(f"\n{shown} not found; skipping link", file=sys.stderr)
             return 1
         exe = args.out / ("soa" + prof.exeext)
         t0 = time.time()

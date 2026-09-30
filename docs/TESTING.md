@@ -34,12 +34,13 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1097 passed, 2 skipped in 440.70s
+1108 passed, 2 skipped in 258.30s
 ```
 
-1099 tests in 58 files, none of which reads the disc. The two FMA probes of
-`test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), which is
-CI and a default run here; the counts below include those two skips. They cover the Python
+1110 tests in 58 files, none of which reads the disc. The two FMA probes of
+`test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
+a default run here; the counts below include those two skips. CI's Windows runner
+ships LLVM, so they run there. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -85,7 +86,7 @@ its own and run it, some of the C as well:
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
-| `test_toolchain_profiles.py` | 7 | the toolchain profiles (portability L3a), no compiler run: the msvc profile's --compile, decompiled-unit, link and mod command lines equal a golden copy of what recompile.py ran before profiles; a clang-cl build writes only under gen/clang, runs nowhere else and builds no mod, and pointing it at gen or letting it build the mods fails; the gnu grammar's translation; compile_runtime.py's strict set is the profile's |
+| `test_toolchain_profiles.py` | 18 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review") |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -102,20 +103,27 @@ its own and run it, some of the C as well:
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
 | `test_turbo.py` | 2 | the check a turbo run is held to (M11a), `python tools/tests/test_turbo.py <log>`: over the battle the game's frame counter advances one a retrace, over the field before it one per two, the battle ends inside the run, and the audio reached the device at 128,000 bytes a second within 3%; a synthetic log with each rule broken fails its own line |
-| `test_toolchain_fp.py` | 2 | no fused multiply-add from a clang profile (portability 2.8, L3a): a*b+c built with -mfma disassembles as vmulss and vaddss, and without -ffp-contract=off (the mutation) as vfmadd213ss; skips, saying so, where no clang and llvm-objdump are found -- CI and a default run here |
+| `test_toolchain_fp.py` | 2 | no fused multiply-add from a clang profile (portability 2.8, L3a): a*b+c built with -mfma disassembles as vmulss and vaddss, and without -ffp-contract=off (the mutation) as vfmadd213ss; skips, saying so, where no clang and llvm-objdump are found, as in a default run here; CI's Windows runner ships LLVM, so the Tests job there runs both |
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine by hiding one at a time:
+this machine on 2026-09-30 by hiding one at a time, with a pytest plugin that
+makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
+"L3a's review"); there is no clang here, so every row has the two FMA skips:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1097 passed, 2 skipped` |
-| no capstone — **what CI installs** | `1078 passed, 3 skipped` |
-| no MSVC | `734 passed, 365 skipped` |
-| neither — **the Ubuntu CI leg** | `715 passed, 366 skipped` |
+| everything (MSVC + capstone) | `1108 passed, 2 skipped` |
+| no capstone | `1089 passed, 3 skipped` |
+| no MSVC | `745 passed, 365 skipped` |
+| neither | `726 passed, 366 skipped` |
 
-Two things follow. The 69 MSVC-gated tests are the ones that build a runtime
+No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
+and a few tests are Windows-only, so read CI's counts from CI: at 8bd7c79
+the Windows Tests job printed `1077 passed, 4 skipped` and the Ubuntu one
+`711 passed, 370 skipped` (`gh run view <id> --log | grep passed`).
+
+Two things follow. The 363 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1089,7 +1097,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 363 of the 1099 skip without a C compiler; they build one runtime file and run it.
+² 365 of the 1110 skip without a C compiler: 363 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1100,8 +1108,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 715 passed, 366 skipped |
-| **Tests** | windows | the same three — 1078 passed, 3 skipped |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 711 passed, 370 skipped at 8bd7c79 |
+| **Tests** | windows | the same three — 1077 passed, 4 skipped at 8bd7c79; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

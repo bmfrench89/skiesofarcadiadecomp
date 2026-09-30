@@ -78,7 +78,7 @@ def main() -> int:
     # same directory cannot slip into the link.
     objs = [args.out / (s.stem + ".obj") for s in SOURCES]
     if not run_cl(
-        "linking the renderer", [*PROF.cflags, *PROF.linker, *map(str, objs), f"/Fe:{exe}"]
+        "linking the renderer", [*PROF.cflags, *map(str, objs), f"/Fe:{exe}", *PROF.linker]
     ):
         return 1
 

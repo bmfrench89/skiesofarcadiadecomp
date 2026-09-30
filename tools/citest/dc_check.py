@@ -92,7 +92,7 @@ def main() -> int:
     # same directory cannot slip into the link.
     objs = [args.out / (Path(s).stem + ".obj") for s in [*sources, *SUPPORT]]
     if not run_cl(
-        "linking the driver", [*PROF.cflags, *PROF.linker, *map(str, objs), f"/Fe:{exe}"]
+        "linking the driver", [*PROF.cflags, *map(str, objs), f"/Fe:{exe}", *PROF.linker]
     ):
         return 1
 
