@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1108 passed, 2 skipped in 258.30s
+1109 passed, 2 skipped in 247.77s
 ```
 
-1110 tests in 58 files, none of which reads the disc. The two FMA probes of
+1111 tests in 58 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -99,8 +99,8 @@ its own and run it, some of the C as well:
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
 | `test_memguard.py` | 4 | the bound on the guest memory image |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
-| `test_perfbench.py` | 3 | the renderer benchmark: its figure is busy thread-time over every fragment processed, and a capture that drifted from the pinned manifest is caught |
-| `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical |
+| `test_perfbench.py` | 4 | the renderer benchmark: its figure is busy thread-time over every fragment processed, a capture that drifted from the pinned manifest is caught, and `--exe` (portability L2a) benchmarks a saved build, a relative path taken from where it was typed and a missing one refused before any replay |
+| `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical; and 600,000 random bilinear samples through the SSE4.1 blend and the scalar loop, byte for byte (H15d). `SOA_CC=clang-cl` builds it with that profile, which passes with the NDK's clang-cl since L2a |
 | `test_gxr_alpha.py` | 2 | the early depth test's premise (H15a): whether a draw's alpha compare passes every alpha, on sixteen combinations worked out by hand -- the XOR of two always-true compares among them -- and the answer's cache between draws |
 | `test_turbo.py` | 2 | the check a turbo run is held to (M11a), `python tools/tests/test_turbo.py <log>`: over the battle the game's frame counter advances one a retrace, over the field before it one per two, the battle ends inside the run, and the audio reached the device at 128,000 bytes a second within 3%; a synthetic log with each rule broken fails its own line |
 | `test_toolchain_fp.py` | 2 | no fused multiply-add from a clang profile (portability 2.8, L3a): a*b+c built with -mfma disassembles as vmulss and vaddss, and without -ffp-contract=off (the mutation) as vfmadd213ss; skips, saying so, where no clang and llvm-objdump are found, as in a default run here; CI's Windows runner ships LLVM, so the Tests job there runs both |
@@ -113,15 +113,15 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1108 passed, 2 skipped` |
-| no capstone | `1089 passed, 3 skipped` |
-| no MSVC | `745 passed, 365 skipped` |
-| neither | `726 passed, 366 skipped` |
+| everything (MSVC + capstone) | `1109 passed, 2 skipped` |
+| no capstone | `1090 passed, 3 skipped` |
+| no MSVC | `746 passed, 365 skipped` |
+| neither | `727 passed, 366 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
-and a few tests are Windows-only, so read CI's counts from CI: at 8bd7c79
-the Windows Tests job printed `1077 passed, 4 skipped` and the Ubuntu one
-`711 passed, 370 skipped` (`gh run view <id> --log | grep passed`).
+and a few tests are Windows-only, so read CI's counts from CI: at cee8a5b
+the Windows Tests job printed `1088 passed, 4 skipped` and the Ubuntu one
+`722 passed, 370 skipped` (`gh run view <id> --log | grep passed`).
 
 Two things follow. The 363 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -193,8 +193,9 @@ held a `mod.ini` at any point, the text rule too.
 Each takes `--cc clang-cl` (portability L3a) to build with the clang-cl profile
 instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
 compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
-Until L2a, `compile_runtime.py --cc clang-cl` compiles 27 of 28: `gxr_tev.c`
-fails with clang's SSE4.1 always_inline error, portability.md 2.2's.
+Since L2a all three pass under the NDK's clang-cl 19.0.1: `compile_runtime.py
+--cc clang-cl` compiles 28 of 28 (until then `gxr_tev.c` failed with clang's
+SSE4.1 always_inline error, portability.md 2.2's).
 
 ```
 python tools/citest/compile_runtime.py
@@ -1097,7 +1098,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 365 of the 1110 skip without a C compiler: 363 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 365 of the 1111 skip without a C compiler: 363 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1108,8 +1109,8 @@ Four job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 711 passed, 370 skipped at 8bd7c79 |
-| **Tests** | windows | the same three — 1077 passed, 4 skipped at 8bd7c79; the runner ships LLVM, so the FMA probes run |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 722 passed, 370 skipped at cee8a5b |
+| **Tests** | windows | the same three — 1088 passed, 4 skipped at cee8a5b; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

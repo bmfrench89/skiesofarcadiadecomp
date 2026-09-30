@@ -3873,3 +3873,61 @@ Seventeen findings, none of them in what MSVC builds:
   measured. The rows are measured now, MSVC or capstone hidden by a
   three-line pytest plugin (`-p`) that makes `toolchain.msvc_env` answer None
   or makes `import capstone` fail as a missing module.
+
+**L2a: the SIMD blend behind an x86-64 guard.** 2026-09-30.
+`runtime/plat.h` is new, with portability.md 3.2's platform tests
+(`PLAT_X86_64`, `PLAT_ARM64`, `PLAT_MSVC`, `PLAT_GNU`, each 0 or 1) and its
+SIMD section: `PLAT_TARGET_SSE41`, the target attribute under gcc and every
+clang, and `plat_cpu_has_sse41`, `__cpuid` wherever `_MSC_VER` is defined and
+`<cpuid.h>` elsewhere. `gxr_tev.c`'s guard is `#if PLAT_X86_64` instead of
+`_MSC_VER && _M_X64`, and the bilinear blend is its own function,
+`bilinear_sse41`: target-attributed under gcc and clang, forced inline under
+MSVC. `perfbench.py run --exe` benchmarks a saved build.
+- **clang-cl compiles it.** The Done's command (the NDK's clang-cl 19.0.1,
+  `/c /std:c17 /O2 /fp:precise /clang:-ffp-contract=off /W3`) reports no
+  error, where the base reports the three of portability.md 2.2 (two at
+  :1193, one at :1196). Under `--cc clang-cl`, `compile_runtime.py` compiles
+  28 of 28 and `render_check.py` passes; its unasserted second-frame hash,
+  63a57c77609efd77, is MSVC's.
+- **A non-MSVC x86-64 build keeps the SIMD path, and the Done's check needed
+  a second compile to show it.** Android's x86-64 target turns SSE4.1 and 4.2
+  on by default (its ABI requires them; `-march=x86-64` does not turn them
+  off), so under the Done's command clang inlines `bilinear_sse41` into
+  `sample` and no function of that name exists: two `pmulld` sit in `sample`
+  instead, where the base has none. With `-mno-sse4.2 -mno-sse4.1`, a
+  baseline x86-64 build, `bilinear_sse41` is its own function holding the
+  SSE4.1 instructions (`pmulld` twice, `packusdw`) and `sample` calls it
+  once: the target attribute doing its job. The base has no SIMD in either
+  build.
+- **MSVC's code: the blend's own function moved registers in `tev_pixel`.**
+  Compiled with `toolchain.CFLAGS` and `/FA`, 55 of 56 functions are
+  identical but for labels, `sample_level`, `sample` and `simd_decide` among
+  them. `tev_pixel`, which inlines the sampler, allocates registers
+  differently around the inlined wrap arithmetic: the same instructions over
+  r11, r14, r15 and ecx permuted, three lines longer. The split is the cause:
+  the guard and the include alone leave all 56 identical, and four spellings
+  of the split (unsigned or signed words, the texel loads inside the
+  function or out, a separate result) each moved `tev_pixel` the same way.
+  So the Done's fallback ran: the base relinked from 8bd7c79's runtime and
+  saved as `build\soa-L2abase.exe`, then `perfbench.py run --threads 1`,
+  interleaved A B B A twice:
+
+  | | ns a fragment, whole perfset, 1 thread | mean |
+  |---|---|---|
+  | base (A) | 40.2, 38.3, 39.6, 39.0 | 39.3 |
+  | L2a (B) | 39.4, 38.7, 39.4, 39.2 | 39.2 |
+
+  No difference: -0.3%, inside the noise and far inside the slice's 3%.
+- **The blend is still exact.** `test_gxr_fastpath.py` passes, 600,000
+  samples and 0 mismatches, under MSVC and, now that its link carries
+  `-fuse-ld=link` (L3a's review), under the NDK's clang-cl with the SIMD path
+  live. b377b1f's mutation, run once on `bilinear_sse41` -- the first weight
+  pair of `_mm_set_epi16` swapped, which is channel 3's -- turns it red under
+  both compilers: "MISMATCH 32x16 wrap 1/0 at -21.56,-97.65: 155,116,49,220
+  vs 155,116,49,183", the alpha byte alone.
+- **`SOA_GXR_NOSIMD` still reaches the scalar path.** A direct `--replay` of
+  a scratch copy of capture 15800 with `SOA_HASH=1`, `SOA_SETTINGS=0`,
+  `SOA_THREADS=1` and `SOA_GXR_NOSIMD=1` prints "the pixel path ran without
+  SIMD" and a91622f21a14d5bb, the manifest's hash; without the switch the
+  line is absent and the hash the same. Replay 23/23 at 1, 2, 3 and 8
+  threads; the self test passes.

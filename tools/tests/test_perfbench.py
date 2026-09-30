@@ -54,3 +54,24 @@ def test_the_manifest_pins_every_complete_capture_and_a_change_is_caught(tmp_pat
     assert all(perfbench.verify(n, h, root) == [] for n, (_, h) in rows.items())
     (root / "field" / "5000.ram").write_bytes(b"changed")  # the drift the pin exists to catch
     assert perfbench.verify("field/5000", rows["field/5000"][1], root) == [".ram"]
+
+
+def test_exe_picks_the_build_and_a_relative_one_is_taken_from_here(tmp_path, monkeypatch):
+    """--exe benchmarks a saved build (portability L2a's A/B): the path is
+    resolved where it was typed, not in the root the replays run in, and a
+    missing build is refused before any replay starts."""
+    got = []
+    monkeypatch.setattr(perfbench, "run", lambda runs, threads, exe: got.append(exe) or 0)
+    (tmp_path / "soa-base.exe").write_bytes(b"MZ")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["perfbench", "run", "--exe", "soa-base.exe"])
+    assert perfbench.main() == 0
+    assert got == [tmp_path.resolve() / "soa-base.exe"]
+    monkeypatch.setattr(sys, "argv", ["perfbench", "run", "--exe", "missing.exe"])
+    assert perfbench.main() == 1
+    assert len(got) == 1
+    # no --exe: gen/soa.exe, here pointed at the saved build
+    monkeypatch.setattr(perfbench, "EXE", tmp_path / "soa-base.exe")
+    monkeypatch.setattr(sys, "argv", ["perfbench", "run"])
+    assert perfbench.main() == 0
+    assert got == [tmp_path.resolve() / "soa-base.exe"] * 2

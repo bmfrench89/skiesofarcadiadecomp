@@ -3,7 +3,13 @@
 
     python tools/perfbench.py run                  # every capture, 5 replays each, 8 threads
     python tools/perfbench.py run --runs 9 --threads 4
+    python tools/perfbench.py run --exe build/soa-base.exe   # another build of the port
     python tools/perfbench.py manifest --write     # pin the set (after opening every PNG)
+
+`--exe` benchmarks a saved copy of an older build, which is how a change is
+judged against its base: save gen/soa.exe before relinking, then run the two
+interleaved, A B B A, because this machine drifts within a session (FINDINGS
+"H11"). A relative path is taken from the current directory.
 
 The set lives in `build/perfset/<scene>/<frame>.{fifo,regs,ram}` -- captured with
 `SOA_FIFO_DIR` pointed there, never at `build/fifo`, and game data, so it stays
@@ -149,6 +155,9 @@ def main() -> int:
     r = sub.add_parser("run", help="replay every pinned capture and report ns per fragment")
     r.add_argument("--runs", type=int, default=5)
     r.add_argument("--threads", type=int, default=8)
+    r.add_argument(
+        "--exe", type=Path, default=EXE, help="the build to benchmark (default gen/soa.exe)"
+    )
     m = sub.add_parser("manifest", help="list the set, or pin it with --write")
     m.add_argument(
         "--write",
@@ -164,7 +173,14 @@ def main() -> int:
     )
     a = p.parse_args()
     if a.cmd == "run":
-        return run(a.runs, a.threads)
+        # Resolved here: the replays run with the repository root as their
+        # working directory, and a path relative to anywhere else is wrong there.
+        exe = a.exe.resolve()
+        if not exe.is_file():
+            print(f"perfbench: no build at {exe}", file=sys.stderr)
+            return 1
+        print(f"perfbench: {exe}")
+        return run(a.runs, a.threads, exe)
     labels = dict(x.split("=", 1) for x in a.label)
     if a.write:
         print(

@@ -15,8 +15,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(_MSC_VER) && defined(_M_X64)
-#include <intrin.h>
+#include "plat.h"
+/* Every x86-64 build gets the SIMD path (L2a): MSVC, clang-cl, and gcc or
+ * clang for Linux or windows-gnu. The blend is a PLAT_TARGET_SSE41 function,
+ * so the file itself stays baseline x86-64 and simd_decide chooses at run
+ * time. Before L2a the test was _MSC_VER && _M_X64, which clang-cl passed and
+ * then could not compile, and a windows-gnu build silently failed. */
+#if PLAT_X86_64
 #include <smmintrin.h>
 #define TEX_SIMD 1
 #endif
@@ -35,10 +40,8 @@ static void simd_decide(void)
     g_gxr_simd = 0;
 #ifdef TEX_SIMD
     {
-        int r[4];
         const char* off = getenv("SOA_GXR_NOSIMD");
-        __cpuid(r, 1);
-        g_gxr_simd = ((r[2] >> 19) & 1) && !(off && atoi(off));
+        g_gxr_simd = plat_cpu_has_sse41() && !(off && atoi(off));
     }
 #endif
 }
@@ -1157,6 +1160,36 @@ TEX_INLINE int wrap(int i, int size, int mask, unsigned mode)
 
 static int g_notex = -1;
 
+#ifdef TEX_SIMD
+/* sample_level's bilinear loop, four channels at a time (H15d): a lane is a
+ * channel. The horizontal pass is one multiply-add of the texel pair by
+ * (256 - ax, ax) -- 255 * 256 fits a signed 16-bit lane -- the vertical one
+ * 32-bit multiplies; the same integers, so the same bytes. The q are four
+ * texels as they sit in memory, the result the blended one.
+ *
+ * Its own function because _mm_mullo_epi32 is SSE4.1 (L2a): under gcc and
+ * clang it carries the target attribute and is a call from the baseline
+ * caller; under MSVC it is forced inline, so MSVC's code is what it was. */
+#if PLAT_MSVC
+#define BILINEAR_SSE41 static __forceinline
+#else
+#define BILINEAR_SSE41 static PLAT_TARGET_SSE41
+#endif
+BILINEAR_SSE41 uint32_t bilinear_sse41(uint32_t q00, uint32_t q10, uint32_t q01, uint32_t q11, int ax, int ay)
+{
+    __m128i z = _mm_setzero_si128(), wx, top, bot, r;
+    wx = _mm_set_epi16((short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax),
+                       (short)ax, (short)(256 - ax));
+    top = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128((int)q00), _mm_cvtsi32_si128((int)q10)), z), wx);
+    bot = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128((int)q01), _mm_cvtsi32_si128((int)q11)), z), wx);
+    r = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(top, _mm_set1_epi32(256 - ay)), _mm_mullo_epi32(bot, _mm_set1_epi32(ay))),
+                      _mm_set1_epi32(32768));
+    r = _mm_srli_epi32(r, 16);
+    r = _mm_packus_epi16(_mm_packus_epi32(r, r), z);
+    return (uint32_t)_mm_cvtsi128_si32(r);
+}
+#endif
+
 TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t out[4])
 {
     const uint8_t* img = C->level[l];
@@ -1178,23 +1211,9 @@ TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t o
         int i;
 #ifdef TEX_SIMD
         if (g_gxr_simd > 0) {
-            /* The loop below, four channels at a time (H15d): a lane is a
-             * channel. The horizontal pass is one multiply-add of the texel
-             * pair by (256 - ax, ax) -- 255 * 256 fits a signed 16-bit lane --
-             * the vertical one 32-bit multiplies; the same integers, so the
-             * same bytes. */
-            int32_t q00, q10, q01, q11;
-            __m128i z = _mm_setzero_si128(), wx, top, bot, r;
+            uint32_t q00, q10, q01, q11;
             memcpy(&q00, p00, 4); memcpy(&q10, p10, 4); memcpy(&q01, p01, 4); memcpy(&q11, p11, 4);
-            wx = _mm_set_epi16((short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax), (short)ax, (short)(256 - ax),
-                               (short)ax, (short)(256 - ax));
-            top = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128(q00), _mm_cvtsi32_si128(q10)), z), wx);
-            bot = _mm_madd_epi16(_mm_unpacklo_epi8(_mm_unpacklo_epi8(_mm_cvtsi32_si128(q01), _mm_cvtsi32_si128(q11)), z), wx);
-            r = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(top, _mm_set1_epi32(256 - ay)), _mm_mullo_epi32(bot, _mm_set1_epi32(ay))),
-                              _mm_set1_epi32(32768));
-            r = _mm_srli_epi32(r, 16);
-            r = _mm_packus_epi16(_mm_packus_epi32(r, r), z);
-            q00 = _mm_cvtsi128_si32(r);
+            q00 = bilinear_sse41(q00, q10, q01, q11, ax, ay);
             memcpy(out, &q00, 4);
             return;
         }

@@ -439,6 +439,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `gxr.c` | renderer | Transform, lighting, texgen, clipping, the rasterizer, depth, fog and blend, the EFB, the command queue and its worker threads, EFB copies and clears, frame hashing | Wrong pixels. The 23 pinned captures in `config/fifo_manifest.tsv` are the check: a change that moves a frame moves a hash |
 | `gxr_tev.c` | renderer | Texture decode and cache, palettes, sampling, the TEV combiner and the alpha compare | Wrong colours. A cache bug is worse than a decode bug, because it shows up as *stale* textures in some frames and not others |
 | `gxr.h` | renderer | Shared types (`Vertex`, `TevSetup`, `TexCfg`), the EFB dimensions, and the producer's phase-accounting clock | A phase mistake makes the profile lie about where the time goes; the pipeline itself is unaffected |
+| `plat.h` | host plumbing | The platform layer (portability.md 3.2), header-only: `PLAT_X86_64`, `PLAT_ARM64`, `PLAT_MSVC` and `PLAT_GNU`, each 0 or 1, so a file tests a meaning rather than a compiler; and, since L2a, `PLAT_TARGET_SSE41` and `plat_cpu_has_sse41`, which let `gxr_tev.c`'s SIMD blend build under any x86-64 compiler while choosing it at run time. It never includes `cpu.h`, so an edit is a `--link`. L2 adds the atomics, waits, clocks and threads | A wrong test drops the SIMD path silently -- a windows-gnu build did before L2a -- or lets a compiler reach intrinsics it cannot build, as clang-cl did from b377b1f to L2a |
 | `png.c` | diagnostic | A minimal PNG writer (stored deflate) for `SOA_SNAP` and `--replay` output | Snapshots are unreadable. Nothing the game sees changes |
 | `cpu.h` | host plumbing | `CpuState`, the memory window and its mask, byte-swapping loads and stores, MMIO routing, the gather-pipe test, the fiber savepoint declarations | Everything, at the level of a single instruction — so it shows up as arbitrary corruption anywhere. This file is also where the cost of the hot path is decided |
 | `main.c` | host plumbing | Boot: allocate and guard the memory image, load the DOL, park the FST, fill low memory, pick the run mode, start the window, the watchdog and the sampling profiler, then jump to `__start` | The image is not what the apploader would have left, and the game misbehaves before any of its own code is suspect. The guarded tail is what turns an out-of-range guest store into one `[mem]` line instead of silent host-heap corruption |
@@ -629,7 +630,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1110 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1111 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

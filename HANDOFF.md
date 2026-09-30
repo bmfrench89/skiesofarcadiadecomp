@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1110 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1111 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1110 |
+| Python tests | 1111 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -420,7 +420,10 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-09-30)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L3a**
+stretch, newest first, each with a FINDINGS entry of its name: **L2a**
+(`runtime/plat.h`, the SIMD blend in every x86-64 build, `perfbench --exe`;
+clang-cl now compiles every runtime file); **L3a's review** (cee8a5b,
+seventeen findings fixed); **L3a**
 (toolchain profiles, `--cc clang-cl` into `gen/clang`); **P10b** (couch
 co-op, `mods/coop`, f740207); **P5a** (gamma, colour blindness, the flash
 limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
@@ -431,16 +434,22 @@ slow in every run).
 1. ~~Re-run L3a's adversarial review~~ -- done the same day: seventeen
    findings, none in what MSVC builds, all fixed (FINDINGS "L3a's review").
    As with P5a and P10b, most were tests that a wrong plan passed.
-2. **L2a** (portability.md, "L2a. The SIMD blend behind an x86-64 guard"):
-   `runtime/plat.h`, `gxr_tev.c`'s guard and `bilinear_sse41`, `perfbench
-   --exe`. The clang-cl its Done needs is the NDK's: `$env:SOA_CLANG_CL =
+2. ~~L2a~~ -- done, MSVC's pixel path measured unchanged. One Done line
+   needed a second compile: Android's x86-64 target has SSE4.1 on, so
+   clang inlines `bilinear_sse41` there (FINDINGS "L2a"). What it unblocks is L4a, CI's clang-cl leg
+   (PLAN-NEXT M4a), and L2. The clang-cl for any of them is the NDK's:
+   `$env:SOA_CLANG_CL =
    'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`.
 3. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
    once its spec lands (turbo is about 1.4x in a window until then); and
    `docs/specs/display.md`, which now owns P5a's presenter budget -- p99
    10.08 ms fullscreen at 3440x1440 before any filter, against 6 ms.
-4. `docs/specs/comfort-pack.md` has the planning session's uncommitted edit
-   in the working tree (P10b's wording). It is theirs to commit; leave it.
+4. `docs/specs/comfort-pack.md`, `docs/PLAN-NEXT.md` and
+   `docs/specs/portability.md` hold uncommitted edits made at 13:20, after
+   8bd7c79, which this session did not write and left alone. They are the
+   planning session's to commit, and when they do, PLAN-NEXT's L2a row and
+   portability's L2a slice should say it landed, and its L3a note that the
+   review ran (FINDINGS "L3a's review", "L2a").
 
 **Traps met in this stretch, each now in the author's memory too:** a check
 chain piped through `tail` hides a failing step -- run it under
