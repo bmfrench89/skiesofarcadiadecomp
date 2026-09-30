@@ -803,7 +803,9 @@ if __name__ == "__main__":
         # P5a's replay identity check: <base>.png and <base>.picture.png
         a, b = decode_png(Path(sys.argv[2])), decode_png(Path(sys.argv[3]))
         same = a == b
-        print(f"[picture-check] {a[0]}x{a[1]} and {b[0]}x{b[1]}: {'the same pixels' if same else 'different'}")
+        print(
+            f"[picture-check] {a[0]}x{a[1]} and {b[0]}x{b[1]}: {'the same pixels' if same else 'different'}"
+        )
         sys.exit(0 if same else 1)
     if len(sys.argv) != 2:
         sys.exit("usage: python tools/tests/test_picture.py <log> | --same <a.png> <b.png>")
