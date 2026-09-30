@@ -162,3 +162,62 @@ jobs:
       # for a renderer that drew nothing at all.
       - name: Renderer pixel checks
         run: python tools/citest/render_check.py
+
+  # The same three checks under a second compiler (portability.md 3.12, L4a).
+  # The clang-cl profile in tools/soa/toolchain.py is clang-cl on MSVC's
+  # headers, libraries and link.exe, with -ffp-contract=off, -fwrapv and
+  # -fno-strict-aliasing; the runner ships LLVM, whose clang-cl
+  # compiler_path finds on PATH. Before L2a, gxr_tev.c's SSE4.1 blend did not
+  # compile under it at all, and nothing but a local build could have said so.
+  #
+  # Every check step runs even when one before it failed, so one run shows
+  # which of the four a change breaks. The two pytest modules skip, rightly,
+  # where there is no clang-cl, llvm-objdump or SSE4.1; here noskip.py makes a
+  # skip fail the run, and SOA_CC is what makes test_gxr_fastpath.py build
+  # with clang-cl rather than MSVC, which would pass it either way.
+  #
+  # NOT COVERED: the clang-cl game build and the replay under it (L3b), and
+  # everything the native job's comment lists.
+  clang-cl:
+    name: Runtime compiles (clang-cl)
+    runs-on: windows-latest
+    env:
+      SOA_CC: clang-cl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest
+
+      # Which clang-cl, and which version, so a runner image that moves LLVM
+      # on is visible in the log. No clang-cl here fails the job.
+      - name: The clang-cl the checks use
+        run: |
+          $cc = python -c "import sys; sys.path.insert(0, 'tools'); from soa import toolchain; print(toolchain.compiler_path(toolchain.CLANG_CL) or '')"
+          if (-not $cc) { Write-Output "::error::no clang-cl (tools/soa/toolchain.py compiler_path)"; exit 1 }
+          Write-Output $cc
+          & $cc --version
+
+      - name: Compile every runtime/*.c
+        if: ${{ !cancelled() }}
+        run: python tools/citest/compile_runtime.py --cc clang-cl
+
+      - name: Decompiled MSL routines against the host C library
+        if: ${{ !cancelled() }}
+        run: python tools/citest/dc_check.py --cc clang-cl
+
+      - name: Renderer pixel checks
+        if: ${{ !cancelled() }}
+        run: python tools/citest/render_check.py --cc clang-cl
+
+      # No FMA contraction from either clang profile, and the renderer's
+      # specialised pixel paths (the SIMD bilinear blend among them) against
+      # the general ones, built with clang-cl.
+      - name: FMA probes and fast paths, no skips
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_toolchain_fp.py tools/tests/test_gxr_fastpath.py -v
