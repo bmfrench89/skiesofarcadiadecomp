@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1109 passed, 2 skipped in 247.77s
+1122 passed, 2 skipped in 231.47s
 ```
 
-1111 tests in 58 files, none of which reads the disc. The two FMA probes of
+1124 tests in 59 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -75,6 +75,7 @@ its own and run it, some of the C as well:
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
 | `test_matchcheck_relocs.py` | 14 | what a relocated word is allowed to hide — every case is a thing the old oracle called a MATCH |
 | `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
+| `test_gx_dlrecord.py` | 13 | display lists recorded into guest memory and drawn at their call (C5b), on the renderer built alone with the SDK's Begin/End/Call played by hand: a list recorded, drawn over, then called lands on top; a CPU FIFO that is not DisplayListFifo (the logo screen's) is drawn at once; only what a list holds at its call is drawn, and an uncalled one never; an overflowing list is empty; each capture holds its lists inline, once, and replays to the live picture; `fifo.py` and `fifopair` read the inline list. Five hand mutations each turn it red (FINDINGS "C5b") |
 | `test_regs.py` | 12 | which GPR an instruction actually writes |
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
 | `test_profiler.py` | 11 | the sampler in `runtime/main.c`, built and run with no game and no disc |
@@ -113,10 +114,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1109 passed, 2 skipped` |
-| no capstone | `1090 passed, 3 skipped` |
-| no MSVC | `746 passed, 365 skipped` |
-| neither | `727 passed, 366 skipped` |
+| everything (MSVC + capstone) | `1122 passed, 2 skipped` |
+| no capstone | `1103 passed, 3 skipped` |
+| no MSVC | `746 passed, 378 skipped` |
+| neither | `727 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at cee8a5b
@@ -1100,7 +1101,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 365 of the 1111 skip without a C compiler: 363 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1124 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

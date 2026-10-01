@@ -11,9 +11,12 @@
  * what matters first is that GXDrawDone and GXSetDrawSync produce the
  * PE_FINISH and PE_TOKEN interrupts the game sleeps on.
  *
- * The CPU FIFO in main memory is not modelled: the stream is consumed as it
- * is written, so the FIFO always reads as empty and the GP as idle, which is
- * exactly what the SDK's flow control and the game's GP-hang detector want.
+ * The CPU FIFO in main memory is modelled only for display lists: between
+ * GXBeginDisplayList and GXEndDisplayList the bytes go into guest memory at
+ * the PI write pointer, and the list is parsed when the game calls it (C5b,
+ * below). Everything else is consumed as it is written, so the FIFO always
+ * reads as empty and the GP as idle, which is exactly what the SDK's flow
+ * control and the game's GP-hang detector want.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
@@ -40,6 +43,37 @@ static int g_in_list;
 static uint16_t g_cp_mmio[0x40]; /* the CP's own MMIO registers, by half-word index */
 static uint16_t g_pe_mmio[8];
 static uint32_t g_pi_fifo[3];
+
+/* The write-gather pipe's bytes not yet parsed (a command not yet whole). */
+#define PIPE_CAP 65536
+static uint8_t g_pipe[PIPE_CAP];
+static size_t g_pipe_len;
+
+/* Display-list recording (gpu-backend.md C5b). GXBeginDisplayList
+ * (fn_80251D80) points the CPU FIFO at DisplayListFifo, the SDK's one FIFO
+ * object for lists, through GXSetCPUFifo (fn_8024C5FC), which stores the
+ * object's address in the small-data global at r13-27520 (0x8024C620) before
+ * it writes the PI FIFO registers; GXEndDisplayList (fn_80251E48) points it
+ * back the same way. So the port records exactly while that global holds
+ * DisplayListFifo: each gather-pipe byte goes into guest memory at the PI write
+ * pointer, which GXEndDisplayList reads (through fn_8024C8A4, after GXFlush's
+ * 32 NOPs) to size the list, and the list is parsed when the game calls it.
+ * Any other CPU FIFO -- the one the logo screen draws through from frame 1 to
+ * 385 and never calls, for one -- is parsed at once, as before (FINDINGS
+ * "Recorded display lists (C5a)"). Before this, every list was drawn when it
+ * was recorded and called empty. */
+#define GX_CPU_FIFO_SDA (-27520) /* r13-relative: GXSetCPUFifo's current CPU FIFO object */
+#define GX_DL_FIFO 0x80318B18u   /* DisplayListFifo (GXBeginDisplayList, 0x80251D94) */
+#define PI_WRAP 0x04000000u      /* PI_FIFO_WPTR's wrap bit; GXEndDisplayList reads it as overflow */
+/* A capture-only record: a display-list call with the list's bytes inline,
+ * as they were at the call (opcode, address, size, then size bytes). A
+ * capture's RAM is the frame's end, and a list recorded again after its call
+ * would replay wrong from it. No GX command uses 0x41, and only a replay
+ * reads it. */
+#define CAP_LIST 0x41
+static int g_dl_rec;    /* the CPU FIFO is DisplayListFifo: record, do not parse */
+static int g_replaying; /* parse() is reading a capture: CAP_LIST is honoured */
+static uint64_t g_dl_recorded, g_dl_rec_bytes, g_dl_nonempty, g_dl_call_bytes, g_dl_overflows;
 
 /* PE_ISR at 0xCC00100A: bit0 token enable, bit1 finish enable, bit2 token, bit3 finish. */
 #define PE_ISR 5
@@ -235,6 +269,26 @@ static void cap_append(const uint8_t* p, size_t n)
     }
     memcpy(g_cap + g_cap_len, p, n);
     g_cap_len += n;
+}
+
+/* The 9-byte list call `back` bytes before the capture's end becomes a
+ * CAP_LIST record holding the list as it is now. The bytes after the call
+ * (`back` - 9 of them, the rest of the store it arrived in) follow it again. */
+static void cap_inline_list(size_t back, const uint8_t* body, uint32_t size)
+{
+    uint8_t head[9], tail[64];
+    size_t pos, n;
+    if (!g_dump_list || back < 9 || back > g_cap_len || back - 9 > sizeof tail) return;
+    pos = g_cap_len - back;
+    if (g_cap[pos] != 0x40) return;
+    n = back - 9;
+    memcpy(tail, g_cap + pos + 9, n);
+    memcpy(head, g_cap + pos, 9);
+    head[0] = CAP_LIST;
+    g_cap_len = pos;
+    cap_append(head, 9);
+    cap_append(body, size);
+    cap_append(tail, n);
 }
 
 static void write_file(const char* path, const void* data, size_t len)
@@ -462,12 +516,18 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
                     if (addr + i < 0x1100) g_xf[addr + i] = mem_r32(s, (src | 0x80000000u) + 4 * i);
             }
             g_xf_loads++;
-        } else if (op == 0x40) { /* display list */
+        } else if (op == 0x40 || (op == CAP_LIST && g_replaying && !in_display_list)) { /* display list */
             uint32_t addr, size;
+            const uint8_t* body = NULL;
             need = 9;
             if (off + need > len) break;
             addr = be32(p + off + 1);
             size = be32(p + off + 5);
+            if (op == CAP_LIST) { /* a capture's call, the list inline after it */
+                if (size > len - off - 9) break;
+                need += size;
+                body = p + off + 9;
+            }
             g_dl_calls++;
             if (g_dllog > 0) {
                 unsigned b = dl_buf(addr);
@@ -477,13 +537,20 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
                 dllog_line("display list %08X called, %u byte(s)%.0llu%.0llu", addr, size, 0ull, 0ull);
             }
             /* size is the guest's, and the same wrap applies to it. */
-            if (!in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
-                size_t done;
+            if (!body && !in_display_list && size <= MEM1_SIZE && (addr & MEM_MASK) <= MEM1_SIZE - size) {
                 gxr_source_hazard(addr, size); /* a queued copy may be writing it (H14) */
+                body = mem_ptr(s, addr);
+                /* A live call (the pipe's own buffer): the capture keeps the
+                 * list as it is now, not as the frame's end leaves it. */
+                if (p == g_pipe && size) cap_inline_list(len - off, body, size);
+            }
+            if (body && !in_display_list) {
+                size_t done;
                 g_list_addr = addr; /* the draws inside say which list they came through (gx_draw_list) */
                 g_in_list = 1;
-                done = parse(s, mem_ptr(s, addr), size, 1);
+                done = parse(s, body, size, 1);
                 g_in_list = 0;
+                if (size) { g_dl_nonempty++; g_dl_call_bytes += size; }
                 if (done != size) {
                     static int warned;
                     if (!warned++) fprintf(stderr, "[gx] display list at %08X: %zu of %u bytes parsed\n", addr, done, size);
@@ -517,10 +584,6 @@ static size_t parse(CpuState* s, const uint8_t* p, size_t len, int in_display_li
 
 /* ---- write-gather pipe ------------------------------------------------ */
 
-#define PIPE_CAP 65536
-static uint8_t g_pipe[PIPE_CAP];
-static size_t g_pipe_len;
-
 /* Set while this thread is inside the parse, and read by the sampler in
  * main.c. A clock pair here is not affordable and that is measured, not
  * argued: pipe_flush runs once per guest store to the gather pipe -- one
@@ -547,9 +610,51 @@ static void pipe_flush(CpuState* s)
     }
 }
 
+/* Inside GXBeginDisplayList/GXEndDisplayList: the bytes go into guest memory
+ * at the PI write pointer, as the console's gather pipe puts them, and are
+ * neither parsed nor captured here (a capture gets the list at its call). Past
+ * the list's buffer the pointer wraps to its base and sets the wrap bit, which
+ * GXEndDisplayList reads as overflow and answers with a list of size 0. */
+static void dl_record(CpuState* s, unsigned size, uint64_t v)
+{
+    uint32_t base = g_pi_fifo[0] & 0x03FFFFFFu, end = (g_pi_fifo[1] & 0x03FFFFFFu) + 4u; /* top is the last word */
+    unsigned i;
+    for (i = 0; i < size; i++) {
+        uint32_t w = g_pi_fifo[2] & 0x03FFFFFFu;
+        if (w >= end) {
+            if (!(g_pi_fifo[2] & PI_WRAP) && g_dl_overflows++ == 0)
+                fprintf(stderr, "[gx] a display list overflowed its buffer at %08X\n", base);
+            g_pi_fifo[2] |= PI_WRAP;
+            w = base;
+        }
+        if (w < MEM1_SIZE) *mem_ptr(s, 0x80000000u | w) = (uint8_t)(v >> (8 * (size - 1 - i)));
+        g_pi_fifo[2] = (g_pi_fifo[2] & PI_WRAP) | (w + 1u);
+    }
+    g_dl_rec_bytes += size;
+    g_bytes += size;
+}
+
+/* After a write of the PI FIFO base: is the CPU FIFO now DisplayListFifo? */
+static void dl_bracket(CpuState* s)
+{
+    int rec = s->gpr[13] && mem_r32(s, s->gpr[13] + (uint32_t)GX_CPU_FIFO_SDA) == GX_DL_FIFO;
+    if (rec && !g_dl_rec) {
+        g_dl_recorded++;
+        if (g_pipe_len) {
+            static int warned;
+            if (!warned++) fprintf(stderr, "[gx] a display list began with %zu byte(s) of a command unparsed\n", g_pipe_len);
+        }
+    }
+    g_dl_rec = rec;
+}
+
 void gx_pipe_write(CpuState* s, unsigned size, uint64_t v)
 {
     unsigned i;
+    if (g_dl_rec) {
+        dl_record(s, size, v);
+        return;
+    }
     if (g_pipe_len + size > PIPE_CAP) {
         static int warned;
         if (!warned++) fprintf(stderr, "[gx] pipe buffer full at %zu bytes; a command is not parsing\n", g_pipe_len);
@@ -610,6 +715,7 @@ int gx_write(CpuState* s, uint32_t ea, unsigned size, uint64_t v)
     }
     if (size == 4 && ea >= PI_FIFO_BASE && ea <= PI_FIFO_WPTR) {
         g_pi_fifo[(ea - PI_FIFO_BASE) >> 2] = (uint32_t)v & 0x1FFFFFFFu;
+        if (ea == PI_FIFO_BASE) dl_bracket(s);
         if (dllog_on()) dllog_pi();
         return 1;
     }
@@ -637,6 +743,10 @@ void gx_report(void)
             (unsigned long long)g_verts, (unsigned long long)g_finishes,
             (unsigned long long)g_tokens, (unsigned long long)g_efb_copies,
             (unsigned long long)g_unknown);
+    fprintf(stderr, "[gx] display lists: %llu calls, %llu nonempty, %llu bytes; %llu recorded, %llu bytes recorded%s\n",
+            (unsigned long long)g_dl_calls, (unsigned long long)g_dl_nonempty, (unsigned long long)g_dl_call_bytes,
+            (unsigned long long)g_dl_recorded, (unsigned long long)g_dl_rec_bytes,
+            g_dl_overflows ? ", some overflowed their buffers" : "");
     gx_dllog_report();
     gxr_report();
 }
@@ -712,7 +822,10 @@ int gx_replay(CpuState* s, const char* base)
         if (fifo) free(fifo);
         if (load_capture(s, base, 1, &fifo, &len)) return 1;
         gxr_reset_efb();
+        g_dl_rec = 0;
+        g_replaying = 1;
         done = parse(s, fifo, len, 0);
+        g_replaying = 0;
         gxr_flush();
     }
     fprintf(stderr, "[gx] replayed %zu of %zu bytes%s\n", done, len, n > 1 ? " (the last of the repeats)" : "");
@@ -782,7 +895,10 @@ int gx_replay_pair(CpuState* s, const char* a, const char* b)
         if (load_capture(s, base, pass != 3, &fifo, &len)) return 1;
         rot = gxr_pair_rotations();
         gxr_reset_efb();
+        g_dl_rec = 0;
+        g_replaying = 1;
         done = parse(s, fifo, len, 0);
+        g_replaying = 0;
         gxr_flush();
         free(fifo);
         fprintf(stderr, "[gx] replayed %zu of %zu bytes\n", done, len);

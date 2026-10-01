@@ -23,6 +23,10 @@ import sys
 from pathlib import Path
 
 MEM_MASK = 0x01FFFFFF  # what the console's address decode narrows a guest address to
+# A capture-only record (runtime/gx.c CAP_LIST): a display-list call with the
+# list's bytes inline -- opcode, address, size, then the bytes. No GX command
+# uses 0x41; only a capture made since C5b holds it.
+CAP_LIST = 0x41
 
 BP_NAMES = {
     0x00: "GEN_MODE",
@@ -451,6 +455,10 @@ def walk(buf, cp: dict, xf, ram=None, bp=None, follow_lists: bool = False):
     parser follows it (gx.c parse): one level deep, only when the list lies
     wholly inside the image, and a command the end of a list cuts off ends the
     list. Without it -- decode's listing -- a call is only reported.
+
+    A capture made since C5b holds each live call as a CAP_LIST record, the
+    list's bytes inline after it as they were at the call; it is reported as a
+    "call" and, with `follow_lists`, followed inline rather than into `ram`.
     """
     yield from _walk(buf, 0, len(buf), None, cp, xf, ram, bp, follow_lists)
 
@@ -509,6 +517,18 @@ def _walk(buf, start: int, end: int, where, cp, xf, ram, bp, follow: bool):
                 lo = addr & MEM_MASK
                 if size <= len(ram) and lo <= len(ram) - size:
                     yield from _walk(ram, lo, lo + size, addr, cp, xf, ram, bp, follow)
+        elif op == CAP_LIST and not inside:
+            if off + 9 > end:
+                return
+            addr = int.from_bytes(buf[off + 1 : off + 5], "big")
+            size = int.from_bytes(buf[off + 5 : off + 9], "big")
+            body = off + 9
+            if body + size > end:
+                return
+            yield ("call", rel, where, addr, size)
+            if follow:
+                yield from _walk(buf, body, body + size, addr, cp, xf, ram, bp, follow)
+            off = body + size
         elif op == 0x61:
             if inside and off + 5 > end:
                 return

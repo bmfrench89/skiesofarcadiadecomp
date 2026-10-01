@@ -3086,6 +3086,8 @@ Two things C5b has to handle that the spec did not name:
   buffer address, and a block the heap reuses for another list counts under
   the same address, so the per-list numbers are an upper bound.)
 
+*Amended 2026-09-30:* C5b has landed; see "C5b" at the end of this file.
+
 
 **P6, followed up: each pin in the log, the reload after a battle, and the
 seed in effect recorded.** 2026-09-25, `build/scenario-p6.log`,
@@ -3967,3 +3969,99 @@ is none.
   profile's intent, and the FMA probe passing shows it holds. `strcpy.c`
   casts a pointer to a 32-bit `unsigned long` three times, the words L4b is
   for. `gxr.c:2942`'s unused `x0` warns as it does under the NDK.
+
+**C5b: display lists recorded into guest memory, and drawn at their call.**
+2026-09-30, `build/scenario-c5b-opening.log`, `build/c5-cap-*.log`. Until
+now the port parsed every gather-pipe byte at once, so each list the game
+recorded was drawn during the scene update that recorded it, and the draw
+pass then called it empty (C5a). `runtime/gx.c` now records while the CPU
+FIFO is the SDK's `DisplayListFifo`. The bytes go into guest memory at the PI
+write pointer, and the list is parsed when the game calls it.
+- **How the port knows it is inside the bracket.** The spec offered (a) hooks
+  at the two functions, which needs a retranslation, or (b) the caller's
+  return address at the PI write. The disassembly gave a third option,
+  `--link` only and keyed on the SDK's own state:
+  - `GXSetCPUFifo` (`fn_8024C5FC`) stores the FIFO object's address at
+    `r13-27520` (`0x8024C620`) before it writes the PI base, top and write
+    pointer.
+  - `GXBeginDisplayList` (`fn_80251D80`) passes it `DisplayListFifo`,
+    `0x80318B18`, after setting `inDispList`.
+  - `GXEndDisplayList` (`fn_80251E48`) reads the write pointer's wrap bit,
+    bit 26, as overflow. It then sizes the list through `fn_8024C8A4`, which
+    first runs GXFlush (`fn_8024DE18`: 32 zero bytes, then `sc`). Only after
+    that does it restore the old FIFO and clear `inDispList`.
+
+  So at each PI base write the port records exactly when that global holds
+  `0x80318B18`. The logo screen's redirect to `0x804024E0` uses another
+  object, so it is still parsed at once. A list that outgrows its buffer
+  wraps to its base and sets bit 26, and the game's call then has size 0.
+- **Captures keep the list as it was called.** A capture's RAM is the frame's
+  end, so a live call is captured as a `0x41` record: address, size, then the
+  list's bytes inline. Only a replay reads it, and `tools/fifo.py` follows it,
+  so `fifopair` and `midpoint` read new captures as the C replay does.
+  Recorded bytes are not captured where they were written, so nothing in a
+  replay is drawn twice. Old captures hold no `0x41` and replay as before.
+- **Tests:** `test_gx_dlrecord.py`, 13 of them, on the renderer built alone.
+  The SDK's Begin/End/Call sequence is played by hand. Five mutations, each
+  run in a scratch worktree, turn it red:
+
+  | Mutation | Tests that fail |
+  |---|---|
+  | recording removed | 7 |
+  | the "bases differ" rule | 8, the logo test among them |
+  | the call not captured inline | the `rerecord` replay and the inline test |
+  | `fifo.py` ignoring `0x41` | the `fifopair` test |
+  | no wrap at the buffer's end | the overflow test |
+- **Live:** the opening to frame 1000 logs `[gx] display lists: 2746 calls,
+  2746 nonempty, 6786431 bytes; 3311 recorded`. Before C5b, every call had
+  size 0. `build/frames/0200.png` was opened and still shows the "Created by
+  OVERWORKS" logo screen. The self test reports 0 failures, `title --check`
+  4 of 4 (0 unknown FIFO bytes of 355 MB), and `replay --threads 1,2,3,8`
+  23/23 with no hash moved.
+- **H10 re-measured.** H4's five pairs were captured again into
+  `build/perfset-c5/` (never `build/fifo`), because nothing had recorded how
+  they were first made. Each card was found from its map loads and copied to
+  a scratch card for the run:
+
+  | scene | card | pad | pokes |
+  |---|---|---|---|
+  | field | `card-partL` | the Continue preamble | -- |
+  | sky | `card-partK` | the Continue preamble | -- |
+  | battle | `card-saved` | the Continue preamble, then A every 150 frames | `cap-battle`'s pokes |
+  | ship | `card-partL` | the Continue preamble, then A every 150 frames | `cap-ship`'s pokes |
+  | cutscene | `build/cards/fresh.raw` | `opening.scn`'s | -- |
+
+  The cutscene needs the fresh card because `card-saved` Continues into
+  `a101b`. The whole recipe, pokes included, is `build/c5-capture.sh`, beside
+  the original runs' `build/run_cap-*.log`, whose first lines hold the same
+  environment. Every run loaded its scene's map and logged 0
+  unknown bytes. By `fifopair`:
+
+  | scene | draws matched, before | draws matched, after | 3D area matched | draws through a list now |
+  |---|---|---|---|---|
+  | field | 1144 / 1147 | 1144 / 1147 | 100.00% of 2.05 M px | 334 (0.42 M px) |
+  | battle | 1390 / 1393 | 1795 / 1798 | 100.00% of 0.41 M px | 842 |
+  | ship | 1514 / 1665 | 1514 / 1665 | 100.00% of 0.86 M px | 142 |
+  | cutscene | 4146 / 4280 | 4146 / 4280 | 100.00% of 0.96 M px | 1238 |
+  | sky | 765 / 765 | 765 / 765 | 100.00% of 0.59 M px | 26 |
+
+  The 3D area is at or above the 99% limit everywhere, and matching without
+  the list-address term gives the same pairs in every scene, so that term
+  costs nothing and adds nothing. `midpoint`'s verdicts all hold over the
+  new pairs, including "the pairs are fifopair's", which means C and Python
+  agree on the `0x41` format. The one exception is battle's "as many as H4
+  counted". Its frames were opened: they show the same battle (`a101b`, the
+  Soldier, 2/8 on the gauge) at a later moment, with the camera turned to
+  show the machinery on the left. The guest clock follows host time, so two
+  runs of one script need not reach one moment.
+- **What the pictures show.** The field and cutscene pairs show the same
+  moments as H4's, so they compare directly:
+  - the field's dark band across the cavern and over the ground on the left
+    is gone, and so is the green-teal ellipse under Vyse's feet. No shadow
+    is visible under him;
+  - the cutscene's translucent teal band down the middle of the bridge,
+    which hid Alfonso's legs, is gone, and his feet show.
+
+  These are draws the game recorded and never showed. Whether the console
+  draws a shadow under Vyse is for C5c, where the owner looks at every
+  changed corpus frame, with D-29's Dolphin comparison if wanted.

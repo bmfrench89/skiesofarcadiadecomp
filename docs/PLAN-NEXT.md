@@ -482,7 +482,7 @@ built only if measured.
 
 | # | Slice | Size | Rebuild | Needs first | Owner | Spec |
 |---|---|---|---|---|---|---|
-| 1 | **C5b** record display lists into guest memory; `[gx] display lists` report; H10's pair matching re-measured on re-captured pairs, with 99% of 3D area the limit | a day to several days | `--link` (gx.c) | C5a confirmed | — | gpu-backend §6 |
+| 1 | **C5b** record display lists into guest memory; `[gx] display lists` report; H10's pair matching re-measured on re-captured pairs, with 99% of 3D area the limit. **Done** (FINDINGS "C5b"): 3D area 100.00% in all five pairs | a day to several days | `--link` (gx.c) | C5a confirmed | — | gpu-backend §6 |
 | 2 | **C5c** re-capture the corpus, open every changed frame, bless: **a first bless** | a day | none | C5b | **Owner** look C | gpu-backend §6 |
 | 3 | **H17a** interpolation, headless, off by default. A second EFB routed per command by `DrawCmd.efb`, from `g_target` in `claim_slot`. It measures the images a second each scene reaches, the input to A2 (b) and A3 | several days | `--link` | C5b's re-measure (or C5a refuted); the H17a spec reviewed | — | PLAN-60FPS-MODS H17a + the H17a spec |
 | 4 | **H17b** interpolation, live: H8's presenter, cut detector, repeat when over budget, a `soa.ini` key off by default | several days | `--link` | H17a; D-2 (display at 60 or 120 Hz) | **Owner** session D | PLAN-60FPS-MODS H17b |

@@ -944,6 +944,12 @@ also names two things C5b must handle (below). C5b and C5c therefore stand.
 
 ### C5b (proposed). Record display lists into guest memory
 
+*Status: landed 2026-09-30 (FINDINGS "C5b"). The bracket is neither (a) nor (b) below: `GXSetCPUFifo`
+stores the current FIFO object at `r13-27520` before it writes the PI registers, so the port records while
+that global is `DisplayListFifo` (0x80318B18). That needs `--link` only, and it is exact by the SDK's own
+state. A capture holds each live call as a `0x41` record with the list inline. H10 re-measured: 3D area
+100.00% in all five pairs, and the list-address term changes no pair.*
+
 *A day to several days. `--link`, or one retranslation if the bracket needs `hooks.txt` (below).
 Prerequisites: C5a confirms (done, 750cef0). Files: `runtime/gx.c`, possibly `config/hooks.txt`,
 `tools/tests/test_gx_dlrecord.py` (new), `docs/ARCHITECTURE.md` (:78 and :513-517, corrected),

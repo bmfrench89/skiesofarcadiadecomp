@@ -65,7 +65,10 @@ store the guest makes — pays one compare and writes to the image.
 
 `runtime/gx.c` · `gx_pipe_write` appends the bytes big-endian to `g_pipe`,
 offers them to the frame capture (`cap_append`), and calls `pipe_flush`,
-which calls `parse`.
+which calls `parse`. The exception is a display list being recorded: between
+`GXBeginDisplayList` and `GXEndDisplayList` the bytes go into guest memory
+at the PI write pointer instead (`dl_record`), as the console's gather pipe
+puts them, and are parsed only when the game calls the list (C5b).
 
 `runtime/gx.c` · `parse` consumes whole commands and leaves a partial one
 for the next store:
@@ -75,7 +78,7 @@ for the next store:
 | `0x08` | CP register | shadows it in `g_cp` |
 | `0x10` | XF registers | shadows a run into `g_xf` |
 | `0x20`/`0x28`/`0x30`/`0x38` | indexed XF load | reads the matrix out of guest memory through the CP array registers |
-| `0x40` | display list | recurses into guest memory with `in_display_list = 1` |
+| `0x40` | display list | recurses into guest memory with `in_display_list = 1`; a live call also puts the list into the capture inline, as a `0x41` record only a replay reads |
 | `0x61` | BP register | `load_bp` |
 | `0x80`–`0xBF` | draw | sizes the vertices and calls the renderer |
 
@@ -514,10 +517,14 @@ of the SDK's — which is why a captured FIFO stream replays byte-identically
 outside the game (`gen/soa.exe --replay`) and why 23 pinned frames are a
 meaningful regression test.
 
-Two consequences worth knowing. Display lists are handled inside the parse
-(opcode `0x40`), not by tracking whether the CPU FIFO targets RAM: `HID2`
-and `WPAR` are carried in `CpuState` but nothing reads them, and the
-`PI_FIFO_*` registers are stored and read back but never used to route. And
+Two consequences worth knowing. Display lists are recorded by tracking the
+one CPU FIFO that is a list: at each write of the PI FIFO base, the port
+reads the global where `GXSetCPUFifo` keeps the current FIFO object
+(`r13-27520`), and records while it is the SDK's `DisplayListFifo`
+(0x80318B18). Any other redirect of the CPU FIFO -- the logo screen's, for
+one -- is parsed at once. Until C5b every list was parsed as it was recorded
+and called empty (FINDINGS "Recorded display lists (C5a)"). `HID2` and
+`WPAR` are carried in `CpuState`, but nothing reads them. And
 because the renderer sees registers rather than API calls, a capture that
 merely *inherits* an unmodelled state — rather than writing it inside the
 captured window — renders wrong and says nothing.
@@ -630,7 +637,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1111 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1124 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

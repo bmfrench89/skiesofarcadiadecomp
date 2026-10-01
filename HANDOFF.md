@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1111 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1124 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1111 |
+| Python tests | 1124 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -433,10 +433,13 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop:** everything is committed and pushed, CI is green on
-all five jobs at 1192647 (L4a) and on 53d4bc4, the docs commit after it, and nothing
-is running. The working tree is clean but for `.claude/worktrees/`, an old
-agent's worktree that is not this session's. The planning session's edits to
+**The state at the stop (2026-10-01):** everything is committed and pushed,
+C5b last; CI was green on all five jobs at every commit before it (1192647,
+53d4bc4, 7167d1f). `gen/soa.exe` is linked with C5b. Nothing is running.
+`build/perfset-c5/` holds H4's five pairs re-captured after C5b, and
+`build/midpoint-c5/` their images. The working tree is clean but for
+`.claude/worktrees/`, an old agent's worktree that is not this session's. The
+planning session's edits to
 `docs/PLAN-NEXT.md`, `docs/specs/comfort-pack.md` and
 `docs/specs/portability.md` (made 13:20, after 8bd7c79) were committed at the
 owner's word, with L3a's review, L2a and L4a marked landed in them and
@@ -450,13 +453,19 @@ and a build-time shader compiler are allowed. The order: the picture fix,
 then the Android path, then 60 fps and the disc layer.
 
 **Pick up here, in order:**
-1. **C5b** (PLAN-NEXT C2 row 1; gpu-backend.md §6): record display lists
-   into guest memory, bracketed by `GXBeginDisplayList`/`GXEndDisplayList`
-   (`fn_80251D80`/`fn_80251E48`), not by a FIFO base difference (C5a's
-   finding: the logo screen, frames 1-385, redirects without a list).
-   `--link` (gx.c). Then **C5c**: re-capture the corpus and open every
-   changed frame. That is a first bless, so the owner looks before anything
-   is pinned (CLAUDE.md, "The first bless is the dangerous one").
+1. ~~C5b~~ -- done (FINDINGS "C5b"): lists are recorded into guest memory
+   while `GXSetCPUFifo`'s current-FIFO global holds `DisplayListFifo`, and
+   drawn at their call. The field's dark band and green ellipse and the
+   cutscene's teal band are gone. **C5c is next:** re-capture the 23 corpus
+   frames into a scratch `SOA_FIFO_DIR`, replay, and put each changed frame
+   beside its old one. That is a first bless, so the owner looks at every
+   changed frame before anything is pinned (CLAUDE.md, "The first bless is
+   the dangerous one"); D-29 offers a Dolphin comparison, which may answer
+   whether the console shows a shadow under Vyse in the field. No run
+   recorded how the 23 were made; `build/c5-capture.sh` shows how H4's five
+   were rebuilt from their logs' first lines and their maps, and a card with
+   a save makes the title Continue (use `build/cards/fresh.raw` for the
+   opening).
 2. **The Android path,** in PLAN-NEXT §0's order: M4a (L2, L4b, L8, L3b, L1),
    M4b (L7, L9, L6), then M5 (the GPU spike and the gate), then V5+ and the
    Android shell. L2's first: `plat.h`'s
