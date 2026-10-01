@@ -433,33 +433,41 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
+**The state at the stop:** everything is committed and pushed, CI is green on
+all five jobs at 1192647 (L4a) and on the docs commit after it, and nothing
+is running. The working tree is clean but for `.claude/worktrees/`, an old
+agent's worktree that is not this session's. The planning session's edits to
+`docs/PLAN-NEXT.md`, `docs/specs/comfort-pack.md` and
+`docs/specs/portability.md` (made 13:20, after 8bd7c79) were committed at the
+owner's word, with L3a's review, L2a and L4a marked landed in them and
+comfort-pack's windowed turbo figure corrected from 1.2x to FINDINGS' 1.4x.
+
 **Pick up here, in order:**
-1. ~~Re-run L3a's adversarial review~~ -- done the same day: seventeen
-   findings, none in what MSVC builds, all fixed (FINDINGS "L3a's review").
-   As with P5a and P10b, most were tests that a wrong plan passed.
-2. ~~L2a~~ -- done, MSVC's pixel path measured unchanged. One Done line
-   needed a second compile: Android's x86-64 target has SSE4.1 on, so
-   clang inlines `bilinear_sse41` there (FINDINGS "L2a").
-   ~~L4a~~, CI's clang-cl leg, is done too: green on a branch, and red there
-   with L2a's guard reverted, both before the merge (FINDINGS "L4a"). **L2**
-   (PLAN-NEXT M4a row 1) is what L2a leaves unblocked. The clang-cl here is the NDK's:
-   `$env:SOA_CLANG_CL =
-   'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`;
-   CI's is LLVM's 20.1.8.
-3. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
+1. **L2** (PLAN-NEXT M4a row 1; portability.md's L2 slice): `plat.h`'s
+   atomics, waits, clocks and threads, the queue's ordering completed
+   (seq_cst on the four Dekker re-checks, with the grep test), then the
+   renderer building anywhere through a POSIX pool. A day to several days,
+   two commits, `--link`; read the slice against HEAD before any code. The
+   clang-cl here is the NDK's: `$env:SOA_CLANG_CL =
+   'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'`,
+   and for the pytest modules put that `bin` on `PATH` too (the second FMA
+   probe looks for `clang` there). CI's is LLVM's 20.1.8, and its clang-cl
+   job now runs on every push, so a change that breaks clang shows there.
+2. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
    once its spec lands (turbo is about 1.4x in a window until then); and
    `docs/specs/display.md`, which now owns P5a's presenter budget -- p99
    10.08 ms fullscreen at 3440x1440 before any filter, against 6 ms.
-4. `docs/specs/comfort-pack.md`, `docs/PLAN-NEXT.md` and
-   `docs/specs/portability.md` hold uncommitted edits made at 13:20, after
-   8bd7c79, which this session did not write and left alone. They are the
-   planning session's to commit, and when they do, PLAN-NEXT's L2a row and
-   M4a's L4a row, and portability's L2a and L4a slices, should say they
-   landed, and its L3a note that the review ran (FINDINGS "L3a's review",
-   "L2a", "L4a"). One figure in them is off: comfort-pack's M11a note says
-   windowed turbo reaches "about 1.2x", which is 35.0 images a second over
-   30 from the loaded host; FINDINGS "M11a" measured about 1.4x on a quiet
-   one (0.717 a retrace at 85 Hz), as item 3 says.
+3. After L2, M4a's order is L4b (the Linux leg), L8, L3b, L1 (PLAN-NEXT).
+
+**Done in this stretch, for the record:** L3a's review (seventeen findings,
+none in what MSVC builds; most were tests a wrong plan passed); L2a (MSVC's
+pixel path measured unchanged; Android's x86-64 target has SSE4.1 on, so one
+Done line needed a second compile); L4a (green on the branch `l4a-clang-cl`,
+red on `l4a-mutation` with L2a's guard reverted, both before the merge; the
+two branches stay on origin because FINDINGS "L4a" links their runs).
+`ci.yml` runs on push only for `main`, so a branch is checked with
+`gh workflow run ci.yml --ref <branch>`, built in a scratch worktree rather
+than by switching this shared checkout.
 
 **Traps met in this stretch, each now in the author's memory too:** a check
 chain piped through `tail` hides a failing step -- run it under

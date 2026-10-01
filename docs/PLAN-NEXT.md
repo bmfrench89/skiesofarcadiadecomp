@@ -108,7 +108,11 @@ live checks, M18 written, and I2 being built in a separate worktree. Since then 
 (3d08479, but for the owner's check) and I2 (12077d1, but for the owner's prune) have landed, then
 CH1 (d1000af), P11b (4c698f5) and H19a (63661a0), then M5b (9642613) and M19 (fe7e48f). CH1, H19a,
 M5b and M19 wait only for the owner's checks, so **owner session A is ready** (C8). P3 has landed
-(1d4bb73), but for the owner's check in session B; P10a, then P5a, P5b and M11a, are next.
+(1d4bb73), but for the owner's check in session B. Then P10a (ca5bfa0), P5b (19fe931), the AI DMA's
+pace fix with M19's follow-up (2169a6f), M11a (79bec43), P5a's native filters (5237e2e, f8ec2c1), P10b
+(f740207), L3a (8bd7c79), L3a's review (cee8a5b), L2a (5af18b3) and L4a (1192647) landed. **The
+implementation session stopped at 1192647 on 2026-09-30;** HANDOFF's "Where the last session stopped"
+gives the pick-up order: L2, then H20, M11a-skip and specs/display.md as their specs land.
 
 ### A2. H13 is closed as "done enough"
 
@@ -390,14 +394,14 @@ cost least.
 | 13 | **M19** a clock that survives sleep. **Done, fe7e48f**, but for the owner's check | several days | `--link` | — | **Owner** (A) |
 | — | **Owner session A** (C8) | — | — | 8, 9, 11, 12, 13 landed | **Owner** |
 | 14 | **P3** `.gci` import and export. **Done, 1d4bb73**, but for the owner's check | a day | none | — | **Owner** (B) |
-| 15 | **P10a** pad 2 in the runtime | a day | `--link` | — | — |
-| 16 | **P10b** couch co-op (its one-hour spike first) | hours to a day | none, `--link` for its key | P10a, P1a | **Owner** (B) |
-| 17 | **P5a** picture options | a day | `--link` | H19a for `sharp`/`crt` | — |
-| 18 | **P5b** deflicker off for the display copy | hours | `--link` (gxr.c) | gxr.c free, which it is | — |
-| 19 | **M11a** turbo up to 2×: measure first; M11a-skip is specified only if the battle drawn every frame misses 60 at p95 | a day | `--link` | P6b; CH1 (the chord arm); H19a (`present_interval`) | **Owner** (B) |
+| 15 | **P10a** pad 2 in the runtime. **Done, ca5bfa0** | a day | `--link` | — | — |
+| 16 | **P10b** couch co-op (its one-hour spike first). **Done, f740207**, but for the owner's check | hours to a day | none, `--link` for its key | P10a, P1a | **Owner** (B) |
+| 17 | **P5a** picture options. **Native filters done, 5237e2e**; `sharp`/`crt` and the presenter budget moved to specs/display.md | a day | `--link` | H19a for `sharp`/`crt` | — |
+| 18 | **P5b** deflicker off for the display copy. **Done, 19fe931** | hours | `--link` (gxr.c) | gxr.c free, which it is | — |
+| 19 | **M11a** turbo up to 2×. **Done, 79bec43**, but for the owner's check; its measurement asked for M11a-skip. Measure first; M11a-skip is specified only if the battle drawn every frame misses 60 at p95 | a day | `--link` | P6b; CH1 (the chord arm); H19a (`present_interval`) | **Owner** (B) |
 | — | **Owner session B** (C8) | — | — | 14, 16, 19 landed | **Owner** |
-| gap | **L3a** toolchain profiles and `--cc` (`tools/` only; clang output goes to `gen/clang`) | hours | none | — | — |
-| gap | **L2a** the SIMD blend behind an x86-64 guard, with `perfbench --exe` | hours | `--link` (gxr_tev.c) | D-12 "yes" (recommended) | — |
+| gap | **L3a** toolchain profiles and `--cc` (`tools/` only; clang output goes to `gen/clang`). **Done, 8bd7c79**; its review ran (cee8a5b, seventeen findings fixed) | hours | none | — | — |
+| gap | **L2a** the SIMD blend behind an x86-64 guard, with `perfbench --exe`. **Done, 5af18b3** | hours | `--link` (gxr_tev.c) | D-12 "yes" (recommended) | — |
 | gap | **H20** a power line in every run report | hours | `--link` | its Done written first (planning session) | — |
 
 **Why C5a went first, before P6b and P1a.** It is cheap: hours, and a log that changes nothing drawn.
@@ -525,9 +529,9 @@ count kept before it starts.
 
 | # | Slice | Size | Rebuild | Needs first | Owner |
 |---|---|---|---|---|---|
-| — | **L3a** and **L2a**, if they did not land in M1 | hours each | none / `--link` | — | — |
+| — | **L3a** and **L2a**, if they did not land in M1. **Both landed in M1** (8bd7c79, 5af18b3) | hours each | none / `--link` | — | — |
 | 1 | **L2** `plat.h`: the queue's ordering completed (seq_cst on the four Dekker re-checks, the grep test), then the renderer builds anywhere (the POSIX pool) | a day to several days, two commits | `--link` | L2a | — |
-| 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red | hours | none | L2a, L3a | — |
+| 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
 | 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N` | several days | `--link`, `decomp.py` | L2, L3a | — |
 | 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races | several days | `--link` | L2, L4b | — |
 | 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
@@ -898,7 +902,7 @@ functions by name, and E4's re-read at slice start is the check.
   against HEAD before any code.
 - **A risk to close cheaply now.** H15d's SIMD guard is the kind of thing that rots silently: clang
   has been unable to build `gxr_tev.c` since b377b1f, and nothing noticed, because no CI leg uses
-  clang. L2a and L4a close that.
+  clang. L2a and L4a close that, and both have landed (5af18b3, 1192647).
 
 **Scope creep.**
 - **The pack has already grown.** The comfort pack grew from the gameplay plan's twelve milestone-1

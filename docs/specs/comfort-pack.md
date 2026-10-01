@@ -614,7 +614,7 @@ All in window.c, on the UI thread that already owns the window and presents.
   `clock_gettime(CLOCK_MONOTONIC)` elsewhere (the L-track reuses it). `hle.c`'s `timebase()` becomes
   `clock_guest_ticks()`.
 - **The model:** guest time accumulates `speed × Δhost` for each read. A Δ above the gap threshold
-  (`SOA_CLOCK_GAP_MS`, default 250; 0 turns the rule off) counts as 0 and bumps an **epoch** counter,
+  (`SOA_CLOCK_GAP_MS`, default 2000 since 2169a6f, first 250; 0 turns the rule off) counts as 0 and bumps an **epoch** counter,
   with a log line `[clock] frame F: a gap of 30.2 s wall counted as 0 s of guest time`. Guest time is
   monotonic by construction.
 - **The origin is logged:** at the first read, `[clock] origin at W.WWW s of wall time since start`, so
@@ -624,9 +624,10 @@ All in window.c, on the UI thread that already owns the window and presents.
 - **Pause** (`clock_pause(1/0)`): tick.c's safe point (`tick.c:88-91`) blocks while paused;
   paused time is excluded; resume bumps the epoch. Callers: `WM_POWERBROADCAST` suspend and resume
   (window.c), `unfocused = pause` (M5b's key), M18 stops the motor on pause.
-- **Audio after an epoch change:** dsp.c resynchronises `g_dma_due = now + period` instead of
-  catching up block by block (`dsp.c:218`). Only on an epoch change, so `speed.scn` at `SOA_SPEED=10`,
-  where the DMA legitimately runs behind, keeps today's block count.
+- **Audio after an epoch change:** first designed as a resynchronisation (`g_dma_due = now +
+  period`), and **removed in 2169a6f**: with the AI DMA's pace fixed (FINDINGS "The AI DMA's pace"),
+  the resync was not needed, and most of the loss first blamed on it was excluded time and the pace
+  defect.
 - **Reports:** `[run]` says how many seconds were excluded and how many gaps there were; the report path
   reads the clock without advancing it (the report may run on the UI thread).
 - **Test knob:** `SOA_STALL=<frame>:<seconds>` sleeps the guest thread once, in the frame hook.
@@ -692,7 +693,7 @@ All in window.c, on the UI thread that already owns the window and presents.
 - **Logging:**
   - each handover, and each forwarded pad-2 press;
   - at the phase 1 → 2 edge, each member's command type: the **s32 word** at `0x80309174 + 32·m`, +0
-    (0 Attack … 3, 6 Run: battle-system.md:107). The word is stored by `stwx r31,r3,r0` at
+    (0 Focus, 1 Magic, 2 S-move, 3 Attack, 4 Guard, 5 Item, 6 Run: battle-system.md:107). The word is stored by `stwx r31,r3,r0` at
     `0x8007C7E0`, with the member index from `0x80347330` shifted by 5 at `0x8007C7DC` [V static]. An
     `SOA_PEEK` of that address reads it whole;
   - once per run, that the session cannot be replayed yet.
@@ -862,7 +863,9 @@ Test-only variables (not in `k_settings`): `SOA_ENCOUNTERS_TEST`, `SOA_AUTOTEXT_
   `SOA_PAD_RECORD` on and something breaks, the recording will not reproduce it.
 - **M19 changes the clock of every run.** A mistake there changes game timing everywhere. Mitigations:
   - every gap is logged, and ordinary runs on an unloaded host must log none (M19's Done). A heavily
-    loaded host can starve the guest past the 250 ms rule and log a real gap (fe7e48f's first run);
+    loaded host can starve the guest past the gap rule and log a real gap (fe7e48f's first run; the
+    default rose from 250 ms to 2000 ms in 2169a6f, because snapshot frames on a loaded host took
+    0.3–1.8 s);
   - `SOA_CLOCK_GAP_MS=0` turns the rule off;
   - `SOA_CLOCK=utc` restores the old source for one release.
 
@@ -1362,8 +1365,8 @@ since M19, pause.*
     really was starved that long; a quiet rerun logged only the stalled one [V run, FINDINGS "M19: a clock that survives sleep"]. So
     run this check with nothing heavy beside it, and read a gap in a loaded run as the host's, not the
     clock's.
-  - Self test, a new case: with the DMA running, an epoch bump makes the next `dsp_poll` deliver one
-    block and resynchronise, not a burst.
+  - (A self-test case for the DMA resync was specified here; the resync was removed in 2169a6f, and
+    the case with it.)
   - The contract holds; `python tools/scenario.py run speed --check` (at `SOA_SPEED=10`) still passes.
   - **Owner:** sleep the handheld for a minute in the field; on waking, the play-time clock has not
     jumped.
@@ -1403,7 +1406,8 @@ since M19, pause.*
     Continue lands on the saved map; a port save exported with `export` loads in Dolphin.
 
 **P10a. Pad 2 in the runtime** — *a day; `--link`; prerequisites none (the API append is after MV2,
-landed).*
+landed). Landed as ca5bfa0; P10b's review then made both ports share one mapping (pad 2 under
+`unfocused = mute`, its sticks' dead zone and its triggers).*
 - Files: `runtime/si.c`, `runtime/window.c`, `runtime/mod.c`, `runtime/soa_mod.h`, `runtime/main.c`,
   `tools/tests/test_padrec.py`, `tools/tests/test_mods.py`, README.md.
 - What: 3.12.
@@ -1419,7 +1423,11 @@ landed).*
   - The contract holds.
 
 **P10b. Couch co-op** — *hours to a day; none (DLL) and `--link` for its settings line; prerequisites
-P10a, P6, P1a, and its one-hour spike (3.12). **Owner.***
+P10a, P6, P1a, and its one-hour spike (3.12). **Owner.** Landed as f740207, but for the owner's check
+(FINDINGS "P10b's spike", "P10b"). Pad 2 took Aika's turns at 10202, 11102 and 12002; on the first,
+two rights and A chose Focus (`commands: 0=3 1=0`). A 16-agent review confirmed 10 findings, fixed in
+the same commit: both ports now share one mapping, the recorder applies the mod's own test to `coop`,
+and new tests cover sticks, triggers, the scene gate and log-line counts.*
 - Files: `mods/coop/{mod.c,mod.ini}`, `runtime/settings.c`, `tools/tests/test_mods.py`, README.md; a
   FINDINGS entry for the spike.
 - What: 3.12.
@@ -1434,27 +1442,38 @@ P10a, P6, P1a, and its one-hour spike (3.12). **Owner.***
 
     Mutation: a filter with no handover rule confirms on the held A. This is the handover's check.
   - `python tools/scenario.py run battle --env SOA_MODS=mods --env SOA_COOP=1
-    --env "SOA_PAD2=3600:left#4@20,3700:a@200" --env SOA_PAD_RECORD=build/p10.pad
+    --env "SOA_PAD2=10225:right,10245:right,10270:a,10420:a@150" --env SOA_PAD_RECORD=build/p10.pad
     --log build/scenario-p10.log`. This is the deck fight, where Vyse is slot 0 and Aika slot 1.
     `python tools/tests/test_mods.py p10b build/scenario-p10.log build/p10.pad` applies the rules
     below, with the spike's values (its pytest feeds it a synthetic log with one rule broken). It
     passes when:
     - on every one of Aika's turns the `[si]` lines show only pad-2 presses, with no `0100` from port
       1's A-every-150 script;
-    - her logged command type equals the spike's value for the number of lefts forwarded before her A;
-    - on at least one of her turns at least one left was forwarded;
+    - her first logged command type is 0 (Focus), which two rights reach and port 1's A-only script
+      never does (it gives 3, Attack);
+    - on at least one of her turns at least one direction was forwarded;
     - on Vyse's turns only port 1's presses appear;
     - every `[mod] coop: handover` line is followed by neutral `[si]` input until a frame where pad 2 has
       no button down;
     - `build/p10.pad` still holds port 1's A presses during Aika's turns, because the record is taken
       before the filter.
-  - Mutation, the same command with `--env SOA_COOP=`: no pad-2 press is forwarded, so the "at least one
-    left" rule fails.
+  - Mutation, the same command with `--env SOA_COOP=`: no handover to pad 2 is logged, and the check
+    fails outright.
+
+    The first design, `3600:left#4@20`, could not work: one left from Attack is Item (5), whose menu
+    swallows A with no progress, and four lefts land on Run, so an A-only script stalls the battle
+    (FINDINGS "P10b's spike").
   - Frames opened on Aika's action (SOA_SNAP) show the command pad 2 chose.
   - **Owner:** two pads, one battle; then one battle through Parsec if you want online.
 
 **P5a. Picture options** — *a day; `--link`; prerequisites H19a for `sharp` and `crt` (the native
-filters need nothing).*
+filters need nothing). The native filters landed as 5237e2e (with f8ec2c1): gamma, colour-blind modes
+and a flash limiter, per pixel, with the over-limit set held for a second; two earlier designs were
+wrong (FINDINGS "P5a"). **Two things moved to [display.md](display.md):** `sharp` and `crt`, and the
+presenter's budget, which is unmet: fullscreen at 3440×1440 the present alone is p99 10.08 ms with no
+filter (the CPU scaler writes the whole back buffer, and it is uploaded every frame), 17.65 ms with the
+filters; at 2× 4.40 and 12.80 ms. Whether the flash limiter's damping of the opening's cloud flight is
+wanted is an owner question for session B (the key defaults off).*
 - Files: `runtime/picture.c`, `runtime/picture.h`, `runtime/window.c`, `runtime/main.c` (the replay
   output), `runtime/settings.c`, `tools/tests/test_picture.py`, README.md.
 - What: 3.13.
@@ -1483,7 +1502,8 @@ filters need nothing).*
   - The contract holds; `SOA_HASH` is untouched by construction (it is taken before `present()`).
 
 **P5b. Deflicker off for the display copy** — *hours; `--link`; prerequisites the implementation
-session releases gxr.c.*
+session releases gxr.c. Landed as 19fe931: unset, replay 23/23; set, all 23 hashes move (replayed from
+copies), and 12000, 4500 and 0300 were opened (the battle frame visibly sharper).*
 - Files: `runtime/gxr.c`, `tools/tests/test_gxr_copy_filter.py`, `runtime/settings.c`, README.md.
 - What: 3.13.
 - *Done:*
@@ -1499,7 +1519,11 @@ session releases gxr.c.*
 
 **M11a. Turbo up to 2×** — *a day; `--link`; prerequisites P6 (a recorded key); its chord arm replaces
 CH1's; the presenter uses H19a's `present_interval` (or moves it into picture.c itself if H19a has not
-landed). **Owner.***
+landed). **Owner.** Landed as 79bec43, but for the owner's check. Its measurement asked for the skip:
+guest ceiling battle 104.9 images/s (p95 14.3 ms) and sky 110.9 (12.1 ms); drawn every frame 35.0
+(48.2 ms) and 37.6 (43.9 ms), on a host shared with other work. A windowed battle on a quieter host
+advanced 0.717 frames a retrace at 85 Hz, so windowed turbo reaches about 1.4×, not 2×, until M11a-skip
+(3.14b; FINDINGS "M11a").*
 - Files: `runtime/tick.c`, `runtime/window.c`, `runtime/picture.c` (`present_interval`), `runtime/main.c`
   (the chord arm), `runtime/settings.c`, `runtime/audio_out.c` (one report line),
   `tools/tests/test_picture.py`, `tools/tests/test_turbo.py` (new: the run's log checker), README.md; a
@@ -1588,9 +1612,11 @@ landed). **Owner.***
 
   The last three are [I] until that run. P1a's live Done peeks only the multiplier byte, so it does
   not depend on this.
-- **Q-I6.** P10b's spike. The command type is the s32 word at `0x80309174 + 32·m` [V static:
-  `stwx` at `0x8007C7E0`]. Its values for Attack and after one left, and the wheel's opening slot and
-  wrap, still need the peek at a phase-1→2 edge before P10b's live Done can be written down exactly.
+- **Q-I6. (Answered, FINDINGS "P10b's spike".)** The command type is the s32 word at
+  `0x80309174 + 32·m`, and the member word is a u32 (`lwz r13-29680` at `0x8007C7D0`). Phase 0→1 sets
+  every command word to −1. The wheel opens on Attack (3). One left is Item (5), one right Magic (1),
+  and two or more rights stop at Focus (0); five or seven lefts land on Run. The wheel does not wrap.
+  B on Aika's wheel gives the turn back to Vyse; B on Vyse's does nothing.
 - **Q-I7.** Counts: new self-test cases (P6, M5b, M18, M19) and new pytest modules change the counts
   quoted in PLAN.md, TESTING.md, HANDOFF.md, README.md, ARCHITECTURE.md and SKILL.md; fix every copy with
   the commit that moves them.

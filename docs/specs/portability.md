@@ -1183,6 +1183,10 @@ Linux PC exists.
 
 ### L2a. The SIMD blend behind an x86-64 guard
 
+*Landed as 5af18b3 (FINDINGS "L2a"). clang-cl compiles every runtime file. MSVC's `tev_pixel` moved
+registers around the split, so the fallback ran: 39.3 against 39.2 ns a fragment, no difference. Android's
+x86-64 target has SSE4.1 on, so the Done's disassembly needed a second compile with it off.*
+
 *Hours. `--link`. Prerequisites: none, but it edits `gxr_tev.c`, so it waits until the session holding the
 renderer files says they are free (§6 order). Files:*
 - *`runtime/plat.h` (new: the platform tests and the SIMD section only);*
@@ -1297,6 +1301,15 @@ Prerequisites: L2a. Files:*
 
 ### L3a. Toolchain profiles and `--cc`
 
+*Landed as 8bd7c79 (FINDINGS "L3a"); its adversarial review, stopped before it reported, was re-run the
+same day: seventeen findings, none in what MSVC builds, fixed in cee8a5b (FINDINGS "L3a's review"). `compile_runtime --cc clang-cl` compiles 27 of 28
+runtime files; `gxr_tev.c` fails with the SSE4.1 error L2a removes. The FMA probe gives
+`vmulss`+`vaddss` under the profile and `vfmadd213ss` without `-ffp-contract=off`. `replay --bless` is
+refused for any exe but `gen/soa.exe`. Two differences from 3.9's table: a `Profile.linker` field holds
+`-fuse-ld=link` for clang-cl, because the NDK's clang-cl defaults to lld-link, which the NDK does not
+ship; and `/D_CRT_SECURE_NO_WARNINGS=` is defined empty, which quiets a redefinition warning in every
+file.*
+
 *Hours. Rebuild: none. Prerequisites: none. It edits `tools/` only, so it can land in any gap. Files:*
 - *`tools/soa/toolchain.py`: `Profile`, `cc()`, clang-cl discovery, and `runtime_support_sources()`
   returning `[]`;*
@@ -1357,6 +1370,10 @@ session not timing. Files: `runtime/main.c` (the `[boot]` compiler line, after P
   The owner then answers Q3 (§7).
 
 ### L4a. CI: the clang-cl leg
+
+*Landed as 1192647 (FINDINGS "L4a"), green on main. Before the merge it was green on a branch (run
+36766285607) and red with L2a's guard reverted (run 36766296154). The runner's clang-cl is LLVM's 20.1.8.
+One addition: `tools/citest/noskip.py` makes a skip fail the pytest step.*
 
 *Hours. Rebuild: none. Prerequisites: L2a and L3a. Files: `.github/workflows/ci.yml` (a `clang-cl` job,
 §3.12); `docs/TESTING.md`; FINDINGS entry.*
