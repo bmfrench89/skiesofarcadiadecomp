@@ -25,6 +25,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5 | `python tools/citest/compile_runtime.py` | 2.8 s | MSVC |
 | 5b | `python tools/citest/dc_check.py` | 2.5 s | MSVC |
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
+| 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
 | 7 | `python -m pytest tools/tests -q` | 248 s | nothing (363 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
@@ -32,7 +33,8 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
 | 11 | `python tools/scenario.py replay` | 16.6 s | disc, exe, corpus |
 
-**Steps 1–3 and 7 are the whole of what CI can run.** Steps 4–6 and 8–11 need
+**Steps 1–3, 5–5d and 7 are the whole of what CI can run** (5–5c under MSVC
+in the `native` job, 5d in the `clang-cl` job). Steps 4, 6 and 8–11 need
 your disc, your vendored compilers or captures that are game data, and nobody
 else can run them for you. A green CI tick means the C compiles, nine MSL
 routines behave like libc and the rasterizer still fills a triangle. It says
@@ -49,8 +51,9 @@ through, silently, exit `-1`, because a second run was live.
 `include/` or `config/GEAE8P/units.txt`; 10 unless you touched
 `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` or anything in the
 game's own control flow; 11 unless you touched anything a draw passes through.
-Steps 1, 2, 3 and 7 are never skippable — they are what CI will run anyway,
-and it is cheaper to fail here.
+Steps 1, 2, 3, 5–5c and 7 are never skippable — they are what CI will run anyway,
+and it is cheaper to fail here. 5d is CI's too: skip it only if you touched
+nothing under `runtime/`, `src/` or `include/`.
 
 This is a PowerShell repository. `set NAME=value` is cmd.exe syntax; in
 PowerShell it creates a *shell* variable whose name contains the equals sign,
@@ -207,6 +210,50 @@ nothing. Its frame hash is printed and deliberately **not** asserted.
 **On failure:** these three fail loudly rather than skipping when `cl.exe` is
 missing, so a failure is real. Read the first `FAIL` line; the later ones are
 usually the same rename.
+
+### 5d. The same three under clang-cl
+
+The owner's goal is any Windows **or Android** device, and Android's compiler
+is clang, so code that only MSVC accepts is a regression even when every MSVC
+step is green. `gxr_tev.c` was exactly that from b377b1f until L2a: its SSE4.1
+blend compiled under MSVC and under nothing else, and no check noticed. CI's
+`clang-cl` job (L4a) now runs this on every push; running it here saves the
+round trip. The clang-cl on this machine is the Android NDK's:
+
+```
+$env:SOA_CLANG_CL = 'C:\Users\bmfre\AppData\Local\Android\Sdk\ndk\28.2.13676358\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe'
+python tools/citest/compile_runtime.py --cc clang-cl
+python tools/citest/dc_check.py --cc clang-cl
+python tools/citest/render_check.py --cc clang-cl
+```
+```
+compiled 28/28 runtime translation units
+...
+all 9 routines agree with the host C library
+...
+[render] second frame hash 63a57c77609efd77 (not asserted)
+[render] both render checks pass
+```
+
+Then the two clang-sensitive pytest modules, where a skip fails the run
+(`tools/citest/noskip.py`; a skipped check here is a check that did not run).
+Put the NDK's `bin` on `PATH` as well, because the second FMA probe looks for
+`clang` there:
+
+```
+$env:PATH = "$(Split-Path $env:SOA_CLANG_CL);$env:PATH"
+$env:SOA_CC = 'clang-cl'; $env:PYTHONPATH = 'tools/citest'
+python -m pytest -p noskip tools/tests/test_toolchain_fp.py tools/tests/test_gxr_fastpath.py -q
+```
+```
+5 passed in 11.85s
+```
+
+**On failure:** the NDK's clang is 19.0.1 and CI's is LLVM's 20.1.8, so a
+warning can differ between them (20.1.8 says `-Woverriding-option` on every
+file; FINDINGS "L4a"), but an error under one is an error under both. Clear
+`SOA_CC` and `PYTHONPATH` afterwards: `test_gxr_fastpath.py` reads `SOA_CC`
+in every later run of the suite.
 
 ## 6. The decompilation check
 

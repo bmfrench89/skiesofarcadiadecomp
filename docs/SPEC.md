@@ -18,6 +18,14 @@ A native x86-64 Windows executable that plays Skies of Arcadia Legends at full s
 without an emulator, using assets the user supplies from their own disc dump.
 Linux/macOS are secondary; the design must not preclude them.
 
+**Amended by the owner, 2026-09-30:** "I want to be able to play it on any Windows or
+Android device." That means Intel and AMD x86-64 PCs and handhelds (the development
+machine is a ROG Ally X), the Steam Deck through Proton, and flagship Android phones and
+handhelds (Snapdragon 8 Gen 2 or newer); not Windows on ARM, mid-range phones or very old
+PCs. Vulkan, SDL3 and a build-time shader compiler are allowed (§12, "Shader-compiler
+and SDL3 vendoring").
+The order this sets is [PLAN-NEXT.md](PLAN-NEXT.md) §0.
+
 ### Non-goals (v1)
 
 - Bit-exact hardware emulation. We target *observable behavioural equivalence*.
@@ -462,3 +470,7 @@ replay through `soa.exe --replay`. What a contributor actually needs is in
   fragment rather than translated to shaders, so the question of which API dissolved.
 - ~~**Shader-compiler and SDL3 vendoring** (§10).~~ **Settled:** neither is vendored;
   there is no third-party runtime dependency and the window is Win32.
+  **Reopened by the owner, 2026-09-30:** Android is a goal, and the owner allowed Vulkan,
+  SDL3 and a build-time shader compiler. Both are fetched and hash-pinned at build time,
+  never committed (PLAN-NEXT G2, D-18). The software rasterizer stays the reference
+  renderer, and a build without the GPU backend still runs on it.

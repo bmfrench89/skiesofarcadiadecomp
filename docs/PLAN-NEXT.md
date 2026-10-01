@@ -61,6 +61,42 @@ cannot measure speed while you use the machine for anything heavy.
 
 ---
 
+## 0. The owner's goal and answers of 2026-09-30: this section overrides the order below
+
+**The goal, in the owner's words:** "I want to be able to play it on any Windows or Android device."
+The machine every session runs on, and the owner's handheld, is a **ROG Ally X** (Z1 Extreme, 7-inch
+1920×1080 120 Hz FreeSync screen); the desktop display it docks to is the 3440×1440 85 Hz ultrawide.
+The owner answered four questions, with the research behind them summarised in the session that asked:
+
+| Question | Answer | Rows it settles |
+|---|---|---|
+| Where Android ranks | **The picture fix first (C5b, C5c), then the Android path (the portability core and the GPU spike), then 60 fps and the disc layer** | D-1 (amended), D-10, D-17 |
+| Which Android devices | **Flagship phones and Android handhelds: Snapdragon 8 Gen 2 or newer.** Mid-range phones are out of scope | D-16; A2's reopen conditions do not grow a mid-range target |
+| Third-party libraries | **Vulkan, SDL3 and a build-time shader compiler are allowed** | D-18, G2 (SDL3: yes); SPEC §1-2's no-dependency line is amended |
+| What "any Windows device" covers | **Intel and AMD x86-64 PCs and handhelds, and the Steam Deck (Proton).** Not Windows on ARM, not very old or 2-core PCs | D-16, D-21 (keep today's floor), L1 (Proton) rises in value |
+
+**What follows from the answers** [I, the session's reading; each is re-checked when its slice starts]:
+- **G1 can no longer default to C.** Android flagships cannot hold 30 fps in heavy scenes on the CPU
+  renderer (estimated 15-30 fps from benchmark ratios, port-performance.md), and the Steam Deck's 4-core
+  Zen 2 is estimated at 12-17 fps in the heaviest field scene. So the gate becomes: do the spike's
+  results justify A (Vulkan)? If they do not, Android is not playable, and the owner hears that plainly.
+- **M4b is no longer "after the gate".** L6, L7 and L9 were deferred because they "pay only once a
+  non-Windows build is a goal" (C4); it is one now.
+- **The new order** [I]: C5b; C5c (owner look C, a first bless); then M4a (L2, L4b, L8, L3b, L1) and
+  M4b (L7, L9, L6), then M5 (V0-V4b and the gate), then V5+ and the Android shell (L12, on SDL3). M2's
+  60 fps half (H17a, H17b, H18) and M3 follow. Two consequences to resolve when their slices start:
+  - **V2 assumed H17a had landed:** H17a adds `DrawCmd.efb` and its `claim_slot` routing, and V2 moves
+    them into `gxr_cmd.h` (gpu-backend.md §6). With H17a later, V2 adds that field and routing itself.
+  - **A phone needs the game's files on it:** M3's I1 (run from one ISO) and the store (G5, whose
+    default "build the store when Android or the Deck is firm" now triggers) come before L12, not after.
+- **Still open, and still the owner's:** D-19 (a GPU picture judged by a tolerance) before V0; G3,
+  distribution (assumed for now: the owner's own devices, built from source on the PC); the primary
+  display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
+  no spec); D-26 (2× and 3×, and 21:9, at the gate).
+- **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
+
+---
+
 ## A. The stopping point, recorded
 
 ### A1. Where the renderer stopped, and what has landed since

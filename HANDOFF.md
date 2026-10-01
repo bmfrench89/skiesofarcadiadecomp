@@ -434,7 +434,7 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 slow in every run).
 
 **The state at the stop:** everything is committed and pushed, CI is green on
-all five jobs at 1192647 (L4a) and on the docs commit after it, and nothing
+all five jobs at 1192647 (L4a) and on 53d4bc4, the docs commit after it, and nothing
 is running. The working tree is clean but for `.claude/worktrees/`, an old
 agent's worktree that is not this session's. The planning session's edits to
 `docs/PLAN-NEXT.md`, `docs/specs/comfort-pack.md` and
@@ -442,8 +442,24 @@ agent's worktree that is not this session's. The planning session's edits to
 owner's word, with L3a's review, L2a and L4a marked landed in them and
 comfort-pack's windowed turbo figure corrected from 1.2x to FINDINGS' 1.4x.
 
+**The owner set the goal and the order on 2026-09-30** (PLAN-NEXT §0, which
+overrides the older order): play on any Windows or Android device, meaning
+x86-64 PCs and handhelds (this machine is a ROG Ally X), the Steam Deck, and
+Android flagships and handhelds (Snapdragon 8 Gen 2 or newer). Vulkan, SDL3
+and a build-time shader compiler are allowed. The order: the picture fix,
+then the Android path, then 60 fps and the disc layer.
+
 **Pick up here, in order:**
-1. **L2** (PLAN-NEXT M4a row 1; portability.md's L2 slice): `plat.h`'s
+1. **C5b** (PLAN-NEXT C2 row 1; gpu-backend.md §6): record display lists
+   into guest memory, bracketed by `GXBeginDisplayList`/`GXEndDisplayList`
+   (`fn_80251D80`/`fn_80251E48`), not by a FIFO base difference (C5a's
+   finding: the logo screen, frames 1-385, redirects without a list).
+   `--link` (gx.c). Then **C5c**: re-capture the corpus and open every
+   changed frame. That is a first bless, so the owner looks before anything
+   is pinned (CLAUDE.md, "The first bless is the dangerous one").
+2. **The Android path,** in PLAN-NEXT §0's order: M4a (L2, L4b, L8, L3b, L1),
+   M4b (L7, L9, L6), then M5 (the GPU spike and the gate), then V5+ and the
+   Android shell. L2's first: `plat.h`'s
    atomics, waits, clocks and threads, the queue's ordering completed
    (seq_cst on the four Dekker re-checks, with the grep test), then the
    renderer building anywhere through a POSIX pool. A day to several days,
@@ -453,11 +469,12 @@ comfort-pack's windowed turbo figure corrected from 1.2x to FINDINGS' 1.4x.
    and for the pytest modules put that `bin` on `PATH` too (the second FMA
    probe looks for `clang` there). CI's is LLVM's 20.1.8, and its clang-cl
    job now runs on every push, so a change that breaks clang shows there.
-2. **H20** once the planning session (soa-b4) sends its Done; **M11a-skip**
-   once its spec lands (turbo is about 1.4x in a window until then); and
-   `docs/specs/display.md`, which now owns P5a's presenter budget -- p99
-   10.08 ms fullscreen at 3440x1440 before any filter, against 6 ms.
-3. After L2, M4a's order is L4b (the Linux leg), L8, L3b, L1 (PLAN-NEXT).
+3. **Gap fillers, as each unblocks:** **H20** once the planning session
+   (soa-b4) sends its Done; **M11a-skip** once its spec lands (turbo is
+   about 1.4x in a window until then); `docs/specs/display.md`, which now
+   owns P5a's presenter budget -- p99 10.08 ms fullscreen at 3440x1440
+   before any filter, against 6 ms; and P1b, once a card in a rate-20 zone
+   exists.
 
 **Done in this stretch, for the record:** L3a's review (seventeen findings,
 none in what MSVC builds; most were tests a wrong plan passed); L2a (MSVC's
