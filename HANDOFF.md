@@ -434,8 +434,8 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 slow in every run).
 
 **The state at the stop (2026-10-01):** everything is committed and pushed,
-C5b last; CI was green on all five jobs at every commit before it (1192647,
-53d4bc4, 7167d1f). `gen/soa.exe` is linked with C5b. Nothing is running.
+and CI is green on all five jobs at 4441a80 (C5b). `gen/soa.exe` is linked
+with C5b. Nothing is running. The owner rebooted here, before C5c.
 `build/perfset-c5/` holds H4's five pairs re-captured after C5b, and
 `build/midpoint-c5/` their images. The working tree is clean but for
 `.claude/worktrees/`, an old agent's worktree that is not this session's. The
@@ -456,16 +456,48 @@ then the Android path, then 60 fps and the disc layer.
 1. ~~C5b~~ -- done (FINDINGS "C5b"): lists are recorded into guest memory
    while `GXSetCPUFifo`'s current-FIFO global holds `DisplayListFifo`, and
    drawn at their call. The field's dark band and green ellipse and the
-   cutscene's teal band are gone. **C5c is next:** re-capture the 23 corpus
-   frames into a scratch `SOA_FIFO_DIR`, replay, and put each changed frame
-   beside its old one. That is a first bless, so the owner looks at every
-   changed frame before anything is pinned (CLAUDE.md, "The first bless is
-   the dangerous one"); D-29 offers a Dolphin comparison, which may answer
-   whether the console shows a shadow under Vyse in the field. No run
-   recorded how the 23 were made; `build/c5-capture.sh` shows how H4's five
-   were rebuilt from their logs' first lines and their maps, and a card with
-   a save makes the title Continue (use `build/cards/fresh.raw` for the
-   opening).
+   cutscene's teal band are gone; before and after side by side are in
+   `build/c5b-compare/` (old left). **C5c is next, and the owner is waiting
+   on it.** The owner asked for this handoff and rebooted, and will look
+   afterwards. Two things:
+   - **The shadow question first, with the owner.** In the Dangral base
+     Vyse no longer has the green blob, but has no shadow either
+     (`build/c5b-compare/field.png`). The owner will check in Dolphin
+     whether the console shows one (D-29). If it does, the missing shadow is
+     a defect to find before anything is blessed.
+   - **Then the re-capture.** It takes about an hour of the machine, so ask
+     before starting, because the owner can't play while it runs.
+     1. Capture all 23 frames into `build/fifo-c5/`, never `build/fifo`.
+        Give each run a scratch `SOA_CARD` path that does not exist yet:
+        the original runs used a "new blank card", and a card with a save
+        makes the title Continue. No log recorded the commands. Frames 2000
+        on are taken from each scenario's evidence lines and each log's
+        `captured frame` lines:
+
+        | frames | run | where it is recorded |
+        |---|---|---|
+        | 100, 300, 500, 700, 1500, 1550 | a plain boot with no input before 1600 | none: they predate the logs (2026-09-16) |
+        | 2000, 2050, 2100 | `title` | `boot_title.log` |
+        | 3600, 3900, 4200 | `capture` | `boot_capture.log`; `boot_text.log` also captured a 4200, so compare both against the old one |
+        | 4500, 4800, 6000, 6300 | `opening` | `boot_text.log` |
+        | 8000 | the ship run | `boot_ship.log` |
+        | 11900, 12000, 12100 | the field run | `boot_field.log` |
+        | 15200, 15800, 16300 | `hold` | `scenario-hold.log` |
+
+        `scenario.py show <name>` prints each scenario's command.
+        `build/c5-capture.sh` is the pattern; it rebuilt H4's five pairs.
+     2. Replay each with `gen/soa.exe --replay`, on copies, because it writes
+        `<base>.png`. Hash each against the old one, and compose old | new
+        for every frame that changed, as `build/c5b-compare/` was made: the
+        session used `midpoint.read_rgba` and `write_rgba`.
+     3. For each changed frame, trace any removed draw to a recording with no
+        call in that frame's `SOA_GX_DLLOG` output, as the C5c Done asks.
+        Then the owner looks at every changed frame.
+     4. Only then: move the old captures to `build/fifo-pre-c5/`, move the new
+        ones in, run `scenario.py replay --bless`, and re-check 23/23 at
+        1, 2, 3 and 8 threads. A frame whose scene does not match its old one
+        (the guest clock follows host time; the battle pair landed at another
+        moment) gets re-captured rather than blessed.
 2. **The Android path,** in PLAN-NEXT §0's order: M4a (L2, L4b, L8, L3b, L1),
    M4b (L7, L9, L6), then M5 (the GPU spike and the gate), then V5+ and the
    Android shell. L2's first: `plat.h`'s

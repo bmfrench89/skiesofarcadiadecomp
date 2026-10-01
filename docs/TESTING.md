@@ -120,9 +120,9 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 | neither | `727 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
-and a few tests are Windows-only, so read CI's counts from CI: at cee8a5b
-the Windows Tests job printed `1088 passed, 4 skipped` and the Ubuntu one
-`722 passed, 370 skipped` (`gh run view <id> --log | grep passed`).
+and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
+the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
+`723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
 Two things follow. The 363 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
@@ -1112,8 +1112,8 @@ Five job runs on every push and pull request:
 | Job | Runner | Does |
 |---|---|---|
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
-| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 722 passed, 370 skipped at cee8a5b |
-| **Tests** | windows | the same three — 1088 passed, 4 skipped at cee8a5b; the runner ships LLVM, so the FMA probes run |
+| **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 723 passed, 383 skipped at 4441a80 |
+| **Tests** | windows | the same three — 1102 passed, 4 skipped at 4441a80; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 | **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
