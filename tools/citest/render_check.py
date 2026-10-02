@@ -10,6 +10,9 @@ needs nothing: gx.c, gxr.c, gxr_tev.c and png.c reach only two symbols outside
 themselves, and tools/citest/render_driver.c supplies both, so the same checks
 link into a binary of their own and run anywhere. This is the one check in
 tools/citest/ that looks at a pixel rather than at whether the C compiles.
+Since L6 the driver also holds plat_f2i to cvttss2si and draws a frame from
+out-of-range conversions whose blocks and hash are pinned; every leg must
+draw it alike, and --cflag=-DPLAT_F2I_SATURATE (ARM64's conversion) fails it.
 Prints the compiler's output, then the driver's; exits non-zero if the build
 fails, the compiler is missing, either check disagrees, or the renderer did
 not start the N workers --threads asks for: a pool that quietly fell back to

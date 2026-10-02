@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1131 passed, 2 skipped in 193.54s
+1138 passed, 2 skipped in 202.12s
 ```
 
-1133 tests in 60 files, none of which reads the disc. The two FMA probes of
+1140 tests in 61 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -88,6 +88,7 @@ its own and run it, some of the C as well:
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
 | `test_toolchain_profiles.py` | 19 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review"); and cl's `/Fo<dir>/` over several sources becomes one gcc command per source, each object named for its source (L4b); and `runtime_support_sources()` is `runtime/plat.c` (L7) |
+| `test_libm_check.py` | 7 | `tools/citest/libm_check.py`'s arithmetic (portability L6), no compiler run: the 64 slices cover each domain once, in order; the domains are 2.5's counts; exact values round to themselves; rounding to a float goes to the nearer one and a tie to the even mantissa, decided against the decimal, not through a double; at `x = -0.029743773862719536` the double-precision `exp2` rounds the wrong way and decimal does not; the pinned file names both functions over their domains; and FNV-1a is the driver's |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -115,10 +116,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1131 passed, 2 skipped` |
-| no capstone | `1112 passed, 3 skipped` |
-| no MSVC | `755 passed, 378 skipped` |
-| neither | `736 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1138 passed, 2 skipped` |
+| no capstone | `1119 passed, 3 skipped` |
+| no MSVC | `762 passed, 378 skipped` |
+| neither | `743 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -252,7 +253,7 @@ One gap worth knowing: `memset` here is the wrapper only. Its fill is
 the decompiled fill is checked by `tools/decomp.py` (it matches) and by the
 in-port self test, not here.
 
-**`render_check.py`** — 3.4 s. The only check in this section that looks at a
+**`render_check.py`** — 6.4 s. The only check in this section that looks at a
 pixel; everything above it would pass for a renderer that drew nothing. It
 links `gx.c`, `gxr.c`, `gxr_tev.c`, `png.c` and a driver with two stubs, and
 runs the same two checks the in-port self test runs:
@@ -262,7 +263,9 @@ runs the same two checks the in-port self test runs:
 [selftest] render full-screen quad      ok    got "307200 of 307200 red"
 [selftest] render triangle rows         ok    got "complete, 53301 px"
 [render] second frame hash 63a57c77609efd77 (not asserted)
-[render] both render checks pass
+[render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
+[render] every render check passes
 ```
 
 The register recipe in the driver is a verbatim copy of `selftest.c`'s, because
@@ -271,6 +274,14 @@ that one is `static` in a file that cannot link outside the port;
 The frame hash is printed and *not* asserted: `ceilf`/`floorf` at a span
 boundary is where two MSVC versions could legitimately differ, and nobody has
 run two.
+
+Since L6 it also holds `plat_f2i`, x86's `cvttss2si` everywhere, to a table of
+14 cases on every leg and to the instruction itself over all 2^32 floats on
+x86, and checks that the two unsigned depth casts give 0 for a NaN. And it
+draws a frame from out-of-range conversions: six blocks of constant texture
+coordinates, some beyond int range or NaN, each one value worked out by hand
+in the driver's comment and checked pixel by pixel, with the frame's hash
+pinned. `--cflag=/DPLAT_F2I_SATURATE`, ARM64's conversion on x86, fails both.
 
 **`threads_check.py`** — 2.7 s (L7). Builds `runtime/threads.c` and
 `runtime/plat.c` with `tools/citest/threads_driver.c`, and parks and resumes a
@@ -287,6 +298,27 @@ the script holds that to `recompile.py`'s `/STACK` before it builds. Under gcc:
 
 On Windows the stack line says the main thread's is sized by the link. CI runs
 it on the three Linux legs, which are where the resume used to exit 6.
+
+**`libm_check.py`** — 18 s (L6). The renderer's `exp2f` (fog) and `log2f`
+(texture LOD) are CORE-MATH's correctly rounded ones, `runtime/crmath.h`. This
+builds `tools/citest/libm_driver.c` and runs every input the renderer can give
+them, 1,090,519,041 for `exp2f` and 2,139,095,039 for `log2f`, in 64 fixed
+slices a function at idle priority. Each output is compared with the host's
+double-precision function rounded to float; where that lies within 2^-40 of a
+rounding boundary, Python's `decimal` at 50 digits decides instead. The
+outputs' hashes must match `config/libm.tsv`, and `--bless` rewrites that only
+while every output is correctly rounded:
+
+```
+[libm] 128 slices in 6.6 s
+[libm] exp2f over [-8, 0]: 1090519041 inputs; 6996 near a rounding boundary, decided by decimal at 50 digits, 6996 of them right; 0 not correctly rounded; hash d26a9f42e670180c (pinned d26a9f42e670180c): ok
+[libm] log2f over (0, inf): 2139095039 inputs; 49987 near a rounding boundary, decided by decimal at 50 digits, 49987 of them right; 0 not correctly rounded; hash 68eb594274ef7407 (pinned 68eb594274ef7407): ok
+```
+
+`--cflag=/DLIBM_HOST` (or `-DLIBM_HOST`) checks the C library's own functions
+instead: 74,153 and 313,550 outputs not correctly rounded, the same bits under
+UCRT and glibc. CI runs it on the MSVC, clang-cl, Linux and ARM64 legs, which
+print the same two hashes.
 
 ### One check on the built binary that still needs no disc
 
@@ -1171,6 +1203,7 @@ perfectly the whole time.
 | `citest/dc_check.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/render_check.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/threads_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Linux and Linux ARM64 |
+| `citest/libm_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Windows, Linux and Linux ARM64 |
 | `SOA_MEMPOKE` tripwire | no | — | no | **yes** | no | no |
 | `recompile.py --compile --link` | **yes** | yes | no | — | no | no |
 | `SOA_SELFTEST=1` | **yes** | — | no | **yes** | no | no |
@@ -1181,7 +1214,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1133 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1140 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
@@ -1194,11 +1227,11 @@ Nine job runs on every push and pull request:
 | **Game data guard** | ubuntu | `tools/guard.py`, then every blob in the whole history against the same suffix list, then `tools/guard.py --history` over every path any commit touched and the bytes it held, then a 2 MiB blob-size ceiling |
 | **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 723 passed, 383 skipped at 4441a80 |
 | **Tests** | windows | the same three — 1102 passed, 4 skipped at 4441a80; the runner ships LLVM, so the FMA probes run |
-| **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
-| **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b); then `test_memguard.py` under `noskip` with `SOA_CC` set, and `threads_check.py`: `plat.c`'s SIGSEGV guard and the guest's 32 MB stack (L7) |
+| **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py`, and since L6 `libm_check.py` |
+| **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b); then `test_memguard.py` under `noskip` with `SOA_CC` set, and `threads_check.py`: `plat.c`'s SIGSEGV guard and the guest's 32 MB stack (L7); and `libm_check.py` (L6) |
 | **ThreadSanitizer (render queue)** | ubuntu | clang `-fsanitize=thread`: `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4`, every race reported and any failing the run, no suppression (L8) |
-| **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8); and L7's two steps, where the guard learns a fault was a store from the ESR record in the signal frame |
-| **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
+| **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8); and L7's two steps, where the guard learns a fault was a store from the ESR record in the signal frame; and `libm_check.py`, which prints the x86 legs' hashes (L6) |
+| **Runtime compiles (clang-cl)** | windows | the same three and `libm_check.py` with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it
 through `vswhere` and runs `vcvars64.bat` exactly as it does on a developer

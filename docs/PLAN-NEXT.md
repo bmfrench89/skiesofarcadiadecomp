@@ -582,7 +582,8 @@ count kept before it starts.
 
 **M4b pays only once a non-Windows build is a goal:**
 - **L6:** renderer determinism, `plat_f2i`, and CORE-MATH `exp2f`/`log2f`. It changes Windows
-  arithmetic too.
+  arithmetic too. **Done** 2026-10-02 (FINDINGS "L6"): every leg draws the pinned frame and prints
+  the pinned libm hashes on `l6-determinism`; the mutations red on `l6-mutation`.
 - **L7:** the POSIX layer's first part. **Done** 2026-10-02 (FINDINGS "L7"): green on
   `l7-posix`, the mutation red on `l7-mutation`.
 - **L9:** its second part, after M1's and M3's files have settled.

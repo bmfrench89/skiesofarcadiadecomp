@@ -4601,3 +4601,116 @@ legs run all three on every push.
   - the port itself running off Windows, which needs L9, L10 and a window;
   - a second guest thread off Windows: every log so far has one (risk 18,
     Q9).
+
+**L6: the renderer's arithmetic, the same on every platform.** 2026-10-02.
+Every leg CI runs now draws the same pixels from out-of-range conversions and
+gets the same bits from `exp2f` and `log2f`. Those legs are MSVC, clang-cl,
+gcc, clang, gcc on ARM64, and clang under ThreadSanitizer. One defect turned
+up that the spec had not foreseen.
+
+- **`plat_f2i`** (`plat.h`) is x86's `cvttss2si` everywhere: the intrinsic on
+  x86-64, a range test elsewhere.
+  - **The sites:** ten in `gxr.c` and `gxr_tev.c`. Fog's weight, the
+    triangle's vertex colour, the line's step count, position and colour, the
+    point's position and colour, `fast_floor`, the bilinear weights and the
+    mip level.
+  - **How they were found:** by the compiler, not by reading. They are every
+    `cvtt*` instruction in MSVC's `/FAs` listings, by source line. That gave
+    §2.6's sites, moved 4-9 lines, and none in `gx.c`.
+  - **The bounded casts,** each now commented:
+    - the triangle's bounding box (`fminf` and `fmaxf` drop a NaN);
+    - the span limits (a NaN fails the compare);
+    - YUV (at most 235.7);
+    - the mip count (a byte over 16);
+    - the two unsigned depth casts. A NaN gives 0 on every target; the driver
+      checks it.
+  - **Checked in `render_check`'s driver:** a 14-case table on every leg, and
+    the range test against the instruction over all 4,294,967,296 floats on
+    x86. Both pass on every leg. `PLAT_F2I_SATURATE` fails 5 cases and
+    830,472,191 floats.
+- **The bilinear weights: the defect.** Past int range, `fast_floor` and the
+  weight are both INT32_MIN.
+  - **How the paths disagreed:** the SSE4.1 path (16-bit lanes, a logical
+    shift, saturating packs) and the scalar path (int products) wrap that
+    differently. Where an odd weight in one direction met INT32_MIN in the
+    other, over texels whose 2x2 sum is odd, the SIMD path gave 0 and the
+    scalar path the texel.
+  - **Why it mattered:** ARM64 has only the scalar path, so `plat_f2i` alone
+    would not have made it draw as x86 does.
+  - **The fix:** such a weight is now 0. Along s that is what the SIMD path
+    already computed; along t it replaces a value that depended on parity.
+  - **The proof:** with the clamp removed, the synthetic frame's block B
+    comes out 0 under SIMD and 85 under scalar. Replay stays 23/23.
+- **The synthetic frame** (`render_driver.c`) is six blocks of constant
+  texture coordinates over an 8x4 I8 texture from an LCG, bilinear and
+  repeating. Each block is one value worked out by hand, in the driver's
+  comment, and the driver checks every pixel.
+  - **On x86:** A 60, B 85, C 218, D 220, E 108, F 220. The MSVC SIMD path,
+    the scalar path, and the range test with the scalar path (ARM's
+    arithmetic) all draw it with hash aa535458106bed0e.
+  - **Pinned** after the owner looked at the frame.
+  - **The saturating mutation** gives B 19, C 108 and D 70, as worked out.
+  - **One worked value was wrong the first time:** F, whose s is NaN, was
+    worked as 218 and draws 220. The identity texture matrix makes t
+    0 x NaN + t, so t is NaN too and the block samples texel (0, 0). The
+    renderer was right.
+  - **No vertex colour of 1e10,** as the spec asked: none can reach the
+    conversions through GX, because `read_color` decodes bytes and
+    `light_channel` clamps.
+  - **Two earlier designs could not fail.** The first, interpolated
+    coordinates, could not be modelled exactly. The second, texels whose 2x2
+    parities always cancelled, drew the same under SIMD and scalar even
+    without the fix.
+- **`exp2f` and `log2f`** are CORE-MATH's (commit 8ea8ea35, MIT, in
+  NOTICE), as `soa_exp2f` and `soa_log2f`.
+  - **Where:** `runtime/crmath.h`, not the spec's `crmath.c`, so the renderer
+    still links alone (3.1).
+  - **How:** generated from upstream by exact, asserted substitutions, listed
+    in the header. MSVC and clang-cl compile it with no diagnostic.
+  - **The check:** `libm_check.py` runs every input. 1,090,519,041 for
+    `exp2f` and 2,139,095,039 for `log2f` are all correctly rounded. Of
+    those, 6,996 and 49,987 lie within 2^-40 of a rounding boundary, and
+    decimal at 50 digits agrees with every one.
+  - **Pinned** in `config/libm.tsv` (d26a9f42e670180c, 68eb594274ef7407) by
+    the owner's answer. The pin was inspected by that comparison: every
+    output agreed with the double reference, and every arbitrated one with
+    decimal.
+- **The C libraries' own functions,** the mutation.
+  - **The counts:** 74,153 `exp2f` and 313,550 `log2f` outputs are not
+    correctly rounded.
+  - **Not 74,154:** §2.5's probe said 74,154 for `exp2f`. At
+    x = -0.029743773862719536 (BCF3A937) the double-precision reference
+    rounds the wrong way and UCRT is right; CORE-MATH handles that input by
+    name. `test_libm_check.py` pins it.
+  - **The same bits everywhere:** UCRT, glibc on x86-64 and glibc on ARM64
+    give the same outputs (hashes 3a3a2f6c6fd6caab and 946e2e76f2851206 on
+    all five legs). So §2.5's "a glibc build would differ" does not hold.
+    Android's bionic is not measured. The renderer's answer is now its own
+    either way.
+- **Codegen and speed.**
+  - **`/FA`:** fog lost a register swap. `fast_floor` converts once instead
+    of twice, and one `cmov` became a branch. `soa_exp2f` stays a call, as
+    `exp2f` was.
+  - **perfbench,** at one thread, three interleaved rounds against
+    `build\soa-L6base.exe`, in ns a fragment, new against base:
+    - after `plat_f2i`: 35.6 against 36.9;
+    - with the weight fix: 34.6 against 35.75;
+    - final: 35.25 against 35.5.
+
+    Not slower.
+- **Checks:**
+  - `compile_runtime` 29/29 under MSVC and clang-cl;
+  - both builds relinked, with the self test, `replay --threads 1,2,3,8`
+    23/23 (unchanged at every step, as §2.5's probe predicted) and `title
+    --check` 4 of 4;
+  - `render_check` under MSVC (1 and 4 workers) and clang-cl;
+  - `libm_check` under MSVC and clang-cl;
+  - pytest 1138 passed, 2 skipped (`test_libm_check.py` is new, with 7
+    tests).
+- **CI.**
+  - **`l6-determinism`** (run 37066691655): every job green. Every leg prints
+    the frame's and the libm's pinned hashes. `libm_check` takes 14-39 s on
+    the runners.
+  - **`l6-mutation`** (run 37066694789): `plat_f2i` saturating in `plat.h`
+    and the host's libm in the driver. Every renderer and libm step on every
+    leg is red, and nothing else.

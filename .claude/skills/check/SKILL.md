@@ -200,8 +200,13 @@ python tools/citest/render_check.py
 [selftest] render full-screen quad      ok    got "307200 of 307200 red"
 [selftest] render triangle rows         ok    got "complete, 53301 px"
 [render] second frame hash 63a57c77609efd77 (not asserted)
-[render] both render checks pass
+[render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
+[render] every render check passes
 ```
+
+And since L6, `python tools/citest/libm_check.py` (18 s): the renderer's
+`exp2f` and `log2f` over every input, against `config/libm.tsv`.
 
 `dc_check.py` is there because matching bytes says nothing about behaviour on
 x86: the string comparison in this tree that returned positive where the answer
@@ -235,7 +240,9 @@ compiled 29/29 runtime translation units
 all 12 routines agree with the host C library
 ...
 [render] second frame hash 63a57c77609efd77 (not asserted)
-[render] both render checks pass
+[render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
+[render] every render check passes
 ```
 
 Then the two clang-sensitive pytest modules, where a skip fails the run
@@ -307,13 +314,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1131 passed, 2 skipped in 193.54s
+1138 passed, 2 skipped in 202.12s
 ```
 
-1133 tests in 60 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1112 passed, 3 skipped` without
+1140 tests in 61 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1119 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `746 passed, 378 skipped` without MSVC. The two
+into one module-level skip), `762 passed, 378 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
 
 **Watch the skip count, not just the pass count.** A number that went *up*

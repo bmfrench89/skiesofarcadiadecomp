@@ -1471,6 +1471,23 @@ self-test and test counts in every copy.*
 
 ### L6. Renderer determinism: float-to-int and `exp2f`/`log2f`
 
+*Landed 2026-10-02 (FINDINGS "L6"). The differences from what follows:*
+- *The bilinear weights needed a fix this section did not foresee. Out of int range the weight is
+  INT32_MIN, which the SSE4.1 path and the scalar path (ARM64's only one) wrapped differently, so
+  `plat_f2i` alone left the two drawing different pixels. Such a weight is now 0 in both.*
+- *CORE-MATH went into `runtime/crmath.h`, not `crmath.c`: a header of static functions keeps the
+  renderer linking alone, as 3.1 requires, and the nine `test_gxr_*` builds need no new source.*
+- *The synthetic frame has no vertex colour of 1e10. No colour can leave [0, 1] through GX:
+  `read_color` decodes bytes and `light_channel` clamps. Its six blocks have constant texture
+  coordinates, so each is one value worked out by hand, and the driver checks every pixel as well
+  as pinning the hash.*
+- *UCRT's exp2f is wrong on 74,153 inputs, not 74,154. 2.5's probe trusted the double-precision
+  reference, which rounds the wrong way at x = -0.029743773862719536. And glibc on x86-64 and
+  ARM64 gives UCRT's outputs bit for bit, so 2.5's "a glibc build would differ" does not hold;
+  bionic is not measured.*
+- *`libm_check` runs 64 fixed slices a function in parallel, about 18 s here and 14-39 s on CI's
+  legs.*
+
 *A day to several days. `--link`. Prerequisites: L2 and L4b. Needed before the first replay off Windows
 (L10, L11), not before. Files:*
 - *`runtime/plat.h` (`plat_f2i`, `PLAT_F2I_GENERIC`, `PLAT_F2I_SATURATE`);*
@@ -1487,7 +1504,7 @@ self-test and test counts in every copy.*
   - The hash matches `config/libm.tsv`, a new baseline whose commit says how it was inspected.
   - The `native`, `clang-cl`, `linux` and (after L8) arm64 legs print the same hash.
   - **Mutation:** UCRT's `exp2f` linked in place of `soa_exp2f` makes the check report exactly the 74,154
-    known differences. The fallback is a coefficient bit of weight 2^-20 or larger, flipped (§3.8).
+    known differences (in fact 74,153; see the note above). The fallback is a coefficient bit of weight 2^-20 or larger, flipped (§3.8).
 - **`plat_f2i` holds its contract.** `render_check`'s driver, built with `PLAT_F2I_GENERIC`:
   - checks a hard-coded table on every leg: NaN, ±inf, ±2^31, 2^31−128 and −2^31 give INT32_MIN or the exact
     value;

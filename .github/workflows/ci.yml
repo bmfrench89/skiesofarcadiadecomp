@@ -161,9 +161,19 @@ jobs:
         run: python tools/citest/dc_check.py
 
       # The only check here that looks at a pixel. Everything above would pass
-      # for a renderer that drew nothing at all.
+      # for a renderer that drew nothing at all. Since L6 it also holds
+      # plat_f2i to cvttss2si over every float and pins a frame drawn from
+      # out-of-range conversions.
       - name: Renderer pixel checks
         run: python tools/citest/render_check.py
+
+      # The renderer's exp2f and log2f (runtime/crmath.h, CORE-MATH), held to
+      # correct rounding over every input fog and texture LOD can give them,
+      # and their outputs to config/libm.tsv, which every leg has to match
+      # (portability.md L6).
+      - name: The renderer's exp2f and log2f, every input
+        if: ${{ !cancelled() }}
+        run: python tools/citest/libm_check.py
 
   # The same three checks under a second compiler (portability.md 3.12, L4a).
   # The clang-cl profile in tools/soa/toolchain.py is clang-cl on MSVC's
@@ -214,6 +224,10 @@ jobs:
       - name: Renderer pixel checks
         if: ${{ !cancelled() }}
         run: python tools/citest/render_check.py --cc clang-cl
+
+      - name: The renderer's exp2f and log2f, every input
+        if: ${{ !cancelled() }}
+        run: python tools/citest/libm_check.py --cc clang-cl
 
       # No FMA contraction from either clang profile, and the renderer's
       # specialised pixel paths (the SIMD bilinear blend among them) against
@@ -288,6 +302,10 @@ jobs:
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}
         run: python tools/citest/threads_check.py --cc ${{ matrix.cc }}
+
+      - name: The renderer's exp2f and log2f, every input
+        if: ${{ !cancelled() }}
+        run: python tools/citest/libm_check.py --cc ${{ matrix.cc }}
 
   # ThreadSanitizer over the render queue (portability.md L8): clang's
   # -fsanitize=thread on render_check at four workers and on queue_check's
@@ -378,3 +396,7 @@ jobs:
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}
         run: python tools/citest/threads_check.py --cc gcc
+
+      - name: The renderer's exp2f and log2f, every input
+        if: ${{ !cancelled() }}
+        run: python tools/citest/libm_check.py --cc gcc

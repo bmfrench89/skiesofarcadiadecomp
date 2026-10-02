@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1133 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1140 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1133 |
+| Python tests | 1140 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -420,7 +420,9 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L7**
+stretch, newest first, each with a FINDINGS entry of its name: **L6**
+("L6": `plat_f2i`, the bilinear weights, CORE-MATH's `exp2f`/`log2f`; every
+leg draws the same pixels and the same libm bits); **L7**
 ("L7": `plat.c`'s cold half; the MEM1 guard and the guest's 32 MB stack
 off Windows, run by CI's three Linux legs); **L1**
 ("Wine": the port under Wine 10.0, all three checks); **L3b**
@@ -442,17 +444,19 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L7):** C5c (9ccef87), L2
+**The state at the stop (2026-10-02, after L6):** C5c (9ccef87), L2
 (dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a), L3b (5783358), L1
-(56ecb9a) and L7 (with this section) are pushed; read CI for the last. The owner plays
+(56ecb9a), L7 (664a524) and L6 (with this section) are pushed; read CI
+for the last. `build/soa-L6base.exe` is the build before L6, kept for
+perfbench comparisons. The owner plays
 `gen/clang/soa.exe` (D-15); MSVC stays the tools' default and the build that
 pins the hashes. Docker Desktop is stopped; the `soa-wine:l1` image, with no
 game data, is kept for the next Wine run; L7's local gcc runs used
 throwaway `python:3.14-slim` containers and kept nothing. `gen/soa.exe` (MSVC) and
-`gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L7 and both draw
+`gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L6 and both draw
 the 23 frames identically. The branches
-`l4b-linux`, `l4b-mutation`, `l8-tsan-arm`, `l8-mutation`, `l7-posix` and
-`l7-mutation` stay on origin,
+`l4b-linux`, `l4b-mutation`, `l8-tsan-arm`, `l8-mutation`, `l7-posix`,
+`l7-mutation`, `l6-determinism` and `l6-mutation` stay on origin,
 as L4a's do, because FINDINGS links their runs. Nothing is running.
 `build/fifo` is the **new** corpus, 23 captures with `PROVENANCE.tsv` (the
 run and frame each came from); the old one is `build/fifo-pre-c5/`, intact,
@@ -504,11 +508,14 @@ C5c) is now done.
    cold half. Off Windows the MEM1 guard is a SIGSEGV handler and the
    guest runs on a 32 MB thread, and CI's gcc, clang and ARM64 legs run
    `test_memguard.py` and `tools/citest/threads_check.py` on every push.
-   **Next, by the owner's answers of 2026-10-02** (PLAN-NEXT section 0):
-   L6, then M5. L9 waits until I1 and I3 have landed in its files. B5 is
-   CORE-MATH if MSVC builds it cleanly, and L6's `config/libm.tsv` may be
-   pinned once the exhaustive comparison agrees. Read the slice against
-   HEAD before any code. Still open for the owner, and not blocking: whether a
+   **L6 is done too** (FINDINGS "L6"): `plat_f2i`, the bilinear weights'
+   fix the spec missed, and CORE-MATH in `runtime/crmath.h`. MSVC,
+   clang-cl, gcc, clang, ARM64 and TSAN all draw the pinned out-of-range
+   frame and print the pinned libm hashes. **Next is M5,** by the owner's
+   answers (PLAN-NEXT section 0); L9 waits until I1 and I3 have landed in
+   its files. M5's gate asks D-18, D-19 and D-20 before it starts
+   (PLAN-NEXT D1); see section 0 for whether they have been answered.
+   Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

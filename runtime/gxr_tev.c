@@ -1115,7 +1115,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         C->min_lod = (float)(mode1 & 0xFF) / 16.0f;
         C->max_lod = (float)((mode1 >> 8) & 0xFF) / 16.0f;
         C->lod_bias = (float)(int8_t)((mode0 >> 9) & 0xFF) / 32.0f;
-        nlevels = C->mip ? (int)(C->max_lod + 0.999f) + 1 : 1;
+        nlevels = C->mip ? (int)(C->max_lod + 0.999f) + 1 : 1; /* bounded: a byte over 16 (L6) */
         te = texture(addr, fmt, w, h, tlut_off, tlut_fmt, nlevels);
         C->nlevels = te->nlevels;
         for (l = 0; l < MAX_MIPS; l++) { C->level[l] = te->level[l]; C->lw[l] = te->lw[l]; C->lh[l] = te->lh[l]; }
@@ -1143,7 +1143,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
 
 TEX_INLINE int fast_floor(float f)
 {
-    int i = (int)f;
+    int i = plat_f2i(f);
     return f < (float)i ? i - 1 : i;
 }
 
@@ -1205,14 +1205,25 @@ TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t o
     } else {
         float fu = u - 0.5f, fv = v - 0.5f;
         int x0 = fast_floor(fu), y0 = fast_floor(fv);
-        int ax = (int)((fu - (float)x0) * 256.0f), ay = (int)((fv - (float)y0) * 256.0f);
-        int xa = wrap(x0, w, mask_s, C->wrap_s), xb = wrap(x0 + 1, w, mask_s, C->wrap_s);
-        int ya = wrap(y0, h, mask_t, C->wrap_t), yb = wrap(y0 + 1, h, mask_t, C->wrap_t);
-        const uint8_t* p00 = img + ((size_t)ya * w + xa) * 4;
-        const uint8_t* p10 = img + ((size_t)ya * w + xb) * 4;
-        const uint8_t* p01 = img + ((size_t)yb * w + xa) * 4;
-        const uint8_t* p11 = img + ((size_t)yb * w + xb) * 4;
+        int ax = plat_f2i((fu - (float)x0) * 256.0f), ay = plat_f2i((fv - (float)y0) * 256.0f);
+        int xa, xb, ya, yb;
+        const uint8_t *p00, *p10, *p01, *p11;
         int i;
+        /* A coordinate beyond int range has no fraction: fast_floor gives
+         * INT32_MIN, and so does the weight. The SIMD path's 16-bit lanes
+         * and the scalar path's int products wrapped that differently, so
+         * the same draw came out differently with and without SSE4.1 --
+         * and on ARM64, which has only the scalar path. Weight 0 is what
+         * the SIMD path already made of it along s; along t it made a
+         * value that depended on the texels' parity (L6). */
+        if ((unsigned)ax > 255u) ax = 0;
+        if ((unsigned)ay > 255u) ay = 0;
+        xa = wrap(x0, w, mask_s, C->wrap_s); xb = wrap(x0 + 1, w, mask_s, C->wrap_s);
+        ya = wrap(y0, h, mask_t, C->wrap_t); yb = wrap(y0 + 1, h, mask_t, C->wrap_t);
+        p00 = img + ((size_t)ya * w + xa) * 4;
+        p10 = img + ((size_t)ya * w + xb) * 4;
+        p01 = img + ((size_t)yb * w + xa) * 4;
+        p11 = img + ((size_t)yb * w + xb) * 4;
 #ifdef TEX_SIMD
         if (g_gxr_simd > 0) {
             uint32_t q00, q10, q01, q11;
@@ -1241,7 +1252,7 @@ TEX_INLINE void sample(const TexCfg* C, float s, float t, float lod, uint8_t out
         float L = lod + C->lod_bias;
         if (L < C->min_lod) L = C->min_lod;
         if (L > C->max_lod) L = C->max_lod;
-        l = (int)(L + 0.5f);
+        l = plat_f2i(L + 0.5f); /* a NaN passes both clamps above */
         if (l >= C->nlevels) l = C->nlevels - 1;
         if (l < 0) l = 0;
     }
