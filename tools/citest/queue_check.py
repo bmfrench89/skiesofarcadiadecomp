@@ -616,7 +616,7 @@ def overlap_finals(text: str) -> dict:
 
 
 def check_queue(exe: Path, out: Path, threads: list[str]) -> list[str]:
-    bad, hashes = [], {}
+    bad, hashes, failed = [], {}, set()
     for t in threads:
         code, text = run(exe, {"SOA_THREADS": t}, out)
         hashes[t] = re.findall(r"\[queue\] cap \d+ frame \d+ hash (\w+)", text)
@@ -632,6 +632,7 @@ def check_queue(exe: Path, out: Path, threads: list[str]) -> list[str]:
             else ""
         )
         if why:
+            failed.add(t)
             bad.append(f"queue SOA_THREADS={t}: {why}\n{text[-3000:]}")
     one = hashes.get("1") or hashes[threads[0]]
     if len(one) == 10 and (len(set(one[:5])) != 5 or one[:5] != one[5:]):
@@ -639,7 +640,7 @@ def check_queue(exe: Path, out: Path, threads: list[str]) -> list[str]:
     for t, h in hashes.items():
         if len(h) == 10 and h != one:
             bad.append(f"queue SOA_THREADS={t} drew a different picture:\n{h}\n{one}")
-        print(f"{'FAIL' if h != one else 'ok  '} queue    SOA_THREADS={t}")
+        print(f"{'FAIL' if h != one or t in failed else 'ok  '} queue    SOA_THREADS={t}")
     return bad
 
 

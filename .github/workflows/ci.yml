@@ -270,8 +270,9 @@ jobs:
 
   # ThreadSanitizer over the render queue (portability.md L8): clang's
   # -fsanitize=thread on render_check at four workers and on queue_check's
-  # whole sweep -- every thread count to four, with each stall kind. A
-  # sanitizer report makes a driver exit non-zero, so the step fails. The
+  # whole sweep -- every thread count to four, with each stall kind. Every
+  # race in a run is reported (halt_on_error=0), and any makes the driver exit
+  # non-zero at the end, so the step fails. The
   # renderer's shared counters go through plat.h's seq_cst helpers, which
   # TSAN understands; what it can find is a plain access no helper covers.
   # tools/citest/tsan.supp holds any suppression, each naming its FINDINGS
@@ -284,7 +285,7 @@ jobs:
     name: ThreadSanitizer (render queue)
     runs-on: ubuntu-latest
     env:
-      TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1 suppressions=${{ github.workspace }}/tools/citest/tsan.supp
+      TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1 suppressions=${{ github.workspace }}/tools/citest/tsan.supp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

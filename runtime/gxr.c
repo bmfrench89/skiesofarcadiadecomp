@@ -144,7 +144,10 @@ static uint64_t g_pool_t0; /* when the worker pool came up: what busy + idle is 
 static void charge(ThreadState* W, uint64_t* acc)
 {
     uint64_t n = gxr_ticks();
-    if (n > W->last) *acc += n - W->last;
+    /* The owner's own read of *acc; the store is atomic because gxr_report
+     * reads the idle timer while a parked worker is still charging it, with
+     * nothing to order the two (ThreadSanitizer found it, L8). A plain mov. */
+    if (n > W->last) plat_store64_relaxed((plat_a64*)acc, (int64_t)(*acc + (n - W->last)));
     W->last = n;
 }
 static int g_cull_flip, g_debug;
@@ -3186,9 +3189,9 @@ void gxr_report(void)
     if (g_workers > 0 && g_pool_t0 && gxr_producer_span() > 0.0) {
         double pool = gxr_seconds(gxr_ticks() - g_pool_t0), busy = 0.0, idle = 0.0, thread_time;
         int i;
-        for (i = 1; i <= g_workers; i++) {
-            busy += gxr_seconds(g_ts[i].busy);
-            idle += gxr_seconds(g_ts[i].idle);
+        for (i = 1; i <= g_workers; i++) { /* another thread's timers: rule 4, and charge()'s store */
+            busy += gxr_seconds((uint64_t)plat_load64((plat_a64*)&g_ts[i].busy));
+            idle += gxr_seconds((uint64_t)plat_load64((plat_a64*)&g_ts[i].idle));
         }
         thread_time = pool * g_workers;
         fprintf(stderr, "[gxr] workers: %d threads, pool up %.2fs each = %.2fs of thread time; busy %.2fs + idle %.2fs = %.2fs, %.1f%% unaccounted\n",
