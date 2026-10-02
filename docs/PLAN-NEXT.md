@@ -89,6 +89,13 @@ The owner answered four questions, with the research behind them summarised in t
     them into `gxr_cmd.h` (gpu-backend.md §6). With H17a later, V2 adds that field and routing itself.
   - **A phone needs the game's files on it:** M3's I1 (run from one ISO) and the store (G5, whose
     default "build the store when Android or the Deck is firm" now triggers) come before L12, not after.
+- **After L7, the owner's answers of 2026-10-02:**
+  - **L6, then M5.** L9 waits until I1 and I3 have landed in `mod.c`, `settings.c` and `hle.c`, as its
+    spec asks. M5 does not need L9, and until L10 only the Linux CI leg runs L9's code.
+  - **B5: CORE-MATH's `exp2f`/`log2f`, vendored under MIT, if MSVC builds them cleanly;** a
+    hand-written pair otherwise.
+  - **L6's `config/libm.tsv` may be pinned once the exhaustive comparison agrees.** Its commit quotes
+    how many inputs the 50-digit reference arbitrated. A replay hash that moves still goes to the owner.
 - **Still open, and still the owner's:** D-19 (a GPU picture judged by a tolerance) before V0; G3,
   distribution (assumed for now: the owner's own devices, built from source on the PC); the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
@@ -796,8 +803,8 @@ until you say otherwise.
 | B1: `g_screen`'s single buffer | portability | before L8's windowed TSAN, or with H17b |
 | B3: which retranslation L5 rides | portability | the first planned one |
 | B4: the windows-11-arm image | portability | moot: Windows on ARM is outside §0's targets, so L8 has no such leg |
-| B5: CORE-MATH or hand-written | portability | open |
-| B6: `scenario.py --wrap` or a separate script | portability | open |
+| B5: CORE-MATH or hand-written | portability | **answered 2026-10-02: CORE-MATH if MSVC builds it cleanly**, else hand-written (§0) |
+| B6: `scenario.py --wrap` or a separate script | portability | taken in L1: `--wrap` on `run` and `replay` (FINDINGS "Wine") |
 | B7: measuring clang-cl's call cost | portability | in L3b |
 | B8: one seq_cst load | portability | open |
 | B9: the self test's thread count | portability | open |

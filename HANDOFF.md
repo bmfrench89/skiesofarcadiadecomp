@@ -504,12 +504,10 @@ C5c) is now done.
    cold half. Off Windows the MEM1 guard is a SIGSEGV handler and the
    guest runs on a 32 MB thread, and CI's gcc, clang and ARM64 legs run
    `test_memguard.py` and `tools/citest/threads_check.py` on every push.
-   **Before the next slice, two answers are the owner's:**
-   - L9's spec wants I1 and I3 (M3, the disc layer) landed in its files
-     first, though section 0 orders L9 next. I3 also waits on D-5.
-   - L6 waits on B5: vendor CORE-MATH's `exp2f`/`log2f` (MIT), or write
-     the pair by hand.
-   PLAN-NEXT section 0 holds the answers once given. Read the slice against
+   **Next, by the owner's answers of 2026-10-02** (PLAN-NEXT section 0):
+   L6, then M5. L9 waits until I1 and I3 have landed in its files. B5 is
+   CORE-MATH if MSVC builds it cleanly, and L6's `config/libm.tsv` may be
+   pinned once the exhaustive comparison agrees. Read the slice against
    HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

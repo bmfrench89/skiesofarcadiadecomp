@@ -1743,9 +1743,11 @@ phone (L6 makes that exact) and an owner session.
 - **B4. The windows-11-arm image.** Does the image carry Visual Studio with the ARM64-native tools and a
   `vcvarsarm64.bat` that `toolchain.py` can find? That is to be checked at L8's start [I].
 - **B5. CORE-MATH or hand-written.** CORE-MATH's `exp2f`/`log2f` against a hand-written pair, once the
-  MSVC compile of the former is tried (§3.8).
+  MSVC compile of the former is tried (§3.8). **Answered 2026-10-02 by the owner:** CORE-MATH if MSVC
+  builds it cleanly, the hand-written pair otherwise.
 - **B6. `scenario.py --wrap`.** Is `--wrap` acceptable in `scenario.py`, or should Wine runs go through a
-  separate `tools/citest/wine_smoke.py` that shells out to it?
+  separate `tools/citest/wine_smoke.py` that shells out to it? **Taken in L1:** `--wrap` on `run` and
+  `replay` (FINDINGS "Wine").
 - **B7. Measuring clang-cl's call cost.** In L3b's A/B, is the out-of-line SSE4.1 blend under clang worth
   a span-level target attribute? Measure it before designing it.
 - **B8. One seq_cst load, or two kinds.** c8274db chose acquire for publication and completion. This spec
