@@ -300,11 +300,11 @@ jobs:
 
       - name: Renderer pixel checks, four workers, under TSAN
         if: ${{ !cancelled() }}
-        run: python tools/citest/render_check.py --cc clang --threads 4 --cflag=-fsanitize=thread --cflag=-g --out build/citest/render-tsan
+        run: python tools/citest/render_check.py --cc clang --threads 4 --cflag=-fsanitize=thread --cflag=-g --cflag=-DPLAT_TEST_RELAXED_LOADS=1 --out build/citest/render-tsan
 
       - name: The queue against the one-worker run, under TSAN
         if: ${{ !cancelled() }}
-        run: python tools/citest/queue_check.py --cc clang --threads 1,2,3,4 --cflag=-fsanitize=thread --cflag=-g --out build/citest/queue-tsan
+        run: python tools/citest/queue_check.py --cc clang --threads 1,2,3,4 --cflag=-fsanitize=thread --cflag=-g --cflag=-DPLAT_TEST_RELAXED_LOADS=1 --out build/citest/queue-tsan
 
   # The same checks on ARM64 (portability.md L8): ubuntu-24.04-arm with gcc.
   # x86 orders every load against every earlier one, so a load the queue
