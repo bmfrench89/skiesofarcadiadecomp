@@ -34,9 +34,10 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 11 | `python tools/scenario.py replay` | 16.6 s | disc, exe, corpus |
 
 **Steps 1–3, 5–5d and 7 are the whole of what CI can run** (5–5c under MSVC
-in the `native` job, 5d in the `clang-cl` job). Steps 4, 6 and 8–11 need
+in the `native` job, 5d in the `clang-cl` job; the same three under gcc and
+clang in the `linux` job). Steps 4, 6 and 8–11 need
 your disc, your vendored compilers or captures that are game data, and nobody
-else can run them for you. A green CI tick means the C compiles, nine MSL
+else can run them for you. A green CI tick means the C compiles, twelve MSL
 routines behave like libc and the rasterizer still fills a triangle. It says
 nothing about the game running.
 
@@ -186,7 +187,7 @@ python tools/citest/dc_check.py
 ...
 ok   memset      3000 cases
 
-all 9 routines agree with the host C library
+all 12 routines agree with the host C library
 ```
 
 ```
@@ -229,7 +230,7 @@ python tools/citest/render_check.py --cc clang-cl
 ```
 compiled 28/28 runtime translation units
 ...
-all 9 routines agree with the host C library
+all 12 routines agree with the host C library
 ...
 [render] second frame hash 63a57c77609efd77 (not asserted)
 [render] both render checks pass
@@ -304,11 +305,11 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1127 passed, 2 skipped in 201.15s
+1128 passed, 2 skipped in 182.44s
 ```
 
-1129 tests in 60 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1108 passed, 3 skipped` without
+1130 tests in 60 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1109 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
 into one module-level skip), `746 passed, 378 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).

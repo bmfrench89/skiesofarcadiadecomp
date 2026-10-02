@@ -23,7 +23,7 @@ resolve is a direct C call; anything else goes through the generated
 `dispatch(s, addr)` switch (`tools/soa/recomp/emit.py`, `dispatch_c`).
 
 **The runtime** — `runtime/`, 28 C files compiled with MSVC at `/std:c17
-/fp:strict`. This is the console: the memory window, the device models the
+/fp:strict` (and on CI under clang-cl, gcc and clang as well). This is the console: the memory window, the device models the
 guest programs through memory-mapped registers, the software graphics
 pipeline, the AX mixer, the window, and the diagnostics that make a wrong
 run legible.
@@ -641,7 +641,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1129 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1130 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

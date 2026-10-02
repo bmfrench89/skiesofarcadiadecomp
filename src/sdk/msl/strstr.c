@@ -12,7 +12,7 @@ char* strstr(const char* str, const char* pat)
 {
     const unsigned char* s1 = (unsigned char*)str - 1;
     const unsigned char* p1 = (unsigned char*)pat - 1;
-    unsigned long firstc, c1, c2;
+    u32 firstc, c1, c2;
 
     if (!pat || !(firstc = *++p1))
         return (char*)str;

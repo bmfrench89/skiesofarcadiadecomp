@@ -254,9 +254,9 @@ def gnu_args(args: list[str]) -> list[str]:
     """The msvc spellings cc() is handed, in gcc's: /D, /I, /Fo, /Fe and /c.
 
     A POSIX absolute path is a file, not a flag, even when it begins like one
-    (/Data/soa/gx.c, /Images/...), so one that exists passes through. Not yet
-    handled: /Fo naming a directory, which every citest driver uses and gcc
-    has no spelling for with several sources; L4b, which first runs gcc."""
+    (/Data/soa/gx.c, /Images/...), so one that exists passes through. /Fo
+    naming a directory is gnu_commands()'s, since gcc has no spelling for it
+    with several sources."""
     out: list[str] = []
     it = iter(args)
     for a in it:
@@ -277,6 +277,31 @@ def gnu_args(args: list[str]) -> list[str]:
     return out
 
 
+def _fo_dir(a: str) -> bool:
+    return a.startswith("/Fo") and a[3:].endswith(("/", "\\"))
+
+
+def gnu_commands(args: list[str], exe: str, p: Profile) -> list[list[str]]:
+    """The gcc command lines for one cc() call in the msvc grammar.
+
+    Usually one. A compile with /Fo naming a directory (every citest script
+    compiles several sources that way, cl's /Fo<dir>/) becomes one command
+    per source, each with -o <dir>/<stem><objext>: gcc writes several objects
+    only into its working directory, and the sources here are paths relative
+    to the caller's."""
+    fo = [a for a in args if _fo_dir(a)]
+    rest = [a for a in args if not _fo_dir(a)]
+    sources = [a for a in rest if a.endswith(".c")]
+    if not fo or "/c" not in args or not sources:
+        return [[exe, *gnu_args(args)]]
+    out_dir = fo[-1][3:]
+    common = [a for a in rest if not a.endswith(".c")]
+    return [
+        [exe, *gnu_args(common), "-o", str(Path(out_dir) / (Path(s).stem + p.objext)), s]
+        for s in sources
+    ]
+
+
 def cc(args: list[str], cwd: Path | str, p: Profile = MSVC) -> subprocess.CompletedProcess:
     """Run a profile's compiler. `args` are in the msvc grammar whatever the
     profile; the profile's own flags are the caller's to include (p.cflags),
@@ -294,8 +319,15 @@ def cc(args: list[str], cwd: Path | str, p: Profile = MSVC) -> subprocess.Comple
             text=True,
             check=False,
         )
-    return subprocess.run(
-        [exe, *gnu_args(args)], cwd=str(cwd), capture_output=True, text=True, check=False
+    runs = [
+        subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=False)
+        for cmd in gnu_commands(args, exe, p)
+    ]
+    return subprocess.CompletedProcess(
+        runs[0].args if len(runs) == 1 else [r.args for r in runs],
+        next((r.returncode for r in runs if r.returncode), 0),
+        "".join(r.stdout for r in runs),
+        "".join(r.stderr for r in runs),
     )
 
 

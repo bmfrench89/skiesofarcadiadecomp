@@ -4329,3 +4329,66 @@ dd87a59.
   `_fastpath`, `_atomics`, `test_citest`, `test_memguard` and
   `test_profiler`; `replay --threads 1,2,3,8` 23/23; the self test 0
   failures; `title --check` 4 of 4.
+
+**L4b: CI's Linux leg, and the 32-bit words it found.** 2026-10-02. A
+`linux` job runs the citest checks under gcc and clang on ubuntu-latest, and
+the six native MSL units no longer assume `long` is 32 bits.
+
+- **The words.** `include/types.h` gave `s32` and `u32` as `long`, and
+  `fillmem.c`, `strcpy.c`, `strcmp.c`, `strstr.c` and `string.c` spelled
+  their words `unsigned long`: 32 bits under mwcc and MSVC, 64 on Linux and
+  Android. `types.h` now has two branches. Under `__MWERKS__` it keeps the
+  exact typedefs the units were matched with. Every host gets `int32_t`
+  and `uint32_t` and `<stddef.h>`'s `size_t`. The units say `u32`, and cast
+  pointers through `size_t` as `strcmp.c` already did; that also silences
+  MSVC's C4311 (pointer truncation) on `strcpy.c:14`. `tools/decomp.py`'s
+  whole report is byte-identical before and after each step, so nothing the
+  game's build compiles moved.
+- **Twelve routines.** `dc_driver.c` adds `strcpy`, `strcmp` (as
+  `fn_8025EF88`, the name its unit defines and the rename keeps:
+  `test_citest.py` requires the table and the declarations to agree) and
+  `strstr`. `strcpy` and `strcmp` take their word loops only when both
+  pointers share an alignment, so half the cases are forced to.
+  `strcmp`'s cases mostly share a long prefix, where the word compare
+  answers, and `strstr`'s run over a three-letter alphabet, where partial
+  matches are common. The `memset` note was stale: `fillmem.c` landed, so
+  the fill itself has been checked since, not the host's.
+- **The toolchain.** cl's `/Fo<dir>/` over several sources has no gcc
+  spelling, so `toolchain.gnu_commands` makes it one command per source,
+  each object named for its source (a test in `test_toolchain_profiles.py`).
+  The three citest scripts take every profile in `--cc` and name objects and
+  executables from it. `render_check.py --threads N` runs the driver with
+  `N` workers through its own `render_env()`, and fails unless the renderer
+  printed `[gxr] rasterizing on N worker thread`.
+- **Green on a branch before the merge**
+  ([run 37036199554](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/37036199554),
+  branch `l4b-linux`, all seven jobs). Under gcc 13.3.0 and Ubuntu clang
+  18.1.3: `compile_runtime.py` 28/28, `dc_check.py` 12/12, and
+  `render_check.py` at one worker and at four. The four-worker run is the
+  first run anywhere of `plat.h`'s POSIX half: `pthread_create`, the futex
+  wait and `CLOCK_MONOTONIC`. Its frame hash is `63a57c77609efd77` under
+  both compilers, the hash MSVC and clang-cl give on Windows, so the
+  renderer draws this frame bit for bit alike on two operating systems and
+  four compilers.
+- **Red on a branch, as the Done asks**
+  ([run 37036562506](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/37036562506),
+  branch `l4b-mutation`, never merged), under both Linux compilers. With
+  `types.h`'s host branch reverted to `long`, `dc_check` fails on exactly
+  `memset` (2,503 of 3,000 cases, its word loop writing eight bytes a word
+  through `fillmem.c`) and `strcpy` (3 cases, a word written past the
+  terminator); `strcmp` stays right, since its word loop never reads past a
+  zero. With the driver's `render_env()` forcing one thread, the four-worker
+  step fails with `asked for 4 worker thread(s), and the renderer never said
+  ...`. The Windows jobs stay green there, as they should: `long` is 32 bits
+  on Windows. The same `types.h` mutation, simulated here with `u32` as
+  `uint64_t`, gives the same 2,503 and 3: the driver's inputs are a fixed
+  xorshift sequence.
+- **Warnings the Linux leg shows, none promoted:** `cpu.h`'s `/*` inside a
+  comment (every file), the unused `x0` in `gxr.c`'s copy code, `hle.c`'s
+  `done`, `mod.c`'s `g_api`, `threads.c`'s fiber helpers that only Windows
+  calls, and gcc's truncation warnings in `aram.c` and `si.c`. All older
+  than this slice.
+- **Checks:** `decomp.py` unchanged; `dc_check.py` 12/12 under MSVC;
+  `render_check.py --threads 1` and `4` under MSVC; `--link`; the self test 0
+  failures, its twin cases (`strcpy`, `strcmp`, `memset`) among them; `replay
+  --threads 1,2,3,8` 23/23; `title --check` 4 of 4.

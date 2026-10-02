@@ -107,16 +107,18 @@ jobs:
   # nothing needs gen/functions.h to compile, and no stub headers exist under
   # tools/citest/. If a runtime file ever does need generated code, it goes in
   # the UNCOVERED table at the top of tools/citest/compile_runtime.py with a
-  # reason, and the job's log names it. Also covered: the two units
-  # config/GEAE8P/units.txt marks native (src/sdk/msl/string.c and mem.c),
-  # built with the /Ddc_* renames tools/recompile.py derives, linked against
-  # runtime/decomp_shims.c and a driver, and checked routine by routine
-  # against the host C library -- eight decompiled bodies and, for memset, the
-  # wrapper only: its fill is __fill_mem, which nobody has decompiled and
-  # which runtime/decomp_shims.c answers with the host memset. And the
-  # renderer's own two pixel checks, linked without the game (gx.c, gxr.c,
-  # gxr_tev.c, png.c and two stubs) and run: a full-screen quad must cover
-  # 307200 pixels and the title screen's cloud triangle must come out whole.
+  # reason, and the job's log names it. Also covered: the six units
+  # config/GEAE8P/units.txt marks native (src/sdk/msl/string.c, mem.c,
+  # strcpy.c, strcmp.c, fillmem.c and strstr.c), built with the /Ddc_* renames
+  # tools/recompile.py derives, linked against runtime/decomp_shims.c and a
+  # driver, and checked routine by routine against the host C library --
+  # twelve routines, every one a decompiled body: memset reaches fillmem.c's
+  # __fill_mem through mem.c's wrapper, and strcmp is checked under its unit's
+  # name, fn_8025EF88. And the renderer's own two pixel checks, linked without
+  # the game (gx.c, gxr.c, gxr_tev.c, png.c and two stubs) and run: a
+  # full-screen quad must cover 307200 pixels and the title screen's cloud
+  # triangle must come out whole. The linux job below runs all three under
+  # gcc and clang.
   #
   # NOT COVERED, and not claimed to be: linking soa.exe, anything under gen/
   # (recompiling needs the user's own disc, which never exists here), every
@@ -221,3 +223,47 @@ jobs:
         env:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_toolchain_fp.py tools/tests/test_gxr_fastpath.py -v
+
+  # The same checks under gcc and clang on Linux (portability.md 3.12, L4b).
+  # These are the first runs of plat.h's POSIX half -- pthread_create, the
+  # futex wait and CLOCK_MONOTONIC -- and of the native twins on a host where
+  # long is 64 bits, which is what include/types.h's host branch is for:
+  # fillmem.c's and strcpy.c's word loops wrote eight bytes a "word" there
+  # before it. render_check asserts the renderer started the workers
+  # --threads asked for, and --threads 4 is the POSIX pool's first run. Every
+  # check step runs even when one before it failed, as in the clang-cl job.
+  #
+  # NOT COVERED: linking or running the port itself off Windows (it needs a
+  # window and audio that are Win32 today, L12), the replay corpus, and
+  # everything the native job's comment lists.
+  linux:
+    name: Runtime compiles (Linux, ${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: The compiler the checks use
+        run: ${{ matrix.cc }} --version
+
+      - name: Compile every runtime/*.c
+        if: ${{ !cancelled() }}
+        run: python tools/citest/compile_runtime.py --cc ${{ matrix.cc }}
+
+      - name: Decompiled MSL routines against the host C library
+        if: ${{ !cancelled() }}
+        run: python tools/citest/dc_check.py --cc ${{ matrix.cc }}
+
+      - name: Renderer pixel checks, one worker
+        if: ${{ !cancelled() }}
+        run: python tools/citest/render_check.py --cc ${{ matrix.cc }} --threads 1
+
+      - name: Renderer pixel checks, four workers (the POSIX pool)
+        if: ${{ !cancelled() }}
+        run: python tools/citest/render_check.py --cc ${{ matrix.cc }} --threads 4

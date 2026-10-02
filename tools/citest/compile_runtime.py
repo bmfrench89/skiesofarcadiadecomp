@@ -1,6 +1,6 @@
 """Compile every runtime/*.c on its own, no linking and no generated code.
 
-    python tools/citest/compile_runtime.py [--cc msvc|clang-cl] [--out build/citest/runtime]
+    python tools/citest/compile_runtime.py [--cc msvc|clang-cl|gcc|clang] [--out build/citest/runtime]
 
 The runtime is the part of the port that is actually hand-written C, and
 until this existed nothing built it except the owner's machine, so a syntax
@@ -70,7 +70,7 @@ def compile_one(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+        "--cc", choices=tuple(toolchain.PROFILES), default="msvc", help="the toolchain profile"
     )
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()

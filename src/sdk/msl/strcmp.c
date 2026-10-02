@@ -15,8 +15,8 @@
  * last characters first and the answer comes out inverted for most inputs.
  * Only the host spelling is redefined, so mwcc still compiles the expression
  * the executable has and the object still matches word for word. Like the rest
- * of the function this assumes a 32-bit unsigned long, which both compilers
- * that build it have. */
+ * of the function this assumes a 32-bit word, which u32 is under every
+ * compiler that builds it (types.h). */
 #if defined(_MSC_VER) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
 #define IN_STRING_ORDER(w) \
     (((w) >> 24) | (((w) >> 8) & 0xFF00) | (((w) << 8) & 0xFF0000) | ((w) << 24))
@@ -29,11 +29,11 @@ int fn_8025EF88(const char* str1, const char* str2)
 {
     const unsigned char* p1 = (unsigned char*)str1;
     const unsigned char* p2 = (unsigned char*)str2;
-    const unsigned long* wp1;
-    const unsigned long* wp2;
-    unsigned long a;
-    unsigned long c1, c2, w1, w2;
-    unsigned long n;
+    const u32* wp1;
+    const u32* wp2;
+    u32 a;
+    u32 c1, c2, w1, w2;
+    u32 n;
     int d;
 
     c1 = *p1;
@@ -43,7 +43,7 @@ int fn_8025EF88(const char* str1, const char* str2)
 
     /* Through size_t, because on the 64-bit host a cast straight to unsigned
        long truncates the address; only its low two bits are wanted. */
-    if ((a = (unsigned long)((size_t)p1 & 3)) == (unsigned long)((size_t)p2 & 3)) {
+    if ((a = (u32)((size_t)p1 & 3)) == (u32)((size_t)p2 & 3)) {
         if (a) {
             /* same misalignment: step bytewise up to the next word boundary */
             if (!c1)
@@ -63,8 +63,8 @@ int fn_8025EF88(const char* str1, const char* str2)
         }
 
         /* word compare until a word may contain a zero byte */
-        wp1 = (const unsigned long*)p1;
-        wp2 = (const unsigned long*)p2;
+        wp1 = (const u32*)p1;
+        wp2 = (const u32*)p2;
         w1 = *wp1;
         w2 = *wp2;
         if ((w1 - 0x01010101) & 0x80808080)

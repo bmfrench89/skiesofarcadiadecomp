@@ -1,6 +1,6 @@
 """Build the renderer on its own and run its two pixel checks.
 
-    python tools/citest/render_check.py [--out build/citest/render]
+    python tools/citest/render_check.py [--cc PROFILE] [--threads N] [--out build/citest/render]
 
 runtime/selftest.c draws a full-screen quad and the title screen's cloud
 triangle through the real GX front end and counts what comes out, but it can
@@ -10,7 +10,10 @@ themselves, and tools/citest/render_driver.c supplies both, so the same checks
 link into a binary of their own and run anywhere. This is the one check in
 tools/citest/ that looks at a pixel rather than at whether the C compiles.
 Prints the compiler's output, then the driver's; exits non-zero if the build
-fails, MSVC is missing, or either check disagrees.
+fails, the compiler is missing, either check disagrees, or the renderer did
+not start the N workers --threads asks for: a pool that quietly fell back to
+one thread would pass every pixel check (L4b; on Linux, --threads 4 is the
+POSIX pool's first run).
 """
 
 from __future__ import annotations
@@ -49,8 +52,9 @@ def run_cl(what: str, args: list[str]) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+        "--cc", choices=tuple(toolchain.PROFILES), default="msvc", help="the toolchain profile"
     )
+    ap.add_argument("--threads", type=int, default=1, help="worker threads (SOA_THREADS)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
     global PROF
@@ -73,21 +77,33 @@ def main() -> int:
         [*PROF.cflags, "/c", f"/I{RUNTIME}", f"/Fo{args.out}/", *map(str, SOURCES)],
     ):
         return 1
-    exe = args.out / "render_check.exe"
+    exe = args.out / f"render_check{PROF.exeext}"
     # Named rather than globbed, so a stale object from an earlier run in the
     # same directory cannot slip into the link.
-    objs = [args.out / (s.stem + ".obj") for s in SOURCES]
+    objs = [args.out / (s.stem + PROF.objext) for s in SOURCES]
     if not run_cl(
         "linking the renderer", [*PROF.cflags, *map(str, objs), f"/Fe:{exe}", *PROF.linker]
     ):
         return 1
 
-    proc = subprocess.run([str(exe)], cwd=ROOT, capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        [str(exe), "--threads", str(args.threads)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     print(proc.stdout, end="")
     if proc.stderr:
         print(proc.stderr, end="")
     if proc.returncode != 0:
         print(f"::error::{proc.returncode} render check(s) failed")
+        return 1
+    want = f"[gxr] rasterizing on {args.threads} worker thread"
+    if want not in proc.stdout + proc.stderr:
+        print(
+            f'::error::asked for {args.threads} worker thread(s), and the renderer never said "{want}"'
+        )
         return 1
     return 0
 

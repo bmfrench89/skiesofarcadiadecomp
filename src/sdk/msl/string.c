@@ -45,7 +45,7 @@ int strncmp(const char* str1, const char* str2, size_t n)
 {
     const unsigned char* p1 = (unsigned char*)str1 - 1;
     const unsigned char* p2 = (unsigned char*)str2 - 1;
-    unsigned long c1, c2;
+    u32 c1, c2;
 
     n++;
 

@@ -568,7 +568,7 @@ count kept before it starts.
 | — | **L3a** and **L2a**, if they did not land in M1. **Both landed in M1** (8bd7c79, 5af18b3) | hours each | none / `--link` | — | — |
 | 1 | **L2** `plat.h`: the queue's ordering completed (seq_cst on the four Dekker re-checks, the grep test), then the renderer builds anywhere (the POSIX pool). **Done** 2026-10-02 in two commits (FINDINGS "L2, step 1", "L2, step 2"): the NDK check is 0 errors over the runtime and the generated code | a day to several days, two commits | `--link` | L2a | — |
 | 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
-| 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N` | several days | `--link`, `decomp.py` | L2, L3a | — |
+| 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N`. **Done** 2026-10-02 (FINDINGS "L4b"): green on `l4b-linux`, the mutations red on `l4b-mutation` | several days | `--link`, `decomp.py` | L2, L3a | — |
 | 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races | several days | `--link` | L2, L4b | — |
 | 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
 | 6 | **L1** Wine smoke test in a container (checkout and `extracted/` mounted read-only, a scratch volume over `build/`) | hours | none | **D-13**; the machine free | optional Proton session on a Deck |

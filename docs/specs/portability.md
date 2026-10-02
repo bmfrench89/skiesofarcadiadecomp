@@ -1395,6 +1395,11 @@ One addition: `tools/citest/noskip.py` makes a skip fail the pytest step.*
 
 ### L4b. CI: the Linux leg, and the 32-bit words it finds
 
+*Landed 2026-10-02 (FINDINGS "L4b"): green under gcc 13.3 and clang 18.1.3 on `l4b-linux` (run
+37036199554), the `types.h` and `render_env()` mutations red on `l4b-mutation` (run 37036562506). The
+four-worker run is the POSIX pool's first; its frame hash equals Windows'. `toolchain.gnu_commands` handles
+`/Fo<dir>/`. The spec's line numbers predate the slice.*
+
 *Several days. `--link` (`src/`, `include/`) and `decomp.py`. Prerequisites: L2 and L3a. Files:*
 - *`.github/workflows/ci.yml`: the `linux` job, and the whole COVERED comment at :92-125 rewritten (the file
   count, six native units, `fillmem.c` decompiled, twelve routines);*

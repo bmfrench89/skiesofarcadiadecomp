@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1127 passed, 2 skipped in 201.15s
+1128 passed, 2 skipped in 182.44s
 ```
 
-1129 tests in 60 files, none of which reads the disc. The two FMA probes of
+1130 tests in 60 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -87,7 +87,7 @@ its own and run it, some of the C as well:
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
-| `test_toolchain_profiles.py` | 18 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review") |
+| `test_toolchain_profiles.py` | 19 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review"); and cl's `/Fo<dir>/` over several sources becomes one gcc command per source, each object named for its source (L4b) |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -115,10 +115,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1127 passed, 2 skipped` |
-| no capstone | `1108 passed, 3 skipped` |
-| no MSVC | `751 passed, 378 skipped` |
-| neither | `732 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1128 passed, 2 skipped` |
+| no capstone | `1109 passed, 3 skipped` |
+| no MSVC | `752 passed, 378 skipped` |
+| neither | `733 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -244,7 +244,7 @@ ok   strncpy     3000 cases
 ok   memcpy      3000 cases
 ok   memset      3000 cases
 
-all 9 routines agree with the host C library
+all 12 routines agree with the host C library
 ```
 
 One gap worth knowing: `memset` here is the wrapper only. Its fill is
@@ -1102,13 +1102,13 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1129 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1130 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 
 ### What CI can and cannot run
 
-Five job runs on every push and pull request:
+Seven job runs on every push and pull request:
 
 | Job | Runner | Does |
 |---|---|---|
@@ -1116,6 +1116,7 @@ Five job runs on every push and pull request:
 | **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 723 passed, 383 skipped at 4441a80 |
 | **Tests** | windows | the same three — 1102 passed, 4 skipped at 4441a80; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
+| **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b) |
 | **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

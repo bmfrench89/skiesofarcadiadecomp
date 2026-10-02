@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1129 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1130 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1129 |
+| Python tests | 1130 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -420,7 +420,8 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L2** (two
+stretch, newest first, each with a FINDINGS entry of its name: **L4b** (CI's
+Linux leg under gcc and clang; the native units' 32-bit words); **L2** (two
 commits: the queue's seq_cst helpers and the grep test, then the renderer
 building for Android); **C5c** (the corpus re-captured, matched to its old
 moments and blessed after the owner's look); **C5b**; **L4a**
@@ -436,9 +437,11 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L2):** C5c (9ccef87) and L2's
-two commits (dd87a59, and its second with this section) are pushed; read CI
-for the last. `gen/soa.exe` is linked with L2. Nothing is running.
+**The state at the stop (2026-10-02, after L4b):** C5c (9ccef87), L2
+(dd87a59, b736cb0) and L4b (with this section) are pushed; read CI for the
+last. `gen/soa.exe` is linked with L4b's twins. The branches `l4b-linux` and
+`l4b-mutation` stay on origin, as L4a's do, because FINDINGS "L4b" links
+their runs. Nothing is running.
 `build/fifo` is the **new** corpus, 23 captures with `PROVENANCE.tsv` (the
 run and frame each came from); the old one is `build/fifo-pre-c5/`, intact,
 and is as irreplaceable as `build/fifo` was. C5c's scratch captures are
@@ -473,14 +476,14 @@ C5c) is now done.
      speak for a late frame.
 2. **The Android path,** in PLAN-NEXT §0's order: M4a (~~L2~~, L4b, L8, L3b,
    L1), M4b (L7, L9, L6), then M5 (the GPU spike and the gate), then V5+ and
-   the Android shell. **L2 is done** (FINDINGS "L2, step 1", "L2, step 2"):
-   `plat.h` holds the atomics, waits, clocks and threads, and `runtime/*.c`
-   and all of `gen/*.c` compile for Android with 0 errors. Nothing has run
-   off Windows yet. **L4b is next:** CI's Linux leg, `types.h` and the five
-   native units fixed for LP64, `dc_check` to twelve routines and
-   `render_check --threads N` (portability.md L4b; several days). It is the
-   first thing that will run L2's futex wait, POSIX threads and
-   `CLOCK_MONOTONIC`. Read the slice against HEAD before any code. Two
+   the Android shell. **L2 and L4b are done** (FINDINGS "L2, step 1", "L2,
+   step 2", "L4b"): `plat.h` holds the atomics, waits, clocks and threads;
+   `runtime/*.c` and all of `gen/*.c` compile for Android with 0 errors; and
+   CI's `linux` job runs the citest checks under gcc and clang, the POSIX
+   pool with four workers among them, its frame hash equal to Windows'.
+   **L8 is next:** CI on ARM64 and ThreadSanitizer, after fixing the
+   `g_notex` and `WARN_ONCE` races (portability.md L8; several days). Read
+   the slice against HEAD before any code. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
    base, after taking the base listing before any edit; and read a whole
    compile's output, not its tail (L2's first commit shipped two C4273
