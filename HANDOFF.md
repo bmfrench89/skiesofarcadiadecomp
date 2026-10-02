@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1130 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1133 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1130 |
+| Python tests | 1133 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -420,7 +420,8 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L3b**
+stretch, newest first, each with a FINDINGS entry of its name: **L1**
+("Wine": the port under Wine 10.0, all three checks); **L3b**
 ("clang-cl": the game under a second compiler, 23/23); **L8** (the
 queue on ARM64 and under TSAN; three races fixed); **L4b** (CI's
 Linux leg under gcc and clang; the native units' 32-bit words); **L2** (two
@@ -439,9 +440,12 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L3b):** C5c (9ccef87), L2
-(dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a) and L3b (with this section)
-are pushed; read CI for the last. `gen/soa.exe` (MSVC) and
+**The state at the stop (2026-10-02, after L1):** C5c (9ccef87), L2
+(dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a), L3b (5783358) and L1 (with
+this section) are pushed; read CI for the last. The owner plays
+`gen/clang/soa.exe` (D-15); MSVC stays the tools' default and the build that
+pins the hashes. Docker Desktop is stopped; the `soa-wine:l1` image, with no
+game data, is kept for the next Wine run. `gen/soa.exe` (MSVC) and
 `gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L3b and both draw
 the 23 frames identically. The branches
 `l4b-linux`, `l4b-mutation`, `l8-tsan-arm` and `l8-mutation` stay on origin,
@@ -489,11 +493,14 @@ C5c) is now done.
    **L3b is done too** (FINDINGS "clang-cl"): the whole game builds with the
    NDK's clang-cl in about 90 s and draws the 23 frames exactly as MSVC does;
    its renderer is 10-13% faster a fragment and its guest ceiling 14% higher
-   pooled. Two answers are the owner's before the next slice: **Q3** (is
-   clang-cl the default build?) and **D-13** (Docker Desktop, installed here
-   but stopped, or a WSL distro, for L1's Wine test). **L1 is next** once
-   D-13 is answered; M4b (L7, L9, L6) follows. Read the slice against HEAD
-   before any code. `tools/citest/queue_check.py` (16 s) is worth a run
+   pooled. **L1 is done** (FINDINGS "Wine"): under Wine 10.0 in a container
+   the self test, replay 23/23 and `title --check` pass, run from a copy of
+   the exe because Wine faults on it straight off the Windows share. That
+   ends M4a. **M4b is next: L7** (the cold half of `plat.c`: memory
+   reservation and the fault guard, the big-stack runner, threads.c's
+   needs), then L9 and L6 (portability.md). Read the slice against HEAD
+   before any code. Still open for the owner, and not blocking: whether a
+   Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
    base, after taking the base listing before any edit; and read a whole

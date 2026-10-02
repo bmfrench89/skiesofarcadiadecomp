@@ -799,7 +799,7 @@ def test_replay_blesses_a_clean_sweep_and_then_holds_the_port_to_it(tmp_path, mo
         (data / rel).write_bytes(b"")
     fifo = tmp_path / "build" / "fifo"
     make_capture(fifo, "0100")
-    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, REPLAY_TEXT))
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t, wrap=(): (0, REPLAY_TEXT))
     args = argparse.Namespace(
         exe="gen/soa.exe", fifo=str(fifo), threads="1,2", passes=1, bless=True
     )
@@ -810,7 +810,7 @@ def test_replay_blesses_a_clean_sweep_and_then_holds_the_port_to_it(tmp_path, mo
     assert scenario.cmd_replay(args) == 0
 
     changed = REPLAY_TEXT.replace("63a57c77609efd77", "0000000000000000")
-    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, changed))
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t, wrap=(): (0, changed))
     assert scenario.cmd_replay(args) == 1
 
 
@@ -832,7 +832,7 @@ def test_bless_from_anywhere_but_the_corpus_is_refused(tmp_path, monkeypatch):
     before = scenario.MANIFEST.read_bytes()
     elsewhere = tmp_path / "build" / "fifo-new"
     make_capture(elsewhere, "3600")
-    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, REPLAY_TEXT))
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t, wrap=(): (0, REPLAY_TEXT))
     args = argparse.Namespace(
         exe="gen/soa.exe", fifo=str(elsewhere), threads="1", passes=1, bless=True
     )
@@ -861,7 +861,7 @@ def test_bless_from_another_build_is_refused(tmp_path, monkeypatch):
     make_capture(tmp_path / "build" / "fifo", "0100")
     scenario.write_manifest(scenario.MANIFEST, {"0100": ("aaaa000000000000", "1111111111111111")})
     before = scenario.MANIFEST.read_bytes()
-    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t: (0, REPLAY_TEXT))
+    monkeypatch.setattr(scenario, "replay_once", lambda exe, base, t, wrap=(): (0, REPLAY_TEXT))
     args = argparse.Namespace(
         exe="gen/clang/soa.exe",
         fifo=str(tmp_path / "build" / "fifo"),
@@ -883,3 +883,49 @@ def test_replay_says_what_is_missing_rather_than_failing_oddly(tmp_path, monkeyp
         exe="gen/soa.exe", fifo=str(tmp_path / "fifo"), threads="1", passes=1, bless=False
     )
     assert scenario.cmd_replay(args) == 2  # no port, no disc
+
+
+def test_wrap_puts_its_prefix_first_for_a_run(tmp_path, monkeypatch):
+    """--wrap "wine" (portability L1): the scenario runs under Wine, so the
+    command starts with wine, then the exe and the disc; quoted words stay
+    words. Without --wrap the command is the exe."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    ran = []
+    monkeypatch.setattr(scenario, "stream_run", lambda cmd, *a: ran.append(cmd) or (0, "", False))
+    args = run_args(tmp_path, check=False)
+    assert scenario.cmd_run(run_args(tmp_path, check=False, wrap="wine")) == 0
+    assert scenario.cmd_run(run_args(tmp_path, check=False, wrap="env WINEDEBUG=-all wine")) == 0
+    assert scenario.cmd_run(args) == 0
+    exe = str(tmp_path / args.exe) if not Path(args.exe).is_absolute() else args.exe
+    assert ran[0] == ["wine", exe, args.data]
+    assert ran[1] == ["env", "WINEDEBUG=-all", "wine", exe, args.data]
+    assert ran[2] == [exe, args.data]
+
+
+def test_wrap_puts_its_prefix_first_for_a_replay(monkeypatch, tmp_path):
+    """The replay's own command, as replay_once builds it."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(scenario.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or Done())
+    exe, base = tmp_path / "soa.exe", tmp_path / "0100"
+    scenario.replay_once(exe, base, 1, ["wine"])
+    scenario.replay_once(exe, base, 1)
+    assert seen == [["wine", str(exe), "--replay", str(base)], [str(exe), "--replay", str(base)]]
+
+
+def test_a_wrapped_replay_may_not_bless(tmp_path, monkeypatch):
+    """Frames drawn under Wine are held to the manifest, never written into it."""
+    monkeypatch.setattr(scenario, "ROOT", tmp_path)
+    args = argparse.Namespace(
+        exe="gen/soa.exe",
+        fifo=str(tmp_path / "build" / "fifo"),
+        threads="1",
+        passes=1,
+        bless=True,
+        wrap="wine",
+    )
+    with pytest.raises(ScenarioError, match="--wrap wine"):
+        scenario.cmd_replay(args)

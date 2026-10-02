@@ -4493,3 +4493,45 @@ builds the game, and it draws the 23 reference frames exactly as MSVC does.
 - **Q3 is the owner's:** whether clang-cl becomes the default build. MSVC
   stays the reference for the pinned hashes, and `replay --bless` still
   refuses any exe but `gen/soa.exe`.
+
+**Wine: the port under Wine 10.0, headless (L1).** 2026-10-02. What the
+Steam Deck's Proton runs, smoke-tested in a Linux container through Docker
+Desktop (D-13, the owner's answer), and it passes all three checks.
+
+- **Setup.** The image is `python:3.14-slim` and Debian's `wine` and
+  `wine64`: Wine 10.0 (Debian 10.0~repack-6), Python 3.14.7, 16 CPUs
+  visible. The checkout, `extracted/` with it, mounted read-only; a fresh
+  named volume over `build/`; the captures and `build/cards/slotA.raw`
+  mounted read-only elsewhere and copied onto the volume. The commands are
+  in TESTING.md. The volume was deleted afterwards and Docker Desktop
+  stopped; the image, with no game data in it, is kept.
+- **The first run crashed at the entry point:** a write to address 0 at
+  `mainCRTStartup`, whose instruction disassembled as `addb %al, (%rax)`,
+  two zero bytes. Started from the Docker Desktop share from Windows, the
+  exe's code page reads as zeros to Wine's image mapping, though Python's
+  `mmap` of the same file reads it correctly and `cmp` finds a copy
+  identical. Run from a copy in the container's `/tmp`, everything below
+  passes. A property of the mount, not of the port, and the reason the
+  TESTING.md recipe copies the exe.
+- **All three checks, on `gen/soa.exe` (MSVC, SHA-256 `d71af51e...`):**
+  - `SOA_SELFTEST=1 wine soa.exe extracted`: exit 0, 0 failures, `[boot]
+    built with MSVC 194435221`.
+  - `scenario.py replay --wrap wine --fifo build/fifo-copy --threads
+    1,2,3,8`: 23/23 against the manifest. Wine draws every reference frame
+    bit for bit, at every thread count, so the pool's `WaitOnAddress`
+    under Wine's futex-based one orders the queue as Windows does.
+  - `scenario.py run title --check --wrap wine` on the copied card: 4 of 4;
+    2,000 frames, `[gxr] rasterizing on 12 worker threads`, 72.0 guest
+    seconds in 72.9 wall, so real time.
+- **Nothing outside `build/` was written:** the checkout was read-only, and
+  every run passed. Two `.git` entries newer than the run were the host's
+  own fetch at 14:52:32, during it.
+- **`scenario.py --wrap "<prefix>"`** on `run` and `replay`, split into
+  words; a wrapped replay may not `--bless`. Three tests in
+  `test_scenario.py`; dropping the prefix in `wrap_prefix` fails the run
+  test and the bless test, and the replay test checks `replay_once`'s
+  command itself.
+- **What it does not show:** DXVK presentation, a window, sound, Steam Input,
+  the Deck's refresh rate or its speed. That is the owner's optional Proton
+  session, which needs a Deck or a Linux PC (portability Q1's second half,
+  still open).

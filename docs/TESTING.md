@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1128 passed, 2 skipped in 182.44s
+1131 passed, 2 skipped in 193.54s
 ```
 
-1130 tests in 60 files, none of which reads the disc. The two FMA probes of
+1133 tests in 60 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -48,7 +48,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
-| `test_scenario.py` | 93 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them |
+| `test_scenario.py` | 96 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless |
 | `test_guard.py` | 76 | the game-data guard: its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
@@ -115,10 +115,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1128 passed, 2 skipped` |
-| no capstone | `1109 passed, 3 skipped` |
-| no MSVC | `752 passed, 378 skipped` |
-| neither | `733 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1131 passed, 2 skipped` |
+| no capstone | `1112 passed, 3 skipped` |
+| no MSVC | `755 passed, 378 skipped` |
+| neither | `736 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -374,6 +374,46 @@ compilers, so a hash that moves under one only is a difference to find, never
 a manifest to re-bless (`replay --bless` refuses any exe but `gen/soa.exe`).
 Either build says which compiler made it right after its `[boot] DOL` line:
 `[boot] built with ...`.
+
+**Under Wine (L1).** What the Steam Deck's Proton runs, smoke-tested in a
+Linux container through Docker Desktop (D-13). The image is the distribution,
+CI's Python and the distribution's Wine, and nothing else:
+
+```
+FROM python:3.14-slim
+RUN apt-get update && apt-get install -y --no-install-recommends wine wine64 && rm -rf /var/lib/apt/lists/*
+ENV WINEDEBUG=-all
+WORKDIR /soa
+```
+
+Built as `docker build -t soa-wine:l1 .`. The checkout is mounted read-only,
+`extracted/` with it, and a fresh named volume goes over `build/`, so no run
+can write anywhere else; the captures and a card are mounted read-only apart
+and copied onto the volume, so no original can be touched. No image layer
+holds game data, and the volume is deleted afterwards:
+
+```
+docker volume create soa-l1-build
+docker run --rm -v "C:/Users/<you>/.../SOA:/soa:ro" -v soa-l1-build:/soa/build \
+  -v "C:/Users/<you>/.../SOA/build/fifo:/src/fifo:ro" -v "C:/Users/<you>/.../SOA/build/cards:/src/cards:ro" \
+  soa-wine:l1 sh -c '
+    wineboot -i
+    cp gen/soa.exe /tmp/soa.exe
+    mkdir -p build/fifo-copy && cp /src/fifo/*.fifo /src/fifo/*.regs /src/fifo/*.ram build/fifo-copy/
+    cp /src/cards/slotA.raw build/card-copy.raw
+    SOA_SELFTEST=1 wine /tmp/soa.exe extracted
+    python3 tools/scenario.py replay --exe /tmp/soa.exe --wrap wine --fifo build/fifo-copy --threads 1,2,3,8
+    python3 tools/scenario.py run title --check --exe /tmp/soa.exe --wrap wine --env SOA_CARD=build/card-copy.raw'
+docker volume rm soa-l1-build
+```
+
+**Run the exe from a copy inside the container.** Started straight off the
+Docker Desktop share from Windows, Wine 10.0 faults at the entry point on a
+page that reads as zeros, though Python's own `mmap` of the same file reads it
+correctly; the copy in `/tmp` is the container's own layer, gone with `--rm`.
+`--wrap` puts its words before the exe for `run` and `replay`, and a wrapped
+replay may not `--bless`: Wine's frames are held to the manifest, never
+written into it.
 
 If MSVC cannot be found, every step says so on stderr — `MSVC not found;
 skipping compile` — and returns 1 rather than pretending it did the work.
@@ -1121,7 +1161,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1130 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1133 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

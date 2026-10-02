@@ -112,6 +112,7 @@ import argparse
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -832,6 +833,13 @@ def refuse_capture_into_corpus(env: dict[str, str]) -> None:
         )
 
 
+def wrap_prefix(args: argparse.Namespace) -> list[str]:
+    """--wrap "wine" (portability L1): what goes in front of soa.exe, as
+    separate words. Under WSL the prefix is not optional: gen/soa.exe alone
+    starts a Windows process through interop, not a Wine one."""
+    return shlex.split(getattr(args, "wrap", None) or "")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     sc = load_scenario(args.name, Path(args.dir))
     exe, data = ROOT / args.exe, ROOT / args.data
@@ -879,7 +887,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"[scenario] {args.exe} {args.data}  ({', '.join(f'{k}={v}' for k, v in env.items())})")
     print(f"[scenario] {env['SOA_FRAMES']} frames, {len(events)} pad events; log: {named(log)}")
     echo = "all" if args.verbose else ("none" if args.quiet else "some")
-    code, text, killed = stream_run([str(exe), args.data], full, log, echo, args.timeout)
+    code, text, killed = stream_run(
+        [*wrap_prefix(args), str(exe), args.data], full, log, echo, args.timeout
+    )
     report = parse_report(text)
     if not args.check:
         if killed:
@@ -965,14 +975,14 @@ def frame_hashes(text: str) -> list[str]:
     return [m.group(1) for line in text.splitlines() if (m := RE_FRAME_HASH.match(line.strip()))]
 
 
-def replay_once(exe: Path, base: Path, threads: int) -> tuple[int, str]:
+def replay_once(exe: Path, base: Path, threads: int, wrap=()) -> tuple[int, str]:
     """One `gen/soa.exe --replay <base>` with the hash switch on."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env["SOA_HASH"] = "1"
     env["SOA_THREADS"] = str(threads)
     env["SOA_SETTINGS"] = "0"  # a player's soa.ini must not move a pinned hash
     proc = subprocess.run(
-        [str(exe), "--replay", str(base)],
+        [*wrap, str(exe), "--replay", str(base)],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -1111,6 +1121,14 @@ def cmd_replay(args: argparse.Namespace) -> int:
             f"--exe {args.exe} would pin another build's frames. Compare it against the "
             "manifest without --bless"
         )
+    # A wrapped run is another program drawing the frames (Wine, L1), held to
+    # the manifest and never its source.
+    wrap = wrap_prefix(args)
+    if args.bless and wrap:
+        raise ScenarioError(
+            f"--bless writes {named(MANIFEST)} from the reference build alone; under "
+            f"--wrap {' '.join(wrap)} the frames come from another program. Compare without --bless"
+        )
     # --replay takes the capture as its argument, so main.c falls back to the
     # literal directory "extracted" for the disc it still wants to open.
     missing = missing_inputs(exe, ROOT / DEFAULT_DATA)
@@ -1135,7 +1153,9 @@ def cmd_replay(args: argparse.Namespace) -> int:
         f"passes = {total} replays, each loading a 24 MB memory image"
     )
     keep_reference_pngs(fifo)
-    hashes, problems = sweep(captures, threads, args.passes, lambda b, t: replay_once(exe, b, t))
+    hashes, problems = sweep(
+        captures, threads, args.passes, lambda b, t: replay_once(exe, b, t, wrap)
+    )
     rows = {
         base.name: (capture_key(base), hashes[base.name])
         for base in captures
@@ -1229,6 +1249,7 @@ def main(argv: list[str] | None = None) -> int:
         "--log", help="where to write the run's output (default build/scenario-NAME.log)"
     )
     p.add_argument("--timeout", type=float, default=0, help="kill the run after N seconds")
+    p.add_argument("--wrap", default="", help='a prefix for the command, e.g. "wine" (L1)')
     p.add_argument("-q", "--quiet", action="store_true", help="echo nothing; the log has it all")
     p.add_argument("-v", "--verbose", action="store_true", help="echo every line, tracing included")
     p.set_defaults(func=cmd_run)
@@ -1242,6 +1263,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--passes", type=int, default=2, help="how many times over (default 2)")
     p.add_argument("--fifo", default=str(FIFO_DIR), help="where the captures are")
+    p.add_argument("--wrap", default="", help='a prefix for the command, e.g. "wine" (L1)')
     p.add_argument("--exe", default=DEFAULT_EXE)
     p.set_defaults(func=cmd_replay)
 

@@ -1158,6 +1158,10 @@ The old B2 (where the helpers go) is answered: at the top of `gxr.c`, for L2 to 
 
 ### L1. Wine smoke test, and optionally Proton on a Deck
 
+*Landed 2026-10-02 (FINDINGS "Wine") under Docker Desktop (D-13), Wine 10.0: the self test, replay
+23/23 and `title --check` pass. One difference from 3.13: the exe runs from a copy in the container's
+`/tmp`, because Wine faults on it straight off the Windows share. The Proton session waits for the owner.*
+
 *Hours, plus the owner's go-ahead to use Docker Desktop or to install a WSL distro. Rebuild: none.
 Prerequisites: none; run it when no other `soa.exe` is running. Files: `tools/scenario.py` (`--wrap` on
 `run` and `replay`), `tools/tests/test_scenario.py`, `docs/TESTING.md` (a Wine section, with the container's
@@ -1684,7 +1688,7 @@ phone (L6 makes that exact) and an owner session.
 
 - **Q1. Wine on this PC.** May the implementation session use Docker Desktop, which is already running,
   or install a WSL Ubuntu, for L1's Wine test? Do you have a Steam Deck or a Linux PC for the optional
-  Proton session?
+  Proton session? *Answered 2026-10-02 (D-13): Docker Desktop. The Proton question is still open.*
 - **Q2. LLVM.** May LLVM be installed for L3b? *Answered 2026-10-02: no; L3b used the NDK's clang-cl
   19.0.1, and the build records it (`[boot] built with clang 19.0.1 ...`).*
   - To match CI's image exactly (LLVM 20.1.8 on runner image 20260922.270.2), the command is
@@ -1692,7 +1696,8 @@ phone (L6 makes that exact) and an owner session.
   - A newer local LLVM is also acceptable, as long as L3b records the version, which its `[boot]` line
     prints.
   - The Android NDK's clang-cl 19.0.1 is enough for L3a.
-- **Q3. The default compiler.** If clang-cl draws the 23 frames identically and is measurably faster, should
+- **Q3. The default compiler.** *Answered 2026-10-02 (D-15): the owner plays `gen/clang/soa.exe`, and MSVC
+  stays the tools' default and the reference for the pinned hashes.* If clang-cl draws the 23 frames identically and is measurably faster, should
   it become the default? MSVC stays the reference for the pinned hashes until you say otherwise.
 - **Q4. ARM hardware.** Which ARM hardware, if any, matters: a Windows-on-ARM laptop, a Linux ARM board, a
   phone? L11 runs only on hardware you have. CI covers the synthetic part either way.

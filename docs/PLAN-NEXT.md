@@ -570,8 +570,8 @@ count kept before it starts.
 | 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
 | 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N`. **Done** 2026-10-02 (FINDINGS "L4b"): green on `l4b-linux`, the mutations red on `l4b-mutation` | several days | `--link`, `decomp.py` | L2, L3a | — |
 | 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races. **Done** 2026-10-02 (FINDINGS "L8"): TSAN clean with no suppression after a third race it found was fixed; ARM64 Linux green; the Windows-on-ARM leg dropped, per §0 | several days | `--link` | L2, L4b | — |
-| 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured. **Done** 2026-10-02 (FINDINGS "clang-cl"): 23/23 against the MSVC manifest; Q3, the default compiler, is the owner's | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
-| 6 | **L1** Wine smoke test in a container (checkout and `extracted/` mounted read-only, a scratch volume over `build/`) | hours | none | **D-13**; the machine free | optional Proton session on a Deck |
+| 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured. **Done** 2026-10-02 (FINDINGS "clang-cl"): 23/23 against the MSVC manifest; Q3 answered: the owner plays the clang build, MSVC stays the reference (D-15) | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
+| 6 | **L1** Wine smoke test in a container (checkout and `extracted/` mounted read-only, a scratch volume over `build/`). **Done** 2026-10-02 (FINDINGS "Wine"): Wine 10.0, the self test, replay 23/23 and `title --check` all pass | hours | none | **D-13**; the machine free | optional Proton session on a Deck |
 
 **M4b pays only once a non-Windows build is a goal:**
 - **L6:** renderer determinism, `plat_f2i`, and CORE-MATH `exp2f`/`log2f`. It changes Windows
@@ -759,9 +759,9 @@ until you say otherwise.
 | **D-10** | Where M5 goes. (a) After M4a, with M4b after the gate. (b) Sooner: right after M2 (only L2a and L2 first), with M3 and M4 after the gate. (c) The portability spec's order exactly: M4b before M5 | GPU §8 and portability §6 against the pivot | M2's end | (a), recommended (C4) |
 | D-11 | Picture options: which matter; co-op's default slot | comfort Q-O8, Q-O9 | P5a, P10b | flash limiter and sharp first; slot 1 (the second party member) |
 | **D-12** | L2a (hours) in M1 | portability Q8(a) | M1 gap | yes (recommended here) |
-| **D-13** | Docker Desktop or a WSL distro for the Wine test | portability Q1 | L1 | L1 waits |
+| **D-13** | Docker Desktop or a WSL distro for the Wine test | portability Q1 | L1 | **answered 2026-10-02: Docker Desktop** |
 | **D-14** | Install LLVM for the clang-cl build | portability Q2 | L3b | **answered 2026-10-02: no install; L3b used the NDK's clang-cl 19.0.1** |
-| D-15 | clang-cl as the default compiler, if it is exact and faster | portability Q3 | after L3b | MSVC stays |
+| D-15 | clang-cl as the default compiler, if it is exact and faster | portability Q3 | after L3b | **answered 2026-10-02: the owner plays `gen/clang/soa.exe`; MSVC stays the tools' default and the build that pins the hashes** |
 | D-16 | ARM hardware that matters | portability Q4 | L11 | none |
 | **D-17** | Is Android a firm goal? | portability Q7 = GPU Q-V1 | V3a (the API); L12 | Vulkan for the spike (gpu-backend V3a's rule); L12 stays gated |
 | D-18 | The build may fetch Vulkan headers and glslang into `vendor/` | GPU Q-V3 | V3a | ask before M5; D3D11 needs neither |

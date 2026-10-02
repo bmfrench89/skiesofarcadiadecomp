@@ -307,11 +307,11 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1128 passed, 2 skipped in 182.44s
+1131 passed, 2 skipped in 193.54s
 ```
 
-1130 tests in 60 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1109 passed, 3 skipped` without
+1133 tests in 60 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1112 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
 into one module-level skip), `746 passed, 378 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
