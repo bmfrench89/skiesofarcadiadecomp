@@ -11,6 +11,7 @@
  * second object file yet.
  */
 #ifndef SOA_PLAT_H
+#define PLAT_F2I_SATURATE /* L6 mutation */
 #define SOA_PLAT_H
 
 /* ---- platform tests ------------------------------------------------------
@@ -50,6 +51,7 @@
 #include <intrin.h> /* MSVC's intrinsics, and clang-cl's __cpuid and __rdtsc */
 #elif PLAT_X86_64
 #include <cpuid.h>
+#include <xmmintrin.h> /* _mm_cvtt_ss2si, for plat_f2i (L6) */
 #endif
 #ifdef _WIN32
 #include <process.h>
@@ -494,6 +496,34 @@ static inline int plat_cpu_has_sse41(void)
     return (int)((c >> 19) & 1);
 #else
     return 0;
+#endif
+}
+
+/* ---- numerics (L6) -------------------------------------------------------
+ * plat_f2i is x86's cvttss2si everywhere: truncation toward zero, and
+ * INT32_MIN for NaN and for anything outside [-2^31, 2^31). A plain (int)
+ * of such a value is undefined in C, and the machines disagree about it:
+ * ARM64's fcvtzs saturates, and gives 0 for NaN. Pixels come out of these
+ * conversions, so the renderer needs one rule, and MSVC x64 is the
+ * reference (portability.md 3.2).
+ *
+ * On x86-64 it is the instruction the cast already emitted, through the
+ * intrinsic so that the result is defined; elsewhere, the range test.
+ * Two switches exist for tests only: PLAT_F2I_GENERIC compiles the range
+ * test on x86 as well, so render_check's driver can hold it to the
+ * instruction over every float, and PLAT_F2I_SATURATE is ARM64's behaviour
+ * on x86, the mutation that driver has to catch. */
+PLAT_INLINE int32_t plat_f2i(float f)
+{
+#if defined(PLAT_F2I_SATURATE)
+    if (f != f) return 0;
+    if (f >= 2147483648.0f) return INT32_MAX;
+    if (f < -2147483648.0f) return INT32_MIN;
+    return (int32_t)f;
+#elif PLAT_X86_64 && !defined(PLAT_F2I_GENERIC)
+    return _mm_cvtt_ss2si(_mm_set_ss(f));
+#else
+    return (f >= -2147483648.0f && f < 2147483648.0f) ? (int32_t)f : INT32_MIN;
 #endif
 }
 

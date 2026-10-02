@@ -9,6 +9,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
+#include "crmath.h"
 #include "plat.h"
 #include <math.h>
 #include <stdio.h>
@@ -927,6 +928,11 @@ PIXEL_INLINE void fog_apply(const PixelCfg* px, uint8_t out[4], float depth)
 {
     float ze, f;
     int fi, i;
+    /* Unsigned, and bounded by the clamp except for a NaN, which converts to 0
+     * on every target: MSVC and clang on x86-64 go through a 64-bit cvttss2si
+     * and keep the low half, and ARM64's fcvtzu gives 0. So not plat_f2i;
+     * render_check's driver checks the expression (L6). depth_test's is the
+     * same. */
     uint32_t zs = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f));
     if (px->fog_type == 0) return;
     if (!px->fog_proj) {
@@ -939,15 +945,17 @@ PIXEL_INLINE void fog_apply(const PixelCfg* px, uint8_t out[4], float depth)
     f = ze - px->fog_c;
     if (f < 0.0f) f = 0.0f;
     if (f > 1.0f) f = 1.0f;
+    /* soa_exp2f, not the C library's: correctly rounded, so the same bits on
+     * every platform (crmath.h, L6). */
     switch (px->fog_type) {
     case 2: break;                                     /* linear */
-    case 4: f = 1.0f - exp2f(-8.0f * f); break;        /* exp */
-    case 5: f = 1.0f - exp2f(-8.0f * f * f); break;    /* exp2 */
-    case 6: f = exp2f(-8.0f * (1.0f - f)); break;      /* backward exp */
-    case 7: f = exp2f(-8.0f * (1.0f - f) * (1.0f - f)); break;
+    case 4: f = 1.0f - soa_exp2f(-8.0f * f); break;    /* exp */
+    case 5: f = 1.0f - soa_exp2f(-8.0f * f * f); break; /* exp2 */
+    case 6: f = soa_exp2f(-8.0f * (1.0f - f)); break;  /* backward exp */
+    case 7: f = soa_exp2f(-8.0f * (1.0f - f) * (1.0f - f)); break;
     default: return;
     }
-    fi = (int)(f * 256.0f);
+    fi = plat_f2i(f * 256.0f); /* a NaN passes both clamps above */
     if (fi > 256) fi = 256;
     for (i = 0; i < 3; i++) out[i] = (uint8_t)((out[i] * (256 - fi) + px->fog_color[i] * fi) >> 8);
 }
@@ -1012,7 +1020,7 @@ PIXEL_INLINE void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t sr
 
 PIXEL_INLINE int depth_test(const PixelCfg* px, int x, int y, float depth)
 {
-    uint32_t z = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f));
+    uint32_t z = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f)); /* see fog_apply */
     uint32_t cur = g_efb_z[y][x];
     int pass;
     if (!px->z_en) return 1;
@@ -1104,7 +1112,7 @@ static float span_lod(const Plane* attr, int wi, int ti, float px, float py, flo
     fy = dsdy * dsdy + dtdy * dtdy;
     f = fx > fy ? fx : fy;
     if (f <= 1e-12f) return -16.0f;
-    return 0.5f * log2f(f);
+    return 0.5f * soa_log2f(f); /* correctly rounded (crmath.h, L6) */
 }
 
 static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
@@ -1142,7 +1150,8 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
         fprintf(stderr, "[gxr] tri (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) (%.1f,%.1f,%.3f) area %.1f scissor %d,%d-%d,%d\n",
                 a->sx, a->sy, a->depth, b->sx, b->sy, b->depth, c->sx, c->sy, c->depth, area, sc->x0, sc->y0, sc->x1, sc->y1);
     /* Clamp in float first: a vertex just past the near plane can sit millions of
-     * pixels off screen, and a huge value converted to int becomes INT_MIN. */
+     * pixels off screen, and a huge value converted to int becomes INT_MIN.
+     * fminf and fmaxf drop a NaN, so the casts see only [-1e6, 1e6] (L6). */
     minx = (int)fmaxf(-1e6f, floorf(fminf(a->sx, fminf(b->sx, c->sx))));
     maxx = (int)fminf(1e6f, ceilf(fmaxf(a->sx, fmaxf(b->sx, c->sx))));
     miny = (int)fmaxf(-1e6f, floorf(fminf(a->sy, fminf(b->sy, c->sy))));
@@ -1210,7 +1219,8 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
                 float base = e[j]->b * py + e[j]->c; /* w at x = 0 */
                 /* Compare in float before converting: a nearly horizontal edge has an x
                  * coefficient that is a rounding crumb, and -base/a runs to billions,
-                 * which an int conversion turns into INT_MIN and an empty row. */
+                 * which an int conversion turns into INT_MIN and an empty row. The
+                 * casts see only (xs, 1e8] and [-1e8, xe): a NaN fails the compare. */
                 if (e[j]->a > 0.0f) { float lim = ceilf(-base / e[j]->a - 0.5f); if (lim > (float)xs) xs = lim > 1e8f ? xe + 1 : (int)lim; }
                 else if (e[j]->a < 0.0f) { float lim = floorf(-base / e[j]->a - 0.5f); if (lim < (float)xe) xe = lim < -1e8f ? xs - 1 : (int)lim; }
                 else if (base < 0.0f) { xs = xe + 1; break; }
@@ -1242,7 +1252,7 @@ static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, 
             for (j = 0; j < nch; j++) {
                 i = chn[j];
                 for (k = 0; k < 4; k++) {
-                    int cv = (int)(av[ci[i] + k] * w255 + 0.5f);
+                    int cv = plat_f2i(av[ci[i] + k] * w255 + 0.5f);
                     col[i][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
                 }
             }
@@ -1266,20 +1276,20 @@ static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
     const Rect* sc = &D->rc.scissor;
     float dx = b->sx - a->sx, dy = b->sy - a->sy;
     float len = fmaxf(fabsf(dx), fabsf(dy));
-    int n = (int)ceilf(len), i;
+    int n = plat_f2i(ceilf(len)), i;
     unsigned t, k;
     g_lines++;
     if (n < 1) n = 1;
     for (i = 0; i <= n; i++) {
         float f = (float)i / (float)n;
-        int x = (int)floorf(a->sx + dx * f), y = (int)floorf(a->sy + dy * f);
+        int x = plat_f2i(floorf(a->sx + dx * f)), y = plat_f2i(floorf(a->sy + dy * f));
         int col[2][4];
         float tex[8][4];
         if (x < sc->x0 || x > sc->x1 || y < sc->y0 || y > sc->y1) continue;
         for (t = 0; t < 2; t++) {
             const float* ca = &a->col[t].r; const float* cb = &b->col[t].r;
             for (k = 0; k < 4; k++) {
-                int cv = (int)((ca[k] + (cb[k] - ca[k]) * f) * 255.0f + 0.5f);
+                int cv = plat_f2i((ca[k] + (cb[k] - ca[k]) * f) * 255.0f + 0.5f);
                 col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv);
             }
         }
@@ -1294,7 +1304,7 @@ static void raster_line(const DrawCmd* D, const Vertex* a, const Vertex* b)
 static void raster_point(const DrawCmd* D, const Vertex* a)
 {
     const Rect* sc = &D->rc.scissor;
-    int x = (int)floorf(a->sx), y = (int)floorf(a->sy);
+    int x = plat_f2i(floorf(a->sx)), y = plat_f2i(floorf(a->sy));
     int col[2][4];
     unsigned t, k;
     g_points++;
@@ -1302,7 +1312,7 @@ static void raster_point(const DrawCmd* D, const Vertex* a)
     float tex[8][4];
     for (t = 0; t < 2; t++) {
         const float* ca = &a->col[t].r;
-        for (k = 0; k < 4; k++) { int cv = (int)(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
+        for (k = 0; k < 4; k++) { int cv = plat_f2i(ca[k] * 255.0f + 0.5f); col[t][k] = cv < 0 ? 0 : (cv > 255 ? 255 : cv); }
     }
     for (t = 0; t < 8; t++) { tex[t][0] = a->tex[t][0]; tex[t][1] = a->tex[t][1]; tex[t][2] = a->tex[t][2]; tex[t][3] = 0.0f; }
     count_shaded(shade(D, x, y, col, tex, a->depth));
@@ -2551,6 +2561,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
                 }
             }
             if (intensity) {
+                /* Bounded: three bytes weighted to at most 235.7, never NaN (L6). */
                 I = (unsigned)(0.257f * px[0] + 0.504f * px[1] + 0.098f * px[2] + 16.0f);
                 if (I > 255) I = 255;
             } else {

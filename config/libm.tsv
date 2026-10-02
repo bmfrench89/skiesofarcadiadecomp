@@ -1,0 +1,7 @@
+# soa_exp2f and soa_log2f (runtime/crmath.h, CORE-MATH) over the renderer's
+# domains: FNV-1a 64 over each output's four bytes, low byte first, per 1/64
+# slice, then over the 64 slice hashes. tools/citest/libm_check.py checks it,
+# and --bless rewrites it only when every output is correctly rounded.
+function	first	last	inputs	hash
+exp2f	80000000	C1000000	1090519041	d26a9f42e670180c
+log2f	00000001	7F7FFFFF	2139095039	68eb594274ef7407
