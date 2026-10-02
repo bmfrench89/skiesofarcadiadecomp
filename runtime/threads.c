@@ -279,12 +279,15 @@ void fn_802335C4(CpuState* s)
     if (ctx && ctx == irq_interrupted_context()) {
         irq_return_from_handler(); /* a handler returning to what it interrupted */
     }
+    /* Same fiber: unwind to its savepoint. Plain setjmp and longjmp on one
+     * stack, so it runs everywhere; off Windows every thread's fiber is
+     * NULL, and the guest's one thread always takes this path (L7). */
+    if (t && t->started && t->fiber == current_fiber()) {
+        g_resuming = t;
+        longjmp(t->jmp, 1);
+    }
 #ifdef _WIN32
     if (t && t->started) {
-        if (t->fiber == current_fiber()) {
-            g_resuming = t;
-            longjmp(t->jmp, 1); /* same fiber: unwind to its savepoint */
-        }
         g_switches++;
         SwitchToFiber(t->fiber);
         resume_self(); /* we were switched back: go to our own savepoint */
@@ -307,7 +310,7 @@ void fn_802335C4(CpuState* s)
     resume_self();
 #else
     (void)t;
-    fprintf(stderr, "[threads] fibers are Windows-only for now\n");
+    fprintf(stderr, "[threads] OSLoadContext(%08X): a second guest thread is Windows-only\n", ctx);
     exit(6);
 #endif
 }

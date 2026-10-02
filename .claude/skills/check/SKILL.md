@@ -170,7 +170,7 @@ python tools/citest/compile_runtime.py
 ...
 ok   window.c
 
-compiled 28/28 runtime translation units
+compiled 29/29 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -230,7 +230,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 28/28 runtime translation units
+compiled 29/29 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...

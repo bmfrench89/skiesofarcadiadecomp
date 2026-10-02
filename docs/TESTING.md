@@ -87,7 +87,7 @@ its own and run it, some of the C as well:
 | `test_decomp_native.py` | 8 | what it takes for a unit to run natively, checked by building it |
 | `test_card.py` | 7 | the parts of Track B that are text: `exi.c`, `selftest.c`, `irq.c`, `names.txt` and the README agreeing |
 | `test_gxr_texcache.py` | 7 | the texture cache (H12), with `gxr_tev.c` included whole to reach its statics: the index stays whole through 30,000 lookups over three times its keys, the least recently used texture goes first, a texture is hashed once an epoch and again after BP 0x66 or a copy moves it, `SOA_TEXVERIFY` catches a rewrite inside one, a dropped decode is rebuilt in place, and a palette load keeps a decode whose palette came back the same and makes it again when it did not |
-| `test_toolchain_profiles.py` | 19 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review"); and cl's `/Fo<dir>/` over several sources becomes one gcc command per source, each object named for its source (L4b) |
+| `test_toolchain_profiles.py` | 19 | the toolchain profiles (portability L3a), no compiler run: every profile's flags, strict set, linker flags and directory are 3.9's table, copied; the msvc profile's --compile, decompiled-unit, link and mod command lines, and the whole --link plan with the objects it links, equal a golden copy of what recompile.py ran before profiles; a clang-cl build's --compile and --link write and read only under gen/clang, with clang-cl's flags on every line and `-fuse-ld=link` after the objects, and build no mod; `--cc clang-cl --out gen` is refused, in any spelling, and main() takes its directory from that rule; --compile's level is /Od or -O0; a `SOA_CLANG_CL` naming no file finds no compiler; the gnu grammar's translation, a POSIX path that begins like a flag passing through; compile_runtime.py's strict set. The review's 22 mutations each fail it (FINDINGS "L3a's review"); and cl's `/Fo<dir>/` over several sources becomes one gcc command per source, each object named for its source (L4b); and `runtime_support_sources()` is `runtime/plat.c` (L7) |
 | `test_ax_census.py` | 6 | the audio census lines a run prints, and the invariants between them |
 | `test_gxr_queue.py` | 6 | the handshake between `gxr_flush` and the rasterizer threads |
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
@@ -99,7 +99,7 @@ its own and run it, some of the C as well:
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
-| `test_memguard.py` | 4 | the bound on the guest memory image |
+| `test_memguard.py` | 4 | the bound on the guest memory image, and the boot path built and poked past the RAM; profile-aware through `SOA_CC`, which CI's Linux legs set, where the guard is `runtime/plat.c`'s SIGSEGV handler (L7) |
 | `test_rvz_junk.py` | 4 | the junk generator behind RVZ junk runs |
 | `test_perfbench.py` | 4 | the renderer benchmark: its figure is busy thread-time over every fragment processed, a capture that drifted from the pinned manifest is caught, and `--exe` (portability L2a) benchmarks a saved build, a relative path taken from where it was typed and a missing one refused before any replay |
 | `test_gxr_fastpath.py` | 3 | the pixel path's specialised cases (H15c) against the general path: 4,000 random register sets through the real `tev_prepare`, near misses included, 64 random pixels each through both TEV paths, and 400,000 random blends through both blend cases -- colour and alpha test identical; and 600,000 random bilinear samples through the SSE4.1 blend and the scalar loop, byte for byte (H15d). `SOA_CC=clang-cl` builds it with that profile, which passes with the NDK's clang-cl since L2a |
@@ -196,7 +196,7 @@ Each takes `--cc clang-cl` (portability L3a) to build with the clang-cl profile
 instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
 compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
 Since L2a all three pass under the NDK's clang-cl 19.0.1: `compile_runtime.py
---cc clang-cl` compiles 28 of 28 (until then `gxr_tev.c` failed with clang's
+--cc clang-cl` compiles every file, 29 of 29 since L7's `plat.c` (until then `gxr_tev.c` failed with clang's
 SSE4.1 always_inline error, portability.md 2.2's). CI runs all three that way
 on every push, in the clang-cl job (L4a, section 7), which is what reports the
 day a runtime change compiles under MSVC and not under clang.
@@ -214,7 +214,7 @@ ok   aram.c
 ...
 ok   window.c
 
-compiled 28/28 runtime translation units
+compiled 29/29 runtime translation units
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -272,6 +272,22 @@ The frame hash is printed and *not* asserted: `ceilf`/`floorf` at a span
 boundary is where two MSVC versions could legitimately differ, and nobody has
 run two.
 
+**`threads_check.py`** — 2.7 s (L7). Builds `runtime/threads.c` and
+`runtime/plat.c` with `tools/citest/threads_driver.c`, and parks and resumes a
+guest thread twice the way the recompiler wraps SelectThread's `OSSaveContext`,
+on the stack `plat_run_on_big_stack` gives the guest. On Linux it also reads
+that thread's stack size back, which must be `main.c`'s `GUEST_STACK_BYTES`;
+the script holds that to `recompile.py`'s `/STACK` before it builds. Under gcc:
+
+```
+[threads_check] the guest's stack: 33554432 bytes, asked for 33554432
+[threads_check] ok: two same-stack OSSaveContext/OSLoadContext round trips
+[threads] 1 guest threads seen; 2 context saves, 2 resumes, 0 fiber switches
+```
+
+On Windows the stack line says the main thread's is sized by the link. CI runs
+it on the three Linux legs, which are where the resume used to exit 6.
+
 ### One check on the built binary that still needs no disc
 
 ```
@@ -287,7 +303,10 @@ gen\soa.exe nodisc
 
 That is the MEM1 out-of-range tripwire firing on purpose, before anything opens
 the disc. It proves the `PAGE_NOACCESS` reservation and the vectored exception
-handler are both in place in this binary. The run then exits 1 with
+handler are both in place in this binary (both `runtime/plat.c`'s since L7;
+off Windows they are an `mmap(PROT_NONE)` reservation and a SIGSEGV handler,
+which CI's Linux legs fire through `test_memguard.py`). The run then exits 1
+with
 
 ```
 cannot open nodisc/sys/main.dol
@@ -1151,6 +1170,7 @@ perfectly the whole time.
 | `citest/compile_runtime.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/dc_check.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/render_check.py` | no | yes | no | no | no | **yes**, Windows |
+| `citest/threads_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Linux and Linux ARM64 |
 | `SOA_MEMPOKE` tripwire | no | — | no | **yes** | no | no |
 | `recompile.py --compile --link` | **yes** | yes | no | — | no | no |
 | `SOA_SELFTEST=1` | **yes** | — | no | **yes** | no | no |
@@ -1175,9 +1195,9 @@ Nine job runs on every push and pull request:
 | **Tests** | ubuntu | `pytest`, `ruff check`, `ruff format --check` — 723 passed, 383 skipped at 4441a80 |
 | **Tests** | windows | the same three — 1102 passed, 4 skipped at 4441a80; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
-| **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b) |
+| **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b); then `test_memguard.py` under `noskip` with `SOA_CC` set, and `threads_check.py`: `plat.c`'s SIGSEGV guard and the guest's 32 MB stack (L7) |
 | **ThreadSanitizer (render queue)** | ubuntu | clang `-fsanitize=thread`: `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4`, every race reported and any failing the run, no suppression (L8) |
-| **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8) |
+| **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8); and L7's two steps, where the guard learns a fault was a store from the ESR record in the signal frame |
 | **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

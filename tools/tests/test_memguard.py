@@ -13,7 +13,9 @@ The second builds the real boot path out of ``runtime/main.c`` plus stubs
 synthesised here and runs it, to see that an address up there is reported once
 and that the run carries on afterwards. It needs a compiler, so it skips where
 there is none, and it needs no disc: ``SOA_MEMPOKE`` is handled before the
-first file is opened.
+first file is opened. ``SOA_CC`` picks the toolchain profile: CI's Linux leg
+runs this module with ``SOA_CC=gcc`` (portability L7), where the guard is
+``runtime/plat.c``'s SIGSEGV handler rather than a vectored one.
 """
 
 import os
@@ -122,7 +124,7 @@ def defines(path, names, known=None):
     for name in names:
         match = re.search(rf"^#define\s+{name}\s+([^\n]*)", text, re.M)
         assert match, f"{path} no longer defines {name}"
-        expr = match.group(1).split("/*")[0].replace("(SIZE_T)", "").strip()
+        expr = re.sub(r"\((?:SIZE_T|size_t)\)", "", match.group(1).split("/*")[0]).strip()
         expr = re.sub(r"(?<=[0-9A-Fa-f])[uU]\b", "", expr)
         out[name] = eval(expr, {"__builtins__": {}}, dict(out))  # noqa: S307
     return out
@@ -164,12 +166,20 @@ def test_the_boot_path_allocates_the_image_and_not_the_ram():
         assert d["MEM_RESERVE_BYTES"] >= d["MEM_IMAGE_SIZE"]
 
 
+# Nine other modules skip on this, for builds of their own that only MSVC
+# makes; test_peek, test_poke and test_uncap also use build() below, which with
+# SOA_CC unset is MSVC.
 needs_msvc = pytest.mark.skipif(
     toolchain.cl_path() is None, reason="no MSVC: the boot path cannot be built here"
 )
+PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
+needs_cc = pytest.mark.skipif(
+    toolchain.compiler_path(PROFILE) is None,
+    reason=f"no {PROFILE.name}: the boot path cannot be built here",
+)
 
 
-@needs_msvc
+@needs_cc
 def test_an_address_past_the_ram_is_reported_once_and_survived(tmp_path):
     """Four stores past the end of the RAM, one of them through the uncached
     alias and one straddling the boundary, produce one message between them --
@@ -182,7 +192,7 @@ def test_an_address_past_the_ram_is_reported_once_and_survived(tmp_path):
     assert out.count("reads back DEADBEEF") == 4, out
 
 
-@needs_msvc
+@needs_cc
 def test_an_address_in_the_ram_says_nothing(tmp_path):
     """The tripwire is only worth having if it is quiet in a working run."""
     exe = build(tmp_path)
@@ -191,22 +201,32 @@ def test_an_address_in_the_ram_says_nothing(tmp_path):
 
 
 def build(tmp_path):
+    """Compile, then link: two steps, because cl's compile-and-link with
+    /Fo<dir> has no gcc spelling."""
     (tmp_path / "stubs.c").write_text(STUBS)
-    exe = tmp_path / "boot.exe"
-    proc = toolchain.cl(
+    runtime = ROOT / "runtime"
+    sources = [
+        *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c")),
+        *toolchain.runtime_support_sources(),
+        tmp_path / "stubs.c",
+    ]
+    proc = toolchain.cc(
         [
-            *toolchain.CFLAGS,
+            *PROFILE.cflags,
+            "/c",
             "/I",
-            str(ROOT / "runtime"),
-            str(ROOT / "runtime" / "main.c"),
-            str(ROOT / "runtime" / "mod.c"),
-            str(ROOT / "runtime" / "tick.c"),
-            str(ROOT / "runtime" / "picture.c"),
-            str(tmp_path / "stubs.c"),
+            str(runtime),
+            *map(str, sources),
             "/Fo" + str(tmp_path) + os.sep,
-            "/Fe" + str(exe),
         ],
-        cwd=tmp_path,
+        tmp_path,
+        PROFILE,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    exe = tmp_path / ("boot" + PROFILE.exeext)
+    objs = [str(tmp_path / (s.stem + PROFILE.objext)) for s in sources]
+    proc = toolchain.cc(
+        [*PROFILE.cflags, *objs, "/Fe" + str(exe), *PROFILE.linker], tmp_path, PROFILE
     )
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
     return exe

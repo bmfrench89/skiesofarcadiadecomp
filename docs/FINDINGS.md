@@ -4535,3 +4535,69 @@ Desktop (D-13, the owner's answer), and it passes all three checks.
   the Deck's refresh rate or its speed. That is the owner's optional Proton
   session, which needs a Deck or a Linux PC (portability Q1's second half,
   still open).
+
+**L7: the POSIX layer's first part: the guard, the guest's stack, a thread's
+resume.** 2026-10-02. Off Windows the MEM1 tripwire now reports and survives
+a store past the RAM, the guest runs on a 32 MB stack, and a guest thread that
+loads its own context resumes rather than ending the run. CI's three Linux
+legs run all three on every push.
+
+- **What moved.** `runtime/plat.c` is new: the cold half of 3.3.
+  - `plat_reserve`, `plat_commit`, `plat_release` and `plat_last_error` wrap
+    VirtualAlloc, or `mmap(PROT_NONE)` and `mprotect`.
+  - `plat_guard_install` is a vectored handler on Windows. Elsewhere it is
+    `sigaction(SIGSEGV, SA_SIGINFO | SA_ONSTACK)` on a `sigaltstack`, chaining
+    to the previous handler for any fault outside the range.
+  - `plat_run_on_big_stack` calls `fn` on Windows. Elsewhere it runs `fn` on a
+    pthread with that stack and joins it.
+- **`main.c`.**
+  - The guard's report is a callback, `mem_fault`, with the same text.
+  - The watchdog runs on `plat_thread_start` and `plat_mono_ns` on every
+    platform and ends with `_Exit(5)`.
+  - Block naming leaves the Windows block, because both reports use it. The
+    sampler stays Windows-only, with its stubs.
+  - The guest starts through `plat_run_on_big_stack(32 MB)`. Off Windows that
+    makes it a new thread, which then claims the guard (`plat_guard_owner`,
+    added to 3.3's list for this).
+- **Elsewhere.** `threads.c`'s same-fiber resume moved above its `#ifdef`, and
+  a second guest thread off Windows still exits 6, now saying "a second guest
+  thread is Windows-only". `irq.c` yields through `plat_yield` and no longer
+  includes `<windows.h>`. By the orient skill's measure, the runtime files
+  outside the platform layer that touch Win32 go from 16 to 15.
+- **On Linux** (branch `l7-posix`, run 37056700247, every job green):
+  - The gcc, clang and ARM64 legs each pass `test_memguard.py` (4 passed,
+    with `noskip`) and `threads_check.py`.
+  - `threads_check.py` reads the guest's stack back as 33554432 bytes on each
+    leg.
+  - On ARM64, "a store" can come only from the ESR record in the signal
+    frame: without the record the report says "an access" and the test
+    fails. This was that path's first run.
+- **The mutations, seen red.** On `l7-mutation` (run 37056702939), threads.c's
+  move was reverted. `threads_check` failed on all three Linux legs with
+  "[threads] OSLoadContext(80300000): a second guest thread is Windows-only"
+  and exit 6; every other step was green. Locally, under gcc 14.2 in a
+  throwaway container, each of these failed its check, and the unmutated tree
+  passed both:
+  - a guard that never calls back failed `test_memguard`;
+  - `fault_storing` returning -1 failed it, because the report says "an
+    access";
+  - the default stack failed `threads_check` (8388608 bytes).
+- **Checks on Windows, both builds** (`gen/soa.exe` and `gen/clang/soa.exe`):
+  - `compile_runtime.py`: 29/29 under MSVC and the NDK's clang-cl, with no new
+    diagnostic.
+  - `--link` without a warning; the self test, 0 failures; `replay --threads
+    1,2,3,8`, 23/23; `title --check`, 4 of 4.
+  - The watchdog, fired by `SOA_STALL=60:5` with `SOA_WATCHDOG=2`, exits 5 at
+    6-7 s.
+  - `SOA_MEMPOKE=0x81800000 gen\soa.exe nodisc` prints TESTING.md's text
+    unchanged.
+  - pytest: 246 passed over `test_memguard` and the nine modules that import
+    it, and 1131 passed, 2 skipped over everything.
+- **Fixed before the commit:** `plat_mono_ns` cached its tick ratio in a
+  static set on first use. That is a race the day a second thread calls it,
+  so it now divides every call; the watchdog check and the self test were run
+  again on both builds.
+- **What it does not show:**
+  - the port itself running off Windows, which needs L9, L10 and a window;
+  - a second guest thread off Windows: every log so far has one (risk 18,
+    Q9).

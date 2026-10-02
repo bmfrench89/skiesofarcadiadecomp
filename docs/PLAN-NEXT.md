@@ -576,7 +576,8 @@ count kept before it starts.
 **M4b pays only once a non-Windows build is a goal:**
 - **L6:** renderer determinism, `plat_f2i`, and CORE-MATH `exp2f`/`log2f`. It changes Windows
   arithmetic too.
-- **L7:** the POSIX layer's first part.
+- **L7:** the POSIX layer's first part. **Done** 2026-10-02 (FINDINGS "L7"): green on
+  `l7-posix`, the mutation red on `l7-mutation`.
 - **L9:** its second part, after M1's and M3's files have settled.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This

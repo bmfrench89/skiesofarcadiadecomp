@@ -420,7 +420,9 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L1**
+stretch, newest first, each with a FINDINGS entry of its name: **L7**
+("L7": `plat.c`'s cold half; the MEM1 guard and the guest's 32 MB stack
+off Windows, run by CI's three Linux legs); **L1**
 ("Wine": the port under Wine 10.0, all three checks); **L3b**
 ("clang-cl": the game under a second compiler, 23/23); **L8** (the
 queue on ARM64 and under TSAN; three races fixed); **L4b** (CI's
@@ -440,15 +442,17 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L1):** C5c (9ccef87), L2
-(dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a), L3b (5783358) and L1 (with
-this section) are pushed; read CI for the last. The owner plays
+**The state at the stop (2026-10-02, after L7):** C5c (9ccef87), L2
+(dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a), L3b (5783358), L1
+(56ecb9a) and L7 (with this section) are pushed; read CI for the last. The owner plays
 `gen/clang/soa.exe` (D-15); MSVC stays the tools' default and the build that
 pins the hashes. Docker Desktop is stopped; the `soa-wine:l1` image, with no
-game data, is kept for the next Wine run. `gen/soa.exe` (MSVC) and
-`gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L3b and both draw
+game data, is kept for the next Wine run; L7's local gcc runs used
+throwaway `python:3.14-slim` containers and kept nothing. `gen/soa.exe` (MSVC) and
+`gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L7 and both draw
 the 23 frames identically. The branches
-`l4b-linux`, `l4b-mutation`, `l8-tsan-arm` and `l8-mutation` stay on origin,
+`l4b-linux`, `l4b-mutation`, `l8-tsan-arm`, `l8-mutation`, `l7-posix` and
+`l7-mutation` stay on origin,
 as L4a's do, because FINDINGS links their runs. Nothing is running.
 `build/fifo` is the **new** corpus, 23 captures with `PROVENANCE.tsv` (the
 run and frame each came from); the old one is `build/fifo-pre-c5/`, intact,
@@ -496,10 +500,17 @@ C5c) is now done.
    pooled. **L1 is done** (FINDINGS "Wine"): under Wine 10.0 in a container
    the self test, replay 23/23 and `title --check` pass, run from a copy of
    the exe because Wine faults on it straight off the Windows share. That
-   ends M4a. **M4b is next: L7** (the cold half of `plat.c`: memory
-   reservation and the fault guard, the big-stack runner, threads.c's
-   needs), then L9 and L6 (portability.md). Read the slice against HEAD
-   before any code. Still open for the owner, and not blocking: whether a
+   ends M4a. **L7 is done** (FINDINGS "L7"): `runtime/plat.c` holds the
+   cold half. Off Windows the MEM1 guard is a SIGSEGV handler and the
+   guest runs on a 32 MB thread, and CI's gcc, clang and ARM64 legs run
+   `test_memguard.py` and `tools/citest/threads_check.py` on every push.
+   **Before the next slice, two answers are the owner's:**
+   - L9's spec wants I1 and I3 (M3, the disc layer) landed in its files
+     first, though section 0 orders L9 next. I3 also waits on D-5.
+   - L6 waits on B5: vendor CORE-MATH's `exp2f`/`log2f` (MIT), or write
+     the pair by hand.
+   PLAN-NEXT section 0 holds the answers once given. Read the slice against
+   HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

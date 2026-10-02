@@ -552,6 +552,7 @@ int   plat_commit(void* p, size_t bytes);         /* VirtualAlloc(MEM_COMMIT) / 
 void  plat_release(void* p, size_t bytes);
 typedef int (*PlatFaultFn)(size_t off, int storing, int on_owner_thread); /* 1 = committed, retry */
 int   plat_guard_install(void* base, size_t lo, size_t hi, PlatFaultFn fn); /* VEH / sigaction(SIGSEGV) */
+void  plat_guard_owner(void);                    /* the calling thread is the guest's (added in L7) */
 unsigned long plat_last_error(void);              /* GetLastError / errno */
 int   plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes); /* POSIX: pthread with that stack; Windows: calls fn */
 ```
@@ -1513,6 +1514,18 @@ self-test and test counts in every copy.*
 - The self test passes, and so does `python tools/scenario.py run title --check`.
 
 ### L7. POSIX layer, part 1: threads, the guarded tail, the guest stack
+
+*Landed 2026-10-02 (FINDINGS "L7"). The differences from what follows:*
+- *`plat_guard_owner`, which 3.3 did not list, names the guest's thread to the guard. Off Windows
+  that is not the thread that installs it.*
+- *`plat_mono_ns` joins `plat.h`. `irq.c` loses `<windows.h>` with its one `Sleep`, and `main.c`'s
+  `SOA_STALL` sleep goes through `plat_sleep_ms` too.*
+- *Block naming leaves `main.c`'s Windows block, because the guard's report and the watchdog's
+  both use it.*
+- *`threads_check` also holds `GUEST_STACK_BYTES` to `recompile.py`'s `/STACK`.*
+- *The ARM64 leg runs both checks as well: AArch64's store bit comes from a different path in
+  `plat.c`.*
+- *`test_memguard.py` keeps `needs_msvc` for the nine modules that import it.*
 
 *Several days. `--link`. Prerequisites: L2 and L4b. `main.c` is coordinated with P1a, I1 and M5b: L7
 edits only the memory guard (:541-651), the watchdog (:465-536) and the start of the guest. Files:*

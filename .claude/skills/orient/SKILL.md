@@ -64,8 +64,8 @@ Nothing runs off Windows today. Don't make that harder:
 
 - **Does it compile under clang?** Run check step 5d. Android's compiler is
   clang, and code that only MSVC accepts counts as a regression.
-- **Is it a new Win32 call outside the platform layer?** 16 runtime files
-  already call Windows directly. New platform needs go through
+- **Is it a new Win32 call outside the platform layer?** 15 runtime files
+  already call Windows directly (16 before L7 moved `irq.c` off it). New platform needs go through
   `runtime/plat.h` (portability.md 3.2).
 - **Does it assume x86-64?**
   - SIMD goes behind `PLAT_X86_64` with a scalar path.

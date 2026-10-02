@@ -329,6 +329,41 @@ static inline int plat_cycles_invariant(void)
 #endif
 }
 
+/* Monotonic nanoseconds, for the watchdog (L7). No cached ratio: a static
+ * set on first use would be a race the day a second thread calls this, and
+ * QueryPerformanceFrequency only reads a value the kernel fixed at boot. */
+static inline uint64_t plat_mono_ns(void)
+{
+#ifdef _WIN32
+    return (uint64_t)((double)plat_mono_raw() * (1e9 / plat_mono_hz()));
+#else
+    return plat_mono_raw();
+#endif
+}
+
+/* ---- the cold half, in plat.c (L7) ---------------------------------------
+ * What only main.c and the device files need of an operating system, and the
+ * renderer never: declared here, defined in plat.c, so render_check.py's
+ * renderer-only build still links without it.
+ *
+ * plat_reserve maps address space nobody can touch (VirtualAlloc MEM_RESERVE
+ * / mmap PROT_NONE); plat_commit makes part of it zeroed read-write memory.
+ * plat_guard_install calls fn for a fault at base + [lo, hi): fn gets the
+ * offset, whether it was a store (-1 where the platform cannot say), and
+ * whether the faulting thread is the guard's owner -- the installer, until
+ * plat_guard_owner names another; fn returns 1 when it has made the range
+ * accessible and the access should run again. plat_run_on_big_stack runs fn
+ * on a stack of `bytes`: on Windows it just calls fn, the /STACK link having
+ * sized the main thread already. */
+typedef int (*PlatFaultFn)(size_t off, int storing, int on_owner_thread);
+void* plat_reserve(size_t bytes);
+int plat_commit(void* p, size_t bytes);
+void plat_release(void* p, size_t bytes);
+int plat_guard_install(void* base, size_t lo, size_t hi, PlatFaultFn fn);
+void plat_guard_owner(void);
+unsigned long plat_last_error(void);
+int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes);
+
 /* ---- threads (L2) --------------------------------------------------------
  * plat_thread_start runs fn(arg) on a new thread and returns 1, or 0 if none
  * could be made; stack_bytes 0 is the platform's default. PlatThread.os is

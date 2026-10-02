@@ -363,5 +363,8 @@ def test_compile_runtime_s_strict_set_is_the_profile_s():
     assert compile_runtime.STRICT == MSVC_STRICT
 
 
-def test_the_runtime_support_sources_are_none_before_l7():
-    assert toolchain.runtime_support_sources() == []
+def test_the_runtime_support_sources_are_plat_c():
+    """L7's cold half, which main.c calls and every test that links main.c
+    needs beside it; the link of soa.exe globs it with the rest of runtime/."""
+    assert toolchain.runtime_support_sources() == [RUNTIME / "plat.c"]
+    assert (RUNTIME / "plat.c").is_file()
