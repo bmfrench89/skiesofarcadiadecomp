@@ -13,6 +13,14 @@ pipeline, the device models, the audio mixer, the analysis and disc tooling,
 and the test machinery. It is original work, it is reusable — someone porting
 a different GameCube title could build on it — and MIT is meant to let them.
 
+## Code from elsewhere
+
+`runtime/crmath.h` holds CORE-MATH's correctly rounded binary32 `exp2f` and
+`log2f` (https://core-math.gitlabpages.inria.fr/, commit 8ea8ea35 of
+2026-02-21), copyright Alexei Sibidanov and published under the MIT licence,
+which the file reproduces above each function. The top of the file lists
+every change made to them.
+
 ## Not covered, and not ours to licence
 
 `src/` contains C written to reproduce the original program's compiled output
