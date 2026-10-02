@@ -685,7 +685,7 @@ def main() -> int:
     threads = [t.strip() for t in args.threads.split(",") if t.strip()]
     if "1" not in threads:
         threads.insert(0, "1")
-    out = args.out or ROOT / "build" / "citest" / f"queue-{prof.name}"
+    out = (args.out or ROOT / "build" / "citest" / f"queue-{prof.name}").resolve()
     cc = toolchain.compiler_path(prof)
     if cc is None:
         print(f"::error::no {prof.name} compiler (tools/soa/toolchain.py compiler_path)")
