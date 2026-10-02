@@ -420,7 +420,8 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L4b** (CI's
+stretch, newest first, each with a FINDINGS entry of its name: **L8** (the
+queue on ARM64 and under TSAN; three races fixed); **L4b** (CI's
 Linux leg under gcc and clang; the native units' 32-bit words); **L2** (two
 commits: the queue's seq_cst helpers and the grep test, then the renderer
 building for Android); **C5c** (the corpus re-captured, matched to its old
@@ -437,11 +438,11 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L4b):** C5c (9ccef87), L2
-(dd87a59, b736cb0) and L4b (with this section) are pushed; read CI for the
-last. `gen/soa.exe` is linked with L4b's twins. The branches `l4b-linux` and
-`l4b-mutation` stay on origin, as L4a's do, because FINDINGS "L4b" links
-their runs. Nothing is running.
+**The state at the stop (2026-10-02, after L8):** C5c (9ccef87), L2
+(dd87a59, b736cb0), L4b (a2c7c21) and L8 (with this section) are pushed;
+read CI for the last. `gen/soa.exe` is linked with L8. The branches
+`l4b-linux`, `l4b-mutation`, `l8-tsan-arm` and `l8-mutation` stay on origin,
+as L4a's do, because FINDINGS links their runs. Nothing is running.
 `build/fifo` is the **new** corpus, 23 captures with `PROVENANCE.tsv` (the
 run and frame each came from); the old one is `build/fifo-pre-c5/`, intact,
 and is as irreplaceable as `build/fifo` was. C5c's scratch captures are
@@ -476,14 +477,18 @@ C5c) is now done.
      speak for a late frame.
 2. **The Android path,** in PLAN-NEXT §0's order: M4a (~~L2~~, L4b, L8, L3b,
    L1), M4b (L7, L9, L6), then M5 (the GPU spike and the gate), then V5+ and
-   the Android shell. **L2 and L4b are done** (FINDINGS "L2, step 1", "L2,
-   step 2", "L4b"): `plat.h` holds the atomics, waits, clocks and threads;
-   `runtime/*.c` and all of `gen/*.c` compile for Android with 0 errors; and
-   CI's `linux` job runs the citest checks under gcc and clang, the POSIX
-   pool with four workers among them, its frame hash equal to Windows'.
-   **L8 is next:** CI on ARM64 and ThreadSanitizer, after fixing the
-   `g_notex` and `WARN_ONCE` races (portability.md L8; several days). Read
-   the slice against HEAD before any code. Two
+   the Android shell. **L2, L4b and L8 are done** (FINDINGS "L2, step 1",
+   "L2, step 2", "L4b", "L8"): `plat.h` holds the atomics, waits, clocks and
+   threads; `runtime/*.c` and all of `gen/*.c` compile for Android with 0
+   errors; CI runs the citest checks under gcc and clang, on ARM64, and the
+   queue under ThreadSanitizer with no race and no suppression; and the
+   four-worker frame hash is the same on Windows, x86-64 Linux and ARM64.
+   **L3b is next:** the clang-cl game build (one retranslation into
+   `gen/clang`, MSVC's build untouched), with the self test, the replay and
+   `title --check` against the MSVC manifest, and its speed measured
+   (portability.md L3b; a day to several days). Read the slice against HEAD
+   before any code. `tools/citest/queue_check.py` (16 s) is worth a run
+   after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
    base, after taking the base listing before any edit; and read a whole
    compile's output, not its tail (L2's first commit shipped two C4273

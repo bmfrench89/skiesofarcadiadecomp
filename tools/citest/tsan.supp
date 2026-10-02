@@ -1,0 +1,3 @@
+# ThreadSanitizer suppressions for the tsan job in .github/workflows/ci.yml.
+# One line each, and each names its FINDINGS entry; portability.md L8 allows
+# at most two, and the target is none.

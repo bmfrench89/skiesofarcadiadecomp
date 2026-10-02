@@ -267,3 +267,77 @@ jobs:
       - name: Renderer pixel checks, four workers (the POSIX pool)
         if: ${{ !cancelled() }}
         run: python tools/citest/render_check.py --cc ${{ matrix.cc }} --threads 4
+
+  # ThreadSanitizer over the render queue (portability.md L8): clang's
+  # -fsanitize=thread on render_check at four workers and on queue_check's
+  # whole sweep -- every thread count to four, with each stall kind. Every
+  # race in a run is reported (halt_on_error=0), and any makes the driver exit
+  # non-zero at the end, so the step fails. The
+  # renderer's shared counters go through plat.h's seq_cst helpers, which
+  # TSAN understands; what it can find is a plain access no helper covers.
+  # tools/citest/tsan.supp holds any suppression, each naming its FINDINGS
+  # reason. The sysctl: TSAN's memory layout needs fewer random mmap bits
+  # than recent Ubuntu runner kernels use, or it dies before main.
+  #
+  # NOT COVERED: anything outside the renderer -- the device models and the
+  # guest threads (threads.c) are not built here.
+  tsan:
+    name: ThreadSanitizer (render queue)
+    runs-on: ubuntu-latest
+    env:
+      TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1 suppressions=${{ github.workspace }}/tools/citest/tsan.supp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Room for TSAN's shadow memory
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: The compiler the checks use
+        run: clang --version
+
+      - name: Renderer pixel checks, four workers, under TSAN
+        if: ${{ !cancelled() }}
+        run: python tools/citest/render_check.py --cc clang --threads 4 --cflag=-fsanitize=thread --cflag=-g --out build/citest/render-tsan
+
+      - name: The queue against the one-worker run, under TSAN
+        if: ${{ !cancelled() }}
+        run: python tools/citest/queue_check.py --cc clang --threads 1,2,3,4 --cflag=-fsanitize=thread --cflag=-g --out build/citest/queue-tsan
+
+  # The same checks on ARM64 (portability.md L8): ubuntu-24.04-arm with gcc.
+  # x86 orders every load against every earlier one, so a load the queue
+  # forgot to order is right there by luck; here it can be wrong, and
+  # queue_check holds every thread count and stall to the one-worker run.
+  # One run on four cores may still miss a race, which is why the tsan job,
+  # not this one, is the oracle for ordering. The windows-11-arm leg the spec
+  # once planned is not here: Windows on ARM is outside the owner's targets
+  # (PLAN-NEXT section 0).
+  arm64-linux:
+    name: Runtime compiles (Linux ARM64, gcc)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: The compiler the checks use
+        run: gcc --version && uname -m
+
+      - name: Compile every runtime/*.c
+        if: ${{ !cancelled() }}
+        run: python tools/citest/compile_runtime.py --cc gcc
+
+      - name: Decompiled MSL routines against the host C library
+        if: ${{ !cancelled() }}
+        run: python tools/citest/dc_check.py --cc gcc
+
+      - name: Renderer pixel checks, four workers
+        if: ${{ !cancelled() }}
+        run: python tools/citest/render_check.py --cc gcc --threads 4
+
+      - name: The queue against the one-worker run
+        if: ${{ !cancelled() }}
+        run: python tools/citest/queue_check.py --cc gcc --threads 1,2,3,4

@@ -1,6 +1,7 @@
 """Build the renderer on its own and run its two pixel checks.
 
-    python tools/citest/render_check.py [--cc PROFILE] [--threads N] [--out build/citest/render]
+    python tools/citest/render_check.py [--cc PROFILE] [--threads N] [--cflag FLAG]...
+                                        [--out build/citest/render]
 
 runtime/selftest.c draws a full-screen quad and the title screen's cloud
 triangle through the real GX front end and counts what comes out, but it can
@@ -55,6 +56,9 @@ def main() -> int:
         "--cc", choices=tuple(toolchain.PROFILES), default="msvc", help="the toolchain profile"
     )
     ap.add_argument("--threads", type=int, default=1, help="worker threads (SOA_THREADS)")
+    ap.add_argument(
+        "--cflag", action="append", default=[], help="added to every compile and link (L8: TSAN)"
+    )
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
     global PROF
@@ -74,7 +78,7 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     if not run_cl(
         "compiling the renderer",
-        [*PROF.cflags, "/c", f"/I{RUNTIME}", f"/Fo{args.out}/", *map(str, SOURCES)],
+        [*PROF.cflags, *args.cflag, "/c", f"/I{RUNTIME}", f"/Fo{args.out}/", *map(str, SOURCES)],
     ):
         return 1
     exe = args.out / f"render_check{PROF.exeext}"
@@ -82,7 +86,8 @@ def main() -> int:
     # same directory cannot slip into the link.
     objs = [args.out / (s.stem + PROF.objext) for s in SOURCES]
     if not run_cl(
-        "linking the renderer", [*PROF.cflags, *map(str, objs), f"/Fe:{exe}", *PROF.linker]
+        "linking the renderer",
+        [*PROF.cflags, *args.cflag, *map(str, objs), f"/Fe:{exe}", *PROF.linker],
     ):
         return 1
 

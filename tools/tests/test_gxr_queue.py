@@ -42,152 +42,15 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from soa import toolchain  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tools" / "citest"))
+# One copy of the driver, which tools/citest/queue_check.py also builds under
+# other compilers and on ARM64 (portability.md L8).
+from queue_check import QUEUE_DRIVER as DRIVER  # noqa: E402
+from queue_check import QUEUE_SOURCES as SOURCES  # noqa: E402
+from queue_check import QUEUE_THREAD_COUNTS as THREAD_COUNTS  # noqa: E402
+
 RUNTIME = ROOT / "runtime"
-SOURCES = ["gx.c", "gxr.c", "gxr_tev.c", "png.c"]
 GXR = (RUNTIME / "gxr.c").read_text(encoding="utf-8")
-
-# The stream drives the flush in every shape the queue has: a copy to memory
-# followed by a draw sampling that destination (the flush that fires from
-# inside tev_prepare with a draw half built), GXDrawDone, the screen copy, and
-# gxr_reset_efb between captures. Positions and colours move with the frame so
-# a frame drawn out of order, twice, or not at all does not hash the same as
-# the one before it.
-DRIVER = r"""
-#define _CRT_SECURE_NO_WARNINGS
-#include "cpu.h"
-#include "gxr.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-uint32_t mmio_read32(CpuState* s, uint32_t ea) { (void)s; (void)ea; return 0; }
-void hle_report(void) {}
-
-static void gp8(CpuState* s, unsigned v) { gx_pipe_write(s, 1, v); }
-static void gp16(CpuState* s, unsigned v) { gx_pipe_write(s, 2, v); }
-static void gp32(CpuState* s, uint32_t v) { gx_pipe_write(s, 4, v); }
-static void gpf(CpuState* s, float f) { uint32_t u; memcpy(&u, &f, 4); gp32(s, u); }
-static void bp_w(CpuState* s, unsigned reg, uint32_t v) { gp8(s, 0x61); gp32(s, ((uint32_t)reg << 24) | (v & 0xFFFFFFu)); }
-static void cp_w(CpuState* s, unsigned reg, uint32_t v) { gp8(s, 0x08); gp8(s, reg); gp32(s, v); }
-static void xf_w(CpuState* s, unsigned addr, unsigned n, const uint32_t* w)
-{
-    unsigned i;
-    gp8(s, 0x10); gp16(s, n - 1); gp16(s, addr);
-    for (i = 0; i < n; i++) gp32(s, w[i]);
-}
-static void xf_f(CpuState* s, unsigned addr, unsigned n, const float* f)
-{
-    unsigned i;
-    gp8(s, 0x10); gp16(s, n - 1); gp16(s, addr);
-    for (i = 0; i < n; i++) gpf(s, f[i]);
-}
-static void vertex(CpuState* s, float x, float y, float z, uint32_t rgba) { gpf(s, x); gpf(s, y); gpf(s, z); gp32(s, rgba); }
-
-static void setup(CpuState* s)
-{
-    static const float viewport[6] = {320.0f, -240.0f, 16777215.0f, 662.0f, 582.0f, 16777215.0f};
-    static const float ortho[6] = {0.003125f, -0.0f, 0.004167f, -0.0f, -0.01f, -1.0f};
-    static const float view[12] = {1, 0, 0, -320, 0, -1, 0, 240, 0, 0, 1, -100};
-    static const uint32_t one = 1, matidx = 0x3CF3CF00u, chan = 0x441u, zero = 0;
-    bp_w(s, 0x59, 0x02ACABu); bp_w(s, 0x20, 0x156156u); bp_w(s, 0x21, 0x3D5335u);
-    xf_f(s, 0x101A, 6, viewport);
-    xf_f(s, 0x1020, 6, ortho); xf_w(s, 0x1026, 1, &one);
-    xf_f(s, 0x0000, 12, view);
-    cp_w(s, 0x30, matidx); xf_w(s, 0x1018, 1, &matidx);
-    xf_w(s, 0x1009, 1, &one); xf_w(s, 0x100E, 1, &chan); xf_w(s, 0x1010, 1, &chan);
-    xf_w(s, 0x103F, 1, &zero); xf_w(s, 0x1008, 1, &one);
-    bp_w(s, 0x28, 0); bp_w(s, 0xC0, 0x08AFFFu); bp_w(s, 0xC1, 0x08BFF0u); bp_w(s, 0x00, 0x000010u);
-    bp_w(s, 0xF6, 0x018064u); bp_w(s, 0xF7, 0x01806Eu); bp_w(s, 0xF8, 0x018060u); bp_w(s, 0xF9, 0x01806Cu);
-    bp_w(s, 0xFA, 0x018065u); bp_w(s, 0xFB, 0x01806Du); bp_w(s, 0xFC, 0x01806Au); bp_w(s, 0xFD, 0x01806Eu);
-    bp_w(s, 0x40, 0x17); bp_w(s, 0x41, 0x18); bp_w(s, 0xF3, 0x3F0000u); bp_w(s, 0x43, 0x40);
-    cp_w(s, 0x50, 0x2200); cp_w(s, 0x60, 0); cp_w(s, 0x70, 0x41377009u); cp_w(s, 0x80, 0xC8241209u); cp_w(s, 0x90, 0x04824120u);
-    bp_w(s, 0x4E, 0x000100u);
-}
-
-/* Stage 0 samples map 0 and passes the rasterized colour through, so every
- * draw decodes a texture the next flush frees without the texels reaching a
- * pixel: the picture says which draws ran, not what they sampled. */
-static void use_texture(CpuState* s, uint32_t addr, unsigned fmt, unsigned w, unsigned h)
-{
-    bp_w(s, 0x80, 0); bp_w(s, 0x84, 0);
-    bp_w(s, 0x88, ((fmt & 15) << 20) | ((h - 1) << 10) | (w - 1));
-    bp_w(s, 0x94, (addr >> 5) & 0x1FFFFFu);
-    bp_w(s, 0x98, 0);
-    bp_w(s, 0x30, w - 1); bp_w(s, 0x31, h - 1);
-    bp_w(s, 0x28, 0x40);
-}
-
-static void quad(CpuState* s, float x0, float y0, float x1, float y1, uint32_t rgba)
-{
-    gp8(s, 0x80); gp16(s, 4);
-    vertex(s, x0, y0, 50.0f, rgba); vertex(s, x1, y0, 50.0f, rgba);
-    vertex(s, x1, y1, 50.0f, rgba); vertex(s, x0, y1, 50.0f, rgba);
-}
-
-static void copy_to_memory(CpuState* s, uint32_t dest, unsigned w, unsigned h)
-{
-    bp_w(s, 0x49, 0);
-    bp_w(s, 0x4A, ((h - 1) << 10) | (w - 1));
-    bp_w(s, 0x4D, 0x28);
-    bp_w(s, 0x4B, (dest >> 5) & 0x1FFFFFu);
-    bp_w(s, 0x52, 0x000043u);
-}
-
-static void present(CpuState* s)
-{
-    bp_w(s, 0x49, 0); bp_w(s, 0x4A, 0x077E7F); bp_w(s, 0x4D, 0x28);
-    bp_w(s, 0x4B, (0x81100000u & 0x1FFFFFFFu) >> 5);
-    bp_w(s, 0x52, 0x4003);
-    gxr_flush();
-}
-
-#define CAPTURES 2
-#define FRAMES 5
-
-int main(void)
-{
-    static CpuState s;
-    int cap, f, i;
-    s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
-    if (!s.mem) return 2;
-    _putenv("SOA_RENDER=1");
-    _putenv("SOA_SNAP=");
-    _putenv("SOA_GXR_DRAWS=");
-    if (!gxr_enabled()) return 3;
-
-    for (cap = 0; cap < CAPTURES; cap++) {
-        gxr_reset_efb(); /* a replay renders several captures in one process */
-        setup(&s);
-        for (f = 0; f < FRAMES; f++) {
-            for (i = 0; i < 40; i++) {
-                float x = (float)(8 + (i * 13 + f * 7) % 560), y = (float)(8 + (i * 29 + f * 11) % 400);
-                uint32_t col = ((uint32_t)((i * 7 + f * 5) & 0xFF) << 24) | ((uint32_t)((i * 31 + f * 3) & 0xFF) << 16) |
-                               ((uint32_t)((f * 9 + i) & 0xFF) << 8) | 0xFFu;
-                use_texture(&s, 0x00400000u + (uint32_t)((cap * 997 + f * 61 + i) * 512), 9, 16, 16);
-                quad(&s, x, y, x + 60.0f, y + 40.0f, col);
-                if ((i & 3) == 3) {
-                    /* The draw after this copy samples what the copy has not
-                     * written yet, so tev_prepare flushes with the draw half
-                     * built. A 16x16 texture inside the 32x32 copy: the copy's
-                     * own texture would be its image, which a draw samples in
-                     * the pool without waiting (FINDINGS "Copy images"). */
-                    copy_to_memory(&s, 0x00300000u + (uint32_t)(i * 4096), 32, 32);
-                    use_texture(&s, 0x00300000u + (uint32_t)(i * 4096), 4, 16, 16);
-                    quad(&s, (float)(100 + i + f), (float)(60 + i), (float)(140 + i + f), (float)(100 + i), 0x00FF00FFu);
-                }
-                if ((i % 17) == 16) bp_w(&s, 0x45, 2); /* GXDrawDone: flushes */
-            }
-            present(&s);
-            printf("[queue] cap %d frame %d hash %016llx\n", cap, f, (unsigned long long)gxr_screen_hash());
-        }
-    }
-    gxr_report();
-    fprintf(stderr, "[queue] done\n");
-    return 0;
-}
-"""
-
-THREAD_COUNTS = ("1", "2", "3", "8")
 
 
 needs_msvc = pytest.mark.skipif(

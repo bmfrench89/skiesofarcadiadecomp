@@ -569,7 +569,7 @@ count kept before it starts.
 | 1 | **L2** `plat.h`: the queue's ordering completed (seq_cst on the four Dekker re-checks, the grep test), then the renderer builds anywhere (the POSIX pool). **Done** 2026-10-02 in two commits (FINDINGS "L2, step 1", "L2, step 2"): the NDK check is 0 errors over the runtime and the generated code | a day to several days, two commits | `--link` | L2a | — |
 | 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
 | 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N`. **Done** 2026-10-02 (FINDINGS "L4b"): green on `l4b-linux`, the mutations red on `l4b-mutation` | several days | `--link`, `decomp.py` | L2, L3a | — |
-| 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races | several days | `--link` | L2, L4b | — |
+| 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races. **Done** 2026-10-02 (FINDINGS "L8"): TSAN clean with no suppression after a third race it found was fixed; ARM64 Linux green; the Windows-on-ARM leg dropped, per §0 | several days | `--link` | L2, L4b | — |
 | 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
 | 6 | **L1** Wine smoke test in a container (checkout and `extracted/` mounted read-only, a scratch volume over `build/`) | hours | none | **D-13**; the machine free | optional Proton session on a Deck |
 
@@ -794,7 +794,7 @@ until you say otherwise.
 | Who owns the on-device ISO importer | disc impl 8 | open |
 | B1: `g_screen`'s single buffer | portability | before L8's windowed TSAN, or with H17b |
 | B3: which retranslation L5 rides | portability | the first planned one |
-| B4: the windows-11-arm image | portability | checked at L8's start |
+| B4: the windows-11-arm image | portability | moot: Windows on ARM is outside §0's targets, so L8 has no such leg |
 | B5: CORE-MATH or hand-written | portability | open |
 | B6: `scenario.py --wrap` or a separate script | portability | open |
 | B7: measuring clang-cl's call cost | portability | in L3b |

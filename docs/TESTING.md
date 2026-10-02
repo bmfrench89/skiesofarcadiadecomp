@@ -1108,7 +1108,7 @@ disc directory.
 
 ### What CI can and cannot run
 
-Seven job runs on every push and pull request:
+Nine job runs on every push and pull request:
 
 | Job | Runner | Does |
 |---|---|---|
@@ -1117,6 +1117,8 @@ Seven job runs on every push and pull request:
 | **Tests** | windows | the same three — 1102 passed, 4 skipped at 4441a80; the runner ships LLVM, so the FMA probes run |
 | **Runtime compiles (MSVC)** | windows | `compile_runtime.py`, `dc_check.py`, `render_check.py` |
 | **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b) |
+| **ThreadSanitizer (render queue)** | ubuntu | clang `-fsanitize=thread`: `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4`, every race reported and any failing the run, no suppression (L8) |
+| **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8) |
 | **Runtime compiles (clang-cl)** | windows | the same three with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

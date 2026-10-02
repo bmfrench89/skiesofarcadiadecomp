@@ -35,7 +35,9 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 
 **Steps 1–3, 5–5d and 7 are the whole of what CI can run** (5–5c under MSVC
 in the `native` job, 5d in the `clang-cl` job; the same three under gcc and
-clang in the `linux` job). Steps 4, 6 and 8–11 need
+clang in the `linux` job, and with `tools/citest/queue_check.py` on ARM64 in
+`arm64-linux` and under ThreadSanitizer in `tsan`). `queue_check.py` runs here
+too, in about 16 s, and is worth it after any change to `gxr.c`'s queue. Steps 4, 6 and 8–11 need
 your disc, your vendored compilers or captures that are game data, and nobody
 else can run them for you. A green CI tick means the C compiles, twelve MSL
 routines behave like libc and the rasterizer still fills a triangle. It says

@@ -892,7 +892,7 @@ Each of those is a latent bug, not a tolerance.
 | `linux` (grows) | ubuntu-latest | `test_memguard.py`, `threads_check.py` | L7 |
 | `tsan` | ubuntu-latest | clang `-fsanitize=thread`: `render_check`, `queue_check` | L8 |
 | `arm64-linux` | ubuntu-24.04-arm | gcc: `compile_runtime`, `dc_check`, `render_check`, `queue_check` at `SOA_THREADS` 1, 2, 3 and 4 with stalls | L8 |
-| `arm64-windows` | windows-11-arm | MSVC ARM64: the same four | L8 (after B4) |
+| `arm64-windows` | windows-11-arm | MSVC ARM64: the same four | dropped at L8: Windows on ARM is outside ../PLAN-NEXT.md §0's targets |
 
 - **`queue_check` repeats drivers** that the `test` job's windows-latest leg already runs under MSVC x64. Its
   value is the other profiles and the ARM hardware, and `ci.yml` says so.
@@ -1539,6 +1539,12 @@ edits only the memory guard (:541-651), the watchdog (:465-536) and the start of
 - Every copy of the file and test counts is updated.
 
 ### L8. CI on ARM64, and ThreadSanitizer
+
+*Landed 2026-10-02 (FINDINGS "L8"). Two differences from what follows. The `arm64-windows` leg, and
+with it `msvc-arm64` and B4, are dropped: Windows on ARM is outside the owner's targets
+(../PLAN-NEXT.md §0), and no target runs MSVC's ARM64 code. And TSAN found a third race, the report
+reading idle timers a parked worker still charges, fixed with `plat_store64_relaxed`, a helper 3.2
+did not list; with it the leg runs with no suppression. The `libm_check` line waits for L6.*
 
 *Several days. `--link` (two small renderer fixes). Prerequisites: L2 and L4b; it does not need L7, because
 `queue_check` drives only the renderer. Files:*

@@ -4392,3 +4392,61 @@ the six native MSL units no longer assume `long` is 32 bits.
   `render_check.py --threads 1` and `4` under MSVC; `--link`; the self test 0
   failures, its twin cases (`strcpy`, `strcmp`, `memset`) among them; `replay
   --threads 1,2,3,8` 23/23; `title --check` 4 of 4.
+
+**L8: the queue on ARM64 and under ThreadSanitizer.** 2026-10-02. Two CI
+jobs, `tsan` and `arm64-linux`, and a third race fixed because TSAN found
+it. Base: a2c7c21.
+
+- **The two known races.** `g_notex` (`SOA_GXR_NOTEX`) was decided inside
+  `sample()` on the workers, so several could race to write it; it is
+  decided on the producer in `tev_prepare` now, beside `simd_decide`, before
+  any sampling draw is published, and `sample()` only reads it.
+  `WARN_ONCE`'s flag was a plain `int`, which two workers at one tripwire
+  could both see unset; it is taken with `plat_cas32`, its first caller, so
+  exactly one prints. `SOA_GXR_NOTEX=1` still greys every texel: a replay of
+  4500 hashes `02be8f2d42c8cefa` with it and its manifest hash without.
+- **`tools/citest/queue_check.py`** holds the two queue drivers and their
+  run table, moved verbatim from `test_gxr_overlap.py` and
+  `test_gxr_queue.py` (one copy; the tests import them, and their drivers'
+  `_putenv` is `plat_setenv` now). It builds them under any profile, with
+  `--cflag` for a sanitizer, and holds every thread count, unstalled and
+  with each stall kind, to the one-worker run. Under MSVC here: 18 runs, all
+  matching, in 16 s. With the worker's fence wait disabled, every
+  multi-worker overlap run fails and the one-worker runs pass, so the check
+  can see the bug it is for. `render_check.py` takes `--cflag` too.
+- **TSAN found a third race,** on its first run: `gxr_report` reads each
+  worker's idle timer while a parked worker is still charging it, in
+  `charge()` on every wake of its wait loop, with nothing to order the two.
+  A statistic, not a pixel, but a race, and rule 4's territory. The owner's
+  write is now `plat_store64_relaxed`, a helper 3.2 did not list (a plain
+  `mov` on x64 and ARM64), and the report reads both timers with
+  `plat_load64`. The workers line still adds up: `title --check`'s run reads
+  busy 15.38 s + idle 827.09 s = 842.47 s, 0.0% unaccounted. The same first
+  run also showed `queue_check` printing `ok` for a thread count whose run
+  had failed, judging by the frame hashes alone; it now prints `FAIL` for
+  any failed run. And `halt_on_error=1` had hidden any race after the first
+  in each run; the job reports every race now and fails at the end.
+- **Clean:** ([run 37040632648](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/37040632648),
+  branch `l8-tsan-arm`, all nine jobs). TSAN under Ubuntu clang 18.1.3:
+  `render_check --threads 4` and `queue_check --threads 1,2,3,4` (18 runs)
+  with no race reported and `tsan.supp` empty of entries, the spec's target.
+  ARM64 (`ubuntu-24.04-arm`, `aarch64`, gcc 13.3.0): `compile_runtime`
+  28/28, `dc_check` 12/12, `render_check --threads 4`, and `queue_check`
+  with every run matching the one-worker run. The four-worker frame hash on
+  ARM64 is `63a57c77609efd77`, the same as on x86-64 Linux and Windows.
+- **Red, as the Done asks** ([run 37041203392](https://github.com/bmfrench89/skiesofarcadiadecomp/actions/runs/37041203392),
+  branch `l8-mutation`, never merged): with `-DPLAT_TEST_RELAXED_LOADS=1`
+  TSAN reported 64 races, on the worker's reads of the command's `seq`,
+  `fence` and `fence_near` (`gxr.c:1800`, :1804), in `draw_command`,
+  `emit_triangle`, `clip_dist` and `raster_triangle` reading the command's
+  vertices, and in `run_copy` and `copy_to_screen` reading a copy's fields
+  and the rows. The render step failed; the queue step was still reporting
+  races 40 minutes in, and the run was cancelled to read the log.
+- **Dropped from the spec:** the `arm64-windows` leg, `msvc-arm64` and B4.
+  Windows on ARM is outside the owner's targets (PLAN-NEXT section 0), and
+  no target runs MSVC's ARM64 code. `libm_check` on the ARM leg waits for
+  L6.
+- **Checks:** `compile_runtime.py` 28/28 under MSVC and clang-cl; `--link`;
+  `replay --threads 1,2,3,8` 23/23; the self test 0 failures; `title
+  --check` 4 of 4; `test_gxr_overlap`, `_queue` and `_atomics` with the
+  drivers imported from `queue_check.py`; pytest 1128 passed, 2 skipped.
