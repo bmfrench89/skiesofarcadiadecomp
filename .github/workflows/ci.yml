@@ -233,9 +233,16 @@ jobs:
   # --threads asked for, and --threads 4 is the POSIX pool's first run. Every
   # check step runs even when one before it failed, as in the clang-cl job.
   #
+  # L7 adds runtime/plat.c's POSIX half: test_memguard builds main.c's boot
+  # path and pokes past the RAM, which only the SIGSEGV guard survives, and
+  # threads_check parks and resumes a guest thread on the 32 MB stack the
+  # guest runs on. noskip.py makes test_memguard's skip -- no compiler --
+  # fail the step, as in the clang-cl job.
+  #
   # NOT COVERED: linking or running the port itself off Windows (it needs a
-  # window and audio that are Win32 today, L12), the replay corpus, and
-  # everything the native job's comment lists.
+  # window and audio that are Win32 today, L12), a second guest thread (no
+  # fibers off Windows yet), the replay corpus, and everything the native
+  # job's comment lists.
   linux:
     name: Runtime compiles (Linux, ${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -248,6 +255,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest
 
       - name: The compiler the checks use
         run: ${{ matrix.cc }} --version
@@ -267,6 +277,17 @@ jobs:
       - name: Renderer pixel checks, four workers (the POSIX pool)
         if: ${{ !cancelled() }}
         run: python tools/citest/render_check.py --cc ${{ matrix.cc }} --threads 4
+
+      - name: The MEM1 guard, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: ${{ matrix.cc }}
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_memguard.py -v
+
+      - name: A guest thread parks and resumes, on the guest's stack
+        if: ${{ !cancelled() }}
+        run: python tools/citest/threads_check.py --cc ${{ matrix.cc }}
 
   # ThreadSanitizer over the render queue (portability.md L8): clang's
   # -fsanitize=thread on render_check at four workers and on queue_check's
@@ -313,7 +334,9 @@ jobs:
   # One run on four cores may still miss a race, which is why the tsan job,
   # not this one, is the oracle for ordering. The windows-11-arm leg the spec
   # once planned is not here: Windows on ARM is outside the owner's targets
-  # (PLAN-NEXT section 0).
+  # (PLAN-NEXT section 0). The MEM1 guard runs here too, because AArch64 says
+  # whether a fault was a store only through the ESR record in the signal
+  # frame, a different path in plat.c from x86-64's error code.
   arm64-linux:
     name: Runtime compiles (Linux ARM64, gcc)
     runs-on: ubuntu-24.04-arm
@@ -322,6 +345,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest
 
       - name: The compiler the checks use
         run: gcc --version && uname -m
@@ -341,3 +367,14 @@ jobs:
       - name: The queue against the one-worker run
         if: ${{ !cancelled() }}
         run: python tools/citest/queue_check.py --cc gcc --threads 1,2,3,4
+
+      - name: The MEM1 guard, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_memguard.py -v
+
+      - name: A guest thread parks and resumes, on the guest's stack
+        if: ${{ !cancelled() }}
+        run: python tools/citest/threads_check.py --cc gcc

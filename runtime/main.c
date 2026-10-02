@@ -13,6 +13,7 @@
 #include "gxr.h"
 #include "mod.h"
 #include "picture.h"
+#include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,17 @@
 #define STR2(x) #x
 #define STR(x) STR2(x)
 void ENTRY_FN(CpuState* s);
+
+/* The guest's call depth becomes the host's, so it runs on a stack as large
+ * as the Windows link's /STACK (tools/recompile.py): there the main thread,
+ * elsewhere a thread of that size, which then owns the MEM1 guard (L7). */
+#define GUEST_STACK_BYTES ((size_t)32 << 20)
+static int run_guest(void* s)
+{
+    plat_guard_owner();
+    ENTRY_FN((CpuState*)s);
+    return 0;
+}
 void hle_report(void);
 void hle_dump(CpuState* s, uint32_t pc);
 void threads_init(CpuState* s);
@@ -102,6 +114,7 @@ extern int g_gx_parsing;
 #ifdef _WIN32
 #include <process.h>
 #include <windows.h>
+#endif
 static CpuState* g_state;
 
 /* ---- naming a block address ---------------------------------------------
@@ -226,6 +239,7 @@ static const char* block_name(uint32_t pc)
     return buf;
 }
 
+#ifdef _WIN32
 /* ---- the sampler ---------------------------------------------------------
  *
  * Its own thread, started before the guest and never stopped until the
@@ -508,28 +522,38 @@ void profile_report(void)
     }
 }
 
+#else
+/* No sampler off Windows: there is no worker pool there either, and the
+ * report says nothing rather than print an empty table. */
+static void profile_start(CpuState* s) { (void)s; }
+void profile_report(void) {}
+#endif
+
+/* ---- the watchdog --------------------------------------------------------
+ * On every platform since L7: a plain thread, a monotonic clock and a 1 ms
+ * sleep, through plat.h. */
 void guest_backtrace(CpuState* s, uint32_t sp);
-static unsigned __stdcall watchdog(void* arg)
+static void watchdog(void* arg)
 {
     unsigned secs = (unsigned)(uintptr_t)arg;
     unsigned frames = gx_frame_count();
-    ULONGLONG t0 = GetTickCount64();
+    uint64_t t0 = plat_mono_ns();
     /* Watching for a stall is the whole of this thread's job now. It used to
      * sample as well, and zero its samples on every presented frame, which is
      * why the only profile it could ever print was of a stall. The sampler
      * above runs the whole time instead.
      *
-     * Sleep(1) is really ~15 ms at the default timer resolution, so pace the
-     * wait by the clock rather than by counting sleeps. */
+     * A 1 ms sleep is really ~15 ms at Windows' default timer resolution,
+     * so pace the wait by the clock rather than by counting sleeps. */
     for (;;) {
         unsigned now;
-        Sleep(1);
+        plat_sleep_ms(1);
         /* Every frame presented restarts the clock, so the timeout means what
          * the message says -- nothing happened for this long. A boot that
          * never reaches its first frame still reports, on time. */
         now = gx_frame_count();
-        if (now != frames) { frames = now; t0 = GetTickCount64(); continue; }
-        if (GetTickCount64() - t0 >= (ULONGLONG)secs * 1000u) break;
+        if (now != frames) { frames = now; t0 = plat_mono_ns(); continue; }
+        if (plat_mono_ns() - t0 >= (uint64_t)secs * 1000000000u) break;
     }
     fprintf(stderr, "[watchdog] no video frame for %us (SOA_WATCHDOG=0 disables it, SOA_WATCHDOG=s "
                     "changes the timeout); %u frames so far, last block %08X%s\n", secs, frames,
@@ -538,8 +562,7 @@ static unsigned __stdcall watchdog(void* arg)
     fprintf(stderr, "  backtrace from r1:");
     guest_backtrace(g_state, g_state->gpr[1]);
     hle_report(); /* which prints the profile, on this path and on every other */
-    _exit(5);
-    return 0;
+    _Exit(5);
 }
 static int g_watchdog_on;
 
@@ -554,12 +577,14 @@ static unsigned start_watchdog(CpuState* s, int windowed)
         /* Only report a timeout there is really a thread behind: the startup
          * line says what will end the run, and a thread that never started
          * would make that a lie. */
-        uintptr_t h = _beginthreadex(NULL, 0, watchdog, (void*)(uintptr_t)secs, 0, NULL);
-        if (!h) {
+        PlatThread t;
+        if (!plat_thread_start(&t, watchdog, (void*)(uintptr_t)secs, 0)) {
             fprintf(stderr, "[watchdog] cannot start the watchdog thread; nothing will time this run out\n");
             return 0;
         }
-        CloseHandle((HANDLE)h);
+#ifdef _WIN32
+        CloseHandle((HANDLE)t.os);
+#endif
         g_watchdog_on = 1;
     }
     return secs;
@@ -575,14 +600,6 @@ void watchdog_fallback(void)
     fprintf(stderr, "[watchdog] no window after all; arming the headless default\n");
     start_watchdog(g_state, 0);
 }
-#else
-static unsigned start_watchdog(CpuState* s, int windowed) { (void)s; (void)windowed; return 0; }
-void watchdog_fallback(void) {}
-/* No sampler off Windows: there is no worker pool there either, and the
- * report says nothing rather than print an empty table. */
-static void profile_start(CpuState* s) { (void)s; }
-void profile_report(void) {}
-#endif
 
 /* ---- the MEM1 image, and the 8 MB of it that is not RAM ------------------
  *
@@ -606,43 +623,29 @@ void profile_report(void) {}
  */
 static int g_mem_guarded;
 
-#ifdef _WIN32
 /* Reserved past the mask's range as well, so an 8-byte load that starts in
- * its last bytes has somewhere to land. 64K because that is the granularity
- * VirtualAlloc reserves in. */
-#define MEM_RESERVE_BYTES ((SIZE_T)MEM_MASK + 1u + 0x10000u)
+ * its last bytes has somewhere to land. 64K: the granularity VirtualAlloc
+ * reserves in, and a whole number of pages on every other platform. */
+#define MEM_RESERVE_BYTES ((size_t)MEM_MASK + 1u + 0x10000u)
 static uint8_t* g_mem_base;
 static CpuState* g_mem_state;
-/* The thread that built the image is the one that runs the guest, so a fault
- * on any other is the runtime's own code and s->pc belongs to neither it nor
- * the moment. Say which kind of fault it was rather than print a block
- * address that had nothing to do with it. */
-static DWORD g_mem_tid;
 
-static LONG CALLBACK mem_guard(EXCEPTION_POINTERS* ep)
+/* plat.c's guard calls this for a fault in the part above the RAM. The
+ * thread that runs the guest owns the guard (plat_guard_owner), so a fault on
+ * any other is the runtime's own code and s->pc belongs to neither it nor the
+ * moment: say which kind of fault it was rather than print a block address
+ * that had nothing to do with it. */
+static int mem_fault(size_t off, int storing, int guest)
 {
-    const EXCEPTION_RECORD* er = ep->ExceptionRecord;
-    static volatile LONG reported;
-    uintptr_t off;
-    int storing, committed, guest;
-    /* Every other fault in the process belongs to somebody else. The
-     * subtraction is unsigned, so an address below the image gives a huge
-     * offset and falls out of the range test with it. */
-    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2 || !g_mem_base)
-        return EXCEPTION_CONTINUE_SEARCH;
-    off = (uintptr_t)er->ExceptionInformation[1] - (uintptr_t)g_mem_base;
-    if (off < MEM1_SIZE || off >= MEM_RESERVE_BYTES) return EXCEPTION_CONTINUE_SEARCH;
-    storing = er->ExceptionInformation[0] != 0;
-    guest = GetCurrentThreadId() == g_mem_tid;
+    static plat_a32 reported;
+    int committed;
     /* Commit first: the report walks the guest stack, and that walk must not
      * fault its way back in here. A commit that fails leaves the access
      * violation standing and the process dies of it -- so say so first,
      * because the message is the entire point of the mechanism and a bare
      * access violation explains nothing. */
-    committed = VirtualAlloc(g_mem_base + MEM1_SIZE, MEM_RESERVE_BYTES - MEM1_SIZE, MEM_COMMIT,
-                             PAGE_READWRITE)
-                != NULL;
-    if (!InterlockedExchange(&reported, 1)) {
+    committed = plat_commit(g_mem_base + MEM1_SIZE, MEM_RESERVE_BYTES - MEM1_SIZE);
+    if (plat_cas32(&reported, 0, 1) == 0) {
         CpuState* s = g_mem_state;
         char who[192];
         if (guest) snprintf(who, sizeof who, "from block %08X%s", s ? s->pc : 0u,
@@ -656,7 +659,8 @@ static LONG CALLBACK mem_guard(EXCEPTION_POINTERS* ep)
                 "[mem] %s %s reached %08X, past the console's 24 MB of RAM; the port "
                 "keeps zeroed scratch up there so that it does not reach the host heap. An address "
                 "up there means the port is not modelling something. Reported once.%s\n",
-                storing ? "a store" : "a load", who, 0x80000000u + (uint32_t)off,
+                storing > 0 ? "a store" : storing == 0 ? "a load" : "an access", who,
+                0x80000000u + (uint32_t)off,
                 committed ? "" : " The scratch could not be committed, so this access violation "
                                  "stands and the process is about to die of it.");
         /* Only for the thread the registers belong to, and only once the
@@ -666,34 +670,29 @@ static LONG CALLBACK mem_guard(EXCEPTION_POINTERS* ep)
             guest_backtrace(s, s->gpr[1]);
         }
     }
-    return committed ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+    return committed;
 }
-#endif
 
-/* The image every window folds onto. Off Windows, and if the reservation or
- * the handler will not take, the whole range is ordinary zeroed memory:
- * nothing the guest can do reaches the host heap either way, there is just
- * nothing to say that it tried. */
+/* The image every window folds onto. If the reservation or the guard will
+ * not take, the whole range is ordinary zeroed memory: nothing the guest can
+ * do reaches the host heap either way, there is just nothing to say that it
+ * tried. */
 static uint8_t* mem_alloc(CpuState* s)
 {
-#ifdef _WIN32
-    uint8_t* p = (uint8_t*)VirtualAlloc(NULL, MEM_RESERVE_BYTES, MEM_RESERVE, PAGE_NOACCESS);
+    uint8_t* p = (uint8_t*)plat_reserve(MEM_RESERVE_BYTES);
     if (p) {
-        if (VirtualAlloc(p, MEM1_SIZE, MEM_COMMIT, PAGE_READWRITE)
-            && AddVectoredExceptionHandler(1, mem_guard)) {
-            g_mem_base = p;
-            g_mem_state = s;
-            g_mem_tid = GetCurrentThreadId();
+        g_mem_base = p;
+        g_mem_state = s;
+        if (plat_commit(p, MEM1_SIZE) && plat_guard_install(p, MEM1_SIZE, MEM_RESERVE_BYTES, mem_fault)) {
             g_mem_guarded = 1;
             return p;
         }
-        VirtualFree(p, 0, MEM_RELEASE);
+        g_mem_base = NULL;
+        plat_release(p, MEM_RESERVE_BYTES);
     }
     fprintf(stderr, "[mem] cannot reserve the guarded MEM1 window (error %lu); running without the "
                     "out-of-range tripwire\n",
-            (unsigned long)GetLastError());
-#endif
-    (void)s;
+            plat_last_error());
     return (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
 }
 
@@ -957,9 +956,7 @@ static void stall_at_frame(unsigned frame)
     if (done || !at || frame < at) return;
     done = 1;
     fprintf(stderr, "[boot] frame %u: stalling the guest thread %u s (SOA_STALL)\n", frame, secs);
-#ifdef _WIN32
-    Sleep(secs * 1000u);
-#endif
+    plat_sleep_ms(secs * 1000u);
 }
 
 void poke_at_frame(CpuState* s, unsigned frame)
@@ -1421,7 +1418,7 @@ int main(int argc, char** argv)
      * 0.3-1.1 s at the first ARAM DMA under load; here, before the game's
      * first instruction, it is not time the game's clock sees. */
     aram_census_prepare();
-    ENTRY_FN(&s);
+    plat_run_on_big_stack(run_guest, &s, GUEST_STACK_BYTES);
 
     fprintf(stderr, "[boot] entry point returned\n");
     hle_report();

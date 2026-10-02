@@ -333,5 +333,5 @@ def cc(args: list[str], cwd: Path | str, p: Profile = MSVC) -> subprocess.Comple
 
 def runtime_support_sources() -> list[Path]:
     """Runtime sources every build that links a runtime file needs beside it:
-    runtime/plat.c once L7 creates it, nothing before."""
-    return []
+    runtime/plat.c, the platform layer's cold half (L7)."""
+    return [Path(__file__).resolve().parents[2] / "runtime" / "plat.c"]

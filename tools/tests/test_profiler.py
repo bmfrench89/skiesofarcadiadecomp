@@ -163,6 +163,7 @@ def build(tmp_path: Path) -> Path:
             str(ROOT / "runtime" / "mod.c"),
             str(ROOT / "runtime" / "tick.c"),
             str(ROOT / "runtime" / "picture.c"),
+            *map(str, toolchain.runtime_support_sources()),
             str(tmp_path / "stubs.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),

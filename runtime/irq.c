@@ -12,13 +12,11 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "plat.h"
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 #define OS_EXCEPTION_TABLE 0x80003000u /* 16 entries, one per PowerPC exception */
 #define OS_INTERRUPT_TABLE 0x80003040u /* 32 entries, one per PI/DSP/EXI/... source */
@@ -427,9 +425,7 @@ static void deliver_pending(CpuState* s)
         handler = interrupt_handler(s, IRQ_PI_SI);
         if (handler) { g_si_count++; call_guest_handler(s, handler, IRQ_PI_SI); }
     }
-#ifdef _WIN32
-    if (g_pace) Sleep(0);
-#endif
+    if (g_pace) plat_yield();
 }
 
 /* SelectThread's idle loop, 0x80237BA8: `lwz RunQueueBits; beq`. Nothing is
