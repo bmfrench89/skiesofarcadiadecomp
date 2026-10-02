@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1122 passed, 2 skipped in 231.47s
+1127 passed, 2 skipped in 201.15s
 ```
 
-1124 tests in 59 files, none of which reads the disc. The two FMA probes of
+1129 tests in 60 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -94,6 +94,7 @@ its own and run it, some of the C as well:
 | `test_gxr_lifetimes.py` | 6 | the lifetime rules the renderer's queue lives by — the texture use-after-free of 2026-09-17 — under H14's fences and again under `SOA_GXR_DRAIN=1`, where a draw's setup still drains for a queued copy |
 | `test_clock.py` | 6 | `runtime/clock.c`, built alone and fed synthetic host times (M19): steady steps are guest time, a 10 s gap counts as none and bumps the epoch (10 s with the rule off), a host step backwards moves nothing, a speed change is continuous and bumps the epoch, a pause is excluded, and a peek writes nothing |
 | `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
+| `test_gxr_atomics.py` | 5 | the render queue's rule 4 (portability 3.4, L2), text only: every use of a shared counter in `gxr.c` is an argument of a `plat_*` helper, its declaration, or the producer's plain read of its own `g_published` on a line marked `own count`; a bare `g_ran[1]` read added to `worker()` (the spec's mutation), a marked worker count, a cast and a condition each fail it, and the code before L2 fails it 38 times |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
@@ -108,23 +109,23 @@ its own and run it, some of the C as well:
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine on 2026-09-30 by hiding one at a time, with a pytest plugin that
+this machine on 2026-10-02 by hiding one at a time, with a pytest plugin that
 makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 "L3a's review"); there is no clang here, so every row has the two FMA skips:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1122 passed, 2 skipped` |
-| no capstone | `1103 passed, 3 skipped` |
-| no MSVC | `746 passed, 378 skipped` |
-| neither | `727 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1127 passed, 2 skipped` |
+| no capstone | `1108 passed, 3 skipped` |
+| no MSVC | `751 passed, 378 skipped` |
+| neither | `732 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 363 MSVC-gated tests are the ones that build a runtime
+Two things follow. The 376 MSVC-gated tests are the ones that build a runtime
 file and run it — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1101,7 +1102,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1124 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1129 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

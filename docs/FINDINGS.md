@@ -4201,3 +4201,63 @@ looked at every changed frame and found them all right before the bless.
   all look right. `python tools/scenario.py replay --bless` then pinned the
   23, `replay --threads 1,2,3,8` is 23/23, and the pinned frame hashes are
   the ones the owner looked at, all 23.
+
+**L2, step 1: the queue's ordering completed.** 2026-10-02. Every
+cross-thread access to the render queue's counters in `gxr.c` now goes
+through `plat.h`: `plat_load64/32`, `plat_inc64/32`, `plat_dec32`,
+`plat_xchg64` and `plat_compiler_barrier`, all seq_cst, and on Windows
+`plat_wait64` and `plat_wake_all64`. The `LOAD_ACQUIRE` macros, the
+Interlocked calls, `WaitOnAddress`, `WakeByAddressAll` and `_ReadWriteBarrier`
+are gone from `gxr.c`, and the `Synchronization.lib` pragma moved to
+`plat.h`. Base: 9ccef87.
+
+- **What it fixes.** The four Dekker re-checks of portability.md 3.4 rule 3
+  (`publish` and a finishing worker reading the sleeper counts, the idle
+  worker and the fence waiter reading the count again), and the fence
+  waiter's first read of `seen`, were plain volatile reads, correct only
+  because an MSVC Interlocked call is a full barrier. They are `plat_load*`
+  now, in the same change that makes the RMWs `__atomic` seq_cst under
+  PLAT_GNU (clang-cl and the NDK), so on ARM64 neither side can miss the
+  other's write.
+- **No `<windows.h>` in `plat.h`.** The MSVC helpers are `<intrin.h>`'s
+  `_Interlocked*` intrinsics, which are what `<windows.h>`'s Interlocked names
+  expand to on x64, and the x64 load is a plain volatile read, which is what
+  the SDK's `ReadAcquire64` is there (10.0.26100's AMD64 section: `Value =
+  *Source;`). The two waits are declared as `synchapi.h` declares them, so
+  `gxr.c`, which includes both, compiles and links with no warning. The
+  reason is `hle.c`: it includes a lean `<windows.h>` because `mmsystem.h`'s
+  `MMIO_READ` collides with its own names, and a `plat.h` that pulled in the
+  full header would break it once step 2 has `gxr.h` include `plat.h`.
+  `plat_cas32` (3.2) is not added: nothing calls it.
+- **The x64 code** (the Done's comparison). Compiled with `toolchain.CFLAGS`
+  and `/FA`, against 9ccef87's `gxr.c`, labels normalised:
+
+  | function | against the base |
+  |---|---|
+  | `wait_ran`, `drain`, `publish`, `ran_min`, `gxr_presented` | identical, line for line |
+  | `worker` | the same multiset of instructions, blocks and registers placed differently |
+  | `fence_wait` | one push/pop pair fewer (one fewer saved register), one `mov` traded for a `movsxd` |
+
+  In all seven the `lock`, `xchg` and fence lines are the same set, and
+  every shared-counter load is a plain `mov`. The comparison can fail:
+  with `plat_load64` made a locked compare-exchange, `worker`, `wait_ran`
+  and `ran_min` turned red and `publish`, which loads only the 32-bit
+  count, stayed identical. Nothing moved, so the Done's timing run was not
+  needed.
+- **`test_gxr_atomics.py` (5 tests)** enforces rule 4 by reading `gxr.c`:
+  comments and strings blanked, each use of a shared counter must sit
+  directly inside a `plat_*` call, be its declaration, or be the producer's
+  plain read of its own `g_published` on a line marked `own count`. 9ccef87's
+  `gxr.c` fails it 38 times, all five re-checks among them. Its cases hold the
+  spec's mutation (a bare `g_ran[1]` read added to `worker()`), a worker's
+  count wrongly marked `own count`, and a read inside a cast or an `if`.
+- **`test_gxr_queue.py`'s rewind test** named `InterlockedIncrement64` and
+  `InterlockedExchange64` and failed on the rename. It names `plat_inc64` and
+  `plat_xchg64` now, and also refuses an exchange or a decrement on
+  `g_published`, or a decrement on `g_ran`: through a helper, those rewind
+  the numbering as surely as the assignment it already refused.
+- **Checks:** `compile_runtime.py` 28/28 under MSVC and under the NDK's
+  clang-cl; `render_check.py` under clang-cl, the first time the `__atomic`
+  helpers ran the worker pool; `dc_check.py`; the no-skip clang modules;
+  `test_gxr_overlap`, `_queue`, `_fastpath` and `test_citest`; `replay
+  --threads 1,2,3,8` 23/23; the self test 0 failures; `title --check` 4 of 4.

@@ -211,9 +211,13 @@ def test_nothing_the_workers_read_is_ever_rewound():
     # An assignment, not a comparison: not ==, !=, <=, >=.
     assigns = re.findall(r"(?<![=!<>])\s(g_published|g_ran\s*\[[^\]]*\])\s*=(?!=)", body)
     assert assigns == [], f"the numbering is being rewritten in place: {assigns}"
-    for name, op in (("g_published", "InterlockedIncrement64"), ("g_ran", "InterlockedExchange64")):
+    for name, op in (("g_published", "plat_inc64"), ("g_ran", "plat_xchg64")):
         writes = re.findall(rf"{op}\(&{name}", body)
         assert writes, f"{name} is no longer published with {op}"
+    # Since L2 every write is a plat_* call, and an exchange or a decrement
+    # through one rewinds the numbering as surely as an assignment would.
+    rewinds = re.findall(r"plat_(?:xchg|dec)\w*\(&g_published|plat_dec\w*\(&g_ran", body)
+    assert rewinds == [], f"the numbering is being rewound through a helper: {rewinds}"
 
 
 @needs_msvc

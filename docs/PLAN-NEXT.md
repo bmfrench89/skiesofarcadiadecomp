@@ -566,7 +566,7 @@ count kept before it starts.
 | # | Slice | Size | Rebuild | Needs first | Owner |
 |---|---|---|---|---|---|
 | — | **L3a** and **L2a**, if they did not land in M1. **Both landed in M1** (8bd7c79, 5af18b3) | hours each | none / `--link` | — | — |
-| 1 | **L2** `plat.h`: the queue's ordering completed (seq_cst on the four Dekker re-checks, the grep test), then the renderer builds anywhere (the POSIX pool) | a day to several days, two commits | `--link` | L2a | — |
+| 1 | **L2** `plat.h`: the queue's ordering completed (seq_cst on the four Dekker re-checks, the grep test), then the renderer builds anywhere (the POSIX pool). **Step 1 landed** 2026-10-02 (FINDINGS "L2, step 1"); step 2, the POSIX pool, is next | a day to several days, two commits | `--link` | L2a | — |
 | 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
 | 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N` | several days | `--link`, `decomp.py` | L2, L3a | — |
 | 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races | several days | `--link` | L2, L4b | — |

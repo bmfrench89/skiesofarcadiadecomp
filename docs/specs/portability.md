@@ -1233,6 +1233,10 @@ renderer files says they are free (§6 order). Files:*
 
 ### L2. `plat.h`: the queue's ordering completed, and the renderer builds and runs anywhere
 
+*Step 1 landed 2026-10-02 (FINDINGS "L2, step 1"): the queue's x64 code compared unchanged in kind, the grep
+test in place. `plat_cas32` waits for its first caller. The `gxr.c` line numbers below predate C5b; the
+same sites now sit about 18 lines further on.*
+
 *A day to several days, in two commits, each checked by the Done lines marked for it. `--link`.
 Prerequisites: L2a. Files:*
 - *`runtime/plat.h`, `gxr.c` and `gxr.h`;*

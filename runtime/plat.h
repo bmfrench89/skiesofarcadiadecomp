@@ -42,6 +42,95 @@
 #define PLAT_GNU 0
 #endif
 
+#include <stddef.h>
+#include <stdint.h>
+#if PLAT_MSVC
+#include <intrin.h>
+#endif
+
+/* A helper that must vanish into its caller, so it costs exactly the
+ * instruction it stands for: L2's Done compares the queue's x64 code with
+ * c8274db's, line for line. */
+#if PLAT_MSVC
+#define PLAT_INLINE static __forceinline
+#elif PLAT_GNU
+#define PLAT_INLINE static inline __attribute__((always_inline))
+#else
+#define PLAT_INLINE static inline
+#endif
+
+/* ---- atomics (L2) --------------------------------------------------------
+ * The render queue's shared counters stay plain volatile integers; what is
+ * shared is that every cross-thread access goes through one of these, which
+ * tools/tests/test_gxr_atomics.py enforces over gxr.c (portability.md 3.4).
+ * The typedefs are documentation, not wrappers.
+ *
+ * Loads are sequentially consistent: the sleepers' Dekker re-checks need it
+ * (3.4 rule 3), and one kind of load leaves none to choose wrongly. On x64
+ * that is a plain mov, which is what <windows.h>'s ReadAcquire64 is there
+ * (the SDK's AMD64 section reads *Source and returns it); after a locked RMW
+ * it is also a seq_cst load. On ARM64 it is LDAR under both compilers. RMWs
+ * are seq_cst: the _Interlocked intrinsics <windows.h>'s Interlocked names
+ * expand to on x64, and __atomic under gcc and every clang, clang-cl
+ * included. Taken from <intrin.h> rather than <windows.h>, which a header
+ * this widely included must not pull in: its min, max, near and far macros,
+ * and mmsystem's MMIO_READ, which hle.c's own names collide with.
+ *
+ * PLAT_TEST_RELAXED_LOADS (test-only, off by default) makes the loads relaxed
+ * under PLAT_GNU: L8's mutation. */
+typedef volatile int64_t plat_a64;
+typedef volatile int32_t plat_a32;
+
+#if PLAT_GNU
+#ifdef PLAT_TEST_RELAXED_LOADS
+#define PLAT_LOAD_ORDER __ATOMIC_RELAXED
+#else
+#define PLAT_LOAD_ORDER __ATOMIC_SEQ_CST
+#endif
+PLAT_INLINE int64_t plat_load64(const plat_a64* p) { return __atomic_load_n(p, PLAT_LOAD_ORDER); }
+PLAT_INLINE int32_t plat_load32(const plat_a32* p) { return __atomic_load_n(p, PLAT_LOAD_ORDER); }
+PLAT_INLINE int64_t plat_inc64(plat_a64* p) { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
+PLAT_INLINE int32_t plat_inc32(plat_a32* p) { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
+PLAT_INLINE int32_t plat_dec32(plat_a32* p) { return __atomic_sub_fetch(p, 1, __ATOMIC_SEQ_CST); }
+PLAT_INLINE int64_t plat_xchg64(plat_a64* p, int64_t v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+PLAT_INLINE void plat_compiler_barrier(void) { __asm__ __volatile__("" ::: "memory"); }
+#elif PLAT_MSVC
+#if PLAT_ARM64
+PLAT_INLINE int64_t plat_load64(const plat_a64* p) { return (int64_t)__ldar64((unsigned __int64 volatile*)p); }
+PLAT_INLINE int32_t plat_load32(const plat_a32* p) { return (int32_t)__ldar32((unsigned __int32 volatile*)p); }
+#else
+PLAT_INLINE int64_t plat_load64(const plat_a64* p) { return *p; }
+PLAT_INLINE int32_t plat_load32(const plat_a32* p) { return *p; }
+#endif
+PLAT_INLINE int64_t plat_inc64(plat_a64* p) { return _InterlockedIncrement64((__int64 volatile*)p); }
+PLAT_INLINE int32_t plat_inc32(plat_a32* p) { return _InterlockedIncrement((long volatile*)p); }
+PLAT_INLINE int32_t plat_dec32(plat_a32* p) { return _InterlockedDecrement((long volatile*)p); }
+PLAT_INLINE int64_t plat_xchg64(plat_a64* p, int64_t v) { return _InterlockedExchange64((__int64 volatile*)p, v); }
+PLAT_INLINE void plat_compiler_barrier(void) { _ReadWriteBarrier(); }
+#else
+#error "plat.h: no atomics for this compiler"
+#endif
+
+/* ---- waits (L2): spin, then sleep on a word (H11's pattern) ---------------
+ * plat_wait64 sleeps while *p still equals seen, at most timeout_ms, and may
+ * return early for no reason; plat_wake_all64 wakes every thread asleep on p.
+ * On Windows they are WaitOnAddress and WakeByAddressAll, declared here
+ * exactly as synchapi.h declares them, so a file that includes <windows.h>
+ * as well still compiles and one that does not is not handed it. */
+#ifdef _WIN32
+__declspec(dllimport) int __stdcall WaitOnAddress(volatile void* Address, void* CompareAddress, size_t AddressSize,
+                                                  unsigned long dwMilliseconds);
+__declspec(dllimport) void __stdcall WakeByAddressAll(void* Address);
+#ifdef _MSC_VER
+#pragma comment(lib, "Synchronization.lib")
+#endif
+PLAT_INLINE void plat_wait64(plat_a64* p, int64_t seen, unsigned timeout_ms)
+{
+    WaitOnAddress((volatile void*)p, &seen, sizeof seen, timeout_ms);
+}
+PLAT_INLINE void plat_wake_all64(plat_a64* p) { WakeByAddressAll((void*)p); }
+#endif
+
 /* ---- SIMD (L2a) ----------------------------------------------------------
  * PLAT_TARGET_SSE41 marks a function that may use SSE4.1 while the file is
  * built for baseline x86-64. gcc and clang will not inline an SSE4.1

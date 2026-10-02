@@ -9,6 +9,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
+#include "plat.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +18,6 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
-#pragma comment(lib, "Synchronization.lib") /* WaitOnAddress, for the idle workers */
 #else
 #include <sys/stat.h>
 #endif
@@ -1584,28 +1584,32 @@ static const char* const g_wait_name[W_COUNT] = {
 static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read by the report */
 
 static DrawCmd* g_queue;
-static volatile LONGLONG g_published;            /* commands published, ever */
-static volatile LONGLONG g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
+static plat_a64 g_published;            /* commands published, ever */
+static plat_a64 g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
 
-/* Another thread's count, read so that nothing read after it -- the command
- * it published, the rows or memory it finished -- can be read before it. Each
- * count is written with an Interlocked call, a full barrier everywhere, so the
- * writes it covers are out first; this is the other half. On x64 any load is
- * already ordered so, and this is the same instruction as the plain volatile
- * read it replaces: compared in the /FA listing before and after, the worker
- * loop, wait_ran, ran_min and drain are unchanged, and fence_wait loads with
- * the same plain movs, its registers allocated differently; on ARM64 it
- * is an LDAR, where a plain load would let a worker read a command slot or a
- * neighbour's rows stale (docs/specs/now.md N4; the portability research's
- * "Bugs that compile fine and give wrong results"). The producer reads its
- * own g_published plainly: it is the only writer. */
-#ifdef _MSC_VER
-#define LOAD_ACQUIRE64(p) ReadAcquire64((LONG64 const volatile*)(p))
-#define LOAD_ACQUIRE32(p) ReadAcquire((LONG const volatile*)(p))
-#else
-#define LOAD_ACQUIRE64(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
-#define LOAD_ACQUIRE32(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
-#endif
+/* The queue's four ordering rules (docs/specs/portability.md 3.4; c8274db
+ * applied the first two, L2 the rest). Every helper named is seq_cst, from
+ * plat.h; on x64 each load is the plain mov it replaced, compared in the /FA
+ * listing, and on ARM64 an LDAR, where a plain load would let a worker read a
+ * command slot or a neighbour's rows stale (docs/specs/now.md N4).
+ *  1. Publication: the producer fills a slot with plain stores, then
+ *     plat_inc64(&g_published) publishes them; a worker reads the slot only
+ *     after plat_load64(&g_published) is past it.
+ *  2. Completion: a worker writes its rows, images and guest memory, then
+ *     plat_xchg64(&g_ran[id], mine); anyone reads those only after
+ *     plat_load64(&g_ran[i]) reaches the command. That covers wait_ran (the
+ *     producer's texture, TLUT and vertex reads), fence_wait (the neighbours'
+ *     rows and copy images), drain (the arena, graveyard, hash and PNG) and
+ *     gxr_presented (the UI thread's g_screen).
+ *  3. Sleepers, a Dekker pair: the waiter (an idle worker, a fence waiter)
+ *     does plat_inc32(&sleepers) and then plat_load64(&count), sleeping only
+ *     if the count is unchanged; the waker (publish, a worker finishing a
+ *     command) raises the count and then plat_load32(&sleepers), waking only
+ *     if there are any. All four seq_cst, so at least one side sees the
+ *     other's write; the 50 ms bound on a wait is the backstop.
+ *  4. Every cross-thread read goes through plat_load*. The producer's reads
+ *     of its own g_published stay plain -- it is the only writer -- and each
+ *     carries the marker own count; test_gxr_atomics.py checks every use. */
 static uint64_t g_flushes;                       /* producer only: drains, so a nested one can be seen */
 static uint8_t* g_arena;
 static size_t g_arena_used;
@@ -1626,17 +1630,17 @@ static long long g_fence_after, g_fence_after_near, g_ran_floor, g_last_copy = -
 static int g_frame_gate;
 static uint64_t g_hazard_hits, g_tokens_waited;
 
-/* Workers asleep in WaitOnAddress on g_published (PLAN-60FPS-MODS H11). The
+/* Workers asleep in plat_wait64 on g_published (PLAN-60FPS-MODS H11). The
  * producer wakes them only when there are any, so a burst of draws with the
- * pool awake costs one more interlocked read per command, and no call. */
-static volatile LONG g_sleepers;
+ * pool awake costs one more load per command, and no call. */
+static plat_a32 g_sleepers;
 
 /* Publish one command to the pool, waking it if it has gone to sleep. */
 static void publish(void)
 {
-    InterlockedIncrement64(&g_published);
+    plat_inc64(&g_published);
 #ifdef _WIN32
-    if (g_sleepers) WakeByAddressAll((PVOID)&g_published);
+    if (plat_load32(&g_sleepers)) plat_wake_all64(&g_published);
 #endif
 }
 
@@ -1645,10 +1649,10 @@ static void publish(void)
  * published. A stale count is too small, so this can only be too small. */
 static long long ran_min(void)
 {
-    long long m = g_published;
+    long long m = g_published; /* own count */
     int i;
     for (i = 1; i <= g_workers; i++) {
-        long long r = LOAD_ACQUIRE64(&g_ran[i]);
+        long long r = plat_load64(&g_ran[i]);
         if (r < m) m = r;
     }
     return m;
@@ -1663,20 +1667,20 @@ static void wait_ran(long long c, int why)
     unsigned spins = 0;
     int i, prev;
     uint64_t t0, t1;
-    if (c >= g_published) {
-        WARN_ONCE("[gxr] a wait for command %lld, which is not published yet (%lld are): nothing to wait for, so no wait\n", c, (long long)g_published);
+    if (c >= g_published) { /* own count */
+        WARN_ONCE("[gxr] a wait for command %lld, which is not published yet (%lld are): nothing to wait for, so no wait\n", c, (long long)g_published); /* own count */
         return;
     }
     if (ran_min() > c) return;
     prev = gxr_phase(T_WAIT);
     t0 = gxr_ticks();
     for (i = 1; i <= g_workers; i++)
-        while (LOAD_ACQUIRE64(&g_ran[i]) <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (plat_load64(&g_ran[i]) <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
     t1 = gxr_ticks();
     g_wait_n[why]++;
     if (t1 > t0) g_wait_ticks[why] += t1 - t0;
     gxr_phase(prev);
-    _ReadWriteBarrier(); /* what the command wrote is read after the wait, not hoisted above it */
+    plat_compiler_barrier(); /* what the command wrote is read after the wait, not hoisted above it */
 }
 
 /* The one place a slot is taken. Command n goes in slot n & QMASK, which held
@@ -1687,7 +1691,7 @@ static void wait_ran(long long c, int why)
  * for the neighbours' fence, kept only where it asks more than the other. */
 static DrawCmd* claim_slot(int kind, long long want, long long want_near)
 {
-    long long n = g_published, fence, nbr;
+    long long n = g_published, fence, nbr; /* own count */
     DrawCmd* D;
     if (n - g_ran_floor >= QUEUE_CAP) {
         g_ran_floor = ran_min();
@@ -1697,7 +1701,7 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
         }
     }
     D = &g_queue[n & QMASK];
-    D->seq = g_published;
+    D->seq = g_published; /* own count */
     D->kind = kind;
     fence = want > g_fence_after ? want : g_fence_after;
     if (fence > n) {
@@ -1713,10 +1717,10 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
 }
 
 #ifdef _WIN32
-/* Workers parked at a fence in WaitOnAddress on another worker's count. A
+/* Workers parked at a fence in plat_wait64 on another worker's count. A
  * worker raising its count wakes them only when there are any, the pattern
  * H11 gave the idle spin. */
-static volatile LONG g_fence_sleepers;
+static plat_a32 g_fence_sleepers;
 
 /* Hold this worker until every other worker has finished every command below
  * f. Each check reads one count that only its owner writes and that only
@@ -1731,9 +1735,9 @@ static volatile LONG g_fence_sleepers;
  * at once when no other thread is ready, so a fence that spun on it cost a
  * core per waiting worker, 12-13% more CPU over H1's Part L run (FINDINGS
  * "H14"). The sleeper count goes up before the count is read again and the
- * worker that raises it reads the sleepers after, both interlocked, so a rise
- * in between is either seen here or wakes the wait; the 50 ms bound is the
- * backstop. */
+ * worker that raises it reads the sleepers after, all four seq_cst (rule 3
+ * above), so a rise in between is either seen here or wakes the wait; the
+ * 50 ms bound is the backstop. */
 static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
 {
     int j, prev = self > 1 ? self - 1 : g_workers, next = self < g_workers ? self + 1 : 1;
@@ -1744,12 +1748,12 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
     for (j = 1; j <= g_workers; j++) {
         long long f = (j == prev || j == next) && nbr > all ? nbr : all;
         if (j == self) continue;
-        while (LOAD_ACQUIRE64(&g_ran[j]) < f) {
+        while (plat_load64(&g_ran[j]) < f) {
             if (++spins > 4000) {
-                LONGLONG seen = g_ran[j];
-                InterlockedIncrement(&g_fence_sleepers);
-                if (g_ran[j] == seen && seen < f) WaitOnAddress((volatile VOID*)&g_ran[j], &seen, sizeof seen, 50);
-                InterlockedDecrement(&g_fence_sleepers);
+                int64_t seen = plat_load64(&g_ran[j]);
+                plat_inc32(&g_fence_sleepers);
+                if (plat_load64(&g_ran[j]) == seen && seen < f) plat_wait64(&g_ran[j], seen, 50);
+                plat_dec32(&g_fence_sleepers);
                 spins = 0;
             } else {
                 YieldProcessor();
@@ -1759,7 +1763,7 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
     charge(W, &W->idle);
     W->fence_ticks += W->idle - idle0;
     W->fences++;
-    _ReadWriteBarrier(); /* the compiler's half: the load above is the machine's */
+    plat_compiler_barrier(); /* the compiler's half: the load above is the machine's */
 }
 #endif
 
@@ -1779,7 +1783,7 @@ static DWORD WINAPI worker(LPVOID arg)
     for (;;) {
         const DrawCmd* D;
         unsigned spins = 0;
-        while (mine >= LOAD_ACQUIRE64(&g_published)) {
+        while (mine >= plat_load64(&g_published)) {
             /* A short spin, for the next command of a burst, then sleep
              * until the producer publishes (H11). This used to be
              * Sleep(0), which returns at once when no other thread is
@@ -1787,17 +1791,17 @@ static DWORD WINAPI worker(LPVOID arg)
              * 8.4-8.9 cores with 8 workers whether a frame was drawn or
              * not (FINDINGS "H3"). The sleeper count goes up before
              * g_published is read again and the producer reads it after
-             * publishing, both interlocked, so a publish in between is
-             * either seen here or wakes the wait. Charging the idle clock
+             * publishing, all four seq_cst (rule 3 above), so a publish in
+             * between is either seen here or wakes the wait. Charging the idle clock
              * on every pass, and the wait's 50 ms bound, are what let a
              * pool parked for twenty seconds under the watchdog still add
              * up to the span the report divides by. */
             if (++spins > 4000) {
-                LONGLONG seen = mine;
+                int64_t seen = mine;
                 charge(W, &W->idle);
-                InterlockedIncrement(&g_sleepers);
-                if (g_published == seen) WaitOnAddress((volatile VOID*)&g_published, &seen, sizeof seen, 50);
-                InterlockedDecrement(&g_sleepers);
+                plat_inc32(&g_sleepers);
+                if (plat_load64(&g_published) == seen) plat_wait64(&g_published, seen, 50);
+                plat_dec32(&g_sleepers);
                 spins = 0;
             } else {
                 YieldProcessor();
@@ -1805,12 +1809,12 @@ static DWORD WINAPI worker(LPVOID arg)
         }
         charge(W, &W->idle);
         /* The producer fills a slot before it publishes the count, and the
-         * count was read with an acquire load, so the command is there on any
-         * machine -- this one does not reorder two loads, and an ARM64 would
-         * without it. The barrier is against the compiler alone, stopping it
-         * from reading the command's fields before the spin ends; it emits
-         * nothing. */
-        _ReadWriteBarrier();
+         * count was read with plat_load64 (rule 1 above), so the command is
+         * there on any machine -- this one does not reorder two loads, and an
+         * ARM64 would without it. The barrier is against the compiler alone,
+         * stopping it from reading the command's fields before the spin
+         * ends; it emits nothing. */
+        plat_compiler_barrier();
         D = &g_queue[mine & QMASK];
         if (D->seq != mine)
             WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
@@ -1826,8 +1830,8 @@ static DWORD WINAPI worker(LPVOID arg)
          * says so rather than hide it. */
         charge(W, &W->busy);
         mine++;
-        InterlockedExchange64(&g_ran[id], mine);
-        if (g_fence_sleepers) WakeByAddressAll((PVOID)&g_ran[id]); /* a worker parked at a fence on this count */
+        plat_xchg64(&g_ran[id], mine);
+        if (plat_load32(&g_fence_sleepers)) plat_wake_all64(&g_ran[id]); /* a worker parked at a fence on this count */
     }
 }
 #endif
@@ -2080,7 +2084,7 @@ static void drain(int why)
     uint64_t t0;
     if (!g_queue) return;
     /* Read once: this thread is the only writer, so the target cannot move. */
-    target = g_published;
+    target = g_published; /* own count */
     /* The wait is the producer's idle, and it used to be charged to whichever
      * of draw, prepare and copies happened to enclose the call -- and to
      * nothing at all from GXDrawDone. It is its own bucket now, and it is the
@@ -2096,7 +2100,7 @@ static void drain(int why)
      * SOA_THREADS=16 cost 3.1-3.5s and 12-15s of CPU each without it, and
      * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
-        while (LOAD_ACQUIRE64(&g_ran[i]) < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (plat_load64(&g_ran[i]) < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
     {
         uint64_t t1 = gxr_ticks();
         g_wait_n[why]++;
@@ -2452,7 +2456,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         TIMED(T_RASTER, draw_command(D));
         /* Run here and finished here, so the numbering still advances and the
          * arena is free again. */
-        InterlockedIncrement64(&g_published);
+        plat_inc64(&g_published);
         g_arena_used = 0;
     }
 }
@@ -2596,7 +2600,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
 
 static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
 static int g_screen_w = EFB_W, g_screen_h = 480;
-static volatile LONG g_frames_presented; /* copies to the screen completed by all rows */
+static plat_a32 g_frames_presented; /* copies to the screen completed by all rows */
 
 /* One filtered EFB sample: the three rows the copy filter reads, weighted and
  * divided by 64.
@@ -2679,7 +2683,7 @@ static void run_copy(const DrawCmd* D)
     else copy_to_texture(D, D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
     if ((D->cp_v & 0x800u) && !copy_reads_foreign_rows(D))
         efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
-    if (D->cp_v & 0x4000u) InterlockedIncrement(&g_frames_presented);
+    if (D->cp_v & 0x4000u) plat_inc32(&g_frames_presented);
 }
 
 /* The deferred half of the command above, published after a drain. */
@@ -2795,7 +2799,7 @@ void gxr_hook_hazard(uint32_t addr, uint32_t bytes)
 
 long gxr_presented(void)
 {
-    long n = LOAD_ACQUIRE32(&g_frames_presented);
+    long n = plat_load32(&g_frames_presented);
     return g_workers > 0 ? n / g_workers : n;
 }
 
@@ -2931,7 +2935,7 @@ static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
     } else {
         t_tid = 1;
         TIMED(T_RASTER, draw_command(D));
-        InterlockedIncrement64(&g_published);
+        plat_inc64(&g_published);
         g_arena_used = 0;
     }
 }
@@ -3016,11 +3020,11 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     near_rows = !g_legacy && filtered && !half && (g_nthreads <= 1 || (unsigned)y0 % (unsigned)g_nthreads == 0);
     want_near = 0;
     if (to_screen || (foreign && !near_rows)) {
-        want = g_published;
+        want = g_published; /* own count */
     } else {
         long long c = bytes ? pending_overlap(dest, bytes) : -1;
         want = c >= 0 ? c + 1 : 0;
-        if (foreign) want_near = g_published;
+        if (foreign) want_near = g_published; /* own count */
     }
     D = claim_slot(1, want, want_near);
     D->s = s;
@@ -3052,7 +3056,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     } else {
         t_tid = 1;
         TIMED(T_RASTER, draw_command(D));
-        InterlockedIncrement64(&g_published);
+        plat_inc64(&g_published);
         g_arena_used = 0;
     }
     /* A copy that samples rows it does not own has to be over before anything
