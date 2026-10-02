@@ -96,7 +96,11 @@ The owner answered four questions, with the research behind them summarised in t
     hand-written pair otherwise.
   - **L6's `config/libm.tsv` may be pinned once the exhaustive comparison agrees.** Its commit quotes
     how many inputs the 50-digit reference arbitrated. A replay hash that moves still goes to the owner.
-- **Still open, and still the owner's:** D-19 (a GPU picture judged by a tolerance) before V0; G3,
+- **Before M5, the owner's answers of 2026-10-02:** **D-19, yes:** a GPU picture judged by a
+  tolerance, with the CPU renderer kept as the pinned reference and the fallback. **D-20, yes:**
+  about three to four weeks of evenings on V0-V4b before the gate. D-17 and D-18 were already
+  settled by the table above (Android firm; Vulkan headers and a shader compiler may be fetched).
+- **Still open, and still the owner's:** G3,
   distribution (assumed for now: the owner's own devices, built from source on the PC); the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec); D-26 (2× and 3×, and 21:9, at the gate).
@@ -773,9 +777,9 @@ until you say otherwise.
 | D-15 | clang-cl as the default compiler, if it is exact and faster | portability Q3 | after L3b | **answered 2026-10-02: the owner plays `gen/clang/soa.exe`; MSVC stays the tools' default and the build that pins the hashes** |
 | D-16 | ARM hardware that matters | portability Q4 | L11 | none |
 | **D-17** | Is Android a firm goal? | portability Q7 = GPU Q-V1 | V3a (the API); L12 | Vulkan for the spike (gpu-backend V3a's rule); L12 stays gated |
-| D-18 | The build may fetch Vulkan headers and glslang into `vendor/` | GPU Q-V3 | V3a | ask before M5; D3D11 needs neither |
-| D-19 | Accept a GPU picture judged by a tolerance, with the CPU renderer as reference | GPU Q-V4 | V0 | ask before M5 |
-| D-20 | Three to four weeks of evenings for the spike | GPU Q-V5 | M5 | ask before M5 |
+| D-18 | The build may fetch Vulkan headers and glslang into `vendor/` | GPU Q-V3 | V3a | **settled by §0 (2026-09-30): Vulkan and a build-time shader compiler are allowed, fetched, never committed** |
+| D-19 | Accept a GPU picture judged by a tolerance, with the CPU renderer as reference | GPU Q-V4 | V0 | **answered 2026-10-02: yes** |
+| D-20 | Three to four weeks of evenings for the spike | GPU Q-V5 | M5 | **answered 2026-10-02: yes, start M5** |
 | D-21 | CPU floor: keep x86-64 with SSE4.1 checked at run time, or require AVX2 | portability Q5 | an H13 reopen, L5 | keep today's floor |
 | D-22 | Store format, per-file hashes, scrubbed dumps | disc Q1, Q2, Q4, Q7 | G5 | D5's default |
 | D-23 | Text deltas for disc files | disc Q3 | I7 (gameplay milestone 2) | yes, as specified |

@@ -513,8 +513,10 @@ C5c) is now done.
    clang-cl, gcc, clang, ARM64 and TSAN all draw the pinned out-of-range
    frame and print the pinned libm hashes. **Next is M5,** by the owner's
    answers (PLAN-NEXT section 0); L9 waits until I1 and I3 have landed in
-   its files. M5's gate asks D-18, D-19 and D-20 before it starts
-   (PLAN-NEXT D1); see section 0 for whether they have been answered.
+   its files. The owner answered M5's questions on 2026-10-02: D-19 yes
+   (a tolerance-judged GPU picture, the CPU renderer the reference) and
+   D-20 yes (three to four weeks of evenings); D-17 and D-18 were
+   settled by section 0. M5 starts at V0 (specs/gpu-backend.md).
    Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
