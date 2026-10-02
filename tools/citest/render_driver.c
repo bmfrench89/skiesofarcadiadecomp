@@ -43,6 +43,18 @@ uint32_t mmio_read32(CpuState* s, uint32_t ea)
  * frame limit here, so it exists only to satisfy the linker. */
 void hle_report(void) {}
 
+/* What the copied checks need from the environment, defined outside the
+ * copy because runtime/selftest.c has its own: there the thread count is
+ * always one; here it is one until L4b gives the driver --threads. SOA_SNAP
+ * is removed: an interval left in the environment would skip the one frame
+ * the checks draw. */
+static void render_env(void)
+{
+    plat_setenv("SOA_RENDER", "1");
+    plat_setenv("SOA_THREADS", "1");
+    plat_setenv("SOA_SNAP", NULL);
+}
+
 /* ---- BEGIN COPY of runtime/selftest.c: check() and the render checks ---- */
 static int check(const char* what, const char* got, const char* want)
 {
@@ -104,9 +116,7 @@ static int render_selftest(CpuState* s, char* got, size_t cap)
     const uint8_t* screen;
     int w = 0, h = 0, failures = 0;
 
-    _putenv("SOA_RENDER=1");
-    _putenv("SOA_THREADS=1");
-    _putenv("SOA_SNAP="); /* a snapshot interval left in the environment would skip the one frame this draws */
+    render_env();
     if (!gxr_enabled()) { fprintf(stderr, "[selftest] renderer disabled; skipping render checks\n"); return 0; }
     gxr_reset_efb();
 

@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "cpu.h"
+#include "plat.h"
 
 #define EFB_W 640
 #define EFB_H 528
@@ -194,14 +195,10 @@ extern int g_gxr_tsc;                 /* -1 undecided, 1 the TSC is usable, 0 us
 
 void gxr_timing_init(void);         /* decide the clock and fix the origin */
 void gxr_timing_finish(void);       /* fix the tick rate; gxr_report calls it */
-uint64_t gxr_qpc(void);             /* QueryPerformanceCounter, raw ticks */
+uint64_t gxr_qpc(void);             /* plat_mono_raw: QueryPerformanceCounter, or CLOCK_MONOTONIC ns */
 double gxr_seconds(uint64_t ticks); /* meaningful once gxr_timing_finish has run */
 double gxr_producer_span(void);     /* seconds the buckets above partition */
-double gxr_clock(void);             /* QueryPerformanceCounter as seconds */
-
-#ifdef _WIN32
-#include <intrin.h>
-#endif
+double gxr_clock(void);             /* gxr_qpc as seconds */
 
 /* About 7 ns a read against QueryPerformanceCounter's 17, which matters
  * because the worker loop reads it twice per queued command and a long run
@@ -211,15 +208,12 @@ double gxr_clock(void);             /* QueryPerformanceCounter as seconds */
  * busy/idle split but not their sum, since the endpoints telescope. Not a
  * serializing instruction, so an out-of-order core can move it by a few
  * instructions: noise over regions of 100 ns and up, and nothing here
- * measures anything shorter. */
+ * measures anything shorter. plat_cycles is the TSC on x86-64 and the generic
+ * timer on ARM64; gxr_timing_finish measures its rate against gxr_qpc. */
 static inline uint64_t gxr_ticks(void)
 {
-#ifdef _WIN32
-    if (g_gxr_tsc > 0) return __rdtsc();
+    if (g_gxr_tsc > 0) return plat_cycles();
     return gxr_qpc();
-#else
-    return 0; /* no clock off Windows; gxr_report says so rather than print zeros */
-#endif
 }
 
 /* Switch to phase p and return the phase left, so a caller can put it back. */

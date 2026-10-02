@@ -19,6 +19,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,7 +101,7 @@ static void disc_read(CpuState* s, uint64_t offset, uint32_t addr, uint32_t leng
         fprintf(stderr, "[dvd] read of %u bytes to %08X leaves MEM1\n", length, addr);
         return;
     }
-    if (g_disc && _fseeki64(g_disc, (long long)offset, SEEK_SET) == 0) got = fread(dst, 1, length, g_disc);
+    if (g_disc && plat_fseek64(g_disc, (int64_t)offset) == 0) got = fread(dst, 1, length, g_disc);
     if (got < length) {
         /* A truncated or partial disc.iso otherwise has no diagnostic at all:
          * the game just gets zeros where an asset should be. Once is enough. */

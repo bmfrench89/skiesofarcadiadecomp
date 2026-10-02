@@ -197,7 +197,7 @@ needs_msvc = pytest.mark.skipif(
 
 def worker_body() -> str:
     """The text of gxr.c's worker(), which is the only rasterizer-side reader."""
-    start = GXR.index("static DWORD WINAPI worker(LPVOID arg)")
+    start = GXR.index("static void worker(void* arg)")
     return GXR[start : GXR.index("\n}\n", start)]
 
 

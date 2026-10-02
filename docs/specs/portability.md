@@ -1233,9 +1233,11 @@ renderer files says they are free (§6 order). Files:*
 
 ### L2. `plat.h`: the queue's ordering completed, and the renderer builds and runs anywhere
 
-*Step 1 landed 2026-10-02 (FINDINGS "L2, step 1"): the queue's x64 code compared unchanged in kind, the grep
-test in place. `plat_cas32` waits for its first caller. The `gxr.c` line numbers below predate C5b; the
-same sites now sit about 18 lines further on.*
+*Landed 2026-10-02 in two commits (FINDINGS "L2, step 1" and "L2, step 2"): the queue's x64 code compared
+unchanged, the grep test in place, and the NDK check at 0 errors over `runtime/*.c` and all 19 `gen/*.c`.
+`plat_cas32` and `plat_mono_ns` from 3.2 wait for their first callers (none is in L2's files). Six Win32
+calls are declared in `plat.h` as the SDK declares them, rather than `<windows.h>` included. The `gxr.c`
+line numbers below predate C5b; the same sites sat about 18 lines further on.*
 
 *A day to several days, in two commits, each checked by the Done lines marked for it. `--link`.
 Prerequisites: L2a. Files:*

@@ -4224,7 +4224,12 @@ are gone from `gxr.c`, and the `Synchronization.lib` pragma moved to
   expand to on x64, and the x64 load is a plain volatile read, which is what
   the SDK's `ReadAcquire64` is there (10.0.26100's AMD64 section: `Value =
   *Source;`). The two waits are declared as `synchapi.h` declares them, so
-  `gxr.c`, which includes both, compiles and links with no warning. The
+  `gxr.c`, which includes both, compiles and links. *Corrected in step 2:
+  not with no warning. `synchapi.h` does not declare these two dllimport
+  (they come from the `Synchronization.lib` API set), so this commit's
+  `__declspec(dllimport)` drew MSVC's C4273, "inconsistent dll linkage",
+  twice in every file that also includes `<windows.h>`; only the tail of
+  that compile was read. Step 2 matches the SDK.* The
   reason is `hle.c`: it includes a lean `<windows.h>` because `mmsystem.h`'s
   `MMIO_READ` collides with its own names, and a `plat.h` that pulled in the
   full header would break it once step 2 has `gxr.h` include `plat.h`.
@@ -4261,3 +4266,66 @@ are gone from `gxr.c`, and the `Synchronization.lib` pragma moved to
   helpers ran the worker pool; `dc_check.py`; the no-skip clang modules;
   `test_gxr_overlap`, `_queue`, `_fastpath` and `test_citest`; `replay
   --threads 1,2,3,8` 23/23; the self test 0 failures; `title --check` 4 of 4.
+
+**L2, step 2: the renderer builds off Windows.** 2026-10-02. The worker
+pool, its waits, its clocks and the files the self test and the disc reader
+use now go through `plat.h`, and `runtime/*.c` compiles for Android. Base:
+dd87a59.
+
+- **`plat.h` gains** the storage classes (`PLAT_THREAD_LOCAL`,
+  `PLAT_ALIGN`); `plat_relax`, `plat_yield` and `plat_sleep_ms`; the waits
+  on Linux and Android (a private futex on the counter's low 32 bits) and a
+  1 ms poll anywhere else, said once; clocks (`plat_mono_raw` and
+  `plat_mono_hz`, which are QueryPerformanceCounter or `CLOCK_MONOTONIC`;
+  `plat_cycles`, the TSC or `CNTVCT_EL0`; `plat_cycles_invariant`); threads
+  (`plat_thread_start` through `_beginthreadex` or `pthread_create`, a heap
+  block carrying the function and its argument; `plat_cpu_count`); and
+  `plat_fseek64` and `plat_setenv`.
+- **Six Win32 calls are declared, not included,** each exactly as the SDK
+  declares it: `WaitOnAddress` and `WakeByAddressAll` without dllimport,
+  `Sleep`, the two performance-counter calls and `GetActiveProcessorCount`
+  with it. `union _LARGE_INTEGER` is declared at file scope first, so it is
+  the SDK's tag whichever header comes first. `gxr.h` now includes `plat.h`,
+  which reaches `main.c`, `window.c` and `selftest.c`, and none of them gains
+  `<windows.h>`'s macros by it.
+- **`gxr.c`:** `fence_wait`, `worker` and `publish`'s wake leave `#ifdef
+  _WIN32`; `workers_start` starts the pool with `plat_thread_start` and keeps
+  each HANDLE for `SOA_HOSTPROF`, which stays Windows-only and says so when
+  set elsewhere. `gxr.h`'s `gxr_ticks` reads `plat_cycles` or `gxr_qpc`
+  everywhere; off Windows it used to return 0, so a run there had no
+  timings at all.
+- **The CPU count:** `GetSystemInfo`'s `dwNumberOfProcessors` counted the
+  current processor group, and `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`
+  counts all of them. The two differ only past 64 logical processors, where
+  Windows 11 spreads a process's threads over every group anyway. This
+  machine still gets 12 workers by default, and `SOA_HOSTPROF=1` still
+  samples all 12 and the guest thread.
+- **`gx.c`** leaves with `_Exit`, **`dvd.c`** seeks with `plat_fseek64`, and
+  the self test's three render settings move into a `render_env()` outside
+  the block `tools/citest/render_driver.c` copies, each file with its own.
+  `test_gxr_queue.py` found the worker by its Windows signature; it finds
+  `static void worker(void* arg)` now.
+- **The x64 code** against dd87a59, compiled with `toolchain.CFLAGS` and
+  `/FA`: `worker`, `wait_ran`, `fence_wait`, `drain`, `publish`, `ran_min`
+  and `gxr_presented` are identical once the listing's names for stack slots
+  and compiler temporaries are set aside (`c$1` is `v$1`, `tv366` is
+  `tv398`). Every `rdtsc` is still inline; the listing gains one more, in an
+  out-of-line copy of `plat_cycles` that nothing calls. `stall`,
+  `gxr_timing_init` and `workers_start` changed, all cold. Nothing moved, so
+  no timing run.
+- **The NDK check:** the NDK's clang 19.0.1, `-fsyntax-only` over
+  `runtime/*.c` with `--target=aarch64-linux-android29` and with
+  `x86_64-linux-android29`, reports 0 errors (11 at dd87a59, 21 at b071949).
+  Over all 19 `gen/*.c`, at idle priority: 0 errors; 19 `-Wcomment`
+  warnings, one per file from `cpu.h`, and 3 `-Wparentheses-equality`.
+- **What it does not show:** nothing links or runs off Windows yet. The
+  futex wait, the POSIX thread start and `CLOCK_MONOTONIC` have compiled for
+  Android and never run; L4b's Linux leg is the first thing that will run
+  them.
+- **Checks:** `compile_runtime.py` 28/28 under MSVC (no C4273 now) and
+  clang-cl, whose one warning, an unused `x0` in `gxr.c`'s copy code, is
+  older; `render_check.py` under both, the same hash, `63a57c77609efd77`;
+  `dc_check.py`; the no-skip clang modules; `test_gxr_overlap`, `_queue`,
+  `_fastpath`, `_atomics`, `test_citest`, `test_memguard` and
+  `test_profiler`; `replay --threads 1,2,3,8` 23/23; the self test 0
+  failures; `title --check` 4 of 4.

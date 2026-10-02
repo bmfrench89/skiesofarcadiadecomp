@@ -348,13 +348,13 @@ static void frame_end(CpuState* s)
         /* The copy for this frame is already queued (load_bp calls the
          * renderer before us), so flushing here finishes it -- any snapshot
          * is written and the counters are real before the report. Leave with
-         * _exit for the reason window.c does: the rasterizer's workers are
+         * _Exit (C99's _exit) for the reason window.c does: the rasterizer's workers are
          * spinning, and CRT teardown around them can hang. */
         fprintf(stderr, "[boot] %u frames done (SOA_FRAMES)\n", g_frame);
         gxr_flush();
         hle_report();
         fflush(NULL);
-        _exit(0);
+        _Exit(0);
     }
     g_cap_len = 0;
     memcpy(g_cap_cp, g_cp, sizeof g_cp);

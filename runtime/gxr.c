@@ -29,24 +29,14 @@ int g_gxr_tsc = -1;
 
 static double qpc_hz(void)
 {
-#ifdef _WIN32
     static double freq;
-    if (freq == 0.0) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = (double)f.QuadPart; }
+    if (freq == 0.0) freq = plat_mono_hz();
     return freq;
-#else
-    return 0.0;
-#endif
 }
 
 uint64_t gxr_qpc(void)
 {
-#ifdef _WIN32
-    LARGE_INTEGER c;
-    QueryPerformanceCounter(&c);
-    return (uint64_t)c.QuadPart;
-#else
-    return 0;
-#endif
+    return plat_mono_raw();
 }
 
 double gxr_clock(void)
@@ -65,21 +55,12 @@ static double g_ticks_hz, g_cal_seconds;
 void gxr_timing_init(void)
 {
     if (g_gxr_tsc >= 0) return;
-#ifdef _WIN32
     {
         const char* env = getenv("SOA_TSC");
-        int r[4], ok = 0;
-        __cpuid(r, 0x80000000);
-        if ((unsigned)r[0] >= 0x80000007u) {
-            __cpuid(r, 0x80000007);
-            ok = (r[3] >> 8) & 1; /* invariant TSC */
-        }
-        if (env && !atoi(env)) ok = 0; /* SOA_TSC=0: measure with QueryPerformanceCounter */
+        int ok = plat_cycles_invariant(); /* an invariant TSC, or the ARM64 generic timer */
+        if (env && !atoi(env)) ok = 0;    /* SOA_TSC=0: measure with gxr_qpc */
         g_gxr_tsc = ok;
     }
-#else
-    g_gxr_tsc = 0;
-#endif
     g_cal_qpc0 = gxr_qpc();
     g_cal_tick0 = gxr_ticks();
     g_gxr_phase_last = g_cal_tick0;
@@ -127,7 +108,7 @@ static uint64_t g_copies_tex, g_copies_xfb, g_rej_bary;
  * touched per pixel are per thread. */
 #define MAX_THREADS 16
 static int g_nthreads = 1;
-static __declspec(thread) int t_tid;
+static PLAT_THREAD_LOCAL int t_tid;
 /* Indexed by t_tid, which is 1..MAX_THREADS for a worker and 0 for the thread
  * that produces, so there are MAX_THREADS + 1 of them: at SOA_THREADS=16 the
  * last worker used to write one element past these.
@@ -147,7 +128,7 @@ typedef struct {
     uint64_t fence_ticks; /* the part of idle spent at fences (H14) */
     uint64_t fences;      /* fenced commands this worker waited at */
 } ThreadState;
-static __declspec(align(64)) ThreadState g_ts[MAX_THREADS + 1];
+static PLAT_ALIGN(64) ThreadState g_ts[MAX_THREADS + 1];
 /* The alignment above only puts the array on a line; what puts each element
  * on its own is the size, and a field added without shrinking the padding
  * would quietly undo the whole point of it. */
@@ -203,7 +184,7 @@ static void stall(int id, int kind)
     for (i = 0; i < g_stall_n; i++)
         if (g_stall[i].worker == id && g_stall[i].kind == kind) {
             double end = gxr_clock() + g_stall[i].us * 1e-6;
-            while (gxr_clock() < end) YieldProcessor();
+            while (gxr_clock() < end) plat_relax();
         }
 }
 
@@ -1639,9 +1620,7 @@ static plat_a32 g_sleepers;
 static void publish(void)
 {
     plat_inc64(&g_published);
-#ifdef _WIN32
     if (plat_load32(&g_sleepers)) plat_wake_all64(&g_published);
-#endif
 }
 
 /* The oldest command some worker has not finished: every worker has finished
@@ -1675,7 +1654,7 @@ static void wait_ran(long long c, int why)
     prev = gxr_phase(T_WAIT);
     t0 = gxr_ticks();
     for (i = 1; i <= g_workers; i++)
-        while (plat_load64(&g_ran[i]) <= c) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (plat_load64(&g_ran[i]) <= c) { if (++spins > 4000) { plat_yield(); spins = 0; } else plat_relax(); }
     t1 = gxr_ticks();
     g_wait_n[why]++;
     if (t1 > t0) g_wait_ticks[why] += t1 - t0;
@@ -1716,7 +1695,6 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
     return D;
 }
 
-#ifdef _WIN32
 /* Workers parked at a fence in plat_wait64 on another worker's count. A
  * worker raising its count wakes them only when there are any, the pattern
  * H11 gave the idle spin. */
@@ -1756,7 +1734,7 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
                 plat_dec32(&g_fence_sleepers);
                 spins = 0;
             } else {
-                YieldProcessor();
+                plat_relax();
             }
         }
     }
@@ -1765,10 +1743,8 @@ static void fence_wait(ThreadState* W, int self, long long all, long long nbr)
     W->fences++;
     plat_compiler_barrier(); /* the compiler's half: the load above is the machine's */
 }
-#endif
 
-#ifdef _WIN32
-static DWORD WINAPI worker(LPVOID arg)
+static void worker(void* arg)
 {
     int id = (int)(intptr_t)arg; /* 1..workers */
     /* This worker's own count, kept here rather than read back out of g_ran so
@@ -1804,7 +1780,7 @@ static DWORD WINAPI worker(LPVOID arg)
                 plat_dec32(&g_sleepers);
                 spins = 0;
             } else {
-                YieldProcessor();
+                plat_relax();
             }
         }
         charge(W, &W->idle);
@@ -1834,7 +1810,6 @@ static DWORD WINAPI worker(LPVOID arg)
         if (plat_load32(&g_fence_sleepers)) plat_wake_all64(&g_ran[id]); /* a worker parked at a fence on this count */
     }
 }
-#endif
 
 /* ---- SOA_HOSTPROF: where the host's time goes, by function and line -------
  *
@@ -2020,7 +1995,12 @@ static void hostprof_report(void)
     SymCleanup(GetCurrentProcess());
 }
 #else
-static void hostprof_start(int n) { (void)n; }
+static void hostprof_start(int n)
+{
+    const char* env = getenv("SOA_HOSTPROF");
+    (void)n;
+    if (env && atoi(env)) fprintf(stderr, "[hostprof] SOA_HOSTPROF is Windows-only here (it suspends threads and reads gen/soa.pdb); not sampling\n");
+}
 static void hostprof_report(void) {}
 #endif
 
@@ -2034,28 +2014,24 @@ static void workers_start(void)
     g_pool_t0 = gxr_ticks();
     g_queue = (DrawCmd*)malloc(sizeof(DrawCmd) * QUEUE_CAP);
     g_arena = (uint8_t*)malloc(ARENA_BYTES);
-#ifdef _WIN32
     if (n <= 0) {
-        SYSTEM_INFO si;
-        GetSystemInfo(&si);
         /* Three quarters of the logical CPUs (FINDINGS "H15c"). On the
          * 16-thread machine this was measured on, 12 workers ran the Dangral
          * base at 27 fps against 25 at 10, 24 at 14 and 19 at the old half;
          * the rest of the machine is the guest thread, the audio and the
          * window, and fifteen workers took the guest thread's core. */
-        n = (int)si.dwNumberOfProcessors * 3 / 4;
+        n = plat_cpu_count() * 3 / 4;
         if (n < 1) n = 1;
     }
     if (n > MAX_THREADS) n = MAX_THREADS;
     for (i = 1; i <= n; i++) {
-        HANDLE h = CreateThread(NULL, 0, worker, (LPVOID)(intptr_t)i, 0, NULL);
-        if (!h) { n = i - 1; break; }
-        g_worker_handle[i] = h; /* kept for SOA_HOSTPROF, which samples through it */
+        PlatThread t;
+        if (!plat_thread_start(&t, worker, (void*)(intptr_t)i, 0)) { n = i - 1; break; }
+#ifdef _WIN32
+        g_worker_handle[i] = (HANDLE)t.os; /* kept for SOA_HOSTPROF, which samples through it */
+#endif
     }
     hostprof_start(n);
-#else
-    n = 0;
-#endif
     g_workers = n;
     g_nthreads = n > 0 ? n : 1;
     fprintf(stderr, "[gxr] rasterizing on %d worker thread%s\n", n, n == 1 ? "" : "s");
@@ -2094,13 +2070,13 @@ static void drain(int why)
     t0 = gxr_ticks();
     /* Backing off matters here for the reason it does in the worker's own
      * spin, which this copies: at SOA_THREADS near the core count the producer
-     * and the workers compete for the same cores, and a bare YieldProcessor()
+     * and the workers compete for the same cores, and a bare plat_relax()
      * takes one away from the very threads being waited on. With four of these
      * processes sharing sixteen cores, 400 flushes of a full-screen draw at
      * SOA_THREADS=16 cost 3.1-3.5s and 12-15s of CPU each without it, and
      * 1.5-1.6s and 5.6-7.4s with it. */
     for (i = 1; i <= g_workers; i++)
-        while (plat_load64(&g_ran[i]) < target) { if (++spins > 4000) { Sleep(0); spins = 0; } else YieldProcessor(); }
+        while (plat_load64(&g_ran[i]) < target) { if (++spins > 4000) { plat_yield(); spins = 0; } else plat_relax(); }
     {
         uint64_t t1 = gxr_ticks();
         g_wait_n[why]++;

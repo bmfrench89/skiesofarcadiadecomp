@@ -59,6 +59,18 @@ static void call(CpuState* s, uint32_t fn)
     dispatch(s, fn);
 }
 
+/* What the render checks need from the environment, set outside the block
+ * tools/citest/render_driver.c copies, because the two set the thread count
+ * differently: here it is always one, so the port's self test never changes.
+ * SOA_SNAP is removed: an interval left in the environment would skip the one
+ * frame the checks draw. */
+static void render_env(void)
+{
+    plat_setenv("SOA_RENDER", "1");
+    plat_setenv("SOA_THREADS", "1");
+    plat_setenv("SOA_SNAP", NULL);
+}
+
 static int check(const char* what, const char* got, const char* want)
 {
     int ok = strcmp(got, want) == 0;
@@ -119,9 +131,7 @@ static int render_selftest(CpuState* s, char* got, size_t cap)
     const uint8_t* screen;
     int w = 0, h = 0, failures = 0;
 
-    _putenv("SOA_RENDER=1");
-    _putenv("SOA_THREADS=1");
-    _putenv("SOA_SNAP="); /* a snapshot interval left in the environment would skip the one frame this draws */
+    render_env();
     if (!gxr_enabled()) { fprintf(stderr, "[selftest] renderer disabled; skipping render checks\n"); return 0; }
     gxr_reset_efb();
 
@@ -341,7 +351,7 @@ static int card_selftest(CpuState* s, char* got, size_t cap)
         failures += check("card untouched at entry", "a card is already open", "nothing opened yet");
         return failures;
     }
-    _putenv("SOA_CARD=" CARD_IMAGE);
+    plat_setenv("SOA_CARD", CARD_IMAGE);
 
     /* The checks below describe a card nobody has written, so the image from
      * the last run has to be gone. If it is not -- a stale handle, a
