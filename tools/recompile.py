@@ -132,7 +132,7 @@ def link_command(p: toolchain.Profile, out: Path, objs: list[Path]) -> list[str]
 
     Every runtime file is globbed, so runtime_support_sources() is not added
     here: it is for the tests that link a few runtime files, and plat.c would
-    otherwise be on this line twice once L7 creates it."""
+    otherwise be on this line twice."""
     return [
         *p.cflags,
         "/Zi",
