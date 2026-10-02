@@ -31,11 +31,9 @@ import argparse
 import os
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +43,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import fifo  # noqa: E402
 import fifopair  # noqa: E402
 import perfbench  # noqa: E402
+from soa.png import read_rgba, write_rgba  # noqa: E402
 
 EXE = ROOT / "gen" / "soa.exe"
 SET = ROOT / "build" / "perfset"
@@ -172,45 +171,6 @@ def verdicts(scene: str, runs: dict, want: list, want_mut: list) -> list:
 # --------------------------------------------------------------------------
 # images: the port's own PNGs only (runtime/png.c: 8-bit RGBA, filter 0)
 # --------------------------------------------------------------------------
-
-
-def read_rgba(path: Path) -> tuple:
-    d = path.read_bytes()
-    if d[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError(f"{path}: not a PNG")
-    i, idat, w, h = 8, [], 0, 0
-    while i + 8 <= len(d):
-        n = int.from_bytes(d[i : i + 4], "big")
-        tag, body = d[i + 4 : i + 8], d[i + 8 : i + 8 + n]
-        if tag == b"IHDR":
-            w, h = int.from_bytes(body[0:4], "big"), int.from_bytes(body[4:8], "big")
-            if (body[8], body[9]) != (8, 6):
-                raise ValueError(f"{path}: not 8-bit RGBA, so not the port's")
-        elif tag == b"IDAT":
-            idat.append(body)
-        i += 12 + n
-    if not w:
-        raise ValueError(f"{path}: no IHDR")
-    raw = zlib.decompress(b"".join(idat))
-    stride = 1 + w * 4
-    if any(raw[y * stride] for y in range(h)):
-        raise ValueError(f"{path}: a filtered row, so not the port's")
-    return w, h, b"".join(raw[y * stride + 1 : (y + 1) * stride] for y in range(h))
-
-
-def write_rgba(path: Path, w: int, h: int, rgba: bytes) -> None:
-    def chunk(tag: bytes, body: bytes) -> bytes:
-        crc = zlib.crc32(tag + body).to_bytes(4, "big")
-        return len(body).to_bytes(4, "big") + tag + body + crc
-
-    raw = b"".join(b"\x00" + rgba[y * w * 4 : (y + 1) * w * 4] for y in range(h))
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
-    path.write_bytes(
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", ihdr)
-        + chunk(b"IDAT", zlib.compress(raw, 6))
-        + chunk(b"IEND", b"")
-    )
 
 
 def differing(a: bytes, b: bytes) -> int:

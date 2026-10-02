@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1140 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1153 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1140 |
+| Python tests | 1153 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -516,7 +516,13 @@ C5c) is now done.
    its files. The owner answered M5's questions on 2026-10-02: D-19 yes
    (a tolerance-judged GPU picture, the CPU renderer the reference) and
    D-20 yes (three to four weeks of evenings); D-17 and D-18 were
-   settled by section 0. M5 starts at V0 (specs/gpu-backend.md).
+   settled by section 0. **V0 is done** (FINDINGS "V0"): `tools/imgdiff.py`,
+   its thresholds frozen by mutations, with a filter test added because
+   3.12's metric passed a one-pixel shift and a second vertical blur.
+   The references are in `build/gpu-oracle/ref/` (corpus and perfset).
+   **Next is V1:** live runs of the game, one `soa.exe` at a time, to
+   capture menus, scene-to-texture copies and a mask frame with casters
+   into `build/gpuset` (never `build/fifo`).
    Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

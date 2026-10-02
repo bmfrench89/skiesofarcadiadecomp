@@ -631,7 +631,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 
 | # | Slice | Size | Rebuild | Needs first | Owner |
 |---|---|---|---|---|---|
-| 1 | **V0** the frame oracle (`tools/imgdiff.py`), thresholds frozen by mutations; the benchmark references opened | a day | none | C5c, or C5a refuted (the references are the corpus as it will stay) | — |
+| 1 | **V0** the frame oracle (`tools/imgdiff.py`), thresholds frozen by mutations; the benchmark references opened. **Done** 2026-10-02 (FINDINGS "V0"): 3.12's metric plus a filter test, which a shift and a second blur needed | a day | none | C5c, or C5a refuted (the references are the corpus as it will stay) | — |
 | 2 | **V1** the captures the corpus lacks: menus, scene-to-texture, a mask effect with casters, kept as consecutive frames | a day | none (live runs, one at a time) | V0; C5b, or C5a refuted (then no mask capture with casters) | — |
 | 3 | **V2** the seam: `gxr_cmd.h`, a reachable zero-worker path (`SOA_GXR_INLINE`), the passthrough backend, copy clears as their own commands, `tex_gen` | a day to several days | `--link` | L2; H17a (which added `DrawCmd.efb`; V2 moves it into the header and does not redo it) | — |
 | 4 | **V3a** headless Vulkan harness: fetch, build, the EFB pass with CPU clipping, geometry self test | several days | none | V2; D-17 "yes" or unanswered | — |

@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1138 passed, 2 skipped in 202.12s
+1151 passed, 2 skipped in 216.39s
 ```
 
-1140 tests in 61 files, none of which reads the disc. The two FMA probes of
+1153 tests in 62 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -60,6 +60,7 @@ its own and run it, some of the C as well:
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
+| `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
@@ -116,10 +117,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1138 passed, 2 skipped` |
-| no capstone | `1119 passed, 3 skipped` |
-| no MSVC | `762 passed, 378 skipped` |
-| neither | `743 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1151 passed, 2 skipped` |
+| no capstone | `1132 passed, 3 skipped` |
+| no MSVC | `775 passed, 378 skipped` |
+| neither | `756 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1070,6 +1071,38 @@ right answer is known exactly, is `tools/tests/test_gxr_pair.py` in section 1.
 
 ---
 
+### The frame oracle (V0)
+
+A GPU renderer cannot reproduce these hashes: edges, interpolation and
+blending round differently. `tools/imgdiff.py` is the tolerance that judges it
+instead (specs/gpu-backend.md 3.12), frozen before any GPU frame existed:
+
+```
+python tools/imgdiff.py REF.png CAND.png [--heat out.png]   # one pair: metrics and a verdict
+python tools/imgdiff.py refs [--set corpus|perfset|gpuset]  # the CPU references, 6 s for the corpus
+python tools/imgdiff.py mutate                              # the thresholds against ten mutations, 3 min
+```
+
+Per pixel, d is the largest of |R-C| over red, green and blue: exact at 0, near
+at 1-16, far above. A frame passes with far pixels under 1%, at most 64 blob
+pixels (far pixels whose eight neighbours are far too) and no blob over 32,
+MAE at most 1.5, |bias| at most 0.75 per channel, and the filter test: the
+error regressed on the reference's first difference (S) and second difference
+(L) per axis, |S| at most 0.25 and |L| at most 0.10. The filter test catches
+what the rest pass: a frame drawn a pixel over (S = -1) and a second vertical
+1:2:1 filter (L = 0.25), whose errors are small and everywhere.
+
+`refs` replays each capture from a scratch copy, with no `SOA_*` in the
+environment but `SOA_SETTINGS=0`, `SOA_HASH=1` and `SOA_THREADS=4`, and keeps
+the frames in `build/gpu-oracle/ref/<set>/`; every corpus frame must hash to
+the manifest. `mutate` runs ten mutations over the corpus references: identity,
++-1 noise, 0.3% scattered pixels and a one-pixel diagonal line must pass on
+all 23; a black 24x24 block on the most detailed region, +4 brightness, a
+red-blue swap, a washed-out transform, a one-pixel shift and a second vertical
+blur must fail on all 23 but the blind spots `BLIND_SPOTS` lists with their
+reasons (two near-white boot frames for brightness, two grey frames for the
+swap). The verdict and the thresholds are FINDINGS "V0"'s.
+
 ## 6. The decompilation check
 
 ```
@@ -1209,12 +1242,13 @@ perfectly the whole time.
 | `SOA_SELFTEST=1` | **yes** | — | no | **yes** | no | no |
 | `scenario.py run … --check` | **yes** | — | no | **yes** | no | no |
 | `scenario.py replay` | **yes**³ | — | no | **yes** | **yes** | no |
+| `imgdiff.py refs` and `mutate` | **yes**³ | — | no | **yes** | **yes** | no |
 | `decomp.py` / `matchcheck.py` | **yes** | no | **yes** | no | no | no |
 | `audio_check.py` | **yes** | — | no | **yes** | no | no |
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1140 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1153 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

@@ -4714,3 +4714,83 @@ up that the spec had not foreseen.
   - **`l6-mutation`** (run 37066694789): `plat_f2i` saturating in `plat.h`
     and the host's libm in the driver. Every renderer and libm step on every
     leg is red, and nothing else.
+
+**V0: the frame oracle, frozen before any GPU frame.** 2026-10-02.
+`tools/imgdiff.py` judges a candidate frame against a reference by 3.12's
+metric. Its thresholds are frozen by mutations, and one rule had to be added
+before they failed what a GPU path is likeliest to get wrong.
+
+- **The references.** `refs` replays each capture from a scratch copy, with no
+  `SOA_*` in the environment but `SOA_SETTINGS=0`, `SOA_HASH=1` and
+  `SOA_THREADS=4`, into `build/gpu-oracle/ref/<set>/`.
+  - **The corpus:** all 23 frames hash to `config/fifo_manifest.tsv`. The
+    hash is FNV-1a over the PNG, as `gxr_screen_hash` computes it, and is
+    also checked against the hash the replay printed.
+  - **The 12 benchmark frames** were rendered after each capture was checked
+    against `config/perfset_manifest.tsv`, and each was opened once:
+    - **battle 4000 and 4001:** Vyse, a party member and a Soldier on a red
+      grid floor, the turn gauge at 2/8. In the second frame the floor's tint
+      has pulsed and the target rings moved.
+    - **corpus 15800:** a pre-C5 capture of Vyse from behind in a riveted
+      room of the a101b ship, the minimap lower right. The teal patch under
+      him is the shadow volume as the pre-C5b stream draws it.
+    - **corpus 6000:** a pre-C5 close-up of Fina's hood beside a
+      gold-framed panel on a circuit-patterned wall.
+    - **cutscene 4500 and 4501:** Alfonso and a guard behind a railing on his
+      bridge, two green crystal lamps, crew in the foreground, the Vice
+      Captain's line in the dialogue box.
+    - **field 5000 and 5001:** Vyse from behind at Dangral base, the blue
+      anchor save point to the left and the minimap lower right. These
+      predate C5b too, and the dark green patch under him is its shadow
+      volume.
+    - **ship 6000 and 6001:** the Delphinus against the Black Pirates, the
+      command grid and the Prototype Cannon menu.
+    - **sky 4000 and 4001:** the ship from behind over night clouds, with
+      the compass and the altitude gauge.
+- **3.12's metric failed two of V0's own mutations.**
+  - **The one-pixel shift** passed on 3 frames: 1500, 3900 and 6000, with
+    far at most 0.97% and MAE at most 1.46.
+  - **The second 1:2:1 vertical blur** passed on 22 of 23, with MAE
+    0.06-1.19 and far at most 0.8%.
+  - **The rule:** more than three blind spots stops the slice, so the metric
+    changed, not the list.
+- **The filter test.** Per axis, S is the least-squares coefficient of the
+  error on the reference's backward difference, and L on its second
+  difference.
+  - **Measured over the 23:**
+    - the shift: S along x is -1.00 on every frame;
+    - the blur: L along y is 0.23-0.25;
+    - identity, +-1 noise, 0.3% scattered and the diagonal line: within
+      +-0.02;
+    - the black block: up to 0.19 on S and 0.13 on L.
+  - **The thresholds** are |S| at most 0.25, which a half-pixel offset at
+    about 0.5 also fails, and |L| at most 0.10.
+  - **The alternative measured first:** a detail ratio, sum |dC| over sum
+    |dR|. It gave the blur 0.78-0.96, too near 1 for a margin.
+- **The thresholds, frozen, and what set each:**
+  - **3.12's five proposals stand;** no mutation needed one moved.
+  - **Blob at most 64 and largest at most 32:** the black block fails them
+    on every frame (22 x 22 = 484 blob pixels).
+  - **MAE at most 1.5 and |bias| at most 0.75:** +-1 noise passes them (MAE
+    1.0); +4 brightness and the washed-out transform fail them.
+  - **Far at most 1%:** the shift and the blur pass it, which is why the
+    filter test exists.
+- **The result over the 23** (3 min 10 s):
+  - the four noise-like mutations pass everywhere;
+  - the block, washed out, shift and blur fail everywhere;
+  - +4 brightness is blind on 0100 and 0300, nearly white boot frames where
+    the clamp leaves 89% and 93% of pixels exact;
+  - the red-blue swap is blind on 0500 and 0700, grey frames where red
+    equals blue at every pixel.
+
+  These four are `BLIND_SPOTS` in `imgdiff.py`, with these reasons. An
+  unlisted one fails the run.
+- **What it does not show:** how a real GPU's legitimate differences score. A
+  consistent edge-rule difference correlates with the gradient at edge pixels.
+  It should score far below a whole-frame shift, and 3.12's by-design rule
+  decides it once V4a has frames.
+- **Also:**
+  - `tools/soa/png.py` holds midpoint.py's PNG reader and writer, moved, plus
+    `screen_hash`.
+  - `test_imgdiff.py` has 13 tests, on synthetic frames, so CI runs them.
+  - pytest: 1151 passed, 2 skipped.

@@ -1035,6 +1035,18 @@ have no matching moment and were judged as new scenes. The owner looked at all 1
 
 ### V0. The frame oracle, frozen before any GPU frame exists
 
+*Landed 2026-10-02 (FINDINGS "V0"). The differences from what follows:*
+- *3.12's metric failed two of this slice's own mutations: the one-pixel shift passed on 3 captures
+  and the second vertical blur on 22. Their errors are small and everywhere, so far pixels and MAE
+  cannot see them. So the metric gained a filter test. The error is regressed on the reference's
+  first difference (S) and second difference (L) per axis, with |S| at most 0.25 and |L| at most
+  0.10. The shift scores -1.00 on every capture and the blur 0.23-0.25; the noise-like mutations
+  stay within 0.02. 3.12's five proposed thresholds stand unchanged.*
+- *The blind spots are +4 brightness on 0100 and 0300 (nearly white boot frames) and the red-blue
+  swap on 0500 and 0700 (grey frames), listed in `imgdiff.py` with their reasons.*
+- *`refs` also checks the replay's printed hash against the PNG's, and verifies each benchmark
+  capture against `config/perfset_manifest.tsv` before rendering it.*
+
 *A day. Rebuild: none. Prerequisites: C5c, or C5a refuted (../PLAN-NEXT.md M5): the references are
 the corpus as it will stay. Files: `tools/imgdiff.py` (new), the PNG reader from
 `tools/midpoint.py` moved to `tools/soa/png.py` (S7b's module, if it has not landed),
