@@ -245,6 +245,43 @@ static int f2i_checks(void)
     return bad != 0;
 }
 
+/* ---- an EFB copy's destination stride ------------------------------------
+ * BP 0x4D is the distance from one row of tiles to the next where a copy
+ * writes, in 32-byte units: GXSetTexCopyDst sets it from the texture the copy
+ * makes, which can be wider than the copy. The battle transition copies the
+ * 640-wide screen into a 1024-wide RGB5A3 texture, and a renderer that packed
+ * the rows drew it as streaks (FINDINGS "V1"). Here a 16x8 red block is
+ * copied as RGB565 with rows 512 bytes apart, four times its own 128: both
+ * rows of tiles must be red where the stride puts them, and the bytes between
+ * must keep the 0xA5 they were given. */
+#define STRIDE_DEST 0x00200000u
+
+static int copy_stride_check(CpuState* s)
+{
+    uint8_t* d = s->mem + STRIDE_DEST;
+    int bad = 0, i;
+    memset(d, 0xA5, 2048);
+    gxr_reset_efb();
+    gp8(s, 0x80); gp16(s, 4);
+    vertex(s, 0, 0, 50, 0xFF0000FFu); vertex(s, 640, 0, 50, 0xFF0000FFu);
+    vertex(s, 640, 480, 50, 0xFF0000FFu); vertex(s, 0, 480, 50, 0xFF0000FFu);
+    bp_w(s, 0x49, 0); bp_w(s, 0x4A, (7u << 10) | 15u); bp_w(s, 0x4D, 512 / 32);
+    bp_w(s, 0x4B, STRIDE_DEST >> 5);
+    bp_w(s, 0x52, 8u << 3); /* RGB565 to memory, no clear */
+    gxr_flush();
+    for (i = 0; i < 128; i++) {
+        uint8_t want = (i & 1) ? 0x00 : 0xF8; /* 0xF800, big-endian */
+        if (d[i] != want || d[512 + i] != want) bad++;
+    }
+    for (i = 128; i < 512; i++)
+        if (d[i] != 0xA5) bad++;
+    fprintf(stderr, "[render] copy stride: rows of tiles 512 bytes apart, the gap untouched: %s\n",
+            bad ? "FAIL" : "ok");
+    if (bad) fprintf(stderr, "[render] copy stride: %d bytes wrong; the first row's start %02X %02X, at 128 %02X, at 512 %02X\n",
+                     bad, d[0], d[1], d[128], d[512]);
+    return bad != 0;
+}
+
 /* ---- a frame drawn from out-of-range conversions (L6) --------------------
  * Six blocks of the screen, each a quad with one texture coordinate at all
  * four corners, so every pixel of a block samples the same point and the
@@ -378,6 +415,7 @@ int main(int argc, char** argv)
     fprintf(stderr, "[render] second frame hash %016llx (not asserted)\n",
             (unsigned long long)gxr_screen_hash());
     failures += f2i_checks();
+    if (gxr_enabled()) failures += copy_stride_check(&s);
     if (gxr_enabled()) failures += f2i_frame(&s);
     if (g_mmio_reads) fprintf(stderr, "[render] %u MMIO reads, which these frames should not need\n", g_mmio_reads);
     fprintf(stderr, "[render] %s\n", failures ? "FAILED" : "every render check passes");

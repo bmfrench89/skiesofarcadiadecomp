@@ -201,6 +201,7 @@ python tools/citest/render_check.py
 [selftest] render triangle rows         ok    got "complete, 53301 px"
 [render] second frame hash 63a57c77609efd77 (not asserted)
 [render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] copy stride: rows of tiles 512 bytes apart, the gap untouched: ok
 [render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
 [render] every render check passes
 ```
@@ -241,6 +242,7 @@ all 12 routines agree with the host C library
 ...
 [render] second frame hash 63a57c77609efd77 (not asserted)
 [render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] copy stride: rows of tiles 512 bytes apart, the gap untouched: ok
 [render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
 [render] every render check passes
 ```

@@ -4794,3 +4794,46 @@ before they failed what a GPU path is likeliest to get wrong.
     `screen_hash`.
   - `test_imgdiff.py` has 13 tests, on synthetic frames, so CI runs them.
   - pytest: 1151 passed, 2 skipped.
+
+**The battle transition: an EFB copy's destination stride.** 2026-10-02.
+Every random battle in the port began with streaks over unrelated artwork
+where the game shatters the screen into squares. V1's capture of a battle's
+start found it: part G's card on `a116a`, S3's seed-33 walk and accelerator,
+the battle beginning at frame 4421.
+
+- **What the game does.** It copies the 640x480 screen to an RGB5A3 texture
+  at 0x667540 with BP 0x4D = 0x100, 8,192 bytes from one row of tiles to the
+  next. It then samples that texture as 1024x512, with 1,536 texture binds a
+  frame for at least 31 frames, while the image breaks apart.
+- **What the renderer did.** It stored BP 0x4D (`cp_stride`) and never used
+  it, packing the rows 5,120 bytes apart. The copy's 614,400 bytes filled the
+  texture's first 300 rows as streaks (614,400 / (1,024 x 2) = 300). The rest
+  showed whatever was already there: the battle-results screen's artwork.
+- **The fix.**
+  - `copy_to_texture` puts the rows of tiles at the stride.
+  - `copy_bytes` returns the span the copy covers, which the fences and the
+    texture hazard use.
+  - A strided copy makes no copy image. That image describes a texture of the
+    copy's own size, laid out packed, so a strided copy's texture is decoded
+    from memory once its fence has passed.
+  - A stride narrower than the copy's own rows still packs them. Its rows
+    would overlap: the console orders the writes, but the pool writes rows in
+    parallel and cannot. No game sets one.
+- **What surfaced on the way.** The synthetic streams in `tools/citest` set
+  0x28 there for every copy, a value from the screen copy. That made their
+  128-wide RGBA8 copies overlap, and a 3-worker overlap run differed from the
+  1-worker one, until the narrow-stride rule went in. The drivers now set each
+  copy's natural stride.
+- **Checks.**
+  - **Regression:** `render_check`'s driver copies a 16x8 block with its rows
+    512 bytes apart, then checks both rows and the untouched gap. With the
+    fix reverted it fails, the second row landing at byte 128.
+  - **The live run:** at 4421, 4436 and 4451 it shows the clean field, then
+    the field in squares, then the squares scattering. The owner was sent
+    before and after.
+  - **Unchanged:** replay 23/23, because no corpus copy uses a stride other
+    than its own (the mask effect's R8 copies set 0x50, their natural 2,560
+    bytes).
+  - **Also passing:** the self test; `title --check`; `compile_runtime` and
+    `render_check` under MSVC and clang-cl; `queue_check` 18 of 18; and the
+    renderer's test modules, 94 passed.

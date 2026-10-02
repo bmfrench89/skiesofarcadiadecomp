@@ -13,6 +13,8 @@ tools/citest/ that looks at a pixel rather than at whether the C compiles.
 Since L6 the driver also holds plat_f2i to cvttss2si and draws a frame from
 out-of-range conversions whose blocks and hash are pinned; every leg must
 draw it alike, and --cflag=-DPLAT_F2I_SATURATE (ARM64's conversion) fails it.
+And it checks that a copy to memory honours its destination stride (BP 0x4D),
+which the battle transition depends on (FINDINGS "The battle transition").
 Prints the compiler's output, then the driver's; exits non-zero if the build
 fails, the compiler is missing, either check disagrees, or the renderer did
 not start the N workers --threads asks for: a pool that quietly fell back to

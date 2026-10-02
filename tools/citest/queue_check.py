@@ -141,9 +141,11 @@ static void textured(CpuState* s, uint32_t addr, unsigned fmt, unsigned w, unsig
     bp_w(s, 0xC0, 0x088FFFu); /* the texel, not the vertex colour */
 }
 
+/* BP 0x4D is each copy's own row of tiles, in 32-byte units, as
+ * GXSetTexCopyDst would set it: a copy into a texture its own width. */
 static void copy_tex(CpuState* s, uint32_t dest)
 {
-    bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((H - 1) << 10) | (W - 1)); bp_w(s, 0x4D, 0x28);
+    bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((H - 1) << 10) | (W - 1)); bp_w(s, 0x4D, W / 4 * 64 / 32);
     bp_w(s, 0x4B, (dest >> 5) & 0x1FFFFFu);
     bp_w(s, 0x52, 0x000063u); /* RGBA8 to memory, no clear */
 }
@@ -152,7 +154,7 @@ static void copy_tex(CpuState* s, uint32_t dest)
  * over the first tile row of an RGBA8 copy at the same address. */
 static void copy_rows(CpuState* s, uint32_t dest, unsigned rows)
 {
-    bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((rows - 1) << 10) | (W - 1)); bp_w(s, 0x4D, 0x28);
+    bp_w(s, 0x49, 0); bp_w(s, 0x4A, ((rows - 1) << 10) | (W - 1)); bp_w(s, 0x4D, W / 4 * 32 / 32);
     bp_w(s, 0x4B, (dest >> 5) & 0x1FFFFFu);
     bp_w(s, 0x52, 0x000043u); /* RGB565 to memory, no clear */
 }
@@ -482,7 +484,7 @@ static void copy_to_memory(CpuState* s, uint32_t dest, unsigned w, unsigned h)
 {
     bp_w(s, 0x49, 0);
     bp_w(s, 0x4A, ((h - 1) << 10) | (w - 1));
-    bp_w(s, 0x4D, 0x28);
+    bp_w(s, 0x4D, (w + 3) / 4); /* RGB565: a row of 4x4 tiles, 32 bytes each */
     bp_w(s, 0x4B, (dest >> 5) & 0x1FFFFFu);
     bp_w(s, 0x52, 0x000043u);
 }

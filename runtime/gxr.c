@@ -2477,6 +2477,29 @@ static void efb_clear(uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, i
 
 /* Write an EFB rectangle into memory as a texture (GXCopyTex). Tiled like
  * the formats the sampler decodes. */
+/* The bytes from one row of tiles to the next where a copy writes. BP 0x4D
+ * holds them in 32-byte units, and GXSetTexCopyDst sets it from the
+ * texture the copy makes, which can be wider than the copy: the battle
+ * transition copies the 640-wide screen into a 1024-wide RGB5A3 texture,
+ * and packed rows drew it as streaks over whatever the texture held
+ * before (FINDINGS "V1"). A stride narrower than the copy's own rows packs
+ * them instead: its rows would overlap, which the console resolves by
+ * writing them in order and the pool, writing rows in parallel, could not
+ * -- the result would depend on the thread count. No game sets one; the
+ * synthetic streams in tools/citest leave 0x28 there from the screen copy. */
+static uint32_t copy_row_stride(uint32_t stride_reg, uint32_t natural)
+{
+    uint32_t s = (stride_reg & 0x3FFu) * 32u;
+    return s > natural ? s : natural;
+}
+
+/* From a copy's first tile to the end of its last, rows row_bytes apart. */
+static uint32_t copy_extent(uint32_t ow, uint32_t oh, unsigned tw, unsigned th, unsigned bpt, uint32_t row_bytes)
+{
+    uint32_t rows = (oh + th - 1) / th, cols = (ow + tw - 1) / tw;
+    return rows && cols ? (rows - 1) * row_bytes + cols * bpt : 0;
+}
+
 static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, uint32_t v, int x0, int y0, int w, int h)
 {
     uint32_t dest = (dest_reg & 0x1FFFFFu) << 5;
@@ -2495,6 +2518,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
     int ybot = y0 + h - 1 > EFB_H - 1 ? EFB_H - 1 : y0 + h - 1;
     int x, y;
     unsigned tw, th, bpt;
+    uint32_t row_bytes;
     uint8_t* base;
 
     /* map copy formats onto texture formats; anything else is left alone
@@ -2533,7 +2557,8 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
      * on all 39 copies in the corpus. */
     if (half && filtered)
         WARN_ONCE("[gxr] half-scale EFB copy with the vertical filter programmed; the box filter is applied and the vertical filter is not, because their order is not established\n");
-    if ((dest & MEM_MASK) + (size_t)((oh + th - 1) / th) * ((ow + tw - 1) / tw) * bpt > MEM1_SIZE) return;
+    row_bytes = copy_row_stride(D->cp_stride, ((uint32_t)ow + tw - 1) / tw * bpt);
+    if ((dest & MEM_MASK) + (size_t)copy_extent((uint32_t)ow, (uint32_t)oh, tw, th, bpt, row_bytes) > MEM1_SIZE) return;
     base = mem_ptr(s, dest | 0x80000000u);
     for (y = 0; y < oh; y++) {
         if (!my_row(half ? 2 * y : y) && !(half && my_row(2 * y + 1))) continue;
@@ -2541,8 +2566,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
         for (x = 0; x < ow; x++) {
             int sx = x0 + (half ? 2 * x : x), sy = y0 + (half ? 2 * y : y);
             uint8_t px[4] = {0, 0, 0, 255};
-            unsigned tiles_w = (ow + tw - 1) / tw;
-            uint8_t* tile = base + ((y / th) * tiles_w + x / tw) * bpt;
+            uint8_t* tile = base + (size_t)(y / th) * row_bytes + (size_t)(x / tw) * bpt;
             unsigned ix = x % tw, iy = y % th;
             unsigned I;
             if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
@@ -2586,7 +2610,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
         }
         /* The row's texels are this worker's alone, so its image row can be
          * decoded from what was just written (FINDINGS "Copy images"). */
-        if (D->cp_image) tex_decode_row(D->cp_image, base, texfmt, (uint32_t)ow, (uint32_t)y);
+        if (D->cp_image) tex_decode_row(D->cp_image, base, texfmt, (uint32_t)ow, (uint32_t)y); /* packed only */
     }
 }
 
@@ -2715,13 +2739,17 @@ static unsigned copy_texfmt(uint32_t v)
     }
 }
 
-/* What a copy to memory writes, in bytes: its tiled size in the texture
- * format copy_to_texture maps it to, and 0 for a format it does not write. */
-static uint32_t copy_bytes(uint32_t v, int w, int h)
+/* What a copy to memory spans, in bytes, from its first tile to the end of
+ * its last: the rows of tiles row_bytes apart (copy_row_stride), so a copy
+ * into a wider texture spans more than it writes. 0 for a format it does
+ * not write. *packed says whether the rows lie end to end, which is the
+ * only layout a copy image (tex_copy_image) describes. */
+static uint32_t copy_bytes(uint32_t v, int w, int h, uint32_t stride_reg, int* packed)
 {
     unsigned texfmt = copy_texfmt(v), tw, th, bpt;
     int half = (v >> 9) & 1;
-    int ow = half ? w / 2 : w, oh = half ? h / 2 : h;
+    uint32_t ow = (uint32_t)(half ? w / 2 : w), oh = (uint32_t)(half ? h / 2 : h), natural, row;
+    if (packed) *packed = 1;
     if (texfmt == 99) return 0;
     switch (texfmt) {
     case 0: tw = 8; th = 8; bpt = 32; break;
@@ -2729,7 +2757,10 @@ static uint32_t copy_bytes(uint32_t v, int w, int h)
     case 3: case 4: case 5: tw = 4; th = 4; bpt = 32; break;
     default: tw = 4; th = 4; bpt = 64; break;
     }
-    return (uint32_t)(((oh + (int)th - 1) / (int)th) * ((ow + (int)tw - 1) / (int)tw)) * bpt;
+    natural = (ow + tw - 1) / tw * bpt;
+    row = copy_row_stride(stride_reg, natural);
+    if (packed) *packed = row == natural;
+    return copy_extent(ow, oh, tw, th, bpt, row);
 }
 
 /* The newest copy that overlaps [addr, addr + bytes) and some worker has not
@@ -2941,6 +2972,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     uint8_t f_up, f_mid, f_dn;
     int filtered, foreign, near_rows;
     uint32_t dest, bytes;
+    int packed = 1;
     long long want, want_near;
     /* Filtered iff the collapsed kernel is not the exact identity. Asking the
      * weights rather than masking the registers is what makes this right: the
@@ -2996,7 +3028,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         last_frame = frame;
     }
     dest = ((bp[0x4B] & 0x1FFFFFu) << 5) & MEM_MASK;
-    bytes = to_screen ? 0 : copy_bytes(v, w, h);
+    bytes = to_screen ? 0 : copy_bytes(v, w, h, bp[0x4D], &packed);
     if (bytes && g_pending_n == QUEUE_CAP) drain(W_PENDING);
     /* The entry fence (H14). A copy that reads rows other workers own -- and
      * every screen copy, whatever its filter, so that gxr_presented stays a
@@ -3037,7 +3069,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
              * with no workers, where the copy has run by the time anything
              * could sample it, so an image would save nothing and would outlive
              * a CPU write to its bytes. */
-            if (!g_legacy && g_workers > 0 && dest + bytes <= MEM1_SIZE)
+            if (!g_legacy && g_workers > 0 && dest + bytes <= MEM1_SIZE && packed)
                 D->cp_image = tex_copy_image(dest, copy_texfmt(v), (uint32_t)(half ? w / 2 : w), (uint32_t)(half ? h / 2 : h), D->seq);
         }
         g_copies_tex++;

@@ -265,6 +265,7 @@ runs the same two checks the in-port self test runs:
 [selftest] render triangle rows         ok    got "complete, 53301 px"
 [render] second frame hash 63a57c77609efd77 (not asserted)
 [render] plat_f2i: 14 table cases, the unsigned depth cast, and all 4294967296 floats against cvttss2si: ok
+[render] copy stride: rows of tiles 512 bytes apart, the gap untouched: ok
 [render] out-of-range frame: 6 of 6 blocks as worked out by hand; hash aa535458106bed0e, pinned aa535458106bed0e: ok
 [render] every render check passes
 ```
@@ -283,6 +284,9 @@ draws a frame from out-of-range conversions: six blocks of constant texture
 coordinates, some beyond int range or NaN, each one value worked out by hand
 in the driver's comment and checked pixel by pixel, with the frame's hash
 pinned. `--cflag=/DPLAT_F2I_SATURATE`, ARM64's conversion on x86, fails both.
+It also copies a block to memory with its rows of tiles further apart than the
+block's own width (BP 0x4D), as the battle transition does, and checks where
+the rows landed and that the gap between them was left alone.
 
 **`threads_check.py`** — 2.7 s (L7). Builds `runtime/threads.c` and
 `runtime/plat.c` with `tools/citest/threads_driver.c`, and parks and resumes a
