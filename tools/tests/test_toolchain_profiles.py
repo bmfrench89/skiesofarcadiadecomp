@@ -312,6 +312,46 @@ def test_the_gnu_grammar_is_translated():
     ]
 
 
+def test_a_compile_into_a_directory_is_one_gcc_per_source():
+    """cl's /Fo<dir>/ over several sources, which every citest script uses,
+    has no gcc spelling: L4b, which first runs gcc, makes it one command per
+    source, each object named for its source in that directory."""
+    cmds = toolchain.gnu_commands(
+        ["-O2", "/c", "/Iinclude", "/Dstrlen=dc_strlen", "/Foout/", "a/string.c", "b/mem.c"],
+        "gcc",
+        toolchain.GCC,
+    )
+    assert cmds == [
+        [
+            "gcc",
+            "-O2",
+            "-c",
+            "-Iinclude",
+            "-Dstrlen=dc_strlen",
+            "-o",
+            str(Path("out") / "string.o"),
+            "a/string.c",
+        ],
+        [
+            "gcc",
+            "-O2",
+            "-c",
+            "-Iinclude",
+            "-Dstrlen=dc_strlen",
+            "-o",
+            str(Path("out") / "mem.o"),
+            "b/mem.c",
+        ],
+    ]
+    # a link, or a compile naming its object, stays one command
+    assert toolchain.gnu_commands(["x.o", "y.o", "/Fe:prog"], "gcc", toolchain.GCC) == [
+        ["gcc", "x.o", "y.o", "-o", "prog"]
+    ]
+    assert toolchain.gnu_commands(["/c", "/Fox.o", "x.c"], "gcc", toolchain.GCC) == [
+        ["gcc", "-c", "-o", "x.o", "x.c"]
+    ]
+
+
 def test_a_posix_path_that_begins_like_a_flag_is_a_file(monkeypatch):
     monkeypatch.setattr(toolchain.os.path, "exists", lambda a: a == "/Data/soa/gx.c")
     assert toolchain.gnu_args(["/c", "/Data/soa/gx.c", "/DX"]) == ["-c", "/Data/soa/gx.c", "-DX"]

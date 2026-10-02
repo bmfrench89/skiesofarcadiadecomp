@@ -45,13 +45,17 @@ void hle_report(void) {}
 
 /* What the copied checks need from the environment, defined outside the
  * copy because runtime/selftest.c has its own: there the thread count is
- * always one; here it is one until L4b gives the driver --threads. SOA_SNAP
- * is removed: an interval left in the environment would skip the one frame
- * the checks draw. */
+ * always one, and here it is --threads (render_check.py asserts the renderer
+ * started that many). SOA_SNAP is removed: an interval left in the
+ * environment would skip the one frame the checks draw. */
+static int g_threads = 1;
+
 static void render_env(void)
 {
+    char n[16];
+    snprintf(n, sizeof n, "%d", g_threads);
     plat_setenv("SOA_RENDER", "1");
-    plat_setenv("SOA_THREADS", "1");
+    plat_setenv("SOA_THREADS", n);
     plat_setenv("SOA_SNAP", NULL);
 }
 
@@ -164,12 +168,15 @@ static int render_selftest(CpuState* s, char* got, size_t cap)
 }
 /* ---- END COPY ---------------------------------------------------------- */
 
-int main(void)
+int main(int argc, char** argv)
 {
     CpuState s;
     char got[128];
-    int failures;
+    int failures, i;
 
+    for (i = 1; i + 1 < argc; i++)
+        if (!strcmp(argv[i], "--threads")) g_threads = atoi(argv[++i]);
+    if (g_threads < 1) g_threads = 1;
     memset(&s, 0, sizeof s);
     s.mem = (uint8_t*)calloc(1, MEM1_SIZE);
     if (!s.mem) {

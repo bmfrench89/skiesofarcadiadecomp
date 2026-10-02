@@ -12,12 +12,12 @@ void __fill_mem(void* dst, int val, size_t n)
        and the pointer used to be a parameter: declare them after v and the
        object is the same instructions with r6 and r7 exchanged. */
     unsigned char* b = (unsigned char*)dst - 1;
-    unsigned long* w;
-    unsigned long v = (unsigned char)val;
-    unsigned long i;
+    u32* w;
+    u32 v = (unsigned char)val;
+    u32 i;
 
     if (n >= 32) {
-        i = (unsigned long)(~(size_t)b & 3);
+        i = (u32)(~(size_t)b & 3);
 
         if (i) {
             n -= i;
@@ -30,9 +30,9 @@ void __fill_mem(void* dst, int val, size_t n)
         if (v)
             v |= v << 24 | v << 16 | v << 8;
 
-        w = (unsigned long*)(b - 3);
+        w = (u32*)(b - 3);
 
-        i = (unsigned long)(n >> 5);
+        i = (u32)(n >> 5);
 
         if (i)
             do {
@@ -46,7 +46,7 @@ void __fill_mem(void* dst, int val, size_t n)
                 *++w = v;
             } while (--i);
 
-        i = (unsigned long)((n & 31) >> 2);
+        i = (u32)((n & 31) >> 2);
 
         if (i)
             do

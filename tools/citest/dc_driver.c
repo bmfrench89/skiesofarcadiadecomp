@@ -1,8 +1,8 @@
 /*
  * Check the hand-decompiled MSL routines against the host C library.
  *
- * tools/citest/dc_check.py compiles src/sdk/msl/string.c and mem.c with the
- * same /Ddc_* renames the native twin build uses, links them with this driver
+ * tools/citest/dc_check.py compiles every unit config/GEAE8P/units.txt marks
+ * native with the /Ddc_* renames the native twin build uses, links them with this driver
  * and runs it, so every dc_ routine below is the decompiled code itself
  * sitting beside the host's own strlen and friends. tools/decomp.py already
  * proves those units assemble to the original's bytes; what that cannot see
@@ -28,6 +28,9 @@ char* dc_strcat(char* dst, const char* src);
 char* dc_strncpy(char* dst, const char* src, size_t n);
 void* dc_memcpy(void* dst, const void* src, size_t n);
 void* dc_memset(void* dst, int val, size_t n);
+char* dc_strcpy(char* dst, const char* src);
+int dc_fn_8025EF88(const char* a, const char* b); /* strcmp: the game's own name for it */
+char* dc_strstr(const char* str, const char* pat);
 
 #define ITER 3000
 #define CAP 192 /* bytes a routine may touch */
@@ -301,14 +304,12 @@ static unsigned test_memcpy(void)
     return bad;
 }
 
-/* Less of this one is decompiled than it looks. mem.c's memset is a two-line
- * wrapper around __fill_mem, which nobody has decompiled: the rename makes it
- * dc___fill_mem, and runtime/decomp_shims.c answers that with the host memset.
- * So the bytes compared below are the host's own fill on both sides, and what
- * this really pins is the wrapper -- the argument order and the returned
- * pointer, which are exactly what a twin swapped into decomp_swap.c gets
- * wrong. It becomes a check of the fill itself the day __fill_mem lands in
- * src/ (PLAN F3). */
+/* mem.c's memset is a two-line wrapper around __fill_mem, and the rename
+ * makes that dc___fill_mem, which is src/sdk/msl/fillmem.c's decompiled body:
+ * the fill itself is checked here, its word loop included (lengths reach 32,
+ * where it starts writing four bytes at a time), along with the wrapper's
+ * argument order and returned pointer. Until fillmem.c landed this compared
+ * the host's own fill on both sides. */
 static unsigned test_memset(void)
 {
     unsigned bad = 0, i;
@@ -335,19 +336,131 @@ static unsigned test_memset(void)
     return bad;
 }
 
+/* An offset into a buffer that puts p + offset at the same word alignment as
+ * `like`, half the time, and anywhere in 0..3 otherwise. strcpy and strcmp
+ * take their word-at-a-time path only when both pointers share an alignment,
+ * and a random pair shares one only a quarter of the time. */
+static size_t align_like(const void* p, const void* like)
+{
+    if (rnd() & 1) return (size_t)(((uintptr_t)like - (uintptr_t)p) & 3);
+    return rnd_upto(3);
+}
+
+/* The word loop copies four bytes at a time while none of them is zero, and
+ * reads the source a word at a time, so the strings are long enough to take
+ * it and every result is compared with its guard bands: a word written past
+ * the terminator shows as a difference there. */
+static unsigned test_strcpy(void)
+{
+    unsigned bad = 0, i;
+    for (i = 0; i < ITER; i++) {
+        unsigned char got[BUF], want[BUF];
+        char srcbuf[CAP + 4];
+        size_t doff = rnd_upto(3), soff;
+        char *src, *r;
+        memset(got, FRESH, sizeof got);
+        memcpy(want, got, sizeof want);
+        soff = align_like(srcbuf, got + PAD + doff);
+        src = srcbuf + soff;
+        make_string(src, CAP - 4);
+        r = dc_strcpy((char*)got + PAD + doff, src);
+        strcpy((char*)want + PAD + doff, src);
+        if (r != (char*)got + PAD + doff || memcmp(got, want, sizeof got) != 0) {
+            bad++;
+            if (show())
+                printf("  strcpy(len %zu, dst %zu, src mod 4 %u): ret %s, differs at %s\n", strlen(src), doff,
+                    (unsigned)((uintptr_t)src & 3), r == (char*)got + PAD + doff ? "ok" : "wrong",
+                    diff_at(got, want, sizeof got));
+        }
+    }
+    return bad;
+}
+
+/* The word loop decides a mismatch by comparing whole words, which on this
+ * little-endian host means byte-swapping them first (strcmp.c's
+ * IN_STRING_ORDER), so most cases share a long prefix and differ late, where
+ * the word compare is what answers. */
+static unsigned test_strcmp(void)
+{
+    unsigned bad = 0, i;
+    for (i = 0; i < ITER; i++) {
+        char abuf[CAP + 4], bbuf[CAP + 4];
+        char *a = abuf + rnd_upto(3), *b;
+        int got, want;
+        make_string(a, CAP - 4);
+        b = bbuf + align_like(bbuf, a);
+        if (rnd() & 3) {
+            size_t len = strlen(a);
+            memcpy(b, a, len + 1);
+            if (len && (rnd() & 1)) b[rnd_upto(len - 1)] = (char)(rnd() | 1);
+            else if (rnd() & 1) { /* one longer: the mismatch is a's terminator */
+                b[len] = (char)(rnd() | 1);
+                b[len + 1] = 0;
+            }
+        } else {
+            make_string(b, CAP - 4);
+        }
+        got = dc_fn_8025EF88(a, b);
+        want = strcmp(a, b);
+        /* Only the sign is fixed: the routine returns a byte difference, or
+         * 1 and -1 from the word compare. */
+        if ((got > 0) != (want > 0) || (got < 0) != (want < 0)) {
+            bad++;
+            if (show()) printf("  strcmp(len %zu, %zu): got %d want %d\n", strlen(a), strlen(b), got, want);
+        }
+    }
+    return bad;
+}
+
+/* Over a three-letter alphabet, so partial matches -- the case a naive
+ * search gets wrong -- are common; the pattern is cut from the string most of
+ * the time, and empty now and then (which finds the start). */
+static unsigned test_strstr(void)
+{
+    unsigned bad = 0, i, k;
+    for (i = 0; i < ITER; i++) {
+        char str[CAP / 2], pat[16];
+        size_t n = rnd_upto(sizeof str - 1), m;
+        const char *got, *want;
+        for (k = 0; k < n; k++) str[k] = (char)('a' + rnd() % 3);
+        str[n] = 0;
+        if (n && (rnd() & 3)) {
+            size_t at = rnd_upto(n - 1);
+            m = rnd_upto(n - at < sizeof pat - 1 ? n - at : sizeof pat - 1);
+            memcpy(pat, str + at, m);
+            if (m && !(rnd() & 3)) pat[m - 1] = (char)('a' + rnd() % 3);
+        } else {
+            m = rnd_upto(sizeof pat - 1);
+            for (k = 0; k < m; k++) pat[k] = (char)('a' + rnd() % 3);
+        }
+        pat[m] = 0;
+        got = dc_strstr(str, pat);
+        want = strstr(str, pat);
+        if (got != want) {
+            bad++;
+            if (show())
+                printf("  strstr(\"%s\", \"%s\"): got %ld want %ld\n", str, pat, got ? (long)(got - str) : -1L,
+                    want ? (long)(want - str) : -1L);
+        }
+    }
+    return bad;
+}
+
 static unsigned run(const char* name, unsigned (*test)(void))
 {
     unsigned bad;
     g_shown = 0;
     bad = test();
-    printf("%s %-10s %5d cases", bad ? "FAIL" : "ok  ", name, ITER);
+    printf("%s %-11s %5d cases", bad ? "FAIL" : "ok  ", name, ITER);
     if (bad) printf(", %u disagreed", bad);
     printf("\n");
     return bad ? 1u : 0u;
 }
 
-/* One table, so the count in the report cannot disagree with the list: PLAN F3
- * takes the decompiled MSL routines past these nine in an evening. */
+/* One table, so the count in the report cannot disagree with the list. Every
+ * unit units.txt marks native is reached through at least one row: memset
+ * through mem.c's wrapper into fillmem.c, and strcmp as fn_8025EF88, the
+ * name its unit defines and the rename keeps. */
 static const struct { const char* name; unsigned (*test)(void); } ROUTINES[] = {
     {"strlen", test_strlen},
     {"strchr", test_strchr},
@@ -358,6 +471,9 @@ static const struct { const char* name; unsigned (*test)(void); } ROUTINES[] = {
     {"strncpy", test_strncpy},
     {"memcpy", test_memcpy},
     {"memset", test_memset},
+    {"strcpy", test_strcpy},
+    {"fn_8025EF88", test_strcmp}, /* strcmp, under the name strcmp.c gives it */
+    {"strstr", test_strstr},
 };
 #define NROUTINES (unsigned)(sizeof ROUTINES / sizeof ROUTINES[0])
 

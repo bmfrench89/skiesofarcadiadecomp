@@ -6,13 +6,16 @@ char* strcpy(char* dst, const char* src)
 {
     const unsigned char* p = (const unsigned char*)src;
     unsigned char* q = (unsigned char*)dst;
-    const unsigned long* lp;
-    unsigned long* lq;
-    unsigned long w;
-    unsigned long n;
+    const u32* lp;
+    u32* lq;
+    u32 w;
+    u32 n;
 
-    if (((unsigned long)dst & 3) == ((unsigned long)src & 3)) {
-        n = (unsigned long)src & 3;
+    /* Through size_t, as strcmp.c: a pointer cast straight to a 32-bit
+       word truncates it on a 64-bit host, which only the low two bits
+       survive anyway, but every compiler says so. */
+    if (((size_t)dst & 3) == ((size_t)src & 3)) {
+        n = (u32)((size_t)src & 3);
         if (n) {
             if ((*q = *p) == 0)
                 return dst;
@@ -23,10 +26,10 @@ char* strcpy(char* dst, const char* src)
             p++;
         }
 
-        lp = (const unsigned long*)p;
+        lp = (const u32*)p;
         w = *lp;
         if (((w + 0xFEFEFEFF) & 0x80808080) == 0) {
-            lq = (unsigned long*)q - 1;
+            lq = (u32*)q - 1;
             do {
                 *++lq = w;
                 w = *++lp;

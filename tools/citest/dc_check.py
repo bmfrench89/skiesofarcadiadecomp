@@ -51,7 +51,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--units", type=Path, default=ROOT / "config" / "GEAE8P" / "units.txt")
     ap.add_argument(
-        "--cc", choices=("msvc", "clang-cl"), default="msvc", help="the toolchain profile"
+        "--cc", choices=tuple(toolchain.PROFILES), default="msvc", help="the toolchain profile"
     )
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
@@ -87,10 +87,10 @@ def main() -> int:
     ):
         return 1
 
-    exe = args.out / "dc_check.exe"
+    exe = args.out / f"dc_check{PROF.exeext}"
     # Named rather than globbed, so a stale object from an earlier run in the
     # same directory cannot slip into the link.
-    objs = [args.out / (Path(s).stem + ".obj") for s in [*sources, *SUPPORT]]
+    objs = [args.out / (Path(s).stem + PROF.objext) for s in [*sources, *SUPPORT]]
     if not run_cl(
         "linking the driver", [*PROF.cflags, *map(str, objs), f"/Fe:{exe}", *PROF.linker]
     ):
