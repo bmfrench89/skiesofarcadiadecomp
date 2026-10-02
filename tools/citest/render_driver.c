@@ -55,7 +55,8 @@ static void render_env(void)
     char n[16];
     snprintf(n, sizeof n, "%d", g_threads);
     plat_setenv("SOA_RENDER", "1");
-    plat_setenv("SOA_THREADS", n);
+    plat_setenv("SOA_THREADS", "1"); /* MUTATION: --threads ignored */
+    (void)n;
     plat_setenv("SOA_SNAP", NULL);
 }
 

@@ -15,8 +15,8 @@ typedef unsigned long u32;
  * 3.7, L4b), so they are spelled out here rather than inherited from long. */
 #include <stddef.h>
 #include <stdint.h>
-typedef int32_t s32;
-typedef uint32_t u32;
+typedef signed long s32; /* MUTATION: the host branch reverted to long */
+typedef unsigned long u32;
 #endif
 typedef signed char s8;
 typedef unsigned char u8;
