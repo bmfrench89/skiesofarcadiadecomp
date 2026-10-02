@@ -356,6 +356,25 @@ the `--optimize` release compile of the translated code is 103 s. The link is
 where `runtime/*.c` and the natively compiled `src/` twins are built, so a
 runtime-only change costs the link and nothing else.
 
+**The clang-cl build (L3b).** With `SOA_CLANG_CL` naming a clang-cl (the
+Android NDK's is enough), `python tools/recompile.py --cc clang-cl --compile
+--optimize --link` writes its translation, objects and `gen\clang\soa.exe`
+under `gen\clang` and touches nothing in `gen`: about a minute and a half on
+this machine, 19 units compiled in 58 s. Its checks are the reference build's,
+pointed at it:
+
+```
+$env:SOA_SELFTEST='1'; gen\clang\soa.exe extracted
+python tools/scenario.py replay --exe gen/clang/soa.exe --threads 1,2,3,8
+python tools/scenario.py run title --check --exe gen/clang/soa.exe
+```
+
+The replay is held to the MSVC manifest: the 23 frames are the same under both
+compilers, so a hash that moves under one only is a difference to find, never
+a manifest to re-bless (`replay --bless` refuses any exe but `gen/soa.exe`).
+Either build says which compiler made it right after its `[boot] DOL` line:
+`[boot] built with ...`.
+
 If MSVC cannot be found, every step says so on stderr — `MSVC not found;
 skipping compile` — and returns 1 rather than pretending it did the work.
 `tools/soa/toolchain.py` finds it through `vswhere` and runs `vcvars64.bat`, so

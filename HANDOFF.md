@@ -420,7 +420,8 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-02)
 
 Everything below this section is older and still true. Landed in the last
-stretch, newest first, each with a FINDINGS entry of its name: **L8** (the
+stretch, newest first, each with a FINDINGS entry of its name: **L3b**
+("clang-cl": the game under a second compiler, 23/23); **L8** (the
 queue on ARM64 and under TSAN; three races fixed); **L4b** (CI's
 Linux leg under gcc and clang; the native units' 32-bit words); **L2** (two
 commits: the queue's seq_cst helpers and the grep test, then the renderer
@@ -438,9 +439,11 @@ limiter, 5237e2e, with f8ec2c1 fixing its red CI); **M11a** (turbo, 79bec43);
 **the AI DMA's pace and M19 followed up** (2169a6f: the audio had played 5%
 slow in every run).
 
-**The state at the stop (2026-10-02, after L8):** C5c (9ccef87), L2
-(dd87a59, b736cb0), L4b (a2c7c21) and L8 (with this section) are pushed;
-read CI for the last. `gen/soa.exe` is linked with L8. The branches
+**The state at the stop (2026-10-02, after L3b):** C5c (9ccef87), L2
+(dd87a59, b736cb0), L4b (a2c7c21), L8 (8a0188a) and L3b (with this section)
+are pushed; read CI for the last. `gen/soa.exe` (MSVC) and
+`gen/clang/soa.exe` (the NDK's clang-cl) are both linked at L3b and both draw
+the 23 frames identically. The branches
 `l4b-linux`, `l4b-mutation`, `l8-tsan-arm` and `l8-mutation` stay on origin,
 as L4a's do, because FINDINGS links their runs. Nothing is running.
 `build/fifo` is the **new** corpus, 23 captures with `PROVENANCE.tsv` (the
@@ -483,10 +486,13 @@ C5c) is now done.
    errors; CI runs the citest checks under gcc and clang, on ARM64, and the
    queue under ThreadSanitizer with no race and no suppression; and the
    four-worker frame hash is the same on Windows, x86-64 Linux and ARM64.
-   **L3b is next:** the clang-cl game build (one retranslation into
-   `gen/clang`, MSVC's build untouched), with the self test, the replay and
-   `title --check` against the MSVC manifest, and its speed measured
-   (portability.md L3b; a day to several days). Read the slice against HEAD
+   **L3b is done too** (FINDINGS "clang-cl"): the whole game builds with the
+   NDK's clang-cl in about 90 s and draws the 23 frames exactly as MSVC does;
+   its renderer is 10-13% faster a fragment and its guest ceiling 14% higher
+   pooled. Two answers are the owner's before the next slice: **Q3** (is
+   clang-cl the default build?) and **D-13** (Docker Desktop, installed here
+   but stopped, or a WSL distro, for L1's Wine test). **L1 is next** once
+   D-13 is answered; M4b (L7, L9, L6) follows. Read the slice against HEAD
    before any code. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

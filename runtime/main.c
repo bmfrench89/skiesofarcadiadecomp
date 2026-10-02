@@ -1356,6 +1356,16 @@ int main(int argc, char** argv)
 
     fprintf(stderr, "[boot] DOL %zu bytes, FST %zu bytes at %08X; entering %s\n", dol_size,
             fst_size, fst_addr, STR(ENTRY_FN));
+    /* Which compiler built this binary (L3b): a replay or a run from another
+     * toolchain profile says so in its first lines, so a log can never be
+     * mistaken for the reference build's. */
+#if defined(__clang__)
+    fprintf(stderr, "[boot] built with clang %s\n", __clang_version__);
+#elif defined(_MSC_VER)
+    fprintf(stderr, "[boot] built with MSVC %d\n", _MSC_FULL_VER);
+#elif defined(__GNUC__)
+    fprintf(stderr, "[boot] built with gcc %s\n", __VERSION__);
+#endif
     snprintf(path, sizeof path, "%s/disc.iso", dir);
     dvd_init(path);
     threads_init(&s);

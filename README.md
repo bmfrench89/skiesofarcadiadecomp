@@ -65,8 +65,13 @@ $env:SOA_RENDER = '1'
 gen\soa.exe extracted
 ```
 
-`--cc clang-cl` builds with clang-cl instead, into `gen\clang` and never `gen` (portability L3a;
-`SOA_CLANG_CL` names the compiler; the renderer's SIMD file compiles under it once L2a lands).
+`--cc clang-cl` builds the whole game with clang-cl instead, into `gen\clang` and never `gen`:
+`python tools/recompile.py --cc clang-cl --compile --optimize --link` makes `gen\clang\soa.exe` in
+about a minute and a half, and it draws the 23 reference frames exactly as MSVC's build does (L3b).
+`SOA_CLANG_CL` names the compiler; the Android NDK's
+(`...\Android\Sdk\ndk\<version>\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`)
+is enough,
+and either build's first lines say which compiler made it (`[boot] built with ...`).
 
 **cmd.exe** — the same commands, except for the line that sets the variable:
 

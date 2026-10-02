@@ -4450,3 +4450,46 @@ it. Base: a2c7c21.
   `replay --threads 1,2,3,8` 23/23; the self test 0 failures; `title
   --check` 4 of 4; `test_gxr_overlap`, `_queue` and `_atomics` with the
   drivers imported from `queue_check.py`; pytest 1128 passed, 2 skipped.
+
+**clang-cl: the whole game under a second compiler (L3b).** 2026-10-02. The
+Android NDK's clang-cl 19.0.1 (the owner's answer to Q2: no LLVM install)
+builds the game, and it draws the 23 reference frames exactly as MSVC does.
+
+- **The build.** `python tools/recompile.py --cc clang-cl --compile
+  --optimize --link`: the translation into `gen/clang`, 19 units compiled
+  in 57.7 s and linked in 10.2 s, about 90 s in all, with no warning in the
+  log. Before and after, the SHA-256 of `gen/soa.exe` and of all 47
+  `gen/*.obj` are identical: the MSVC build was not touched. `dumpbin
+  /dependents` lists the same nine DLLs for both exes, no ucrtbase,
+  api-ms-win-crt or VCRUNTIME among them: the same static CRT.
+- **Every check, the first time.** `gen/clang/soa.exe`'s self test: 0
+  failures. `replay --exe gen/clang/soa.exe --threads 1,2,3,8`: 23/23
+  against the MSVC manifest, so 3.11's procedure for a difference never
+  ran. `title --check --exe gen/clang/soa.exe`: 4 of 4. The MSVC build,
+  relinked for the line below, keeps the contract (23/23, the self test,
+  `title --check`) and `decomp.py`'s report is byte-identical.
+- **`[boot] built with ...`** after the DOL line names the compiler, so a
+  log says which build made it: `clang 19.0.1 (https://android.googlesource
+  .com/toolchain/llvm-project 97a699bf...)`, or `MSVC 194435221`.
+- **Measured, not a gate,** interleaved, on AC power in the Turbo scheme,
+  with 13-16% background load from other sessions. MSVC's translated code
+  was confirmed `/O2`: compiling its smallest chunk again gives 943,526
+  bytes at `/O2` against the existing object's 943,430, and 1,095,716 at
+  `/Od`, so both builds were optimised.
+
+  | | MSVC | clang-cl | |
+  |---|---|---|---|
+  | `perfbench`, ns a fragment, 1 thread (A B B A) | 42.2, 44.2 | 39.2, 38.6 | clang-cl 10% less |
+  | `perfbench`, ns a fragment, 8 threads (A B B A) | 68.6, 62.1 | 59.2, 54.9 | clang-cl 13% less |
+  | guest ceiling, images a second (A B B A, then B A A B) | 135.5, 158.6, 140.2, 148.2 | 172.0, 176.7, 139.6, 176.3 | pooled 145.6 against 166.2, +14% |
+
+  The ceiling is H1's Part L uncapped from frame 3000 at `SOA_SPEED=4`, in
+  snapshot mode, 9,000 frames, every run checked to have reached `126a`.
+  It is bimodal: three clang-cl runs sit at 172-177 with a 4.7-4.8 ms
+  median frame, and the fourth at 139.6 with 7.7 ms, MSVC's level; MSVC's
+  medians run 6.0-7.8 ms. Why one run fell is not known, and nothing here
+  tests it. Each figure is one invocation (perfbench's with `--runs 5`), so a
+  drift of this machine's size could move any single one.
+- **Q3 is the owner's:** whether clang-cl becomes the default build. MSVC
+  stays the reference for the pinned hashes, and `replay --bless` still
+  refuses any exe but `gen/soa.exe`.

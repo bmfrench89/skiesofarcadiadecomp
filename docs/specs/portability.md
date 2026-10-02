@@ -1354,6 +1354,10 @@ file.*
 
 ### L3b. The clang-cl game build, and the replay under both compilers
 
+*Landed 2026-10-02 (FINDINGS "clang-cl") with the NDK's clang-cl 19.0.1 (Q2): 23/23 against the MSVC
+manifest at 1, 2, 3 and 8 threads, so 3.11 did not run. The `[boot]` compiler line landed here rather than
+after P1a. Q3 is the owner's.*
+
 *A day to several days; days only if a difference appears. Rebuild: one retranslation into `gen/clang/`; the
 MSVC build is untouched. Prerequisites: L2a and L3a; a clang-cl (Q2); the machine free, with the implementation
 session not timing. Files: `runtime/main.c` (the `[boot]` compiler line, after P1a lands); README/CONTRIBUTING
@@ -1681,7 +1685,8 @@ phone (L6 makes that exact) and an owner session.
 - **Q1. Wine on this PC.** May the implementation session use Docker Desktop, which is already running,
   or install a WSL Ubuntu, for L1's Wine test? Do you have a Steam Deck or a Linux PC for the optional
   Proton session?
-- **Q2. LLVM.** May LLVM be installed for L3b?
+- **Q2. LLVM.** May LLVM be installed for L3b? *Answered 2026-10-02: no; L3b used the NDK's clang-cl
+  19.0.1, and the build records it (`[boot] built with clang 19.0.1 ...`).*
   - To match CI's image exactly (LLVM 20.1.8 on runner image 20260922.270.2), the command is
     `winget install LLVM.LLVM --version 20.1.8`. A plain `winget install LLVM.LLVM` takes whatever is newest.
   - A newer local LLVM is also acceptable, as long as L3b records the version, which its `[boot]` line

@@ -570,7 +570,7 @@ count kept before it starts.
 | 2 | **L4a** CI: the clang-cl leg, with the reverted-guard mutation shown red. **Done, 1192647** | hours | none | L2a, L3a | — |
 | 3 | **L4b** CI: the Linux leg; `types.h` and the five native units fixed for LP64; `dc_check` to twelve routines; `render_check --threads N`. **Done** 2026-10-02 (FINDINGS "L4b"): green on `l4b-linux`, the mutations red on `l4b-mutation` | several days | `--link`, `decomp.py` | L2, L3a | — |
 | 4 | **L8** CI on ARM64 and ThreadSanitizer, after fixing the `g_notex` and `WARN_ONCE` races. **Done** 2026-10-02 (FINDINGS "L8"): TSAN clean with no suppression after a third race it found was fixed; ARM64 Linux green; the Windows-on-ARM leg dropped, per §0 | several days | `--link` | L2, L4b | — |
-| 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
+| 5 | **L3b** the clang-cl game build: self test, replay and `title --check` against the MSVC manifest; speed measured. **Done** 2026-10-02 (FINDINGS "clang-cl"): 23/23 against the MSVC manifest; Q3, the default compiler, is the owner's | a day to several days | one retranslation into `gen/clang` (MSVC's build untouched) | L2a, L3a; **D-14** (LLVM); the machine free | — |
 | 6 | **L1** Wine smoke test in a container (checkout and `extracted/` mounted read-only, a scratch volume over `build/`) | hours | none | **D-13**; the machine free | optional Proton session on a Deck |
 
 **M4b pays only once a non-Windows build is a goal:**
@@ -760,7 +760,7 @@ until you say otherwise.
 | D-11 | Picture options: which matter; co-op's default slot | comfort Q-O8, Q-O9 | P5a, P10b | flash limiter and sharp first; slot 1 (the second party member) |
 | **D-12** | L2a (hours) in M1 | portability Q8(a) | M1 gap | yes (recommended here) |
 | **D-13** | Docker Desktop or a WSL distro for the Wine test | portability Q1 | L1 | L1 waits |
-| **D-14** | Install LLVM for the clang-cl build | portability Q2 | L3b | L3b waits; L3a uses the NDK's clang-cl |
+| **D-14** | Install LLVM for the clang-cl build | portability Q2 | L3b | **answered 2026-10-02: no install; L3b used the NDK's clang-cl 19.0.1** |
 | D-15 | clang-cl as the default compiler, if it is exact and faster | portability Q3 | after L3b | MSVC stays |
 | D-16 | ARM hardware that matters | portability Q4 | L11 | none |
 | **D-17** | Is Android a firm goal? | portability Q7 = GPU Q-V1 | V3a (the API); L12 | Vulkan for the spike (gpu-backend V3a's rule); L12 stays gated |
