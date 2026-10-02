@@ -89,8 +89,9 @@ to this decision; H18 follows H17b and is not held by it, ../PLAN-NEXT.md A4).
 (`python tools/scenario.py replay --threads 1,2,3,8`), the self test
 (`$env:SOA_SELFTEST='1'; gen\soa.exe extracted`), `python tools/scenario.py run title --check`,
 `python tools/decomp.py`, and `python -m pytest tools/tests/test_memguard.py tools/tests/test_mods.py`
-are unchanged. No GPU frame hash is ever pinned. (C5c is the one proposed slice that changes the
-corpus itself, and it says so.)
+are unchanged. No GPU frame hash is ever pinned. (C5c is the one slice that changed the corpus
+itself. Since it landed, 2026-10-01, the 23 hashes are its re-blessed manifest of the re-captured
+corpus; the captures before it are in `build/fifo-pre-c5/`, FINDINGS "C5c".)
 
 ---
 
@@ -1007,7 +1008,7 @@ FINDINGS "Recorded display lists", every copy of the test count.*
   not, H7's dismissal is reopened in FINDINGS before H17a.
 - The self test and `python tools/scenario.py run title --check` pass.
 
-### C5c (proposed). Re-capture the corpus and bless it, as a first bless
+### C5c (done). Re-capture the corpus and bless it, as a first bless
 
 *A day. Rebuild: none. Prerequisites: C5b. **Owner:** opens every changed frame. Files:
 `config/fifo_manifest.tsv`, FINDINGS "Recorded display lists", a note in every spec whose contract
@@ -1025,6 +1026,12 @@ cites the 23 hashes.*
 - Only then `python tools/scenario.py replay --bless` over the new captures; the old captures are
   kept under `build/fifo-pre-c5/`. The manifest change is announced to every spec's contract.
 - `python tools/scenario.py replay --threads 1,2,3,8` is 23/23 against the new manifest.
+
+**Done 2026-10-01** (FINDINGS "C5c"). C5b removed no draw from any frame that could be compared,
+so no removal needed tracing: the one frame that lost draws (6000) lost a flickering sprite drawn
+outside any list. The guest clock follows host time, so the frames were matched to the old moments
+from windows of consecutive captures rather than taken at their old numbers; the three battle frames
+have no matching moment and were judged as new scenes. The owner looked at all 16 changed frames.
 
 ### V0. The frame oracle, frozen before any GPU frame exists
 

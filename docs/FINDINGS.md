@@ -4065,3 +4065,139 @@ write pointer, and the list is parsed when the game calls it.
   These are draws the game recorded and never showed. Whether the console
   draws a shadow under Vyse is for C5c, where the owner looks at every
   changed corpus frame, with D-29's Dolphin comparison if wanted.
+
+  *Corrected 2026-10-01 (next entry): nothing was removed, and the shadow is
+  drawn. The band and the ellipse were the characters' shadow volumes, run
+  when they were recorded instead of at their call.*
+
+**The shadows were drawn out of order, not drawn too often (C5c).**
+2026-10-01. The entry above called the field's green-teal ellipse and the
+cutscene's teal band draws "the game recorded and never showed", and found no
+shadow under Vyse. Both were judged by eye; the captures say otherwise.
+
+- **C5b removed no draw from any pair it can be compared on.** Walking each
+  capture with `fifo.walk(..., follow_lists=True)`, the draws before C5b
+  (`build/perfset/`) and after (`build/perfset-c5/`) are field 1147 and 1147,
+  sky 765 and 765, ship 1665 and 1665, cutscene 4280 and 4280, behind the same
+  list calls; after C5b 334, 26, 142 and 1238 of them come through a call.
+  Battle (1393, 1798) is another moment of the fight, as above. C5b moved
+  recorded draws from where they were recorded to where they are called.
+- **The game's shadow pass, from the field capture after C5b** (draw numbers
+  count list draws in stream order):
+  1. a full-screen EFB copy in R8, no clear, saves the scene's red channel
+     (destination `0x35D4E0`);
+  2. a full-screen quad with logic OR (`PE_CMODE0 00713E`) sets red to 255
+     (draw 805);
+  3. list `805048A0` draws a shadow volume twice, depth LEQUAL without update
+     (`PE_ZMODE 07`), material red 51: one face set subtracting
+     (`PE_CMODE0 00093D`, `GEN_MODE 8010`, draw 806) and the other adding
+     (`00013D`, `4010`, draw 807). Only ground inside the volume ends at 204;
+  4. a second R8 copy takes red as the mask (`0x3A84E0`);
+  5. a quad with logic AND (`00113E`, colour `00FFFF`) clears red (808), and
+     the saved copy is ORed back (809);
+  6. two draws (810, 811) sample the mask and blend
+     `dst * (1 - src)` (`PE_CMODE0 00007D`) with src 51: 20% darker.
+
+  The characters' own lists follow. The cutscene runs step 3 four times, one
+  list per character (`80503EA0`, `8050DD20`, `80517BA0`, `8051FF60`). Before
+  C5b, step 3 ran when the lists were recorded, earlier in the frame, against
+  the visible scene's red channel and that moment's depth state, which is
+  consistent with an ellipse short of red over Vyse's feet and a teal band
+  over Alfonso's legs.
+- **The shadow is drawn, and is faint on that ground.** The field frame
+  rendered with `SOA_GXR_DRAWS=809` and `=811`: 5,493 pixels in x 283-397,
+  y 346-426 change, to a median 0.80 of their value, and all 5,493 keep that
+  value in the finished frame. Mean luminance 25.5 inside, 34.1 a dozen pixels
+  outside. Vyse's lower boots, drawn before the pass and inside the volume,
+  are darkened with the ground; that is the game's depth test, as before C5b,
+  when his toe showed through the ellipse. `build/c5b-compare/
+  field-shadow-where.png` shows the 5,493 in magenta.
+- **The red channel's round trip is not lossless, and is not meant to be.**
+  The frame after draw 809 differs from the one after 804 on 187,153 pixels,
+  by up to 9 steps at edges. The copy filter at frame start is the
+  deflicker's (8, 8, 10, 12, 10, 8, 8; BP `53` `30A208`, `54` `00820A`) and
+  nothing in the frame changes it, so both texture copies are filtered
+  vertically, as the registers ask. The TEV multiply in the restore is exact
+  (`gxr_tev.c` `c + (c >> 7)`).
+- **D-29 answered:** with the shadow found, the owner chose no Dolphin
+  comparison before C5c's bless (2026-10-01).
+
+**C5c: the corpus re-captured, matched to its old moments, and blessed.**
+2026-10-01. The 23 captures in `build/fifo` are new, taken with C5b's
+recording; the old ones are in `build/fifo-pre-c5/`, untouched. The owner
+looked at every changed frame and found them all right before the bless.
+
+- **The runs.** Four scenarios, each on a card path that did not exist (a
+  new blank card, as every original log shows) and `SOA_FIFO_DIR` set to a
+  scratch directory. Which original run each frame came from was read from
+  the old logs' pad events: `boot_ship.log` has the opening's 19 events, so
+  8000 comes from the opening run, and `boot_field.log` has hold's 21, so
+  11900-12100 come from the hold run. The frames before 1600 come from the
+  title run, which presses nothing before then.
+
+  | run | scenario | frames | `--frames` |
+  |---|---|---|---|
+  | title | `title.scn` | 0100-0700, 1500, 1550, 2000-2100 | 2150 |
+  | capture | `capture.scn` | 3600, 3900, 4200 | 4250 |
+  | opening | `opening.scn` | 4500, 4800, 6000, 6300, 8000 | 8050 |
+  | hold | `hold.scn` | 11900-12100, 15200, 15800, 16300 | 16350 |
+
+  Every run reported 0 unknown bytes.
+- **Most frame numbers no longer reach the same moment.** The guest clock
+  follows host time, and today's renderer is faster: by frame 12000 the
+  September hold run had counted 32,327 VI retraces and today's 28,161, 69
+  s less guest time. Loads end at other frame numbers, and the text fade at
+  0500, the opening flight at 1500 and the battle all landed elsewhere. So
+  every drifted frame was captured again in a window of consecutive frames
+  (2,325 captures in four more runs, into scratch directories), each was
+  replayed, and the one whose render is closest to the old capture's (mean
+  absolute RGB difference over every 7th pixel) was kept under the old
+  name. `build/fifo/PROVENANCE.tsv` records the run and frame of each:
+
+  | name | frame kept | distance | name | frame kept | distance |
+  |---|---|---|---|---|---|
+  | 0500 | 521 | 0.00 | 4800 | 4796 | 0.80 |
+  | 0700 | 721 | 0.00 | 6000 | 6000 | 0.19 |
+  | 1500 | 1488 | 1.97 | 6300 | 6300 | 0.90 |
+  | 1550 | 1538 | 1.40 | 8000 | 7991 | 8.19 |
+  | 3600 | 3600 | 0.02 | 15200 | 15200 | 0.59 |
+  | 3900 | 3900 | 1.30 | 15800 | 15800 | 0.55 |
+  | 4200 | 4200 | 2.71 | 16300 | 16300 | 0.37 |
+  | 4500 | 4496 | 0.83 | | | |
+
+  8000's 8.19 is clouds and ships drifting; 15200 and 15800 tie with frames 41 apart, Vyse's run
+  cycle against a wall, and keep their own numbers. **The battle has no
+  match:** the best of 451 candidates was 16 to 26 away, the fight having
+  taken a different course in each of three runs (one had reached the
+  results screen by 12100). 11900-12100 keep the first hold run's own frames, a fight in
+  progress, and were judged as new scenes.
+- **Before any change, the old captures replayed to their 23 manifest
+  hashes**, so the comparison ran on the renderer that had pinned them.
+- **Each frame, against the old one** (`build/c5c-compare/`: old | new | the
+  changed pixels; the draws compared as a multiset of primitive, count and
+  vertex bytes):
+
+  | frames | result | what changed, and why |
+  |---|---|---|
+  | 0100, 0300, 0500, 0700, 2000, 2050, 2100 | unchanged | pixel for pixel |
+  | 3600, 6300, 1500, 1550, 15200, 15800, 16300 | the same draws, reordered | recorded lists now draw at their call |
+  | 15200, 15800, 16300 | shadows | the teal blob under Vyse is a faint shadow, as in the field (entry above) |
+  | 4500, 4800, 6300 | shadows | the teal bands over Alfonso and the Vice Captain are gone and their feet show; 4500 and 4800 also differ by idle animation |
+  | 1500, 1550, 3900 | layer order | 404 draws in seven lists (1500) and 474 in nine (1550) now draw at the end of the frame instead of mid-frame, where they were recorded; the sky is lighter and hazier; 1550 also re-layers rigging behind the sails; 3900's cloud patches likewise |
+  | 4200, 3600 | layer order | the dark blotches inside the searchlight beams are gone, the bridge windows are lit warm yellow instead of white, and the mast shows through the central beam (not traced); 3600, 203 pixels at the beams' edge |
+  | 8000 | searchlights | the warship's searchlights were three opaque black fans and are translucent beams |
+  | 6000 | timing only | a hair ribbon moved, and a flickering sprite drawn outside any list (texture `041302`, present at frames 5998, 5999, 6000 and 6002 of today's run, not 6001) is drawn once instead of twice |
+  | 11900, 12000, 12100 | new moments | no old frame to compare |
+- **C5b removed no draw from any frame that could be compared**, so the
+  Done's removal tracing has nothing to trace. Where a frame differs by a
+  few draws (3900, 4200, 6000), every draw only the new frame has is drawn
+  outside any list, small 4-vertex strips with as many on the old side
+  give or take one. 4500, 4800 and 8000 have more draws now, not fewer.
+  `SOA_GX_DLLOG` could not have shown it for most frames anyway: it prints
+  its first 400 lines and stops (`DLLOG_LINES`, `gx.c`), and the opening
+  makes 2,746 list calls by frame 1000 (entry C5b), a line each.
+- **The look and the bless.** The owner opened `build/c5c-compare/
+  index.html`, the 16 changed frames with a note each, and answered that
+  all look right. `python tools/scenario.py replay --bless` then pinned the
+  23, `replay --threads 1,2,3,8` is 23/23, and the pinned frame hashes are
+  the ones the owner looked at, all 23.

@@ -21,7 +21,9 @@ queue") was this spec's **L0** and has **landed as c8274db**. §6 L0 says what i
 none / `--link` / one retranslation. **Owner** marks where the owner must look, play or decide.
 
 **Every slice keeps the contract.** With the default MSVC build, these do not change:
-- the 23 replay hashes (`python tools/scenario.py replay --threads 1,2,3,8`);
+- the 23 replay hashes (`python tools/scenario.py replay --threads 1,2,3,8`), since 2026-10-01
+  C5c's re-blessed manifest of the re-captured corpus (FINDINGS "C5c"; the older captures are in
+  `build/fifo-pre-c5/`);
 - the self test (`$env:SOA_SELFTEST='1'; gen\soa.exe extracted`);
 - `python tools/scenario.py run title --check`;
 - `python tools/decomp.py`;

@@ -45,7 +45,8 @@ the event track that records chord and pad-2 input (milestone 2), H9's VI lock, 
 and any GPU work. The disc layer (I-track), portability (L-track) and the GPU decision (V-track) are
 separate specs; section 5 lists where they touch this one.
 
-**The contract.** With a slice's feature off: `python tools/scenario.py replay` stays 23/23, the self
+**The contract.** With a slice's feature off: `python tools/scenario.py replay` stays 23/23 (since
+2026-10-01 against C5c's re-blessed manifest, FINDINGS "C5c"), the self
 test (`$env:SOA_SELFTEST='1'; gen\soa.exe extracted`) passes, `python tools/scenario.py run title
 --check` passes, `python tools/decomp.py` is unchanged, and `python -m pytest
 tools/tests/test_memguard.py tools/tests/test_mods.py` passes. "The contract holds" below means all

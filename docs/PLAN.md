@@ -532,7 +532,11 @@ on A2 and nowhere else — a wrong body neither crashes nor diffs.
 `docs/specs/gpu-backend.md` §6, re-reading FINDINGS H4's zero-size calls;
 scheduled in PLAN-NEXT M1 (C5a) and M2 (C5b, C5c). C5a done 2026-09-25
 (750cef0): the chain is confirmed, and the port runs the lists at recording
-(FINDINGS "Recorded display lists (C5a)").*
+(FINDINGS "Recorded display lists (C5a)"). C5b done 2026-10-01 (4441a80): the
+lists are recorded into guest memory and drawn at their call. C5c done
+2026-10-01: the corpus re-captured, matched to its old moments, opened by the
+owner and blessed; the older captures are in `build/fifo-pre-c5/` (FINDINGS
+"C5c").*
 
 ---
 

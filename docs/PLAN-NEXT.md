@@ -82,7 +82,7 @@ The owner answered four questions, with the research behind them summarised in t
   results justify A (Vulkan)? If they do not, Android is not playable, and the owner hears that plainly.
 - **M4b is no longer "after the gate".** L6, L7 and L9 were deferred because they "pay only once a
   non-Windows build is a goal" (C4); it is one now.
-- **The new order** [I]: C5b; C5c (owner look C, a first bless); then M4a (L2, L4b, L8, L3b, L1) and
+- **The new order** [I]: C5b; C5c (owner look C, a first bless; both done 2026-10-01); then M4a (L2, L4b, L8, L3b, L1) and
   M4b (L7, L9, L6), then M5 (V0-V4b and the gate), then V5+ and the Android shell (L12, on SDL3). M2's
   60 fps half (H17a, H17b, H18) and M3 follow. Two consequences to resolve when their slices start:
   - **V2 assumed H17a had landed:** H17a adds `DrawCmd.efb` and its `claim_slot` routing, and V2 moves
@@ -483,7 +483,7 @@ built only if measured.
 | # | Slice | Size | Rebuild | Needs first | Owner | Spec |
 |---|---|---|---|---|---|---|
 | 1 | **C5b** record display lists into guest memory; `[gx] display lists` report; H10's pair matching re-measured on re-captured pairs, with 99% of 3D area the limit. **Done** (FINDINGS "C5b"): 3D area 100.00% in all five pairs | a day to several days | `--link` (gx.c) | C5a confirmed | — | gpu-backend §6 |
-| 2 | **C5c** re-capture the corpus, open every changed frame, bless: **a first bless** | a day | none | C5b | **Owner** look C | gpu-backend §6 |
+| 2 | **C5c** re-capture the corpus, open every changed frame, bless: **a first bless**. **Done** 2026-10-01 (FINDINGS "C5c"): frames matched to their old moments from windows of captures, no draw removed, the owner looked at all 16 changed frames | a day | none | C5b | **Owner** look C | gpu-backend §6 |
 | 3 | **H17a** interpolation, headless, off by default. A second EFB routed per command by `DrawCmd.efb`, from `g_target` in `claim_slot`. It measures the images a second each scene reaches, the input to A2 (b) and A3 | several days | `--link` | C5b's re-measure (or C5a refuted); the H17a spec reviewed | — | PLAN-60FPS-MODS H17a + the H17a spec |
 | 4 | **H17b** interpolation, live: H8's presenter, cut detector, repeat when over budget, a `soa.ini` key off by default | several days | `--link` | H17a; D-2 (display at 60 or 120 Hz) | **Owner** session D | PLAN-60FPS-MODS H17b |
 | 5 | **H9** VI locked to vblank, **only** if session A or D shows judder | several days | `--link` | its Done restated (PLAN-GAMEPLAY-MODS F) | **Owner** | PLAN-60FPS-MODS H9 |
@@ -682,7 +682,7 @@ cancellation. Each returns on the condition shown.
 | **Decision sitting 1** | Now, early in M1 (C5a, P6b and P1a need no answer) | 30 to 45 min, no play | Eight questions, most of them yes or no: **D-1** (approve this order) and **D-10** (or take the GPU answer sooner); **D-2** (the handheld and its refresh rate; then set the display to 60 or 120 Hz); **D-5** (`soa.exe` holding your executable); **D-12** (L2a early); **D-13** (Docker or WSL for Wine); **D-14** (install LLVM); **D-17** (is Android a firm goal?). Everything else defaults (D6), and you can overrule a default at any later sitting |
 | **Session A** | Mid-M1, after M18, CH1, H19a, M5b and M19 | 60 to 90 min on the handheld | **H8**: 15 minutes windowed, and your verdict. **M5**: a setting on and off without a terminal. **M5b**: double-click start; `unfocused = mute`. **H19a**: F11, Alt+Enter and the chord; resize; Escape in fullscreen. **CH1**: the pad in slot 1 or 2. **M18**: rumble in a battle with the game's Vibration on and off. **M19**: sleep a minute in the field. **I2**: run `extract.py --prune-loose --dry-run`, then for real (D-28). Optionally play with P1 and P11 on, and keep the log (D-25) |
 | **Session B** | End of M1 | about 60 min, with Dolphin at hand | **P10b**: two pads, one battle (Parsec optional). **M11a**: turbo feel and music pitch. **P3**: import a Dolphin save, and export one back to Dolphin. **C5 (optional)**: the same scene in Dolphin and the port, a character in sunlight and a menu over a field (D-29), which feeds C5b/C5c. P5a at a glance |
-| **Look C** | M2, after C5b | about 20 min, no play | **C5c**: open each changed frame beside the old one; the bless commit says you did |
+| **Look C** | M2, after C5b | about 20 min, no play | **C5c**: open each changed frame beside the old one; the bless commit says you did. **Done 2026-10-01:** all 16 judged right |
 | **Session D** | M2, after H17b | about 30 min windowed, at 60 or 120 Hz | **H17b**: does 60 look right? A list of anything wrong, which is H18's input. Judder here reopens H9 |
 | **Gate sitting** | After V4b | about 30 min | Four side-by-sides; **G1**; then D-26 (2×/3×) and, if the answer is A with Android or Linux, G2 and G3 |
 
@@ -775,7 +775,7 @@ until you say otherwise.
 | D-26 | 2×/3× resolution and unsqueezed widescreen wanted | GPU Q-V2 | V8/V9 | ask at the gate |
 | D-27 | GPU build or gameplay milestone 2 first, after the gate | this plan | C6 | ask at the gate |
 | D-28 | Delete the loose tree (I2), and later `disc.iso` and your original dump (I5) | disc Q6 | session A; I5 | nothing is deleted without you; the commands check first |
-| D-29 | A Dolphin comparison for C5 | GPU Q-V6 | session B | optional; C5c proceeds on the port's frames |
+| D-29 | A Dolphin comparison for C5 | GPU Q-V6 | session B | **answered 2026-10-01: not before C5c's bless.** The shadow C5b seemed to lose is drawn (FINDINGS "The shadows were drawn out of order") |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:
