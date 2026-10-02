@@ -139,6 +139,12 @@ PLAT_INLINE int64_t plat_inc64(plat_a64* p) { return __atomic_add_fetch(p, 1, __
 PLAT_INLINE int32_t plat_inc32(plat_a32* p) { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
 PLAT_INLINE int32_t plat_dec32(plat_a32* p) { return __atomic_sub_fetch(p, 1, __ATOMIC_SEQ_CST); }
 PLAT_INLINE int64_t plat_xchg64(plat_a64* p, int64_t v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+PLAT_INLINE int32_t plat_cas32(plat_a32* p, int32_t expect, int32_t want) /* returns the old value */
+{
+    int32_t e = expect;
+    __atomic_compare_exchange_n(p, &e, want, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return e;
+}
 PLAT_INLINE void plat_compiler_barrier(void) { __asm__ __volatile__("" ::: "memory"); }
 #elif PLAT_MSVC
 #if PLAT_ARM64
@@ -152,6 +158,10 @@ PLAT_INLINE int64_t plat_inc64(plat_a64* p) { return _InterlockedIncrement64((__
 PLAT_INLINE int32_t plat_inc32(plat_a32* p) { return _InterlockedIncrement((long volatile*)p); }
 PLAT_INLINE int32_t plat_dec32(plat_a32* p) { return _InterlockedDecrement((long volatile*)p); }
 PLAT_INLINE int64_t plat_xchg64(plat_a64* p, int64_t v) { return _InterlockedExchange64((__int64 volatile*)p, v); }
+PLAT_INLINE int32_t plat_cas32(plat_a32* p, int32_t expect, int32_t want) /* returns the old value */
+{
+    return _InterlockedCompareExchange((long volatile*)p, want, expect);
+}
 PLAT_INLINE void plat_compiler_barrier(void) { _ReadWriteBarrier(); }
 #else
 #error "plat.h: no atomics for this compiler"

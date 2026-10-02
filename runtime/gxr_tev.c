@@ -34,6 +34,11 @@ static uint8_t g_tmem[1u << 20];
  * tev_prepare, before any worker samples; the scalar path is the fallback and
  * the reference, and the two agree bit for bit (test_gxr_fastpath.py). */
 static int g_gxr_simd = -1;
+/* SOA_GXR_NOTEX: every texel a flat grey, for telling texture faults from
+ * the rest. Decided on the producer in tev_prepare, beside simd_decide,
+ * before any draw that samples is published: sample() runs on the workers,
+ * and deciding it there was a write several of them could race to (L8). */
+static int g_notex = -1;
 
 static void simd_decide(void)
 {
@@ -1087,6 +1092,7 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
     for (i = 0; i < 8; i++) T->tex[i].level[0] = NULL;
     g_tex_fence = 0;
     if (g_gxr_simd < 0) simd_decide();
+    if (g_notex < 0) g_notex = getenv("SOA_GXR_NOTEX") ? 1 : 0;
     g_building = T;
     for (st = 0; st < T->stages; st++) {
         Stage* S = &T->st[st];
@@ -1157,8 +1163,6 @@ TEX_INLINE int wrap(int i, int size, int mask, unsigned mode)
     }
     }
 }
-
-static int g_notex = -1;
 
 #ifdef TEX_SIMD
 /* sample_level's bilinear loop, four channels at a time (H15d): a lane is a
@@ -1231,8 +1235,7 @@ TEX_INLINE void sample(const TexCfg* C, float s, float t, float lod, uint8_t out
 {
     int l = 0;
     float u, v;
-    if (g_notex < 0) g_notex = getenv("SOA_GXR_NOTEX") ? 1 : 0;
-    if (g_notex) { out[0] = out[1] = out[2] = out[3] = 200; return; }
+    if (g_notex > 0) { out[0] = out[1] = out[2] = out[3] = 200; return; } /* read only: tev_prepare decides */
     if (!C->level[0] || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
     if (C->mip && C->nlevels > 1) {
         float L = lod + C->lod_bias;

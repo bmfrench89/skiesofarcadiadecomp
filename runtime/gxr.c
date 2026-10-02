@@ -269,13 +269,15 @@ int gxr_enabled(void)
  * nothing was drawn and there is no picture to be wrong. What the game asked
  * for is still caught on every frame that is written.
  */
-#define WARN_ONCE(...)                    \
-    do {                                  \
-        static int said;                  \
-        if (!said) {                      \
-            said = 1;                     \
-            fprintf(stderr, __VA_ARGS__); \
-        }                                 \
+/* Two workers can reach the same tripwire at once, so the flag is taken with
+ * a compare-and-swap (L8): exactly one of them prints, and a plain flag's
+ * race, which ThreadSanitizer reports, is gone. The load first keeps the
+ * common case, already said, to one plain read. */
+#define WARN_ONCE(...)                                                  \
+    do {                                                                \
+        static plat_a32 said;                                           \
+        if (!plat_load32(&said) && plat_cas32(&said, 0, 1) == 0)        \
+            fprintf(stderr, __VA_ARGS__);                               \
     } while (0)
 
 /* BP_MASK (BP 0xFE) says the next BP write changes only the bits it names,
