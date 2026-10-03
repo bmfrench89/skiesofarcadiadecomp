@@ -185,7 +185,7 @@ scale = 3
 mods = C:\Games\Skies\mods
 ```
 
-The keys are `disc`, `render`, `window`, `scale`, `threads`, `mods`, `card`,
+The keys are `disc`, `render`, `gpu`, `window`, `scale`, `threads`, `mods`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
 `encounters_hold_b`, `autotext`, `coop`, `rumble`, `fullscreen`, `scaler`, `unfocused`, `deflicker`, `turbo`, `gamma`, `colorblind`, `colorblind_mode` and `flash_limit`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys,
@@ -233,6 +233,7 @@ an unquoted path with a space in it is two arguments.
 | Variable | Effect |
 |---|---|
 | `SOA_RENDER=1` | render (and open the window) |
+| `SOA_GPU=vulkan` | the GPU draws the picture (specs/gpu-backend.md V5; `gpu` in `soa.ini`), where this build has the backend -- `python tools/fetch_gpu.py`, then `python tools/recompile.py --link`, which then says `GPU backend: built in` -- and there is a Vulkan driver. It says `[gxv] Vulkan ... on <device>` when it starts and `[gxv] fallback: <why>` when it cannot, and then the CPU draws. Every frame waits for the GPU for now (V5); the picture is judged against the CPU's by a tolerance, not a hash, and the pinned frames are checked with it off. `SOA_GPU_DEVICE=n` picks a GPU, `SOA_GPU_LOGICOP=native|blend|snapshot` the logic-op path, `SOA_GPU_LOADER=path` another Vulkan loader, `SOA_GPU_VALIDATE=1` the validation layer where installed |
 | `SOA_SCALE=n` | the window's starting size, n times 640x480; by default the largest whole multiple whose window fits the monitor's work area |
 | `SOA_FULLSCREEN=1` | start in borderless fullscreen (`fullscreen = 1`); F11, Alt+Enter and View+LB toggle it |
 | `SOA_DEFLICKER=0` | the picture without the game's deflicker: the copy to the screen blends each row with the rows above and below it, which suits an interlaced television and softens a progressive display; `0` copies it unfiltered (`deflicker = 0`, P5b). The game's own copies to textures keep their filter. A replay with it set hashes differently from the manifest, by design |
@@ -307,7 +308,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1199 tests; any that need a dump skip themselves
+python -m pytest                     # 1211 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

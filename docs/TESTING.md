@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1197 passed, 2 skipped in 315.16s
+1209 passed, 2 skipped in 301.37s
 ```
 
-1199 tests in 65 files, none of which reads the disc. The two FMA probes of
+1211 tests in 66 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -48,7 +48,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
-| `test_scenario.py` | 98 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
+| `test_scenario.py` | 100 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; a sweep refuses a replay the GPU drew, and a replay cannot see `SOA_GPU` or a `soa.ini` (V5); and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
 | `test_guard.py` | 76 | the game-data guard: its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
@@ -61,6 +61,7 @@ its own and run it, some of the C as well:
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_fifo_summary.py` | 5 | `tools/fifo.py --summary` (specs/gpu-backend.md V1) on a synthetic stream: one draw under a logic OR, a display list of 0x40 bytes, and an R8 and an RGB565 copy, each with its destination and size; a blend overrides the logic op, as GX and the renderer have it; and intensity copies are named as such |
+| `test_gxv_live.py` | 10 | a run with `SOA_GPU=vulkan` judged on its own log (GPU spec V5): `scenario.gpu_problems` passes a run the GPU drew whole, and fails a fallback, each count off by one against what the renderer sent or counted, a run that drew nothing, two start lines, and a backend that is not vulkan; it reads the last report, not the watchdog's; and the fifth invariant is there only with the GPU. A real log is checked with `scenario.py check <log>`, which applies it to any log the backend wrote in |
 | `test_gxr_backend.py` | 5 | the renderer's backend seam (GPU spec V2), on a renderer-only build with a counting backend: the commands arrive as 0 0 1 2 1 2 0 1 2 for two draws, a filtered and an unfiltered copy to texture and a screen copy, each copy's clear its own command; a texture's generation moves when its bytes change and not otherwise; the frame and presented counts agree; each command carries the EFB it was built for; and the 23 corpus captures through the passthrough keep their manifest hashes (skipped, with its reason, without `build/fifo`). Each of the spec's five mutations turns it red |
 | `test_gpuspike.py` | 33 | the GPU spike (specs/gpu-backend.md V3a, V3b, V4a, V4b, V5): the judge passes a pixel moved at an edge and fails a hole or a one-step colour inside, takes in colour edges, holds `cull3` to nothing, lines to one pixel and points to none; copydiff's comparison counts each kind of difference and refuses a refused copy that wrote, runs whose cases differ, a short run and an empty one; a replay sees no `SOA_*` but `SOA_SETTINGS=0`, and one pixel of a frame does not count as a mutation applying; the shader list tools/soa/shaders.py builds is exactly what runtime/gxv.c includes and each stub declares its array, `fetch_gpu.py --headers` records the headers alone and wants no glslang where a full fetch refuses, gxv.c compiles as the backend against vendor/'s headers and fails against an empty vulkan_core.h (MSVC), the Python copy_texfmt is gxr.c's, a copy's runs and texels skip a stride's gaps, poison covers only what a copy writes, and efb_at cuts the stream before the copy; the driver's recipe is still `runtime/selftest.c`'s and every scene it writes is judged; `vendor/` matches its record, and a copy with one header byte changed and `LICENSE.md` gone fails it; and on this machine's GPU the 17 scenes pass (the invariance strip and the logic ops among them) and `--mutate unclipped` fails, tevdiff's 100,000 cases and copydiff's 25,600 copies have no mismatch, the clamp, rounding, intensity and unseeded mutations each fail as they should, loddiff holds the level of detail (100,000 cases bit for bit, and the formula within 1/1024) with its lod and lodmin mutations red, the 35 captures of the corpus and the benchmark set pass V0 (two by design, listed) against references equal to the manifest's and V0's, the copy captures poisoned, and the mask effect's 14 give byte-identical frames under all three logic-op paths. The vendor tests skip, saying why, without `vendor/`; the GPU ones also without MSVC or a Vulkan device, and the capture ones without the captures |
 | `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
@@ -120,10 +121,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1197 passed, 2 skipped` |
-| no capstone | `1178 passed, 3 skipped` |
-| no MSVC | `802 passed, 397 skipped` |
-| neither | `783 passed, 398 skipped` |
+| everything (MSVC + capstone) | `1209 passed, 2 skipped` |
+| no capstone | `1190 passed, 3 skipped` |
+| no MSVC | `814 passed, 397 skipped` |
+| neither | `795 passed, 398 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -822,6 +823,22 @@ $env:SOA_SNAP='50'
 gen\soa.exe extracted
 ```
 
+**With the GPU drawing** (V5), `--env SOA_GPU=vulkan` adds a fifth invariant,
+`the GPU drew the run`: one `[gxv] Vulkan ... on ...` start line, no `[gxv]
+fallback:`, and a `[gxv]` report whose draws, copies and clears are what the
+renderer sent the backend (`[gxr] vulkan backend: ...`) and whose screen and
+texture copies are `[gxr]`'s:
+
+```
+python tools/scenario.py run title --check --env SOA_GPU=vulkan
+[check] the GPU drew the run                pass  26336 draws, 2000 screen copies, 152 copies to a texture, as sent; Vulkan 1.4.344 on AMD Radeon Graphics ...
+title: 5 of 5 invariants hold
+```
+
+With `--env SOA_GPU_LOADER=nonexistent.dll` the run falls back to the CPU and
+that invariant fails while the other four pass. `scenario.py check <log>` applies it
+to any log with a `[gxv]` line, and `tools/tests/test_gxv_live.py` holds it to canned logs.
+
 `python tools/scenario.py check build/scenario-hold.log --name hold` applies the
 same checks to a log written earlier — useful for a run you drove by hand, and
 free.
@@ -1148,6 +1165,7 @@ python tools/gpuspike.py selftest    # build if stale, draw 17 scenes on the CPU
 python tools/gpuspike.py tevdiff     # tev.glsl against tev_pixel, 100,000 random setups; 1 s
 python tools/gpuspike.py copydiff    # copy.comp against gxr.c's copies, 25,600 random copies; 22 s
 python tools/gpuspike.py loddiff     # lod.glsl against the sampler and span_lod, 100,000 cases each; 1 s
+python tools/gpuspike.py contrast --set corpus,perfset,gpuset   # the spike and soa.exe --replay on the GPU, the same pixels; 5 min
 python tools/gpuspike.py oracle      # corpus and benchmark set, CPU against GPU, V0's verdict; 40 s
 python tools/gpuspike.py oracle --set corpus,perfset,gpuset --mutations   # all 67 and eight mutations; 16 min
 python tools/gpuspike.py logicop     # the mask effect's 14 captures, logic ops three ways; 22 s
@@ -1347,7 +1365,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 397 of the 1199 skip without a C compiler: 395 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 397 of the 1211 skip without a C compiler: 395 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

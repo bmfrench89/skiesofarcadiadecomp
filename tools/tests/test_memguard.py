@@ -78,6 +78,7 @@ int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
 int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }
 void gxr_hook_hazard(uint32_t a, uint32_t b) { (void)a; (void)b; }
+int gxr_enabled(void) { return 0; } /* main.c's gpu_start asks; no renderer here */
 void gxr_enable(int on) { (void)on; }
 void gxr_set_output(const char* p) { (void)p; }
 void watch_init(void) {}
@@ -206,7 +207,7 @@ def build(tmp_path):
     (tmp_path / "stubs.c").write_text(STUBS)
     runtime = ROOT / "runtime"
     sources = [
-        *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c")),
+        *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c")),
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",
     ]

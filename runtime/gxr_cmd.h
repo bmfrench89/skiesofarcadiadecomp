@@ -87,6 +87,7 @@ typedef struct GxrBackend {
     int (*clear)(const DrawCmd* D); /* kind 2: a copy's clear, always its own command when a backend is set */
     void (*reset_efb)(const uint32_t* bp); /* gxr_reset_efb's fill, on the backend's EFB; may be NULL */
     void (*finish)(void); /* every command so far has run and its RAM writes have landed; may be NULL */
+    void (*report)(void); /* its own lines, printed after gxr_report's; may be NULL */
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */

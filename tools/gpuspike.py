@@ -10,6 +10,7 @@
     python tools/gpuspike.py logicop [--mutate M]         # logic ops native, blend and snapshot
     python tools/gpuspike.py ramdiff                      # each copy's RAM, CPU against GPU
     python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
+    python tools/gpuspike.py contrast [--mutate M]        # the spike and soa.exe --replay, the same pixels
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -71,10 +72,17 @@ frames; `ramdiff` holds every copy's bytes, CPU against GPU, and traces each
 difference to the EFB the copy read; `chain` carries each frame's copies into
 the next frame's RAM, as V1's battle start needs.
 
+`contrast` (V5) replays every capture of --set through the spike and through gen/soa.exe --replay with
+SOA_GPU=vulkan, from one scratch copy of it, and holds the two pictures to the
+same pixels, with both runs' start lines naming the same device and driver.
+--mutate hands one of gxv's mutations to soa.exe alone (SOA_GPU_MUTATE), and
+the pictures must then differ, failing it.
+
 --mutate names a mutation the command must fail on: unclipped (selftest),
 clamp (tevdiff), rounding, intensity and unseeded (copydiff), lod and
 lodmin (loddiff), and-copy,
-or-copy and or-and (logicop), dest+32 (ramdiff). Exit 0 pass,
+or-copy and or-and (logicop), dest+32 (ramdiff), any gxv mutation for
+soa.exe alone (contrast). Exit 0 pass,
 1 fail, 3 skipped (no compiler, no vendor/, no Vulkan device), the reason
 printed.
 """
@@ -1111,6 +1119,79 @@ def logic_captures() -> list[Cap]:
 LOGIC_MODES = ("native", "blend", "snapshot")
 
 
+# The GPU backend's start line; contrast holds both binaries' to one device.
+GXV_START = re.compile(r"^\[gxv\] Vulkan .*$", re.M)
+
+
+def contrast(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
+    """V5's same-session contrast. Each capture is copied once into
+    build/gpuspike/<cc>/contrast/<set>/ -- soa.exe --replay writes <base>.png
+    beside it -- and replayed by the spike and by gen/soa.exe with
+    SOA_GPU=vulkan. Pass: every pair of pictures has the same pixels and every
+    run started on the same device. A mutation goes to soa.exe alone, and
+    must fail it."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    exe = ROOT / "gen" / f"soa{prof.exeext}"
+    if not exe.exists():
+        print(f"skip: no {exe.relative_to(ROOT)} (python tools/recompile.py --link)")
+        return SKIP
+    out = build_dir(prof) / "contrast"
+    caps = captures(sets)
+    starts: set[str] = set()
+    same, differ, problems = 0, [], []
+    for cap in caps:
+        d = out / cap.setname
+        d.mkdir(parents=True, exist_ok=True)
+        base = d / cap.capture.name
+        for suffix in (".fifo", ".regs", ".ram"):
+            shutil.copyfile(f"{cap.capture.base}{suffix}", f"{base}{suffix}")
+        spike_png = d / f"{cap.capture.name}_spike.png"
+        spike, _ = replay(prof, "gpu", base, spike_png)
+        if skipped(spike):
+            return SKIP
+        env = {**clean_env(), "SOA_GPU": "vulkan"}
+        if mutate:
+            env["SOA_GPU_MUTATE"] = mutate
+        port = subprocess.run(
+            [str(exe), "--replay", str(base)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+        )
+        at = f"{cap.setname}/{cap.capture.name}"
+        for who, proc in (("spike", spike), ("soa.exe", port)):
+            text = (proc.stdout or "") + (proc.stderr or "")
+            found = GXV_START.findall(text)
+            if proc.returncode != 0 or len(found) != 1:
+                problems.append(f"{at}: {who} exit {proc.returncode}, {len(found)} start lines")
+            starts.update(found)
+        port_png = Path(f"{base}.png")
+        if not spike_png.exists() or not port_png.exists():
+            problems.append(f"{at}: a picture is missing")
+            continue
+        if png.read_rgba(spike_png)[2] == png.read_rgba(port_png)[2]:
+            same += 1
+        else:
+            differ.append(at)
+    for line in sorted(starts):
+        print(line)
+    if len(starts) > 1:
+        problems.append(f"{len(starts)} different start lines: the two binaries did not run alike")
+    for p in problems:
+        print(f"PROBLEM {p}")
+    print(f"[gpuspike] contrast: {same} of {len(caps)} captures the same pixels, spike and soa.exe")
+    if differ:
+        print(f"  differ: {' '.join(differ[:12])}{' ...' if len(differ) > 12 else ''}")
+    ok = not problems and same == len(caps) and len(caps) > 0
+    print(f"[gpuspike] contrast {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
     """V4b: the mask effect's captures through the three ways of drawing a
     logic op, poisoned; byte-identical images (a same-replay contrast). With
@@ -1329,6 +1410,7 @@ def main(argv: list[str] | None = None) -> int:
             "logicop",
             "ramdiff",
             "chain",
+            "contrast",
         ),
     )
     ap.add_argument(
@@ -1367,6 +1449,8 @@ def main(argv: list[str] | None = None) -> int:
         return ramdiff(prof, args.set.split(","), args.mutate)
     if args.command == "chain":
         return chain(prof, args.frames)
+    if args.command == "contrast":
+        return contrast(prof, args.set.split(","), args.mutate)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)

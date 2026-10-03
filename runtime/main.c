@@ -11,6 +11,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "gxr.h"
+#include "gxv.h"
 #include "mod.h"
 #include "picture.h"
 #include "plat.h"
@@ -1211,6 +1212,27 @@ static int replay_picture(const char* base)
     return rc;
 }
 
+/* SOA_GPU=vulkan (soa.ini gpu): every command the renderer builds is drawn by
+ * gxv, the Vulkan backend, on the producer as it is built (specs/gpu-backend.md
+ * V5), and the screen copy read back is the picture. Anything short of a
+ * device is one "[gxv] fallback:" line and the CPU renderer, which is also
+ * the default. Before the renderer's first command. */
+static void gpu_start(void)
+{
+    const char* g = getenv("SOA_GPU");
+    char why[512];
+    if (!g || !*g || !strcmp(g, "off")) return;
+    if (strcmp(g, "vulkan") != 0) {
+        fprintf(stderr, "[gxv] fallback: SOA_GPU=%s is neither off nor vulkan; the CPU draws\n", g);
+        return;
+    }
+    if (!gxr_enabled()) {
+        fprintf(stderr, "[gxv] SOA_GPU=vulkan but nothing is drawn (SOA_RENDER is not set); the GPU is not started\n");
+        return;
+    }
+    if (!gxv_start(why, sizeof why)) fprintf(stderr, "[gxv] fallback: %s; the CPU draws\n", why);
+}
+
 int main(int argc, char** argv)
 {
     const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";
@@ -1375,6 +1397,7 @@ int main(int argc, char** argv)
         snprintf(png, sizeof png, "%s.png", argv[2]);
         gxr_enable(1);
         gxr_set_output(png);
+        gpu_start();
         if (argc > 3) return gx_replay_pair(&s, argv[2], argv[3]);
         rc = gx_replay(&s, argv[2]);
         if (rc == 0 && replay_picture(argv[2])) rc = 1; /* no picture of a capture that did not load */
@@ -1413,6 +1436,7 @@ int main(int argc, char** argv)
         profile_start(&s);
         print_mode(want, rendering, scripted, frames, snap, secs);
         if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
+        gpu_start();
     }
     /* The ARAM census reads the head of every file on the disc, which took
      * 0.3-1.1 s at the first ARAM DMA under load; here, before the game's

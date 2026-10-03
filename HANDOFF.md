@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1199 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1211 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1199 |
+| Python tests | 1211 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -562,10 +562,16 @@ C5c) is now done.
    **The backend is in the runtime** (FINDINGS "V5, second"):
    `runtime/gxv.c` and `runtime/gxv/`, which `--link` builds in when
    `vendor/` is filled, a stub otherwise, with every image the spike
-   writes unchanged by the move. **Next is the rest of V5**: `SOA_GPU` in
-   `soa.exe`, its start, fallback and report lines, the sweep's refusal,
-   `test_gxv_live.py` and the same-session contrast (specs/gpu-backend.md
-   V5). Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
+   writes unchanged by the move. **V5 is done** (FINDINGS "V5"):
+   `SOA_GPU=vulkan` draws the game on the GPU in `soa.exe` itself, the
+   same pixels as the spike on all 67 captures (`gpuspike.py contrast`),
+   and `title --check --env SOA_GPU=vulkan` holds five invariants, the
+   fifth that the GPU drew everything the renderer sent it. One thing is
+   open from it: a 3.4 tripwire fired in the title (draw 6425, a `ztop`
+   draw whose alpha test can reject), and whether a pixel differs wants a
+   capture of that frame replayed both ways. **Next is V6a**, the consumer
+   on its own thread (specs/gpu-backend.md V6a). Read the slice against
+   HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

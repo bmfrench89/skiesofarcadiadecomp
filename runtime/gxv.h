@@ -24,10 +24,16 @@
  * SOA_GXV, because vendor/ had no glslang or Vulkan-Headers at the link, and
  * then gxv_built is the only function here that exists. */
 int gxv_built(void);
+/* SOA_GPU=vulkan (main.c): gxv_init, then gxv as the renderer's backend, so
+ * every command from the first is drawn on the GPU. 0 with the reason in why
+ * -- no backend in this build, no loader, no device -- and the CPU draws. */
+int gxv_start(char* why, size_t cap);
 
-/* Load the host's Vulkan (vulkan-1.dll, libvulkan.so.1) and set everything up.
- * 1 on success; 0 with the reason in why -- no loader, no device, a missing
- * format -- which a caller reports as a skip, never as a pass. */
+/* Load the host's Vulkan (vulkan-1.dll, libvulkan.so.1) and set everything up,
+ * and print the start line: the API version, the device, the driver, logicOp
+ * and the logic-op mode (SOA_GPU_LOGICOP picks it). 1 on success; 0 with the
+ * reason in why -- no loader, no device, a missing format -- which a caller
+ * reports as a skip, never as a pass. */
 int gxv_init(char* why, size_t cap);
 const GxrBackend* gxv_backend(void);
 const char* gxv_device_name(void);

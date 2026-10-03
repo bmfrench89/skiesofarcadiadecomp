@@ -2721,6 +2721,7 @@ static void run_copy_clear(const DrawCmd* D)
  * own or would be booked as vertex setup. Run here and finished here, so
  * the numbering still advances and the arena is free again. The backend
  * cannot reach g_frames_presented, so the hook counts its screen copies. */
+static unsigned long long g_be_sent[3]; /* what a backend was handed, by kind, for gxr_report */
 static void run_here(DrawCmd* D)
 {
     t_tid = 1;
@@ -2731,6 +2732,7 @@ static void run_here(DrawCmd* D)
             fprintf(stderr, "[gxr] the %s backend failed command %lld (kind %d); stopping the run\n", g_backend->name, D->seq, D->kind);
             exit(8);
         }
+        g_be_sent[D->kind < 3 ? D->kind : 2]++;
         if (D->kind == 1 && (D->cp_v & 0x4000u)) plat_inc32(&g_frames_presented);
     } else {
         TIMED(T_RASTER, draw_command(D));
@@ -2742,12 +2744,11 @@ static void run_here(DrawCmd* D)
 /* The test-only passthrough backend (SOA_GXR_BACKEND=passthrough, V2): the
  * CPU path's own code called through the hook, so that the hook, the
  * separate clear and the presented count are proved before a GPU backend
- * relies on them. It counts what it ran for gxr_report. */
-static unsigned long long g_pt_draws, g_pt_copies, g_pt_clears;
-static int pt_draw(const DrawCmd* D) { g_pt_draws++; draw_command(D); return 1; }
-static int pt_copy(const DrawCmd* D) { g_pt_copies++; run_copy_pixels(D); return 1; }
-static int pt_clear(const DrawCmd* D) { g_pt_clears++; run_copy_clear(D); return 1; }
-static const GxrBackend g_passthrough = {"passthrough", pt_draw, pt_copy, pt_clear, NULL, NULL};
+ * relies on them. run_here counts what it ran, as it does for any backend. */
+static int pt_draw(const DrawCmd* D) { draw_command(D); return 1; }
+static int pt_copy(const DrawCmd* D) { run_copy_pixels(D); return 1; }
+static int pt_clear(const DrawCmd* D) { run_copy_clear(D); return 1; }
+static const GxrBackend g_passthrough = {"passthrough", pt_draw, pt_copy, pt_clear, NULL, NULL, NULL};
 
 void gxr_set_backend(const GxrBackend* b)
 {
@@ -3248,8 +3249,9 @@ void gxr_report(void)
      * workers' unaccounted share below is where that shows. */
     if (!gxr_enabled()) return;
     gxr_timing_finish();
-    if (g_backend == &g_passthrough)
-        fprintf(stderr, "[gxr] passthrough backend: %llu draws, %llu copies, %llu clears\n", g_pt_draws, g_pt_copies, g_pt_clears);
+    if (g_backend)
+        fprintf(stderr, "[gxr] %s backend: %llu draws, %llu copies, %llu clears\n", g_backend->name, g_be_sent[0], g_be_sent[1],
+                g_be_sent[2]);
     {
         double span = gxr_producer_span(), rest;
         uint64_t sum = 0;
@@ -3296,6 +3298,7 @@ void gxr_report(void)
             (unsigned long long)px, (unsigned long long)g_rej_bary, (unsigned long long)ra, (unsigned long long)rd, (unsigned long long)g_clipped, (unsigned long long)g_verts_bad,
             (unsigned long long)g_copies_tex, (unsigned long long)g_copies_xfb);
     }
+    if (g_backend && g_backend->report) g_backend->report();
     /* Two facts about lifetimes, stated when they happened at all, because
      * between them they say whether a run took the paths the queue's rules are
      * there for. The first is the only moment the renderer's own state moves

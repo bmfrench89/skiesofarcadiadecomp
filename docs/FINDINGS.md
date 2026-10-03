@@ -5621,3 +5621,91 @@ call it yet: `SOA_GPU` is the next commit.
     `vulkan_core.h`, and is not attempted without headers.
   - `--link` adds `SOA_GXV=1` and the two include paths only when asked,
     the rest being the golden copy.
+
+**V5: the GPU draws the game in `soa.exe`.** 2026-10-03. `SOA_GPU=vulkan`
+(`gpu = vulkan` in `soa.ini`) makes gxv the renderer's backend in the port
+itself. Every command is drawn on the GPU as the producer builds it, and the
+screen copy read back is the picture. Every frame waits for the GPU; V6
+moves that to a thread.
+
+- **What it says.**
+  - **When it starts:** one line, `[gxv] Vulkan 1.4.344 on AMD Radeon
+    Graphics (driver 0x800184): logicOp yes; EFB 640x528 RGBA8 + D32F;
+    logic ops native; timestamps on`.
+  - **When it cannot:** one `[gxv] fallback: <why>; the CPU draws` line.
+    The causes are a build without the backend (which names `fetch_gpu.py`
+    and `--link`), no loader, no device, or a value of `SOA_GPU` other than
+    `off` or `vulkan`.
+  - **At the end:** its report, after `[gxr]`'s.
+  - **What the renderer sent:** `[gxr]` now prints `<name> backend: N
+    draws, M copies, K clears` for any backend, not only the passthrough,
+    so the two reports can be held to each other.
+  - **Knobs:** `SOA_GPU_LOGICOP` picks the logic-op path,
+    `SOA_GPU_LOADER` another loader, and `SOA_GPU_MUTATE` one of gxv's
+    mutations (a check's knob).
+- **The same pictures as the spike** [V]. `python tools/gpuspike.py
+  contrast --set corpus,perfset,gpuset` replays all 67 captures through the
+  spike and through `gen/soa.exe --replay`, both on the GPU, from one scratch
+  copy of each.
+  - **The result:** 67 of 67 have the same pixels, and both binaries print
+    the one start line, driver version included.
+  - **So V0's verdicts carry over:** each picture is the spike's, which the
+    oracle judged (65 pass, two by design).
+  - **The mutation:** `--mutate fog` (soa.exe's shader without fog) makes 14
+    differ, the 14 V4b found fog applies to, and fails the contrast.
+- **A live run, judged on its own log** [V]. `python tools/scenario.py run
+  title --check --env SOA_GPU=vulkan` passes five invariants in the usual 71
+  s, the four as before and "the GPU drew the run".
+  - **What was drawn:** 26,336 draws, 2,000 screen copies and 152 copies to
+    a texture, exactly what the renderer handed the backend (26,336 draws,
+    2,152 copies, 2,000 clears) and what `[gxr]` counted copying.
+  - **The mutation:** with `--env SOA_GPU_LOADER=nonexistent.dll` the run
+    falls back, the four invariants still pass on the CPU, and the fifth
+    fails, naming the fallback.
+  - **`test_gxv_live.py`** holds the check to canned logs, each wrong one
+    way. `scenario.py check <log>` applies it to any log with a `[gxv]`
+    line: the passing run's log gives 5 of 5, the fallback's fails, and a
+    CPU run's gives 4 of 4.
+- **The spec's comparison had to change.** V5's Done line held the GPU's
+  counts to `[gx]`'s draw count. That cannot hold in a headless run with
+  `SOA_SNAP`: the renderer draws only the frames it snapshots, so `[gx]`
+  parsed 1,261,709 draws where 26,336 were drawn. The check compares what the
+  renderer sent the backend instead, and screen copies to `[gxr]`'s count
+  (2,000, which `SOA_SNAP` does not thin).
+- **Replays cannot see the GPU** [V].
+  - **The sweep:** `scenario.py`'s sweep records a problem for a replay
+    whose output has the start line, since the 23 pinned hashes are the CPU
+    renderer's.
+  - **The environment:** a test shows `replay_once` hands the port none of
+    the caller's `SOA_GPU*` and `SOA_SETTINGS=0`.
+  - **The mutations:** dropping the check, and passing `SOA_*` through, each
+    turn their test red.
+- **A build without the backend says so** [V]. With glslang set aside,
+  `--link` prints `GPU backend: not built in`, and `SOA_GPU=vulkan` gives
+  `[gxv] fallback: this build has no GPU backend: run python
+  tools/fetch_gpu.py, then python tools/recompile.py --link; the CPU draws`.
+- **The contract holds with `SOA_GPU` unset** [V]:
+  - `replay` 23/23 at 1, 2, 3 and 8 threads;
+  - the self test, 0 failures;
+  - `title --check`, 4 of 4, with no `[gxv]` line;
+  - `decomp.py`;
+  - `test_memguard.py` and `test_mods.py`. Its boot-path build now links
+    `gxv.c` as the stub and stubs `gxr_enabled`, which `main.c` asks before
+    starting the GPU. `test_profiler.py` builds `main.c` the same way and
+    needed the same; the full suite, not the contract's list, caught it
+    (nine tests, all MSVC-gated).
+- **A tripwire fired in the title, open.**
+  - **What fired:** `[gxv] draw 6425 is ztop with an alpha test that can
+    reject: the GPU tests depth after the TEV, the CPU before`.
+  - **What it means:** spec 3.4 relies on no `ztop` draw with a rejecting
+    alpha test existing, and none does in the 67 captures. The game makes
+    one in the title, outside them, where the GPU's order can keep depth
+    the CPU's would write.
+  - **What is not known yet:** whether any pixel differs. The next step is a
+    capture of that frame, into a scratch directory, replayed both ways.
+    The line now names the draw, and `SOA_GPU_DRAW=6425` describes it.
+- **Less noise.** The per-copy `copy to texture at ...` line stops after
+  eight; the report counts the rest. A live run made 152.
+- **Tests:** `test_gxv_live.py` (10); `test_scenario.py`,
+  two more (the sweep refuses a GPU replay, and a replay cannot see
+  `SOA_GPU`).

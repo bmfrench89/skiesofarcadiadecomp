@@ -554,7 +554,9 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
   late order. The CPU tests depth first only for `ztop` draws and where `TevSetup.alpha_always` says
   the order cannot change a pixel (gxr.c:1030-1056); no draw in the corpus is `ztop` with an alpha
   test that can reject (HANDOFF, wrong statement 2) [V], so the late order gives the CPU's result
-  everywhere, and such a draw is a tripwire. If V7 adds early depth as a speed-up, it takes
+  everywhere, and such a draw is a tripwire. *It fired in V5's live title run (FINDINGS "V5"):
+  the game makes such a draw outside the corpus. Whether a pixel differs is open; a capture of that
+  frame, replayed both ways, decides.* If V7 adds early depth as a speed-up, it takes
   `alpha_always` from the CPU and never re-derives it (the XOR-of-always-true trap H15a avoided).
 - **Depth quantised as the CPU compares it**: `zq = uint(clamp(depth, 0, 1) · 16777215)` from the
   depth varying (truncating, as `depth_test`, gxr.c:1009), written as `gl_FragDepth = zq · 2⁻²⁴`,
@@ -719,7 +721,9 @@ the differentials and every Done line stay the same. For Vulkan:
 | `SOA_GXR_BACKEND` | `passthrough` | Test knob (V2): the passthrough backend, which runs `draw_command` through the seam |
 
 - **Logging**, one line at start: `[gxv] Vulkan 1.4 on AMD Radeon Graphics (AMD proprietary
-  26.10.07.06): logicOp yes, dualSrcBlend yes; EFB 640x528 RGBA8 + D32F; logic ops native`. A
+  26.10.07.06): logicOp yes, dualSrcBlend yes; EFB 640x528 RGBA8 + D32F; logic ops native`
+  (as built, V5: `[gxv] Vulkan 1.4.344 on AMD Radeon Graphics (driver 0x800184): logicOp yes; EFB
+  640x528 RGBA8 + D32F; logic ops native; timestamps on`, the driver as Vulkan 1.1 gives it). A
   fallback prints one line starting `[gxv] fallback:` and naming the cause. One report line at the
   end: draws, screen copies, texture copies and bytes read back, pipelines created, textures uploaded
   (count and MB), pool resets mid-frame, readback waits, GPU ms a frame (timestamp queries)
@@ -1411,8 +1415,17 @@ and `runtime/gxv/`, built with `SOA_GXV=1` by the spike and by `--link` when `ve
 stub otherwise; the shaders through `tools/soa/shaders.py` into `gen/gxv/`, not one
 `gen/gxv_spirv.h`; `plat_dl_*` in `plat.c`; `compile_runtime.py` compiles the backend against
 fetched headers in every CI compile job (`fetch_gpu.py --headers`, `--require-gxv`). Every image the
-spike writes is byte-identical to before the move. Next: `SOA_GPU` in `soa.exe`, and the rest of
-the Done.*
+spike writes is byte-identical to before the move.*
+
+*V5 landed 2026-10-03 (FINDINGS "V5"): `SOA_GPU=vulkan` in `soa.exe`; `gpuspike.py contrast`, 67 of
+67 captures the same pixels in the spike and `soa.exe`, `--mutate fog` (`SOA_GPU_MUTATE`, soa.exe
+alone) 14 differing; `title --check --env SOA_GPU=vulkan` 5 of 5 invariants, the fifth "the GPU
+drew the run" (`scenario.gpu_problems`), red with `SOA_GPU_LOADER=nonexistent.dll`; a given log is
+checked by `scenario.py check <log>`, and `test_gxv_live.py` holds the check to canned logs. One change
+from the Done below: the live check holds the GPU's counts to what the renderer sent the backend
+(`[gxr] vulkan backend: ...`, new) and screen copies to `[gxr]`'s, not to `[gx]`'s draw count,
+which a run with `SOA_SNAP` cannot meet, the renderer drawing only the frames it snapshots. A
+3.4 tripwire fired in the title; see there.*
 
 *A day to several days. `--link`. Prerequisites: the gate; V4b. Files: `runtime/gxv.c` and
 `runtime/gxv/*.glsl` (from the spike), `tools/recompile.py` (the SPIR-V step, optional),

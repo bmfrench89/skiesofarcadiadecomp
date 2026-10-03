@@ -902,7 +902,9 @@ static int gxv_draw(const DrawCmd* D)
      * ztop draw whose alpha test can reject, which the corpus has none of
      * (3.4); said once if one comes. */
     if (D->px.ztop && !D->tev.alpha_always && !ztop_said++)
-        say("a ztop draw with an alpha test that can reject: the GPU tests depth after the TEV, the CPU before (tripwire, 3.4)");
+        say("draw %llu is ztop with an alpha test that can reject: the GPU tests depth after the TEV, the CPU before "
+            "(tripwire, 3.4; SOA_GPU_DRAW=%llu describes it)",
+            g_n_draws + 1, g_n_draws + 1);
     switch (D->prim) {
     case 0x80: topo = T_TRIS; quads = 1; n = n / 4 * 4; break;
     case 0x90: topo = T_TRIS; n = n / 3 * 3; break;
@@ -1334,8 +1336,13 @@ static int copy_texture(const DrawCmd* D)
     compute_to_host();
     if (!submit_wait()) return 0;
     memcpy(ram, g_dest_map, extent);
-    /* For ramdiff: which bytes, and the EFB as of which draw. */
-    say("copy to texture at %08X, %u bytes, format %u, after draw %llu", dest, extent, texfmt, g_n_draws);
+    /* For ramdiff: which bytes, and the EFB as of which draw. A frame makes
+     * two or three; a live run makes one or two a frame, which the report
+     * counts instead of listing. */
+    if (g_n_tex_copies < 8)
+        say("copy to texture at %08X, %u bytes, format %u, after draw %llu", dest, extent, texfmt, g_n_draws);
+    else if (g_n_tex_copies == 8)
+        say("copies to a texture after the eighth are counted in the report, not listed");
     g_img_w = p.ow;
     g_img_h = p.oh;
     if (D->cp_image) memcpy(D->cp_image, g_image_map, (size_t)p.ow * p.oh * 4);
@@ -1562,7 +1569,7 @@ static void timed_finish(void)
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
 }
 
-static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish};
+static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
 
@@ -1918,10 +1925,31 @@ int gxv_init(char* why, size_t cap)
         uint32_t* q = g_quad_map + i * 6, b = i * 4;
         q[0] = b; q[1] = b + 1; q[2] = b + 2; q[3] = b; q[4] = b + 2; q[5] = b + 3;
     }
+    if (g_logic_mode < 0) {
+        const char* forced = getenv("SOA_GPU_LOGICOP");
+        if (forced && *forced && !gxv_set_logicop(forced)) say("SOA_GPU_LOGICOP=%s is not native, blend or snapshot here; ignored", forced);
+    }
     if (g_logic_mode < 0) g_logic_mode = g_has_logicop ? LOGIC_NATIVE : LOGIC_SNAPSHOT;
-    say("device %s (Vulkan %u.%u.%u, driver %#x), timestamps %s", g_devname, VK_API_VERSION_MAJOR(g_props.apiVersion),
-        VK_API_VERSION_MINOR(g_props.apiVersion), VK_API_VERSION_PATCH(g_props.apiVersion), g_props.driverVersion,
+    /* The start line (3.11), which a live run's log is judged by. */
+    say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s",
+        VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
+        VK_API_VERSION_PATCH(g_props.apiVersion), g_devname, g_props.driverVersion, g_has_logicop ? "yes" : "no", EFB_W,
+        EFB_H, g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot",
         g_timestamps ? "on" : "unavailable");
+    return 1;
+}
+
+int gxv_start(char* why, size_t cap)
+{
+    /* A check's knob: one of gxv_set_mutation's, which gpuspike.py contrast
+     * hands soa.exe alone to prove the two binaries' pictures can differ. */
+    const char* m = getenv("SOA_GPU_MUTATE");
+    if (m && *m && !gxv_set_mutation(m)) {
+        snprintf(why, cap, "SOA_GPU_MUTATE=%s is not a mutation gxv has", m);
+        return 0;
+    }
+    if (!gxv_init(why, cap)) return 0;
+    gxr_set_backend(gxv_backend());
     return 1;
 }
 
@@ -1988,5 +2016,11 @@ int gxv_built(void) { return 1; }
 /* This build has no backend: vendor/ held no glslang or Vulkan-Headers when
  * it was linked. */
 int gxv_built(void) { return 0; }
+
+int gxv_start(char* why, size_t cap)
+{
+    snprintf(why, cap, "this build has no GPU backend: run `python tools/fetch_gpu.py`, then `python tools/recompile.py --link`");
+    return 0;
+}
 
 #endif

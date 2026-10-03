@@ -737,6 +737,42 @@ def test_a_hash_that_moves_with_the_thread_count_is_the_point(tmp_path):
     assert len(problems) == 1 and "SOA_THREADS=8" in problems[0]
 
 
+def test_a_replay_the_gpu_drew_is_refused(tmp_path):
+    """V5, 3.9: the 23 pinned hashes are the CPU renderer's. A replay that
+    started the GPU backend printed its start line, and is a problem however
+    its hash came out."""
+    captures = [make_capture(tmp_path, "0100")]
+    drawn = (
+        REPLAY_TEXT + "[gxv] Vulkan 1.4.344 on AMD Radeon Graphics (driver 0x800184): logicOp yes\n"
+    )
+    _, problems = scenario.sweep(
+        captures, (1,), 1, lambda base, t: (0, drawn), echo=lambda *a: None
+    )
+    assert len(problems) == 1 and "the GPU drew it" in problems[0]
+    _, problems = scenario.sweep(
+        captures, (1,), 1, lambda base, t: (0, REPLAY_TEXT), echo=lambda *a: None
+    )
+    assert problems == []
+
+
+def test_a_replay_cannot_see_the_gpu_switch(tmp_path, monkeypatch):
+    """V5: replay_once hands soa.exe no SOA_* variable of the caller's, so
+    SOA_GPU=vulkan set for another run never reaches a pinned replay, and
+    SOA_SETTINGS=0, so a soa.ini's `gpu = vulkan` does not either."""
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw["env"])
+        return scenario.subprocess.CompletedProcess(cmd, 0, REPLAY_TEXT, "")
+
+    monkeypatch.setenv("SOA_GPU", "vulkan")
+    monkeypatch.setenv("SOA_GPU_DEVICE", "1")
+    monkeypatch.setattr(scenario.subprocess, "run", fake_run)
+    scenario.replay_once(tmp_path / "soa.exe", tmp_path / "0100", 1)
+    assert not {k for k in seen if k.startswith("SOA_GPU")}
+    assert seen["SOA_SETTINGS"] == "0"
+
+
 def test_a_replay_that_rendered_nothing_is_not_silently_recorded(tmp_path):
     """gx_replay() returns 1 and says which file it could not open; a sweep
     that grepped for a hash would record nothing and call it agreement."""

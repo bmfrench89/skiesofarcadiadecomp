@@ -64,6 +64,8 @@ static int is_slots(const char* v)
  * off by default (PLAN M5). */
 static const Setting k_settings[] = {
     {"render", "SOA_RENDER", "1 draws the game"},
+    {"gpu", "SOA_GPU", "off (the default) or vulkan: the GPU draws the picture, where this build has the backend (python tools/fetch_gpu.py, then --link) and there is a Vulkan driver; anything short of one is said and the CPU draws",
+     0, NULL, "off|vulkan"},
     {"window", "SOA_WINDOW", "0 or 1: force the window off or on"},
     {"scale", "SOA_SCALE", "the window's starting size in multiples of 640x480; by default the largest that fits"},
     {"threads", "SOA_THREADS", "rasterizer threads"},

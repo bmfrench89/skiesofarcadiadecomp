@@ -468,6 +468,66 @@ RE_PAD_TROUBLE = re.compile(r"^\[si\] SOA_PAD")
 # version of "no video frame for Ns" -- gone from runtime/, but the terminal
 # line in all 31 saved logs in build/, which is what `check` is pointed at.
 RE_STOP = re.compile(r"^\[(spin|trap|unimplemented)\]|^\[watchdog\] (no video frame|still running)")
+# The GPU backend's report (runtime/gxv.c), what the renderer handed it
+# (gxr.c), and what the renderer counted copying (gxr_report).
+RE_GXV_REPORT = re.compile(
+    r"^\[gxv\] (\d+) draws \(\d+ rebuilt by clipping\), \d+ vertices, (\d+) clears, "
+    r"(\d+) screen copies, (\d+) copies to a texture",
+    re.M,
+)
+RE_GXR_BACKEND = re.compile(
+    r"^\[gxr\] (\S+) backend: (\d+) draws, (\d+) copies, (\d+) clears", re.M
+)
+RE_GXR_COPIES = re.compile(r"^\[gxr\] .*?(\d+) texture copies, (\d+) screen copies$", re.M)
+
+
+def gpu_problems(text: str) -> tuple[list[str], str]:
+    """What a run's log says against the GPU having drawn all of it
+    (specs/gpu-backend.md V5): one `[gxv] Vulkan ... on ...` start line, no
+    `[gxv] fallback:`, and a report that is not empty and whose counts are
+    what the renderer handed the backend -- every draw, copy and clear -- and
+    the screen and texture copies gxr_report counted. The last of each
+    report is the run's (the watchdog may print one earlier). Returns the
+    problems, and on none a line saying what was drawn."""
+    lines = text.splitlines()
+    starts = [ln for ln in lines if ln.startswith(GXV_SAYS) and " on " in ln]
+    falls = [ln for ln in lines if ln.startswith("[gxv] fallback:")]
+    problems = (
+        [f"{len(starts)} '[gxv] Vulkan ... on ...' start lines, not 1"] if len(starts) != 1 else []
+    )
+    problems += falls[:1]
+    gxv, sent, copied = (
+        RE_GXV_REPORT.findall(text),
+        RE_GXR_BACKEND.findall(text),
+        RE_GXR_COPIES.findall(text),
+    )
+    for what, found in (
+        ("[gxv] report", gxv),
+        ("[gxr] backend line", sent),
+        ("[gxr] copy counts", copied),
+    ):
+        if not found:
+            problems.append(f"no {what}")
+    if not (gxv and sent and copied):
+        return problems, ""
+    draws, clears, screens, textures = map(int, gxv[-1])
+    name, sent_draws, sent_copies, sent_clears = sent[-1][0], *map(int, sent[-1][1:])
+    gxr_textures, gxr_screens = map(int, copied[-1])
+    if name != "vulkan":
+        problems.append(f"the backend was {name}, not vulkan")
+    if not draws or not screens:
+        problems.append(f"the GPU drew {draws} draws and {screens} screen copies")
+    for what, got, want in (
+        ("draws", draws, sent_draws),
+        ("copies", screens + textures, sent_copies),
+        ("clears", clears, sent_clears),
+        ("screen copies", screens, gxr_screens),
+        ("copies to a texture", textures, gxr_textures),
+    ):
+        if got != want:
+            problems.append(f"the GPU reports {got} {what} where the renderer counts {want}")
+    drew = f"{draws} draws, {screens} screen copies, {textures} copies to a texture, as sent"
+    return problems, f"{drew}; {starts[0][len('[gxv] ') :] if starts else ''}"
 
 
 @dataclass
@@ -487,6 +547,7 @@ class Report:
     scripted_events: int | None = None
     pad_trouble: str | None = None
     stop_lines: list[str] = field(default_factory=list)
+    gpu: tuple[list[str], str] = ([], "")  # gpu_problems over the whole log
 
 
 def parse_report(text: str) -> Report:
@@ -533,6 +594,7 @@ def parse_report(text: str) -> Report:
             continue
         if RE_STOP.match(line):
             r.stop_lines.append(line)
+    r.gpu = gpu_problems(text)
     return r
 
 
@@ -557,8 +619,10 @@ def check_report(
     expect_render: bool | None = None,
     expect_events: int | None = None,
     killed_after: float | None = None,
+    expect_gpu: bool = False,
 ) -> list[Check]:
-    """The four invariants, plus one sanity check on the input.
+    """The four invariants, plus one sanity check on the input; and with
+    expect_gpu (SOA_GPU=vulkan), a fifth: the GPU drew the run (V5).
 
     `exit_code` is None when reading a saved log, where the run's own words
     have to stand in for it. `expect_render` says whether the scenario asked
@@ -690,6 +754,14 @@ def check_report(
         drew = f", {r.triangles} triangles" if r.triangles is not None else ""
         checks.append(Check("no bad vertex references", PASS, f"0 bad vertex refs{total}{drew}"))
 
+    # 5. With SOA_GPU=vulkan, the GPU drew every command the renderer built.
+    if expect_gpu:
+        problems, drew = r.gpu
+        if problems:
+            checks.append(Check("the GPU drew the run", FAIL, "; ".join(problems)))
+        else:
+            checks.append(Check("the GPU drew the run", PASS, drew))
+
     # And the input itself: a script the port did not understand makes the
     # four above true about a run that drove nothing.
     if r.pad_trouble:
@@ -725,7 +797,8 @@ def print_checks(checks: list[Check], label: str) -> int:
         return 1
     skipped = [c for c in checks if c.invariant and c.status == SKIP]
     tail = f" ({len(skipped)} skipped: {', '.join(c.name for c in skipped)})" if skipped else ""
-    print(f"{label}: {len(invariants)} of 4 invariants hold{tail}")
+    total = sum(c.invariant for c in checks)  # four, or five with the GPU's
+    print(f"{label}: {len(invariants)} of {total} invariants hold{tail}")
     return 0
 
 
@@ -899,7 +972,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"[scenario] {sc.name} exited {code}: {why}; log in {named(log)}")
         return 0 if code == 0 else 1
     return print_checks(
-        check_report(report, code, rendering, len(events), args.timeout if killed else None),
+        check_report(
+            report,
+            code,
+            rendering,
+            len(events),
+            args.timeout if killed else None,
+            env.get("SOA_GPU") == "vulkan",
+        ),
         sc.name,
     )
 
@@ -914,8 +994,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     if args.name:
         sc = load_scenario(args.name, Path(args.dir))
         expect_render, expect_events = sc.rendering, len(sc.events)
+    # A log the GPU backend wrote in -- its start line or a fallback -- was a
+    # run with SOA_GPU=vulkan, and is held to it.
+    gpu = any(ln.startswith("[gxv] ") for ln in text.splitlines())
     return print_checks(
-        check_report(parse_report(text), None, expect_render, expect_events), path.name
+        check_report(parse_report(text), None, expect_render, expect_events, None, gpu), path.name
     )
 
 
@@ -979,6 +1062,9 @@ def frame_hashes(text: str) -> list[str]:
 # is built (SOA_GXR_INLINE, specs/gpu-backend.md V2), the path a backend uses.
 INLINE = "inline"
 INLINE_SAYS = "[gxr] rasterizing on 0 worker threads"
+# The GPU backend's start line (runtime/gxv.c): a replay that prints it was
+# drawn on the GPU, and no pinned hash is the GPU's (specs/gpu-backend.md 3.9).
+GXV_SAYS = "[gxv] Vulkan "
 
 
 def replay_once(exe: Path, base: Path, threads, wrap=()) -> tuple[int, str]:
@@ -1035,6 +1121,10 @@ def sweep(
                 at = f"{base.name} at SOA_THREADS={t} (pass {p})"
                 if code != 0:
                     problems.append(f"{at}: exit {code}")
+                if GXV_SAYS in text:
+                    problems.append(
+                        f"{at}: the GPU drew it, and a pinned hash is the CPU renderer's"
+                    )
                 if len(got) != 1:
                     # gx_replay returns 1 and says why when a file will not
                     # open; counting the lines is what tells a replay that
