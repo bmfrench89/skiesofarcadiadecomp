@@ -134,7 +134,10 @@ Still on the guest thread, `gxr_draw_inner`:
   The cache holds 1,024 decodes, found through an index, and hashes a
   texture's source bytes at most once a *texture epoch*, which moves on the
   game's texture-cache invalidate (BP 0x66), on every EFB copy and on a
-  replay's RAM load (PLAN-60FPS-MODS H12);
+  replay's RAM load (PLAN-60FPS-MODS H12). Each bound texture also carries
+  its cache slot and a generation that moves on every decode, replacement,
+  copy image and eviction (`TexCfg.tex_id`, `tex_gen`), so a backend can
+  tell it changed without hashing (V2);
 - `pixel_prepare` and `raster_prepare` snapshot blend, logic op, depth,
   fog, the viewport and the scissor, so a later register write cannot
   change a queued draw;
@@ -158,7 +161,15 @@ reset, so a stale read is always too small and can only make a thread wait.
 Every read of another thread's count goes through a seq_cst `plat_load*`
 from `plat.h` (portability.md 3.4: a plain `mov` on x64, `ldar` on ARM64),
 and `tools/tests/test_gxr_atomics.py` checks that over the source.
-With no workers the producer runs the command itself on the spot.
+With no workers the producer runs the command itself on the spot
+(`run_here`): with `SOA_GXR_INLINE=1`, or whenever a backend is set
+(`gxr_set_backend`, or `SOA_GXR_BACKEND=passthrough`), no worker starts,
+and every command goes through the backend if there is one and
+`draw_command` if not. The command types live in `runtime/gxr_cmd.h`, and
+each command carries `efb`, the EFB it was built for -- 0, or 1 for H17's
+in-between image -- which `claim_slot` stamps from the producer's target,
+so a consumer never reads it from global state (specs/gpu-backend.md 3.1,
+V2).
 
 ### 7. Workers rasterize it
 
@@ -221,7 +232,10 @@ order behind the draws it is copying. `run_copy` then calls:
   memory tiled in the format the sampler decodes, which is how the game's
   own render-to-texture effects work;
 
-and then `efb_clear` if the copy asked for a clear.
+and then `efb_clear` if the copy asked for a clear. With a backend set the
+clear is always its own kind-2 command, so a backend's copy never clears,
+and the hook in `run_here`, not the backend, counts a screen copy in
+`g_frames_presented` (V2).
 
 A copy that reads rows other workers own -- a filtered one, which is every
 copy the game makes, or a half-scale one -- needs every earlier command
@@ -446,6 +460,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `gxr.c` | renderer | Transform, lighting, texgen, clipping, the rasterizer, depth, fog and blend, the EFB, the command queue and its worker threads, EFB copies and clears, frame hashing | Wrong pixels. The 23 pinned captures in `config/fifo_manifest.tsv` are the check: a change that moves a frame moves a hash |
 | `gxr_tev.c` | renderer | Texture decode and cache, palettes, sampling, the TEV combiner and the alpha compare | Wrong colours. A cache bug is worse than a decode bug, because it shows up as *stale* textures in some frames and not others |
 | `gxr.h` | renderer | Shared types (`Vertex`, `TevSetup`, `TexCfg`), the EFB dimensions, and the producer's phase-accounting clock | A phase mistake makes the profile lie about where the time goes; the pipeline itself is unaffected |
+| `gxr_cmd.h` | renderer | The commands the producer builds and a consumer runs -- `DrawCmd` with its `PixelCfg`, `RasterCfg` and `Rect`, and since V2 the `efb` it was built for -- and the backend interface: `GxrBackend`, `gxr_set_backend`, `gxr_backend_screen`, the exported clip helpers and `gxr_set_target` (specs/gpu-backend.md 3.1). What a GPU backend is written against | A backend that reads a field the producer stopped filling, or global state the producer has already moved on from, draws the wrong command |
 | `plat.h` | host plumbing | The platform layer (portability.md 3.2), header-only: `PLAT_X86_64`, `PLAT_ARM64`, `PLAT_MSVC` and `PLAT_GNU`, each 0 or 1, so a file tests a meaning rather than a compiler; and, since L2a, `PLAT_TARGET_SSE41` and `plat_cpu_has_sse41`, which let `gxr_tev.c`'s SIMD blend build under any x86-64 compiler while choosing it at run time. Since L2, everything the renderer asks of a host: the queue's atomics (`plat_load*`, `plat_inc*`, `plat_dec32`, `plat_xchg64`, `plat_cas32`, `plat_compiler_barrier`, all seq_cst, and `plat_store64_relaxed` for the timers a worker charges while the report reads them), spinning and sleeping, waits (`WaitOnAddress`, or a futex on Linux and Android), clocks (`plat_mono_raw`, `plat_mono_ns` since L7, and `plat_cycles`: the TSC or ARM64's generic timer), threads and the CPU count, `plat_fseek64` and `plat_setenv`. Since L7 it also declares `plat.c`'s cold half. It declares the six Win32 calls it makes as the SDK does rather than include `<windows.h>`, whose macros `hle.c`'s names collide with; `gxr.h` includes it. It never includes `cpu.h`, so an edit is a `--link` | A wrong test drops the SIMD path silently -- a windows-gnu build did before L2a -- or lets a compiler reach intrinsics it cannot build, as clang-cl did from b377b1f to L2a |
 | `plat.c` | host plumbing | The platform layer's cold half (portability.md 3.3, L7). It reserves, commits and releases address space. It puts the fault guard on a reserved range: a vectored handler on Windows; elsewhere `sigaction(SIGSEGV)` on a `sigaltstack`, chaining to the previous handler, with the store bit taken from the page fault's error code or AArch64's ESR record. It also runs the guest on a stack of the size it asks for. Only `main.c` calls it, and every test that links `main.c` adds it through `toolchain.runtime_support_sources()` | The MEM1 tripwire goes quiet, or an address past the RAM kills the run instead of being reported once. Off Windows the guest overflows an 8 MB default stack somewhere deep, or a fault that is not the guard's never reaches the handler before it |
 | `crmath.h` | renderer | CORE-MATH's correctly rounded binary32 `exp2f` and `log2f` (portability.md 3.8, L6), as `soa_exp2f` for fog and `soa_log2f` for texture LOD: one answer on every platform, where a C library's own answer is that library's. MIT; the changes from upstream are listed at its top, and `config/libm.tsv` pins its outputs over every input the renderer can give it | Fog or mip choice drifts by platform, by a bit at a time, which only `tools/citest/libm_check.py` would see |
@@ -643,7 +658,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1158 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1165 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

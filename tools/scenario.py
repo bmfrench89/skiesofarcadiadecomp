@@ -975,11 +975,21 @@ def frame_hashes(text: str) -> list[str]:
     return [m.group(1) for line in text.splitlines() if (m := RE_FRAME_HASH.match(line.strip()))]
 
 
-def replay_once(exe: Path, base: Path, threads: int, wrap=()) -> tuple[int, str]:
-    """One `gen/soa.exe --replay <base>` with the hash switch on."""
+# --threads inline: no worker pool, every command run on the producer as it
+# is built (SOA_GXR_INLINE, specs/gpu-backend.md V2), the path a backend uses.
+INLINE = "inline"
+INLINE_SAYS = "[gxr] rasterizing on 0 worker threads"
+
+
+def replay_once(exe: Path, base: Path, threads, wrap=()) -> tuple[int, str]:
+    """One `gen/soa.exe --replay <base>` with the hash switch on. `threads`
+    is a worker count or INLINE, which the run must confirm it used: a
+    zero-worker run that quietly started a pool would prove nothing."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env["SOA_HASH"] = "1"
-    env["SOA_THREADS"] = str(threads)
+    env["SOA_THREADS"] = "1" if threads == INLINE else str(threads)
+    if threads == INLINE:
+        env["SOA_GXR_INLINE"] = "1"
     env["SOA_SETTINGS"] = "0"  # a player's soa.ini must not move a pinned hash
     proc = subprocess.run(
         [*wrap, str(exe), "--replay", str(base)],
@@ -990,12 +1000,18 @@ def replay_once(exe: Path, base: Path, threads: int, wrap=()) -> tuple[int, str]
         errors="replace",
         check=False,
     )
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    text = (proc.stdout or "") + (proc.stderr or "")
+    if threads == INLINE and INLINE_SAYS not in text:
+        return (
+            proc.returncode or 1,
+            text + f"\n[replay] inline, and the run never said {INLINE_SAYS!r}\n",
+        )
+    return proc.returncode, text
 
 
 def sweep(
     captures: list[Path],
-    threads: tuple[int, ...],
+    threads: tuple,
     passes: int,
     run,
     echo=print,
@@ -1144,9 +1160,11 @@ def cmd_replay(args: argparse.Namespace) -> int:
         print(f"[replay] no complete captures in {named(fifo)}: run the capture scenario first")
         return 2
     try:
-        threads = tuple(int(t) for t in args.threads.split(","))
+        threads = tuple(t if t == INLINE else int(t) for t in args.threads.split(","))
     except ValueError:
-        raise ScenarioError(f"--threads {args.threads!r} is not a list like 1,2,3,8") from None
+        raise ScenarioError(
+            f"--threads {args.threads!r} is not a list like 1,2,3,8 (or inline)"
+        ) from None
     total = len(captures) * len(threads) * args.passes
     print(
         f"[replay] {len(captures)} captures x {len(threads)} thread counts x {args.passes} "
@@ -1259,7 +1277,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--threads",
         default=",".join(str(t) for t in DEFAULT_THREADS),
-        help="SOA_THREADS values to sweep; a frame that moves between them is a race",
+        help="SOA_THREADS values to sweep, or inline for no worker pool (V2); a frame "
+        "that moves between them is a race",
     )
     p.add_argument("--passes", type=int, default=2, help="how many times over (default 2)")
     p.add_argument("--fifo", default=str(FIFO_DIR), help="where the captures are")

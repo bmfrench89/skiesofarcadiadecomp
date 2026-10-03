@@ -929,3 +929,35 @@ def test_a_wrapped_replay_may_not_bless(tmp_path, monkeypatch):
     )
     with pytest.raises(ScenarioError, match="--wrap wine"):
         scenario.cmd_replay(args)
+
+
+def test_an_inline_replay_runs_with_no_worker_pool(monkeypatch, tmp_path):
+    """--threads inline (GPU spec V2): SOA_THREADS=1 and SOA_GXR_INLINE=1, the
+    path a backend uses, and nothing else set by the caller gets through."""
+    seen = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", scenario.INLINE_SAYS + "\n"
+
+    monkeypatch.setenv("SOA_GPU", "vulkan")
+    monkeypatch.setattr(
+        scenario.subprocess, "run", lambda cmd, **kw: seen.append(kw["env"]) or Done()
+    )
+    code, _ = scenario.replay_once(tmp_path / "soa.exe", tmp_path / "0100", scenario.INLINE)
+    env = seen[0]
+    assert code == 0
+    assert (env["SOA_THREADS"], env["SOA_GXR_INLINE"]) == ("1", "1")
+    assert "SOA_GPU" not in env
+
+
+def test_an_inline_replay_that_started_a_pool_fails(monkeypatch, tmp_path):
+    """A zero-worker run that quietly started workers would prove nothing about
+    the zero-worker path, so the run has to say it used none."""
+
+    class Done:
+        returncode, stdout, stderr = 0, "", "[gxr] rasterizing on 8 worker threads\n"
+
+    monkeypatch.setattr(scenario.subprocess, "run", lambda cmd, **kw: Done())
+    code, text = scenario.replay_once(tmp_path / "soa.exe", tmp_path / "0100", scenario.INLINE)
+    assert code != 0 and "never said" in text
+    assert scenario.replay_once(tmp_path / "soa.exe", tmp_path / "0100", 8)[0] == 0

@@ -27,7 +27,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 231 s | nothing (376 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 231 s | nothing (381 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -316,13 +316,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1156 passed, 2 skipped in 262.10s
+1163 passed, 2 skipped in 240.26s
 ```
 
-1158 tests in 63 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1137 passed, 3 skipped` without
+1165 tests in 64 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1144 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `780 passed, 378 skipped` without MSVC. The two
+into one module-level skip), `782 passed, 383 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
 
 **Watch the skip count, not just the pass count.** A number that went *up*

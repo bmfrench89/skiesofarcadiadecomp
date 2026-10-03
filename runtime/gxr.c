@@ -9,6 +9,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
+#include "gxr_cmd.h"
 #include "crmath.h"
 #include "plat.h"
 #include <math.h>
@@ -22,6 +23,10 @@
 #else
 #include <sys/stat.h>
 #endif
+
+/* A backend that draws the commands instead of the worker pool (V2), or
+ * NULL. Set before the first command; with one, no worker starts. */
+static const GxrBackend* g_backend;
 
 uint64_t g_gxr_ticks[T_COUNT];
 uint64_t g_gxr_phase_last;
@@ -389,6 +394,7 @@ void gxr_reset_efb(void)
     int x, y;
     for (y = 0; y < EFB_H; y++)
         for (x = 0; x < EFB_W; x++) { memcpy(g_efb[y][x], col, 4); g_efb_z[y][x] = z ? z : 0xFFFFFFu; }
+    if (g_backend && g_backend->reset_efb) g_backend->reset_efb(bp);
 }
 
 void gxr_enable(int on)
@@ -795,26 +801,6 @@ static void transform(CpuState* s, const VertexIn* in, Vertex* out)
 #define QMASK (QUEUE_CAP - 1) /* commands are numbered, not indexed, so the capacity is a power of two */
 #define ARENA_BYTES (48u << 20)
 
-typedef struct { int x0, y0, x1, y1; } Rect;
-
-typedef struct {
-    int blend_en, logic_en, col_upd, alpha_upd, subtract;
-    unsigned sfac, dfac, lop;
-    int const_alpha; /* -1 when not enabled */
-    int z_en, z_upd, ztop;
-    unsigned z_func;
-    /* fog (BP 0xEE-0xF2, GXSetFog): type 0 off, 2 linear, 4 exp, 5 exp2, 6/7 backwards */
-    unsigned fog_type, fog_proj;
-    float fog_a, fog_c;
-    uint32_t fog_b_mag;
-    unsigned fog_b_shift;
-    uint8_t fog_color[3];
-    /* blend_pixel's case, decided once a draw (H15c): 0 the general one, 1 no
-     * blend and no logic op, 2 the source-alpha blend (GX_BL_SRCALPHA,
-     * GX_BL_INVSRCALPHA, adding), which 57% of the H6 set's pixels use. */
-    unsigned blend_kind;
-} PixelCfg;
-
 /* The 20-bit floats in the fog registers: sign, 8-bit exponent, 11-bit mantissa. */
 static float fog_float(uint32_t v)
 {
@@ -824,46 +810,6 @@ static float fog_float(uint32_t v)
     return f;
 }
 
-typedef struct {
-    Rect scissor;
-    unsigned cull;
-    float wd, ht, zrange, xorig, yorig, farz; /* viewport, offsets applied */
-} RasterCfg;
-
-typedef struct {
-    /* The number this command was published as. A worker asking for command n
-     * finds it in slot n & QMASK and checks this before running it, so the day
-     * a change lets the producer get QUEUE_CAP commands ahead of a worker, the
-     * run says so instead of rasterizing a command built over the one it
-     * wanted. See the queue's declarations for why it cannot happen today. */
-    long long seq;
-    /* A fence (H14): no worker starts this command until every other worker
-     * has finished every command numbered below it. 0 is none; never above
-     * seq, so the worker furthest behind can always run. fence_near is the
-     * same, asked only of the worker's two neighbours -- the workers that own
-     * the rows either side of its own -- which is all a filtered copy reads
-     * (FINDINGS "Neighbour fences"); 0 when fence covers it. */
-    long long fence, fence_near;
-    int kind; /* 0 draw, 1 EFB copy, 2 the EFB clear that followed one */
-    TevSetup tev;
-    PixelCfg px;
-    RasterCfg rc;
-    unsigned ntex, nchan, prim, count;
-    unsigned miptex;      /* texcoord slots whose map has mipmaps */
-    uint8_t texmap_of[8]; /* the map a texcoord slot feeds (first stage using it) */
-    const Vertex* v;
-    /* copy: the registers as they were, and the command word */
-    uint32_t cp_v, cp_tl, cp_wh, cp_dest, cp_stride, cp_ar, cp_gb, cp_z;
-    /* The copy filter, already collapsed onto the three rows it reads, so a
-     * worker never touches BP 0x53/0x54 itself: the producer keeps writing
-     * those while workers run, and a worker reading them would apply whichever
-     * copy's coefficients happened to have arrived last. This game programs one
-     * set for the whole run, so that bug would be invisible in every capture we
-     * have and would wait for the first stream that reprograms the filter. */
-    uint8_t cp_f_up, cp_f_mid, cp_f_dn;
-    uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
-    CpuState* s;
-} DrawCmd;
 
 static void scissor_rect(const uint32_t* bp, Rect* r)
 {
@@ -1413,6 +1359,9 @@ static unsigned clip_polygon(Vertex* in, unsigned n, Vertex* out)
     return clip_against(tmp, n, out, CLIP_FAR);
 }
 
+int gxr_vertex_unclipped(const Vertex* v) { return vertex_unclipped(v); }
+unsigned gxr_clip_polygon(Vertex* in, unsigned n, Vertex* out) { return clip_polygon(in, n, out); }
+
 static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
     Vertex in[3], out[16];
@@ -1443,6 +1392,7 @@ static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, co
 
 static void run_copy(const DrawCmd* D);
 static void run_copy_clear(const DrawCmd* D);
+static void run_here(DrawCmd* D);
 static void filter_sample(const DrawCmd* D, int sx, int sy, int ytop, int ybot, uint8_t* o);
 static void workers_start(void);
 void gxr_flush(void);
@@ -1661,6 +1611,7 @@ static void wait_ran(long long c, int why)
     unsigned spins = 0;
     int i, prev;
     uint64_t t0, t1;
+    if (g_backend && g_backend->finish) g_backend->finish();
     if (c >= g_published) { /* own count */
         WARN_ONCE("[gxr] a wait for command %lld, which is not published yet (%lld are): nothing to wait for, so no wait\n", c, (long long)g_published); /* own count */
         return;
@@ -1683,6 +1634,16 @@ static void wait_ran(long long c, int why)
  * copy left for the command after it, and never above the command itself, so
  * the worker furthest behind can always run the command it is on; the same
  * for the neighbours' fence, kept only where it asks more than the other. */
+/* Which EFB the commands built from now on are for: 0 the real frame, 1
+ * H17's in-between image. The producer's alone; claim_slot copies it into
+ * each command, which is all any consumer reads (3.1). */
+static int g_target;
+
+void gxr_set_target(int efb)
+{
+    g_target = efb ? 1 : 0;
+}
+
 static DrawCmd* claim_slot(int kind, long long want, long long want_near)
 {
     long long n = g_published, fence, nbr; /* own count */
@@ -1697,6 +1658,7 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
     D = &g_queue[n & QMASK];
     D->seq = g_published; /* own count */
     D->kind = kind;
+    D->efb = (uint8_t)g_target;
     fence = want > g_fence_after ? want : g_fence_after;
     if (fence > n) {
         WARN_ONCE("[gxr] command %lld asked for a fence at %lld, past itself; held to its own number\n", n, fence);
@@ -2019,17 +1981,32 @@ static void hostprof_start(int n)
 static void hostprof_report(void) {}
 #endif
 
+static const GxrBackend g_passthrough;
+
 static void workers_start(void)
 {
     const char* env = getenv("SOA_THREADS");
-    int n = env ? atoi(env) : 0, i;
+    const char* inl = getenv("SOA_GXR_INLINE");
+    const char* be = getenv("SOA_GXR_BACKEND");
+    int n = env ? atoi(env) : 0, i, inline_only;
+    /* SOA_GXR_BACKEND names a backend built in, when none was set by
+     * code; the passthrough is the only one in V2. */
+    if (!g_backend && be && *be) {
+        if (!strcmp(be, "passthrough")) g_backend = &g_passthrough;
+        else fprintf(stderr, "[gxr] SOA_GXR_BACKEND=%s is not a backend this build has; the worker pool draws\n", be);
+    }
+    /* Zero workers: every command runs on the producer as it is built --
+     * through the backend when there is one, and implied by one. The path
+     * V2 made reachable and SOA_GXR_INLINE=1 proves. */
+    inline_only = g_backend || (inl && atoi(inl));
     /* Before the threads, so every one of them starts its busy/idle clock at
      * the same reading the report measures the pool's span from. */
     if (g_gxr_tsc < 0) gxr_timing_init();
     g_pool_t0 = gxr_ticks();
     g_queue = (DrawCmd*)malloc(sizeof(DrawCmd) * QUEUE_CAP);
     g_arena = (uint8_t*)malloc(ARENA_BYTES);
-    if (n <= 0) {
+    if (inline_only) n = 0;
+    else if (n <= 0) {
         /* Three quarters of the logical CPUs (FINDINGS "H15c"). On the
          * 16-thread machine this was measured on, 12 workers ran the Dangral
          * base at 27 fps against 25 at 10, 24 at 14 and 19 at the old half;
@@ -2039,7 +2016,7 @@ static void workers_start(void)
         if (n < 1) n = 1;
     }
     if (n > MAX_THREADS) n = MAX_THREADS;
-    for (i = 1; i <= n; i++) {
+    for (i = 1; i <= n && !inline_only; i++) {
         PlatThread t;
         if (!plat_thread_start(&t, worker, (void*)(intptr_t)i, 0)) { n = i - 1; break; }
 #ifdef _WIN32
@@ -2050,6 +2027,7 @@ static void workers_start(void)
     g_workers = n;
     g_nthreads = n > 0 ? n : 1;
     fprintf(stderr, "[gxr] rasterizing on %d worker thread%s\n", n, n == 1 ? "" : "s");
+    if (g_backend) fprintf(stderr, "[gxr] the %s backend draws every command, on the producer\n", g_backend->name);
 }
 
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
@@ -2074,6 +2052,7 @@ static void drain(int why)
     int i, prev;
     uint64_t t0;
     if (!g_queue) return;
+    if (g_backend && g_backend->finish) g_backend->finish();
     /* Read once: this thread is the only writer, so the target cannot move. */
     target = g_published; /* own count */
     /* The wait is the producer's idle, and it used to be charged to whichever
@@ -2441,14 +2420,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (g_workers > 0) {
         publish(); /* the workers pick it up */
     } else {
-        t_tid = 1;
-        /* Without workers the rasterizer runs on the producer, so it needs a
-         * bucket of its own here or its time would be booked as vertex setup. */
-        TIMED(T_RASTER, draw_command(D));
-        /* Run here and finished here, so the numbering still advances and the
-         * arena is free again. */
-        plat_inc64(&g_published);
-        g_arena_used = 0;
+        run_here(D);
     }
 }
 
@@ -2618,6 +2590,20 @@ static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
 static int g_screen_w = EFB_W, g_screen_h = 480;
 static plat_a32 g_frames_presented; /* copies to the screen completed by all rows */
 
+/* A backend's screen copy (V2): its pixels into the screen buffer, which the
+ * window, the PNG and the frame hash all read. Exactly the size the producer
+ * set for this copy, or the frame would be part one copy and part another. */
+void gxr_backend_screen(const uint8_t* rgba, int w, int h)
+{
+    int y;
+    if (w != g_screen_w || h != g_screen_h) {
+        fprintf(stderr, "[gxr] a backend's screen copy is %dx%d where the copy is %dx%d; stopping the run\n", w, h,
+                g_screen_w, g_screen_h);
+        exit(8);
+    }
+    for (y = 0; y < h; y++) memcpy(g_screen[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
+}
+
 /* One filtered EFB sample: the three rows the copy filter reads, weighted and
  * divided by 64.
  *
@@ -2691,14 +2677,22 @@ static int copy_reads_foreign_rows(const DrawCmd* D)
     return copy_is_foreign(half, filtered, (int)((D->cp_tl >> 10) & 0x3FF));
 }
 
-static void run_copy(const DrawCmd* D)
+/* A copy's pixels, and its clear where it can ride inside the copy: never
+ * with a backend, whose copy never clears (3.1), and never for a copy that
+ * reads rows other workers own. */
+static void run_copy_pixels(const DrawCmd* D)
 {
     int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
     int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
     if (D->cp_v & 0x4000u) copy_to_screen(D, x0, y0, w, h);
     else copy_to_texture(D, D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
-    if ((D->cp_v & 0x800u) && !copy_reads_foreign_rows(D))
+    if ((D->cp_v & 0x800u) && !g_backend && !copy_reads_foreign_rows(D))
         efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+}
+
+static void run_copy(const DrawCmd* D)
+{
+    run_copy_pixels(D);
     if (D->cp_v & 0x4000u) plat_inc32(&g_frames_presented);
 }
 
@@ -2708,6 +2702,48 @@ static void run_copy_clear(const DrawCmd* D)
     int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
     int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
     efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+}
+
+/* A command run on the producer, as it is built: through the backend when
+ * one is set (V2), or by the CPU path, which then needs a time bucket of its
+ * own or would be booked as vertex setup. Run here and finished here, so
+ * the numbering still advances and the arena is free again. The backend
+ * cannot reach g_frames_presented, so the hook counts its screen copies. */
+static void run_here(DrawCmd* D)
+{
+    t_tid = 1;
+    if (g_backend) {
+        int ok = 0;
+        TIMED(T_RASTER, ok = D->kind == 0 ? g_backend->draw(D) : D->kind == 1 ? g_backend->copy(D) : g_backend->clear(D));
+        if (!ok) {
+            fprintf(stderr, "[gxr] the %s backend failed command %lld (kind %d); stopping the run\n", g_backend->name, D->seq, D->kind);
+            exit(8);
+        }
+        if (D->kind == 1 && (D->cp_v & 0x4000u)) plat_inc32(&g_frames_presented);
+    } else {
+        TIMED(T_RASTER, draw_command(D));
+    }
+    plat_inc64(&g_published);
+    g_arena_used = 0;
+}
+
+/* The test-only passthrough backend (SOA_GXR_BACKEND=passthrough, V2): the
+ * CPU path's own code called through the hook, so that the hook, the
+ * separate clear and the presented count are proved before a GPU backend
+ * relies on them. It counts what it ran for gxr_report. */
+static unsigned long long g_pt_draws, g_pt_copies, g_pt_clears;
+static int pt_draw(const DrawCmd* D) { g_pt_draws++; draw_command(D); return 1; }
+static int pt_copy(const DrawCmd* D) { g_pt_copies++; run_copy_pixels(D); return 1; }
+static int pt_clear(const DrawCmd* D) { g_pt_clears++; run_copy_clear(D); return 1; }
+static const GxrBackend g_passthrough = {"passthrough", pt_draw, pt_copy, pt_clear, NULL, NULL};
+
+void gxr_set_backend(const GxrBackend* b)
+{
+    if (g_started) {
+        WARN_ONCE("[gxr] a backend set after the first command is ignored: the pool is already running\n");
+        return;
+    }
+    g_backend = b;
 }
 
 /* Copies to memory since the last drain: where each wrote, how much, and
@@ -2956,10 +2992,7 @@ static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
     if (g_workers > 0) {
         publish();
     } else {
-        t_tid = 1;
-        TIMED(T_RASTER, draw_command(D));
-        plat_inc64(&g_published);
-        g_arena_used = 0;
+        run_here(D);
     }
 }
 
@@ -3078,10 +3111,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     if (g_workers > 0) {
         publish();
     } else {
-        t_tid = 1;
-        TIMED(T_RASTER, draw_command(D));
-        plat_inc64(&g_published);
-        g_arena_used = 0;
+        run_here(D);
     }
     /* A copy that samples rows it does not own has to be over before anything
      * after it writes those rows, and this is the half that is easy to miss:
@@ -3111,6 +3141,8 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         else if (near_rows) g_fence_after_near = D->seq + 1;
         else g_fence_after = D->seq + 1;
         if (v & 0x800u) publish_clear(s, bp, v);
+    } else if (g_backend && (v & 0x800u)) {
+        publish_clear(s, bp, v); /* a backend's copy never clears (3.1) */
     }
     /* The frame is published: the next frame's first command drains, once.
      * That recycles the arena, the copy list and the graveyard a frame at a
@@ -3204,6 +3236,8 @@ void gxr_report(void)
      * workers' unaccounted share below is where that shows. */
     if (!gxr_enabled()) return;
     gxr_timing_finish();
+    if (g_backend == &g_passthrough)
+        fprintf(stderr, "[gxr] passthrough backend: %llu draws, %llu copies, %llu clears\n", g_pt_draws, g_pt_copies, g_pt_clears);
     {
         double span = gxr_producer_span(), rest;
         uint64_t sum = 0;

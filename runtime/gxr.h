@@ -112,6 +112,13 @@ typedef struct {
     float lod_bias, min_lod, max_lod;
     float scale_s, scale_t;
     float su0, sv0; /* scale_s * lw[0] / w and scale_t * lh[0] / h: sample()'s factors at level 0, once a draw (H15b) */
+    /* For a backend (V2): the cache slot (0-1023), a generation that moves
+     * on every decode, replacement, copy image and eviction of that slot,
+     * and whether the decode is a copy's image, which a GPU makes itself.
+     * They tell a backend a texture changed without hashing it. */
+    int tex_id;
+    uint32_t tex_gen;
+    uint8_t copy_image;
 } TexCfg;
 
 typedef struct {

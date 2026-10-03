@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1156 passed, 2 skipped in 262.10s
+1163 passed, 2 skipped in 240.26s
 ```
 
-1158 tests in 63 files, none of which reads the disc. The two FMA probes of
+1165 tests in 64 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -48,7 +48,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
-| `test_scenario.py` | 96 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless |
+| `test_scenario.py` | 98 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
 | `test_guard.py` | 76 | the game-data guard: its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
@@ -61,6 +61,7 @@ its own and run it, some of the C as well:
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_fifo_summary.py` | 5 | `tools/fifo.py --summary` (specs/gpu-backend.md V1) on a synthetic stream: one draw under a logic OR, a display list of 0x40 bytes, and an R8 and an RGB565 copy, each with its destination and size; a blend overrides the logic op, as GX and the renderer have it; and intensity copies are named as such |
+| `test_gxr_backend.py` | 5 | the renderer's backend seam (GPU spec V2), on a renderer-only build with a counting backend: the commands arrive as 0 0 1 2 1 2 0 1 2 for two draws, a filtered and an unfiltered copy to texture and a screen copy, each copy's clear its own command; a texture's generation moves when its bytes change and not otherwise; the frame and presented counts agree; each command carries the EFB it was built for; and the 23 corpus captures through the passthrough keep their manifest hashes (skipped, with its reason, without `build/fifo`). Each of the spec's five mutations turns it red |
 | `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
@@ -118,18 +119,18 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1156 passed, 2 skipped` |
-| no capstone | `1137 passed, 3 skipped` |
-| no MSVC | `780 passed, 378 skipped` |
-| neither | `761 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1163 passed, 2 skipped` |
+| no capstone | `1144 passed, 3 skipped` |
+| no MSVC | `782 passed, 383 skipped` |
+| neither | `763 passed, 384 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 376 MSVC-gated tests are the ones that build a runtime
-file and run it — the renderer's queue and lifetimes, the tripwires, the memory
+Two things follow. The 381 MSVC-gated tests are the ones that build runtime
+files and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
 `ruff` only, **not** `pip install -e .[dev]`, so `capstone` is absent and the 19
@@ -954,31 +955,37 @@ actually drew with what it drew before.
 [replay] pass 2, SOA_THREADS=2
 [replay] pass 2, SOA_THREADS=3
 [replay] pass 2, SOA_THREADS=8
-  ok    0100: ced8f6518129ba7a
-  ok    0300: 060aa3991d5675e2
-  ok    0500: 18188c9e9ce5bbdb
-  ok    0700: 43e4f07acb6eb6bc
-  ok    11900: 8397a025bf14b446
-  ok    12000: 2bd2ed4ef6cb6f64
-  ok    12100: a299e090100d8908
-  ok    1500: eb9e8561b21e23d4
-  ok    15200: a0cb1546b9125d59
-  ok    1550: a0943b2e3ed178f9
-  ok    15800: 6994bc39a78c21fa
-  ok    16300: 98abad1aafa1ac08
-  ok    2000: 1b89d592cb4ff90a
-  ok    2050: b0baac995859366f
-  ok    2100: 57b709d297ec6a66
-  ok    3600: 2918b9b8dd044aa8
-  ok    3900: 1b9127a8c6a17b2d
-  ok    4200: 9cb3932be64e1dcb
-  ok    4500: d66bf6cc34f00b08
-  ok    4800: 04e0ac5788d18865
-  ok    6000: fd05131bf320ca69
-  ok    6300: 713cbc1951a1b894
-  ok    8000: f672349f32fb0053
+  ok    0100: 929dde33f20748af
+  ok    0300: 0f45ed5ffa309d19
+  ok    0500: 895a38755a9ed879
+  ok    0700: 1af7b540bace66b0
+  ok    11900: ee1d9d70189d1ae6
+  ok    12000: fd09804a9ef0c71d
+  ok    12100: 20926164c40594f0
+  ok    1500: 398cc5b72790e18e
+  ok    15200: 3279b1ae0d8ec929
+  ok    1550: 8d5525a97371f560
+  ok    15800: 48922aa95fed6683
+  ok    16300: bc911bca56c5dfa1
+  ok    2000: baf1dae6d503defd
+  ok    2050: 0d46fbdcb1053ea6
+  ok    2100: b4eba6e04b2cf520
+  ok    3600: e4ea1dae37a91aa5
+  ok    3900: b768e25aeac6b91f
+  ok    4200: aafb63c62b2b3b13
+  ok    4500: 7ec6eb11bd244d52
+  ok    4800: 61ea704e28906f81
+  ok    6000: b64d79603a729baa
+  ok    6300: 68e3d078cec5fcc0
+  ok    8000: bd6e7ee0bfb37f19
 [replay] 23 captures match config/fifo_manifest.tsv at SOA_THREADS 1,2,3,8
 ```
+
+`--threads inline` sweeps with no worker pool at all (`SOA_GXR_INLINE=1`),
+the path a GPU backend takes: every command runs on the producer as it is
+built, and the run must say `rasterizing on 0 worker threads`. `python
+tools/scenario.py replay --threads inline,1,8` is V2's check that the two
+paths draw the same 23 frames.
 
 Each capture is three files written by `SOA_FIFO_DUMP`: the frame's command
 stream, the CP/XF/BP register shadows it began with, and a 24 MB image of MEM1.
@@ -1262,7 +1269,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1158 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 383 of the 1165 skip without a C compiler: 381 build runtime files with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

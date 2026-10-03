@@ -75,6 +75,7 @@ typedef struct {
     int replaced; /* a mod's image stands in for the decode: one level, any size */
     int from_copy; /* the decode is a copy's image, made in the pool by command copy_cmd */
     long long copy_cmd;
+    uint32_t gen; /* moves on every decode, replacement, copy image and eviction (TexCfg.tex_gen) */
 } TexEntry;
 
 /* The texture epoch (PLAN-60FPS-MODS H12). A texture's source bytes are
@@ -214,6 +215,7 @@ void tex_invalidate_all(void)
         tex_free_later(g_cache[i].rgba);
         g_cache[i].rgba = NULL;
         g_cache[i].from_copy = 0;
+        g_cache[i].gen++;
     }
 }
 
@@ -579,6 +581,7 @@ static void decode_texture(TexEntry* e, int nlevels)
     }
     out = (uint8_t*)calloc(total, 1);
     e->rgba = out;
+    e->gen++;
     if (!out) {
         /* The levels still name the buffer the caller has just put in the
          * graveyard, and this entry is about to be handed to a draw. Say there
@@ -642,6 +645,7 @@ static void maybe_replace(TexEntry* e)
     memcpy(copy, img, (size_t)w * h * 4);
     tex_free_later(e->rgba);
     e->rgba = copy;
+    e->gen++;
     e->level[0] = copy;
     e->lw[0] = (int)w;
     e->lh[0] = (int)h;
@@ -760,6 +764,7 @@ static TexEntry* tex_take(const TexEntry* key)
     }
     tex_free_later(e->rgba);
     e->rgba = NULL;
+    e->gen++; /* evicted, or taken for another key */
     e->from_copy = 0;
     tex_index_remove(victim);
     return e;
@@ -895,6 +900,7 @@ uint8_t* tex_copy_image(uint32_t addr, uint32_t fmt, uint32_t w, uint32_t h, lon
         tex_free_later(e->rgba);
     }
     e->rgba = img;
+    e->gen++;
     e->level[0] = img;
     for (l = 1; l < MAX_MIPS; l++) e->level[l] = NULL;
     e->lw[0] = (int)w; e->lh[0] = (int)h;
@@ -1118,6 +1124,9 @@ void tev_prepare(const uint32_t* bp, TevSetup* T)
         nlevels = C->mip ? (int)(C->max_lod + 0.999f) + 1 : 1; /* bounded: a byte over 16 (L6) */
         te = texture(addr, fmt, w, h, tlut_off, tlut_fmt, nlevels);
         C->nlevels = te->nlevels;
+        C->tex_id = (int)(te - g_cache);
+        C->tex_gen = te->gen;
+        C->copy_image = (uint8_t)(te->from_copy != 0);
         for (l = 0; l < MAX_MIPS; l++) { C->level[l] = te->level[l]; C->lw[l] = te->lw[l]; C->lh[l] = te->lh[l]; }
         C->w = (int)w; C->h = (int)h;
         C->wrap_s = mode0 & 3; C->wrap_t = (mode0 >> 2) & 3;

@@ -4896,3 +4896,62 @@ read with the new `tools/fifo.py --summary`.
     the replays.
 - **Also:** `test_fifo_summary.py` has 5 tests. The scan directory (21 GB,
   this session's) is deleted.
+
+**V2: the renderer's backend seam.** 2026-10-03. A GPU backend now has
+something to plug into, proved with the CPU renderer standing in for one. The
+change introduces no new picture.
+
+- **The header.** `runtime/gxr_cmd.h` holds `DrawCmd` with its `PixelCfg`,
+  `RasterCfg` and `Rect`, moved out of gxr.c, and 3.1's interface:
+  `GxrBackend`, `gxr_set_backend`, `gxr_backend_screen`, the exported clip
+  helpers and `gxr_set_target`.
+  - `DrawCmd` gains `efb`, the EFB it was built for. `claim_slot` stamps it
+    from the producer's `g_target`, which H17a would have added; V2 adds it.
+  - `TexCfg` gains `tex_id`, `tex_gen` and `copy_image`. The generation moves
+    on every decode, replacement, copy image and eviction.
+- **One run point.** The three places the producer runs a command itself
+  (`gxr_draw`, `publish_clear`, `enqueue_copy`) now share `run_here`. It
+  calls the backend when one is set and `draw_command` otherwise, and it
+  counts a backend's screen copy in `g_frames_presented`, which the backend
+  cannot reach.
+  - **No workers:** `SOA_GXR_INLINE=1`, or any backend, starts none.
+  - **The passthrough:** `SOA_GXR_BACKEND=passthrough` is the test-only
+    backend that calls the CPU path's own code through the hook.
+  - **Clears:** with a backend set, a copy's clear is always its own kind-2
+    command.
+  - **Waits:** `drain` and `wait_ran` call the backend's `finish`.
+- **The zero-worker path, unreachable on Windows until now, works.**
+  `scenario.py replay --threads inline,1,8` is 23/23. `inline` sets
+  `SOA_THREADS=1` and `SOA_GXR_INLINE=1`, and fails a run that never says
+  `rasterizing on 0 worker threads`.
+- **`test_gxr_backend.py`** (5 tests) builds the renderer alone with a
+  counting backend.
+  - **The copy sequence:** two draws, a filtered copy to texture, an
+    unfiltered full-scale copy and a screen copy, each copy with its clear
+    bit, arrive as `0 0 1 2 1 2 0 1 2`.
+  - **Generations:** across four draws of one texture they read A A A B: the
+    same through an invalidate that changed nothing, then higher once its
+    bytes changed.
+  - **Counts and routing:** the frame and presented counts agree at 1, and a
+    target of 1 set for one draw reaches that command alone.
+  - **The corpus:** all 23 captures, replayed through the passthrough, keep
+    their manifest hashes. Frame 6000 runs 3,593 draws, 3 copies and 1
+    separate clear.
+  - **The mutations,** each red:
+    - the hook dropping kind 2;
+    - the clear left fused in the unfiltered copy;
+    - a re-decode keeping its generation;
+    - `claim_slot` ignoring the target;
+    - the passthrough skipping blended draws, which moves 23 of 23 hashes.
+- **Codegen:** the worker loop's `/FA` code is identical to the base, and so
+  is `raster_triangle`'s. Only `draw_command`'s copy branch moved, now a
+  call to `run_copy` (a few times a frame), so nothing was timed.
+- **Checks:**
+  - `compile_runtime` under MSVC and clang-cl;
+  - `--link`;
+  - `render_check`;
+  - replay 23/23 at 1,2,3,8 and at inline,1,8;
+  - `test_gxr_overlap`, `_queue`, `_pair` and `_fastpath`, 45 passed;
+  - the self test and `title --check`;
+  - `test_scenario` with two new tests for `inline`;
+  - pytest 1163 passed, 2 skipped.

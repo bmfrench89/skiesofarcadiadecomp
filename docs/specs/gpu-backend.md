@@ -1127,6 +1127,17 @@ display-list sizes), `config/gpuset_manifest.tsv` (new: input hashes and labels,
 
 ### V2. The seam: `DrawCmd` in a header, a reachable zero-worker path, and a backend hook
 
+*Landed 2026-10-03 (FINDINGS "V2"). The differences from what follows:*
+- *H17a has not landed, so V2 adds `DrawCmd.efb`, the producer's `g_target` and
+  `claim_slot`'s stamp itself. `gxr_set_target` is exported for the test until H17a calls it.*
+- *The CPU-only switches 3.1 says are logged once when the GPU is on are not logged yet: the only
+  backend is the passthrough, which draws with the CPU path. That waits for V5.*
+- *ARCHITECTURE's "sections 6 and 9" are its subsections "The draw is queued" and "The copy
+  out". The file table gains `gxr_cmd.h`.*
+- *The corpus part runs the driver once per capture through `gx_replay`.*
+- *The worker loop's `/FA` code is identical to the base, so it was not timed. Only the copy
+  branch of `draw_command` moved: it now calls `run_copy` instead of inlining its body.*
+
 *A day to several days. `--link`. Prerequisites: L0 (landed, c8274db) and L2 (portability.md); H17a
 (which adds `DrawCmd.efb`); P5b and M11a-skip per the order above; the implementation session holds
 `gxr*.c`. Files: `runtime/gxr_cmd.h`
