@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import fetch_gpu  # noqa: E402
 import gpuspike  # noqa: E402
-from soa import png, toolchain  # noqa: E402
+from soa import png, shaders, toolchain  # noqa: E402
 
 W, H = 64, 48
 
@@ -379,6 +379,54 @@ def test_the_three_logic_op_paths_draw_the_same_frames():
     assert proc.returncode == 0, out + proc.stderr
     assert "[gpuspike] logicop over 14 captures: the three paths give byte-identical images" in out
     assert out.count("logic draws 3;") == 14
+
+
+def test_the_shader_list_is_what_gxv_c_includes_and_each_stub_declares_its_array(tmp_path):
+    """V5: tools/soa/shaders.py builds the headers runtime/gxv.c includes, for
+    the spike and for soa.exe alike; a name in one list and not the other is a
+    build that fails, or a variant nobody builds. A stub is one word under the
+    same name, so compile_runtime.py compiles all of gxv.c without glslang."""
+    gxv = (ROOT / "runtime" / "gxv.c").read_text(encoding="utf-8")
+    included = set(re.findall(r'^#include "(\w+)\.h"$', gxv, re.M)) - {"gxv", "plat"}
+    assert included == {var for _, var, _ in shaders.SHADERS}
+    shaders.stub(tmp_path)
+    for _, var, _ in shaders.SHADERS:
+        assert f"const uint32_t {var}[] = {{0}};" in (tmp_path / f"{var}.h").read_text()
+
+
+def test_fetching_the_headers_alone_wants_no_glslang(tmp_path, monkeypatch):
+    """CI's compile jobs run on hosts with no glslang release (Linux ARM64):
+    --headers records Vulkan-Headers and asks for nothing more, where a full
+    fetch on such a host refuses."""
+    header = tmp_path / "vulkan-headers" / "include" / "vulkan" / "vulkan_core.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("/* a stand-in */\n")
+    monkeypatch.setattr(fetch_gpu.platform, "system", lambda: "Plan9")
+    assert fetch_gpu.main(["--vendor", str(tmp_path)]) == 1
+    assert fetch_gpu.main(["--headers", "--vendor", str(tmp_path)]) == 0
+    files, _ = fetch_gpu.read_record(tmp_path / fetch_gpu.RECORD)
+    assert list(files) == ["vulkan-headers/include/vulkan/vulkan_core.h"]
+    assert not (tmp_path / "glslang").exists()
+
+
+def test_the_backend_compiles_and_fails_without_vulkans_declarations(tmp_path):
+    """compile_runtime.py's second compile of gxv.c, with SOA_GXV=1: it
+    compiles against vendor/'s headers; with an empty vulkan_core.h it fails,
+    so the check can; and with no headers at all it is not attempted, which
+    --require-gxv turns into a failure."""
+    if toolchain.compiler_path(toolchain.MSVC) is None:
+        pytest.skip("no msvc")
+    if not (shaders.HEADERS / "vulkan" / "vulkan_core.h").exists():
+        pytest.skip("no vendor/vulkan-headers (python tools/fetch_gpu.py --headers)")
+    sys.path.insert(0, str(ROOT / "tools" / "citest"))
+    import compile_runtime
+
+    assert compile_runtime.compile_backend(tmp_path / "real")[0] is True
+    empty = tmp_path / "empty"
+    (empty / "vulkan").mkdir(parents=True)
+    (empty / "vulkan" / "vulkan_core.h").write_text("")
+    assert compile_runtime.compile_backend(tmp_path / "broken", headers=empty)[0] is False
+    assert compile_runtime.compile_backend(tmp_path / "none", headers=tmp_path / "x") == (None, "")
 
 
 def test_copy_texfmt_is_gxr_cs():

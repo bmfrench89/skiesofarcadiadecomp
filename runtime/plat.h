@@ -355,7 +355,12 @@ static inline uint64_t plat_mono_ns(void)
  * plat_guard_owner names another; fn returns 1 when it has made the range
  * accessible and the access should run again. plat_run_on_big_stack runs fn
  * on a stack of `bytes`: on Windows it just calls fn, the /STACK link having
- * sized the main thread already. */
+ * sized the main thread already.
+ *
+ * plat_dl_open loads a shared library (LoadLibraryExA / dlopen RTLD_NOW |
+ * RTLD_LOCAL), NULL with the system's reason in err when it cannot;
+ * plat_dl_sym finds a symbol in it, NULL when absent (V5's Vulkan loader,
+ * portability.md 3.3). */
 typedef int (*PlatFaultFn)(size_t off, int storing, int on_owner_thread);
 void* plat_reserve(size_t bytes);
 int plat_commit(void* p, size_t bytes);
@@ -364,6 +369,9 @@ int plat_guard_install(void* base, size_t lo, size_t hi, PlatFaultFn fn);
 void plat_guard_owner(void);
 unsigned long plat_last_error(void);
 int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes);
+void* plat_dl_open(const char* path, char* err, size_t cap);
+void* plat_dl_sym(void* lib, const char* name);
+void plat_dl_close(void* lib);
 
 /* ---- threads (L2) --------------------------------------------------------
  * plat_thread_start runs fn(arg) on a new thread and returns 1, or 0 if none

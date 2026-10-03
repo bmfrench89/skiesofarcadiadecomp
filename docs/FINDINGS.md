@@ -5568,3 +5568,56 @@ to the CPU's directly, as `tevdiff` holds the TEV.
   both are exact.
 - `test_gpuspike.py` gains three tests: the pass, and each mutation failing
   its own half.
+
+**V5, second: the backend moves into the runtime.** 2026-10-03. `gxv.c`,
+`gxv.h` and the seven shaders are now `runtime/gxv.c`, `runtime/gxv.h` and
+`runtime/gxv/`, so the spike and `soa.exe` build one source. The spike's
+driver stays in `tools/gpuspike/`. `soa.exe` links the backend but does not
+call it yet: `SOA_GPU` is the next commit.
+
+- **Built two ways.**
+  - **With `SOA_GXV=1`:** the backend, compiled against Vulkan-Headers and
+    the SPIR-V that `tools/soa/shaders.py` makes from `runtime/gxv/`.
+    `tools/gpuspike.py` always builds it so. `recompile.py --link` does when
+    `vendor/` holds glslang and the headers, as recorded.
+  - **Without it:** a stub whose `gxv_built()` says the build has none.
+  - **Failures:** a shader that does not compile fails the link, and a
+    `vendor/` that differs from its record stops it.
+  - **Both links run** [V]: `GPU backend: built in`, then `not built in` with
+    glslang set aside; each `soa.exe` passes the self test with 0 failures.
+- **The loader.** Vulkan is opened through `plat_dl_open` and `plat_dl_sym`,
+  portability.md 3.3's `plat_dl_*`, which land here in `plat.c`: on Windows
+  `LoadLibraryExA`, elsewhere `dlopen(RTLD_NOW | RTLD_LOCAL)`.
+  `SOA_GPU_LOADER` names another loader (3.11).
+- **Debug variables renamed.** `GXV_DRAW`, `GXV_DEVICE` and `GXV_VALIDATE`
+  are now `SOA_GPU_DRAW`, `SOA_GPU_DEVICE` and `SOA_GPU_VALIDATE`, so a
+  replay, which strips every `SOA_*` variable (3.12), cannot inherit one.
+- **The C is checked everywhere.** `compile_runtime.py` compiles `gxv.c`
+  twice: as every runtime file is (the stub), and as the backend, with
+  one-word stand-ins for the SPIR-V, so no glslang is needed.
+  - **The headers:** `fetch_gpu.py --headers` fetches Vulkan-Headers alone.
+  - **CI:** every compile job (MSVC, clang-cl, Linux gcc and clang, ARM64
+    gcc) fetches the headers and passes `--require-gxv`, which turns missing
+    headers into a failure.
+  - **Here** [V]: MSVC and clang-cl compile both builds with no warning from
+    `gxv.c`. The NDK's clang, targeting aarch64 Android, compiles `gxv.c` and
+    `plat.c`, the `dlopen` side included.
+- **The move changed nothing the spike draws** [V].
+  - **The images:** each one written for the same command is byte-identical
+    to the build before the move: the self test's 17 scenes, plain and with
+    `--mutate unclipped`, and the oracle's 67 captures (65 pass V0, two by
+    design, as before).
+  - **The differentials:** `tevdiff`, `copydiff` and `loddiff` pass.
+  - **One false alarm, explained:** the first comparison flagged five
+    self-test images, four clip scenes and the lines. The baseline had been
+    written by the test suite's last self test, the one with `--mutate
+    unclipped`, and the new build's mutated run reproduces all 17 exactly.
+- **Tests:** four new.
+  - The shader list is exactly what `gxv.c` includes, and each stub declares
+    its array.
+  - `--headers` records only the headers and asks for no glslang, where a
+    full fetch on a host without a release refuses.
+  - The backend compiles against `vendor/`, fails against an empty
+    `vulkan_core.h`, and is not attempted without headers.
+  - `--link` adds `SOA_GXV=1` and the two include paths only when asked,
+    the rest being the golden copy.

@@ -1,30 +1,31 @@
 /*
- * gxv: the GPU spike's Vulkan backend. See gxv.h for what it draws and what
- * it refuses, and specs/gpu-backend.md 3.2-3.3 for the design it follows.
+ * gxv: the Vulkan backend. See gxv.h for what it draws and what it refuses,
+ * and specs/gpu-backend.md 3.2-3.3 for the design it follows.
  *
  * One queue, one command buffer, recorded as the renderer's commands arrive
  * and submitted when something must wait for the GPU: a screen copy, the
  * renderer's finish, or a full vertex ring. Every submission is waited for on
  * a fence before the next is recorded, so nothing here is ever in flight
- * behind the CPU's back -- the spike measures correctness, and V4a the
- * pipelining.
+ * behind the CPU's back (V5; V6 moves it to a thread of its own).
  *
- * Built only by tools/gpuspike.py, never into soa.exe.
+ * Built two ways. With SOA_GXV=1 it is the backend, compiled against
+ * Vulkan-Headers and the shaders in runtime/gxv/ as glslang made them
+ * (tools/soa/shaders.py): tools/gpuspike.py always builds it so, and
+ * recompile.py --link does when tools/fetch_gpu.py has filled vendor/.
+ * Without it, it is the few lines at the end that say this build has no
+ * backend, and need neither.
  */
 #define _CRT_SECURE_NO_WARNINGS
-#define VK_NO_PROTOTYPES
 #include "gxv.h"
+#include <stdio.h>
+
+#if SOA_GXV
+#define VK_NO_PROTOTYPES
+#include "plat.h"
 #include <vulkan/vulkan_core.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 #include "raster_vert.h"
 #include "raster_vert_noinvariant.h"
@@ -207,20 +208,23 @@ static void say(const char* fmt, ...)
 
 /* ---- the loader ------------------------------------------------------------- */
 
+/* The host's loader, which the GPU driver installs; SOA_GPU_LOADER names
+ * another, and a missing one is how the fallback is tested (3.11). */
 static int load_loader(char* why, size_t cap)
 {
 #ifdef _WIN32
-    HMODULE m = LoadLibraryA("vulkan-1.dll");
-    if (!m) { snprintf(why, cap, "no Vulkan loader: LoadLibrary(vulkan-1.dll) failed (error %lu)", GetLastError()); return 0; }
-    g_lib = m;
-    vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void (*)(void))GetProcAddress(m, "vkGetInstanceProcAddr");
+    const char* path = "vulkan-1.dll";
 #else
-    void* m = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (!m) m = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
-    if (!m) { snprintf(why, cap, "no Vulkan loader: dlopen(libvulkan.so.1) failed: %s", dlerror()); return 0; }
-    g_lib = m;
-    *(void**)&vkGetInstanceProcAddr = dlsym(m, "vkGetInstanceProcAddr");
+    const char* path = "libvulkan.so.1";
 #endif
+    const char* forced = getenv("SOA_GPU_LOADER");
+    char err[512];
+    g_lib = plat_dl_open(forced ? forced : path, err, sizeof err);
+#ifndef _WIN32
+    if (!g_lib && !forced) g_lib = plat_dl_open("libvulkan.so", err, sizeof err);
+#endif
+    if (!g_lib) { snprintf(why, cap, "no Vulkan loader: %s", err); return 0; }
+    *(void**)&vkGetInstanceProcAddr = plat_dl_sym(g_lib, "vkGetInstanceProcAddr");
     if (!vkGetInstanceProcAddr) { snprintf(why, cap, "the Vulkan loader has no vkGetInstanceProcAddr"); return 0; }
 #define GXV_LOAD_GLOBAL(name) name = (PFN_##name)vkGetInstanceProcAddr(NULL, #name);
     GXV_GLOBAL(GXV_LOAD_GLOBAL)
@@ -912,9 +916,9 @@ static int gxv_draw(const DrawCmd* D)
     g_n_draws++;
     if (g_skip_draw && g_n_draws == g_skip_draw) return 1;
     {
-        /* GXV_DRAW=N: draw N's state, for a bisection's first diverging draw. */
+        /* SOA_GPU_DRAW=N: draw N's state, for a bisection's first diverging draw. */
         static long long want = -2;
-        if (want == -2) want = getenv("GXV_DRAW") ? atoll(getenv("GXV_DRAW")) : -1;
+        if (want == -2) want = getenv("SOA_GPU_DRAW") ? atoll(getenv("SOA_GPU_DRAW")) : -1;
         if ((long long)g_n_draws == want) describe_draw(D);
     }
     if (needs_rebuild(D)) {
@@ -1617,13 +1621,13 @@ void gxv_report(void)
 
 /* ---- set-up --------------------------------------------------------------- */
 
-/* The device: GXV_DEVICE=<n> picks one; otherwise the first discrete GPU,
+/* The device: SOA_GPU_DEVICE=<n> picks one; otherwise the first discrete GPU,
  * then the first integrated, then anything with a graphics queue. */
 static int pick_device(char* why, size_t cap)
 {
     VkPhysicalDevice devs[16];
     uint32_t n = 16, i, best = UINT32_MAX, best_rank = 0;
-    const char* want = getenv("GXV_DEVICE");
+    const char* want = getenv("SOA_GPU_DEVICE");
     if (vkEnumeratePhysicalDevices(g_inst, &n, devs) < 0 || n == 0) { snprintf(why, cap, "no Vulkan device"); return 0; }
     for (i = 0; i < n; i++) {
         VkQueueFamilyProperties q[16];
@@ -1638,7 +1642,7 @@ static int pick_device(char* why, size_t cap)
         if (want && *want) rank = (uint32_t)atoi(want) == i ? 4 : 0;
         if (rank > best_rank) { best_rank = rank; best = i; g_family = f; }
     }
-    if (best == UINT32_MAX) { snprintf(why, cap, "no Vulkan device with a graphics queue%s", want ? " (GXV_DEVICE)" : ""); return 0; }
+    if (best == UINT32_MAX) { snprintf(why, cap, "no Vulkan device with a graphics queue%s", want ? " (SOA_GPU_DEVICE)" : ""); return 0; }
     g_phys = devs[best];
     vkGetPhysicalDeviceProperties(g_phys, &g_props);
     vkGetPhysicalDeviceMemoryProperties(g_phys, &g_memprops);
@@ -1867,7 +1871,7 @@ int gxv_init(char* why, size_t cap)
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
     VkInstanceCreateInfo ii = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     const char* layer = "VK_LAYER_KHRONOS_validation";
-    const char* val = getenv("GXV_VALIDATE");
+    const char* val = getenv("SOA_GPU_VALIDATE");
     VkResult r;
     unsigned i;
     why[0] = 0;
@@ -1875,7 +1879,7 @@ int gxv_init(char* why, size_t cap)
     app.pApplicationName = "soa-gpuspike";
     app.apiVersion = VK_API_VERSION_1_1;
     ii.pApplicationInfo = &app;
-    /* GXV_VALIDATE=1 asks for the Khronos validation layer, where one is
+    /* SOA_GPU_VALIDATE=1 asks for the Khronos validation layer, where one is
      * installed (it comes with the Vulkan SDK, which nothing here needs). */
     if (val && atoi(val)) {
         VkLayerProperties lp[64];
@@ -1885,7 +1889,7 @@ int gxv_init(char* why, size_t cap)
             for (k = 0; k < n; k++)
                 if (!strcmp(lp[k].layerName, layer)) have = 1;
         if (have) { ii.enabledLayerCount = 1; ii.ppEnabledLayerNames = &layer; }
-        say("GXV_VALIDATE: %s", have ? "the validation layer is on" : "no validation layer is installed; running without it");
+        say("SOA_GPU_VALIDATE: %s", have ? "the validation layer is on" : "no validation layer is installed; running without it");
     }
     r = vkCreateInstance(&ii, NULL, &g_inst);
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateInstance failed: VkResult %d (no Vulkan 1.1 driver?)", (int)r); return 0; }
@@ -1973,4 +1977,16 @@ void gxv_shutdown(void)
     vkDestroyInstance(g_inst, NULL);
     g_dev = VK_NULL_HANDLE;
     free(g_tmp);
+    plat_dl_close(g_lib);
+    g_lib = NULL;
 }
+
+int gxv_built(void) { return 1; }
+
+#else /* SOA_GXV */
+
+/* This build has no backend: vendor/ held no glslang or Vulkan-Headers when
+ * it was linked. */
+int gxv_built(void) { return 0; }
+
+#endif

@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1195 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1199 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1195 |
+| Python tests | 1199 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -530,13 +530,13 @@ C5c) is now done.
    copy clears as their own commands, `tex_id`/`tex_gen`, and H17a's
    `DrawCmd.efb`. **V3a is done** (FINDINGS "V3"): `tools/fetch_gpu.py`
    fills `vendor/` (pinned, gitignored) and `tools/gpuspike.py selftest`
-   draws 15 scenes through `tools/gpuspike/gxv.c` on this machine's GPU and
+   draws 15 scenes through `gxv.c` (now `runtime/gxv.c`) on this machine's GPU and
    on the CPU. Away from edges the coverage is exact, and colours are
    within one step where they are interpolated. Thirteen mutations turn it
    red; hardware colour rounding is the one difference nothing here can see.
    `vendor/` (27 MB) can be fetched again at any time; `build/gpuspike/<compiler>/`
    holds the spike and its last scene images, CPU and GPU, to open.
-   **V3b is done** (FINDINGS "V3"): `tools/gpuspike/tev.glsl` and
+   **V3b is done** (FINDINGS "V3"): `tev.glsl` (now in `runtime/gxv/`) and
    `copy.comp` give `tev_pixel`'s and `copy_to_texture`'s bytes exactly --
    `gpuspike.py tevdiff`, 100,000 random setups, and `copydiff`, 25,600
    random copies, both with 0 mismatches and each Done mutation red -- and
@@ -559,8 +559,13 @@ C5c) is now done.
    (FINDINGS "V5, first"): the exact level-of-detail check the owner chose
    for V0's blind spot, 0 mismatches, each mutation red; its first run
    found the GPU's division one ULP out and lod.glsl now divides exactly.
-   **Next is the rest of V5**, the backend in `soa.exe`, synchronous
-   (specs/gpu-backend.md V5). Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
+   **The backend is in the runtime** (FINDINGS "V5, second"):
+   `runtime/gxv.c` and `runtime/gxv/`, which `--link` builds in when
+   `vendor/` is filled, a stub otherwise, with every image the spike
+   writes unchanged by the move. **Next is the rest of V5**: `SOA_GPU` in
+   `soa.exe`, its start, fallback and report lines, the sweep's refusal,
+   `test_gxv_live.py` and the same-session contrast (specs/gpu-backend.md
+   V5). Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

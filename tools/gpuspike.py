@@ -12,9 +12,10 @@
     python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
-tools/gpuspike/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
-arrays -- each mutation a variant of its own -- and builds gx.c, gxr.c,
-gxr_tev.c and png.c with the spike's driver and gxv.c (the backend) into
+runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
+arrays -- each mutation a variant of its own, tools/soa/shaders.py, which
+recompile.py --link uses too -- and builds gx.c, gxr.c, gxr_tev.c, png.c,
+gxv.c (the backend, with SOA_GXV=1) and plat.c with the spike's driver into
 build/gpuspike/<compiler>/gpuspike.exe, when an input is newer than it. No
 gen/, no disc: the binary links the renderer alone, as
 tools/citest/render_check.py does.
@@ -100,33 +101,17 @@ import fetch_gpu  # noqa: E402
 import fifo  # noqa: E402
 import imgdiff  # noqa: E402
 import scenario  # noqa: E402
-from soa import png, toolchain  # noqa: E402
+from soa import png, shaders, toolchain  # noqa: E402
 
 SPIKE = ROOT / "tools" / "gpuspike"
 RUNTIME = ROOT / "runtime"
 OUT = ROOT / "build" / "gpuspike"
 VENDOR = ROOT / "vendor"
-# Each shader and the variants built from it: (source, header and array name,
-# defines). A variant is a mutation gxv_set_mutation selects; the self test
-# runs each and must fail.
-SHADERS = [
-    ("raster.vert", "raster_vert", ()),
-    ("raster.vert", "raster_vert_noinvariant", ("GXV_MUTATE_NOINVARIANT",)),
-    ("raster.frag", "raster_frag", ()),
-    ("raster.frag", "raster_frag_alpha", ("GXV_MUTATE_ALPHA",)),
-    ("raster.frag", "raster_frag_lod", ("GXV_MUTATE_LOD",)),
-    ("raster.frag", "raster_frag_fog", ("GXV_MUTATE_FOG",)),
-    ("tevdiff.comp", "tevdiff_comp", ()),
-    ("tevdiff.comp", "tevdiff_comp_clamp", ("GXV_MUTATE_CLAMP",)),
-    ("loddiff.comp", "loddiff_comp", ()),
-    ("loddiff.comp", "loddiff_comp_lod", ("GXV_MUTATE_LOD",)),
-    ("loddiff.comp", "loddiff_comp_lodmin", ("GXV_MUTATE_LODMIN",)),
-    ("copy.comp", "copy_comp", ()),
-    ("copy.comp", "copy_comp_rounding", ("GXV_MUTATE_ROUNDING",)),
-    ("copy.comp", "copy_comp_intensity", ("GXV_MUTATE_INTENSITY",)),
-]
-SOURCES = [RUNTIME / n for n in ("gx.c", "gxr.c", "gxr_tev.c", "png.c")]
-SOURCES += [SPIKE / "driver.c", SPIKE / "gxv.c"]
+# The renderer, the backend (runtime/gxv.c, built with SOA_GXV=1 and the
+# shaders tools/soa/shaders.py compiles) and plat.c, whose loader it opens
+# Vulkan with; the driver is the spike's own.
+SOURCES = [RUNTIME / n for n in ("gx.c", "gxr.c", "gxr_tev.c", "png.c", "gxv.c")]
+SOURCES += [*toolchain.runtime_support_sources(), SPIKE / "driver.c"]
 SKIP = 3
 
 # Scene name -> how it is judged: ("area", colour tolerance, edges by), ("lines",)
@@ -164,21 +149,15 @@ def exe_path(prof: toolchain.Profile) -> Path:
     return build_dir(prof) / f"gpuspike{prof.exeext}"
 
 
-def glslang() -> Path:
-    name = "glslang.exe" if sys.platform == "win32" else "glslang"
-    return VENDOR / "glslang" / "bin" / name
-
-
 def inputs() -> list[Path]:
     """Everything the binary is made from: its sources and shaders, every
     header either directory holds (any of them may be included), the record
     of the fetched files, and the scripts that hold the flags."""
     return [
         *SOURCES,
-        *(SPIKE / n for n in {src for src, _, _ in SHADERS}),
-        SPIKE / "tev.glsl",
+        *shaders.sources(),
         *RUNTIME.glob("*.h"),
-        *SPIKE.glob("*.h"),
+        Path(shaders.__file__),
         VENDOR / fetch_gpu.RECORD,
         Path(__file__),
         ROOT / "tools" / "soa" / "toolchain.py",
@@ -204,35 +183,13 @@ def build(prof: toolchain.Profile) -> tuple[bool, str]:
     out = build_dir(prof)
     out.mkdir(parents=True, exist_ok=True)
     exe_path(prof).unlink(missing_ok=True)
-    for src, var, defines in SHADERS:
-        proc = subprocess.run(
-            [
-                str(glslang()),
-                "-V",
-                "--target-env",
-                "vulkan1.1",
-                f"-I{SPIKE}",
-                *(f"-D{d}" for d in defines),
-                "--vn",
-                var,
-                str(SPIKE / src),
-                "-o",
-                str(out / f"{var}.h"),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            print(proc.stdout + proc.stderr)
-            return False, f"glslang failed on {src} ({var})"
-    inc = [
-        f"/I{RUNTIME}",
-        f"/I{SPIKE}",
-        f"/I{out}",
-        f"/I{VENDOR / 'vulkan-headers' / 'include'}",
-    ]
-    proc = toolchain.cc([*prof.cflags, "/c", *inc, f"/Fo{out}/", *map(str, SOURCES)], ROOT, prof)
+    built, why = shaders.build(out)
+    if not built:
+        return False, why
+    inc = [f"/I{RUNTIME}", f"/I{out}", f"/I{shaders.HEADERS}"]
+    proc = toolchain.cc(
+        [*prof.cflags, "/c", "/DSOA_GXV=1", *inc, f"/Fo{out}/", *map(str, SOURCES)], ROOT, prof
+    )
     text = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         print(text)

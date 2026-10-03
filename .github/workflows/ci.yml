@@ -151,8 +151,16 @@ jobs:
       # constraint on a file this job does not otherwise touch, so
       # tools/tests/test_citest.py asserts it rather than leaving it to be
       # discovered here.
+      # gxv.c, the GPU backend, compiles against Vulkan-Headers, which
+      # tools/fetch_gpu.py fetches (pinned, never committed); glslang is not
+      # needed, since compile_runtime.py gives gxv.c stand-ins for the SPIR-V.
+      # --require-gxv fails the compile step if the backend was not compiled
+      # (specs/gpu-backend.md V5).
+      - name: Vulkan-Headers for the GPU backend
+        run: python tools/fetch_gpu.py --headers
+
       - name: Compile every runtime/*.c
-        run: python tools/citest/compile_runtime.py
+        run: python tools/citest/compile_runtime.py --require-gxv
 
       # Byte-matching a decompiled routine says nothing about how it is called.
       # This links the natively compiled twins to a driver and compares each
@@ -213,9 +221,17 @@ jobs:
           Write-Output $cc
           & $cc --version
 
+      # gxv.c, the GPU backend, compiles against Vulkan-Headers, which
+      # tools/fetch_gpu.py fetches (pinned, never committed); glslang is not
+      # needed, since compile_runtime.py gives gxv.c stand-ins for the SPIR-V.
+      # --require-gxv fails the compile step if the backend was not compiled
+      # (specs/gpu-backend.md V5).
+      - name: Vulkan-Headers for the GPU backend
+        run: python tools/fetch_gpu.py --headers
+
       - name: Compile every runtime/*.c
         if: ${{ !cancelled() }}
-        run: python tools/citest/compile_runtime.py --cc clang-cl
+        run: python tools/citest/compile_runtime.py --cc clang-cl --require-gxv
 
       - name: Decompiled MSL routines against the host C library
         if: ${{ !cancelled() }}
@@ -276,9 +292,17 @@ jobs:
       - name: The compiler the checks use
         run: ${{ matrix.cc }} --version
 
+      # gxv.c, the GPU backend, compiles against Vulkan-Headers, which
+      # tools/fetch_gpu.py fetches (pinned, never committed); glslang is not
+      # needed, since compile_runtime.py gives gxv.c stand-ins for the SPIR-V.
+      # --require-gxv fails the compile step if the backend was not compiled
+      # (specs/gpu-backend.md V5).
+      - name: Vulkan-Headers for the GPU backend
+        run: python tools/fetch_gpu.py --headers
+
       - name: Compile every runtime/*.c
         if: ${{ !cancelled() }}
-        run: python tools/citest/compile_runtime.py --cc ${{ matrix.cc }}
+        run: python tools/citest/compile_runtime.py --cc ${{ matrix.cc }} --require-gxv
 
       - name: Decompiled MSL routines against the host C library
         if: ${{ !cancelled() }}
@@ -370,9 +394,17 @@ jobs:
       - name: The compiler the checks use
         run: gcc --version && uname -m
 
+      # gxv.c, the GPU backend, compiles against Vulkan-Headers, which
+      # tools/fetch_gpu.py fetches (pinned, never committed); glslang is not
+      # needed, since compile_runtime.py gives gxv.c stand-ins for the SPIR-V.
+      # --require-gxv fails the compile step if the backend was not compiled
+      # (specs/gpu-backend.md V5).
+      - name: Vulkan-Headers for the GPU backend
+        run: python tools/fetch_gpu.py --headers
+
       - name: Compile every runtime/*.c
         if: ${{ !cancelled() }}
-        run: python tools/citest/compile_runtime.py --cc gcc
+        run: python tools/citest/compile_runtime.py --cc gcc --require-gxv
 
       - name: Decompiled MSL routines against the host C library
         if: ${{ !cancelled() }}

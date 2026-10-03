@@ -53,7 +53,9 @@ The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only 
 (`tools/recompile.py:203`), and nothing tracks dependencies or warns about staleness.
 
 **`--link` alone is enough** after editing `runtime/*.c`, a runtime-only header
-(`runtime/gxr.h`), `src/**`, `include/`, or `config/GEAE8P/units.txt`.
+(`runtime/gxr.h`), `src/**`, `include/`, `config/GEAE8P/units.txt`, or the GPU
+shaders in `runtime/gxv/`, which `--link` compiles to SPIR-V whenever `vendor/`
+holds glslang (`tools/fetch_gpu.py`; without it `soa.exe` has no GPU backend).
 
 **A full `python tools/recompile.py --compile --link` is required** after editing:
 

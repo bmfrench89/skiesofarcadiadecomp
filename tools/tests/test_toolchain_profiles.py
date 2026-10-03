@@ -140,6 +140,21 @@ def test_the_msvc_command_lines_are_the_golden_copy():
     ]
 
 
+def test_the_link_builds_the_gpu_backend_in_only_when_asked():
+    """V5: with vendor/ filled, --link defines SOA_GXV and adds the SPIR-V and
+    Vulkan-Headers include paths, and nothing else; without it the command is
+    the golden copy above."""
+    from soa import shaders
+
+    out = Path("gen")
+    plain = recompile.link_command(toolchain.MSVC, out, [])
+    i = plain.index("/Igen")
+    backend = ["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"]
+    assert recompile.link_command(toolchain.MSVC, out, [], gxv=True) == (
+        plain[: i + 1] + backend + plain[i + 1 :]
+    )
+
+
 def test_the_msvc_link_plan_is_the_golden_copy(tmp_path):
     """What --link runs, in order, objects included, as before profiles: the
     decompiled units, then the link of the chunks it finds, dispatch and the

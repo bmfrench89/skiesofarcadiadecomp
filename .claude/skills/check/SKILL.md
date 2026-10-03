@@ -27,7 +27,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 307 s | nothing (394 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 315 s | nothing (395 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -169,13 +169,17 @@ python tools/citest/compile_runtime.py
 ```
 ...
 ok   window.c
+ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 29/29 runtime translation units
+compiled 30/30 runtime translation units
+gxv.c: compiled as the backend too
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
 Every `runtime/*.c` compiled on its own with `/c` and nine warnings promoted to
-errors. Nothing links, so C4013 — implicit declaration — is first among them:
+errors, and `gxv.c` a second time as the GPU backend, which needs
+`vendor/vulkan-headers` (`python tools/fetch_gpu.py --headers`); CI passes
+`--require-gxv` so a missing header fails rather than skips. Nothing links, so C4013 — implicit declaration — is first among them:
 it is the only sign that a rename left a caller behind. This catches, in three
 seconds and with no disc, what would otherwise surface as a link failure in
 step 8 after a minute of building, or not at all.
@@ -236,7 +240,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 29/29 runtime translation units
+compiled 30/30 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...
@@ -316,18 +320,18 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1193 passed, 2 skipped in 306.96s
+1197 passed, 2 skipped in 315.16s
 ```
 
-1195 tests in 65 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1174 passed, 3 skipped` without
+1199 tests in 65 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1178 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `799 passed, 396 skipped` without MSVC. The two
+into one module-level skip), `802 passed, 397 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 394 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 395 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

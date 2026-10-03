@@ -1,8 +1,8 @@
 /*
- * gxv: the GPU spike's Vulkan backend (specs/gpu-backend.md V3a). A
- * GxrBackend (runtime/gxr_cmd.h) that draws the renderer's commands into an
- * EFB of its own, headless: no window, no swapchain, a screen copy read back
- * and handed to gxr_backend_screen.
+ * gxv: the Vulkan backend (specs/gpu-backend.md V3a-V5). A GxrBackend
+ * (runtime/gxr_cmd.h) that draws the renderer's commands into an EFB of its
+ * own, headless: no window, no swapchain, a screen copy read back and handed
+ * to gxr_backend_screen, which is what the window presents.
  *
  * It draws (V3a, V4a): the vertex stage of 3.3 (the CPU's own clipping, the
  * depth varying, invariant positions), the CPU's culling, scissor, depth test
@@ -19,6 +19,11 @@
 
 #include "gxr_cmd.h"
 #include <stddef.h>
+
+/* 1 when this build has the backend; 0 when gxv.c was compiled without
+ * SOA_GXV, because vendor/ had no glslang or Vulkan-Headers at the link, and
+ * then gxv_built is the only function here that exists. */
+int gxv_built(void);
 
 /* Load the host's Vulkan (vulkan-1.dll, libvulkan.so.1) and set everything up.
  * 1 on success; 0 with the reason in why -- no loader, no device, a missing

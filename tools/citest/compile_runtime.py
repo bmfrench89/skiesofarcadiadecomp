@@ -15,6 +15,14 @@ warnings underneath, and exits non-zero if any file fails or the compiler is
 missing. --cc clang-cl builds with the clang-cl profile instead
 (tools/soa/toolchain.py; portability.md 3.9), its own flags and strict set,
 into build/citest/runtime-clang-cl.
+
+gxv.c is compiled twice: as every file is, which is the stub a build without
+the GPU backend links, and with SOA_GXV=1, which is the backend (V5). The
+second needs Vulkan-Headers (python tools/fetch_gpu.py --headers) and is
+given one-word stand-ins for the SPIR-V headers (tools/soa/shaders.py stub),
+so it compiles all of the backend's C on any machine, glslang or not; without
+the headers it is reported as not compiled, and --require-gxv, which CI
+passes, makes that a failure.
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import toolchain  # noqa: E402
+from soa import shaders, toolchain  # noqa: E402
 
 RUNTIME = ROOT / "runtime"
 
@@ -67,12 +75,46 @@ def compile_one(
     return path, proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
+def compile_backend(
+    out: Path, prof: toolchain.Profile = toolchain.MSVC, headers: Path = shaders.HEADERS
+) -> tuple[bool | None, str]:
+    """gxv.c with SOA_GXV=1, against the Vulkan-Headers under `headers` and
+    stand-ins for the SPIR-V, into out/gxv: True compiled, False failed, None
+    not compiled because there are no headers; and the compiler's output."""
+    if not (headers / "vulkan" / "vulkan_core.h").exists():
+        return None, ""
+    stubs = out / "gxv-spirv-stubs"
+    shaders.stub(stubs)
+    (out / "gxv").mkdir(parents=True, exist_ok=True)
+    proc = toolchain.cc(
+        [
+            *prof.cflags,
+            *prof.strict,
+            "/c",
+            "/DSOA_GXV=1",
+            f"/I{stubs}",
+            f"/I{headers}",
+            f"/I{RUNTIME}",
+            str(RUNTIME / "gxv.c"),
+            f"/Fo{out / 'gxv'}/",
+        ],
+        ROOT,
+        prof,
+    )
+    return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--cc", choices=tuple(toolchain.PROFILES), default="msvc", help="the toolchain profile"
     )
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--require-gxv",
+        action="store_true",
+        help="fail when gxv.c cannot be compiled as the backend (no vendor/vulkan-headers)",
+    )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
     if args.out is None:
@@ -110,7 +152,23 @@ def main() -> int:
                 if line.strip() and line.strip() != path.name:
                     print(f"      {line}")
 
+    # The backend: gxv.c again, with SOA_GXV=1, into a directory of its own so
+    # its object does not replace the stub's.
+    gxv_note = "not compiled as the backend: no vendor/vulkan-headers (python tools/fetch_gpu.py --headers)"
+    compiled, text = compile_backend(args.out, prof)
+    if compiled is None:
+        print(f"---- gxv.c with SOA_GXV=1 (the backend): {gxv_note}")
+        backend_ok = not args.require_gxv
+    else:
+        print(f"{'ok  ' if compiled else 'FAIL'} gxv.c with SOA_GXV=1 (the backend)")
+        for line in text.splitlines():
+            if line.strip() and line.strip() != "gxv.c":
+                print(f"      {line}")
+        backend_ok = compiled
+        gxv_note = "compiled as the backend too" if compiled else "FAILED as the backend"
+
     print(f"\ncompiled {len(covered) - len(failed)}/{len(covered)} runtime translation units")
+    print(f"gxv.c: {gxv_note}")
     if UNCOVERED:
         print("not compiled here:")
         for name, why in sorted(UNCOVERED.items()):
@@ -119,6 +177,9 @@ def main() -> int:
         print("not compiled here: nothing, every runtime/*.c is covered")
     if failed:
         print(f"::error::{len(failed)} runtime file(s) failed to compile")
+        return 1
+    if not backend_ok:
+        print(f"::error::gxv.c {gxv_note}")
         return 1
     return 0
 

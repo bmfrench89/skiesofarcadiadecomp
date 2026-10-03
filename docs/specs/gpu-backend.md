@@ -1404,8 +1404,15 @@ and the differentials; if Q-V1 was answered before V3a, no port is needed.
 the formula within 1/1024, each mutation red. It added `tools/gpuspike/lod.glsl` (raster.frag's
 level of detail, now shared), `tex_level` and gxr_tev.c's `SAMPLE_AT` macro, and `gxr_span_lod`;
 every existing runtime function compiles to the same instructions. Its first run found the GPU's
-division one ULP out for a side that is not a power of two, and lod.glsl now divides exactly. The
-rest of V5 is next.*
+division one ULP out for a side that is not a power of two, and lod.glsl now divides exactly.*
+
+*The backend moved into the runtime 2026-10-03 (FINDINGS "V5, second"): `runtime/gxv.c`, `gxv.h`
+and `runtime/gxv/`, built with `SOA_GXV=1` by the spike and by `--link` when `vendor/` is filled, a
+stub otherwise; the shaders through `tools/soa/shaders.py` into `gen/gxv/`, not one
+`gen/gxv_spirv.h`; `plat_dl_*` in `plat.c`; `compile_runtime.py` compiles the backend against
+fetched headers in every CI compile job (`fetch_gpu.py --headers`, `--require-gxv`). Every image the
+spike writes is byte-identical to before the move. Next: `SOA_GPU` in `soa.exe`, and the rest of
+the Done.*
 
 *A day to several days. `--link`. Prerequisites: the gate; V4b. Files: `runtime/gxv.c` and
 `runtime/gxv/*.glsl` (from the spike), `tools/recompile.py` (the SPIR-V step, optional),

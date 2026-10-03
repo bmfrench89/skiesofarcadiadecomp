@@ -29,15 +29,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # units.txt is read by one parser, which decomp.py owns (stdlib only, so the
 # no-pip CI job that imports this file still needs nothing installed).
+import fetch_gpu  # noqa: E402
 from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
+from soa import shaders, toolchain  # noqa: E402
 from soa import symbols as S  # noqa: E402
-from soa import toolchain  # noqa: E402
 from soa.hle import load_hle  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
 from soa.recomp import Emitter  # noqa: E402
 
 RUNTIME = Path(__file__).resolve().parents[1] / "runtime"
+VENDOR = Path(__file__).resolve().parents[1] / "vendor"
 
 # Where mods with native code live: the ones the port ships, and the examples
 # a mod author copies. --link builds each folder's mod.c into its mod.dll.
@@ -121,8 +123,12 @@ def decomp_objects(p: toolchain.Profile, out: Path, dc_files: list[str]) -> list
     return sorted(out / "decomp" / (Path(f).stem + p.objext) for f in dc_files)
 
 
-def link_command(p: toolchain.Profile, out: Path, objs: list[Path]) -> list[str]:
+def link_command(p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = False) -> list[str]:
     """The link of runtime/ and the objects into soa.exe, run in the root.
+
+    gxv builds runtime/gxv.c as the GPU backend (SOA_GXV=1), against
+    vendor/'s Vulkan-Headers and the SPIR-V headers shaders.build wrote into
+    <out>/gxv; without it gxv.c is the stub that says the build has none.
 
     /Zi and /DEBUG write <out>/soa.pdb without changing the code /O2 makes
     (/OPT:REF and /OPT:ICF are what /DEBUG would otherwise turn off): the
@@ -139,6 +145,7 @@ def link_command(p: toolchain.Profile, out: Path, objs: list[Path]) -> list[str]
         f"/Fd{out}/runtime.pdb",
         f"/I{RUNTIME}",
         f"/I{out}",
+        *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
         f"/Fo{out}/",
         f"/Fe:{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
@@ -160,7 +167,11 @@ def builds_mods(p: toolchain.Profile) -> bool:
 
 
 def link_plan(
-    p: toolchain.Profile, out: Path, dc_files: list[str], dc_defines: list[str]
+    p: toolchain.Profile,
+    out: Path,
+    dc_files: list[str],
+    dc_defines: list[str],
+    gxv: bool = False,
 ) -> list[tuple[list[str], Path]]:
     """Every compiler command --link runs, in order, each with its working
     directory: the decompiled units, the link, then (msvc only) each mod."""
@@ -169,7 +180,7 @@ def link_plan(
     if dc_files:
         plan.append((decomp_command(p, out, dc_files, dc_defines), Path(".")))
         objs += decomp_objects(p, out, dc_files)
-    plan.append((link_command(p, out, objs), Path(".")))
+    plan.append((link_command(p, out, objs, gxv), Path(".")))
     if builds_mods(p):
         plan += [(mod_dll_command(src), src.parent) for src in mod_dll_sources()]
     return plan
@@ -365,8 +376,28 @@ def main() -> int:
             return 1
         if dc_files:
             (args.out / "decomp").mkdir(parents=True, exist_ok=True)
+        # The GPU backend (specs/gpu-backend.md 3.10), when tools/fetch_gpu.py
+        # has filled vendor/: the shaders to SPIR-V first, and a shader that
+        # does not compile fails the build. Without vendor/ soa.exe is built
+        # as before, and SOA_GPU=vulkan says how to get the backend.
+        gxv = shaders.available()
+        if gxv:
+            bad = fetch_gpu.verify(VENDOR)
+            if bad:
+                print(
+                    f"vendor/ is not as recorded ({bad[0]}); run python tools/fetch_gpu.py",
+                    file=sys.stderr,
+                )
+                return 1
+            built, why = shaders.build(args.out / "gxv")
+            if not built:
+                print(why, file=sys.stderr)
+                return 1
+            print("GPU backend: built in (SOA_GPU=vulkan)")
+        else:
+            print("GPU backend: not built in (python tools/fetch_gpu.py, then --link again)")
         failed_mods = 0
-        for cmd, cwd in link_plan(prof, args.out, dc_files, dc_defines):
+        for cmd, cwd in link_plan(prof, args.out, dc_files, dc_defines, gxv):
             proc = toolchain.cc(cmd, cwd, prof)
             if cwd != Path("."):  # a mod.dll, beside its mod.c
                 where = cwd.relative_to(RUNTIME.parent) / "mod.dll"

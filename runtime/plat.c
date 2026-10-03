@@ -3,8 +3,8 @@
  * main.c and the device files ask of an operating system. The renderer needs
  * none of it, so render_check.py's renderer-only build still links without
  * this file. Each function lands with its first caller -- L7's are the MEM1
- * image's guard and the guest's stack -- so nothing here is compiled and
- * never run.
+ * image's guard and the guest's stack, V5's the shared-library loader the
+ * GPU backend opens Vulkan with -- so nothing here is compiled and never run.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* REG_ERR in ucontext, on glibc */
@@ -235,5 +235,34 @@ int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes)
     }
     pthread_join(id, NULL);
     return b.rc;
+}
+#endif
+
+/* ---- shared libraries ---------------------------------------------------- */
+
+#ifdef _WIN32
+void* plat_dl_open(const char* path, char* err, size_t cap)
+{
+    HMODULE m = LoadLibraryExA(path, NULL, 0);
+    if (!m && err && cap) snprintf(err, cap, "LoadLibrary(%s) failed (error %lu)", path, GetLastError());
+    return (void*)m;
+}
+void* plat_dl_sym(void* lib, const char* name) { return (void*)(uintptr_t)GetProcAddress((HMODULE)lib, name); }
+void plat_dl_close(void* lib)
+{
+    if (lib) FreeLibrary((HMODULE)lib);
+}
+#else
+#include <dlfcn.h>
+void* plat_dl_open(const char* path, char* err, size_t cap)
+{
+    void* m = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!m && err && cap) snprintf(err, cap, "dlopen(%s) failed: %s", path, dlerror());
+    return m;
+}
+void* plat_dl_sym(void* lib, const char* name) { return dlsym(lib, name); }
+void plat_dl_close(void* lib)
+{
+    if (lib) dlclose(lib);
 }
 #endif

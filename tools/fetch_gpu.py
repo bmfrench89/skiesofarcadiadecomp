@@ -1,6 +1,7 @@
 """Fetch what the GPU spike builds with into vendor/, which is gitignored.
 
     python tools/fetch_gpu.py            # fetch what is missing, then record
+    python tools/fetch_gpu.py --headers  # Vulkan-Headers alone: compiling gxv.c, on any host
     python tools/fetch_gpu.py --verify   # check what is on disk against the record
 
 specs/gpu-backend.md V3a, D-18: the build may fetch Vulkan-Headers and glslang,
@@ -146,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--verify", action="store_true", help="only check what is on disk against the record"
     )
+    ap.add_argument(
+        "--headers",
+        action="store_true",
+        help="Vulkan-Headers alone, which compiling gxv.c needs; no glslang (CI, any host)",
+    )
     args = ap.parse_args(argv)
     vendor = args.vendor
 
@@ -158,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if bad else 0
 
     host = platform.system()
-    if host not in GLSLANG:
+    if host not in GLSLANG and not args.headers:
         print(f"error: no glslang release for {host}", file=sys.stderr)
         return 1
     files, comments = read_record(vendor / RECORD)
@@ -177,9 +183,11 @@ def main(argv: list[str] | None = None) -> int:
         kept += [p for p in headers.rglob("*") if p.is_file()]
 
     glslang = vendor / "glslang"
-    url, pin = GLSLANG[host]
+    url, pin = GLSLANG.get(host, ("", ""))
     exe = glslang / "bin" / ("glslang.exe" if host == "Windows" else "glslang")
-    if not exe.exists():
+    if args.headers:
+        kept += [p for p in glslang.rglob("*") if p.is_file()]
+    elif not exe.exists():
         blob = fetch(url)
         digest = sha256(blob)
         if digest != pin:
