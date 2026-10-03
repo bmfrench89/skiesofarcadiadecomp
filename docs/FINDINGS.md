@@ -4955,3 +4955,144 @@ change introduces no new picture.
   - the self test and `title --check`;
   - `test_scenario` with two new tests for `inline`;
   - pytest 1163 passed, 2 skipped.
+
+**V3: the GPU spike (V3a, the harness and the geometry).** 2026-10-03. The
+renderer draws through Vulkan for the first time: headless, outside the
+port, on this machine's GPU (AMD Radeon Graphics, the Z1 Extreme's; Vulkan
+1.4.344). Away from triangle edges, every scene covers exactly the pixels
+the CPU covers. Colours match exactly too, except where they are
+interpolated, which is within one step.
+
+- **What it is.**
+  - `tools/fetch_gpu.py` puts Vulkan-Headers `vulkan-sdk-1.4.357.0` and
+    glslang 16.6.0 into `vendor/` (gitignored), with every kept file's
+    sha256 in `vendor/GPU.sha256`. glslang's release archive is pinned by
+    hash. GitHub builds the headers' tag archive on demand, so that hash is
+    recorded but not enforced. `--verify` reports any file that is missing
+    or changed.
+  - `tools/gpuspike.py build` compiles the two shaders to SPIR-V as C
+    arrays. It then builds `gx.c`, `gxr.c`, `gxr_tev.c`, `png.c`, the
+    driver and `tools/gpuspike/gxv.c` into `build/gpuspike/<compiler>/`.
+    It rebuilds only when an input is newer than the binary.
+  - `gxv.c` is the backend:
+    - Vulkan comes from `vulkan-1.dll` (or `libvulkan.so.1`) through one
+      list of entry points;
+    - one queue, a bump allocator per memory type, and an EFB of
+      `R8G8B8A8_UNORM` with `D32_SFLOAT` depth;
+    - vertex pulling of the `Vertex` records as they are, 156 bytes each;
+    - pipelines keyed by topology, cull, depth state and write mask, with a
+      dynamic scissor;
+    - clears through `vkCmdClearAttachments`;
+    - a screen copy by reading the EFB back, assembled as `copy_to_screen`
+      does;
+    - timestamps.
+  - **Refused, with a message that stops the run:** a TEV shape other than
+    the vertex colour, an alpha test that can reject, blending, logic ops,
+    fog, a constant alpha, and a copy to a texture. These are V3b's and
+    V4a's.
+  - **Clipping is the consumer's.** A draw whose vertices all pass
+    `gxr_vertex_unclipped` is uploaded as it is, with its own topology
+    (quads through a static index buffer, `(0,1,2)(0,2,3)`). Any other draw
+    is rebuilt as a list in `draw_command`'s order:
+    - triangles go through `gxr_clip_polygon` and are fanned;
+    - lines and points with w <= 0 are dropped, as the CPU skips them.
+- **`python tools/gpuspike.py selftest`.** It runs the driver with
+  `--backend cpu` and `--backend gpu` and compares 15 scenes.
+  - **An edge pixel** is one whose 3x3 neighbourhood in the CPU's image is
+    not all one colour, for the flat-coloured scenes, or not all covered
+    or all uncovered, for the gradients. Vulkan's top-left fill rule and
+    the CPU's inclusive one may disagree there.
+  - **The two render recipes** from `runtime/selftest.c`, copied verbatim
+    and held to it by a test, pass on the GPU: `307200 of 307200 red` and
+    `complete, 53301 px`, as on the CPU.
+
+  | Scene | Pixels, CPU / GPU | Away from edges | At edges | Colour |
+  |---|---|---|---|---|
+  | `cull0`: four shapes in both windings, a strip, a fan, two quads | 91,332 / 91,332 | 0 differ | 0 | exact |
+  | `cull1` | 37,840 / 37,840 | 0 | 0 | exact |
+  | `cull2` | 53,492 / 53,492 | 0 | 0 | exact |
+  | `cull3` | 0 / 0 | -- | -- | -- |
+  | `clip_near_ortho` | 45,710 / 45,710 | 0 | 20 | 51 px one step off |
+  | `clip_far_ortho` | 45,710 / 45,710 | 0 | 20 | 49 px one step off |
+  | `clip_near_persp` | 49,597 / 49,597 | 0 | 0 | 66 px one step off |
+  | `clip_far_persp` | 35,812 / 35,813 | 0 | 3 | 73 px one step off |
+  | `depth`: EQUAL redraw, LESS against the clear | 132,774 / 132,774 | 0 | 0 | exact |
+  | `depth_persp`: two planes crossing in perspective | 152,061 / 152,053 | 0 | 22 | exact |
+  | `scissor`: two per-draw scissors | 179,791 / 179,791 | 0 | 0 | exact |
+  | `quad_gradient`: four corner colours | 157,820 / 157,820 | 0 | 0 | 193 px one step off |
+  | `clear`: a copy's clear, (0x30, 0x60, 0x90) at depth 0x400000 | 264,000 / 264,000 | 0 | 0 | exact |
+  | `lines`: six segments, a strip, and two in perspective | 2,400 / 2,391 | all within one pixel | -- | -- |
+  | `points`: 64 | 64 / 64 | exact | -- | exact |
+
+  - **The clip scenes' uploads.** In each, the vertices uploaded equal the
+    driver's own walk of the draw through `clip_polygon`, field by field:
+    9 vertices for each orthographic scene and 12 for each perspective one,
+    where the draw had 6.
+  - **Opened:** `depth`, `depth_persp` and `clear` show what their comments
+    say. Red is wholly replaced by blue under EQUAL; green is in front
+    only where z > 50; the cleared rectangle is (0x30, 0x60, 0x90) with
+    orange around it and white over both.
+- **Mutations, each run against the real source.** Thirteen turned it red:
+
+  | Mutation | Scenes that failed |
+  |---|---|
+  | upload unclipped (`--mutate unclipped`, run by the test) | the four clip scenes and their upload check, and `lines` (the segment behind the eye) |
+  | cull front and back swapped | `cull1`, `cull2` |
+  | front face clockwise | `cull1`, `cull2` |
+  | a strip drawn as a list | `cull0` to `cull2` |
+  | a fan drawn as a strip | `cull0` to `cull2` |
+  | quads split `(0,1,3)(1,2,3)` | `quad_gradient` |
+  | depth unquantised | `depth` |
+  | EQUAL compared as LESS | `depth` |
+  | the fragment input's depth perspective-correct | `depth_persp` (the crossing moves from row 240 to 193; 6,492 px change colour) |
+  | the clear's red and blue swapped | `clear` |
+  | the clear's depth ignored | `clear` |
+  | the scissor ignored | `scissor` |
+  | lines with w <= 0 kept in the rebuild | `lines` |
+
+  Four of these were green against the first scenes, and each exposed a
+  gap that a scene now fills:
+  - flat rectangles look the same whichever diagonal splits them;
+  - the first perspective depth scene leaned both planes: with the
+    fragment input perspective-correct both shifted alike and the crossing
+    stayed on row 240, as putting that scene back afterwards confirmed. One
+    plane now faces the eye;
+  - every scene used the full-screen scissor;
+  - no line went behind the eye.
+- **Two results that are not checks, recorded as such.**
+  - **The interpolation decoration that counts is the fragment input's.**
+    Removing `noperspective` from the vertex output alone changes nothing,
+    and the selftest stays green.
+  - **Hardware colour rounding.** Writing the interpolated colour straight
+    to the UNORM target, instead of quantising as the CPU does, gives the
+    same bytes on this GPU in every scene. The shader quantises anyway,
+    because Vulkan leaves the float-to-UNORM rounding to the
+    implementation. Nothing here can tell the two apart on this GPU.
+- **Points and lines** (none occur in the corpus, 3.2):
+  - **Points:** a point exactly on a pixel edge (x = 554.0) lit 554 on the
+    CPU and 553 on the GPU, where Vulkan leaves the choice to the
+    implementation. The scene keeps its points 0.2 to 0.8 of a pixel from
+    the edges.
+  - **Lines:** the CPU steps a line in `ceil(length)` floored samples, and
+    Vulkan rasterizes by diamond exit. 95 and 86 pixels differ, all within
+    one pixel, so lines are judged on that and no closer.
+- **Compilers.** The NDK's clang-cl (`--cc clang-cl` with `SOA_CLANG_CL`)
+  builds the spike with no warning of its own, and its selftest gives the
+  same numbers as MSVC's.
+- **Time.** The GPU's timestamps total about 2.4 ms for the 42 draws and 18
+  screen copies, each copy waiting for a fence. That is not a performance
+  figure; V4a measures one. The selftest takes about 5 s. The test module
+  takes 15 s, the two GPU runs most of it.
+- **`test_gpuspike.py`** has 11 tests, 0 skipped here.
+  - **Seven run anywhere:** the judge's own cases (an edge pixel moved
+    passes, a hole or a one-step colour fails; colour edges; `cull3`;
+    lines and points), the recipe copy, and every scene being judged.
+  - **Four need `vendor/` and skip, printing why, without it:** the record
+    verifying; a copy of `vendor/` with one header byte changed and
+    `LICENSE.md` deleted failing it; the selftest; and the unclipped
+    mutation failing.
+  - **The two GPU tests also skip without MSVC** or a Vulkan device (the
+    driver's exit code 3).
+  - **CI:** its runners have no `vendor/` and no GPU, so CI runs the
+    seven.
+- **No runtime file changed.**

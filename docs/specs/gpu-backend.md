@@ -1190,6 +1190,23 @@ accepts `inline`), `tools/tests/test_gxr_backend.py` (new), `docs/ARCHITECTURE.m
 
 ### V3a. A headless Vulkan harness: fetch, build, the EFB pass, the geometry checks
 
+*Landed 2026-10-03 (FINDINGS "V3"). The differences from what follows:*
+- *The self test draws 15 scenes, not only the Done's: depth (an EQUAL redraw, LESS against the
+  clear, two planes crossing in perspective), two per-draw scissors, a quad with four corner colours
+  and a copy's clear were added because a mutation of each of those paths passed without them.*
+- *An edge pixel is one whose 3x3 neighbourhood in the CPU's image is not one colour (coverage, for
+  the gradient scenes); colours may be one step off where interpolated. Lines are held to one pixel
+  (the CPU's stepping against Vulkan's diamond exit); points are placed away from pixel edges, where
+  Vulkan leaves the choice to the implementation.*
+- *A screen copy reads the EFB back and is assembled on the CPU as `copy_to_screen` does; a copy to
+  a texture, a TEV shape other than the vertex colour, an alpha test that can reject, blending,
+  logic ops and fog are refused, stopping the run (V3b, V4a).*
+- *The driver carries the self test's render recipe verbatim, held to `runtime/selftest.c` by a
+  test, as `tools/citest/render_driver.c` does. The build is skipped when the binary is newer than
+  every input, and each compiler builds into its own directory under `build/gpuspike/`.*
+- *The pytest module also skips, saying why, without MSVC; the driver's exit 3 is "no Vulkan
+  device".*
+
 *Several days. Rebuild: none for `soa.exe` (the spike builds its own renderer-only binary; no `gen/`).
 Prerequisites: V2; Q-V1 answered "yes" or unanswered (otherwise V3′a, below). Files:
 `tools/fetch_gpu.py` (new), `tools/gpuspike.py` (new: `build`, `selftest`), `tools/gpuspike/` (new:

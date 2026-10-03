@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1165 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1176 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1165 |
+| Python tests | 1176 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -528,10 +528,17 @@ C5c) is now done.
    `runtime/gxr_cmd.h`, the backend hook at the three points the producer
    runs a command itself, `SOA_GXR_INLINE`, the passthrough backend,
    copy clears as their own commands, `tex_id`/`tex_gen`, and H17a's
-   `DrawCmd.efb`. **Next is V3a:** a headless Vulkan harness -- the build
-   fetches Vulkan-Headers and glslang into `vendor/` (D-18, settled), and
-   it needs this machine's GPU (specs/gpu-backend.md V3a).
-   Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
+   `DrawCmd.efb`. **V3a is done** (FINDINGS "V3"): `tools/fetch_gpu.py`
+   fills `vendor/` (pinned, gitignored) and `tools/gpuspike.py selftest`
+   draws 15 scenes through `tools/gpuspike/gxv.c` on this machine's GPU and
+   on the CPU. Away from edges the coverage is exact, and colours are
+   within one step where they are interpolated. Thirteen mutations turn it
+   red; hardware colour rounding is the one difference nothing here can see.
+   `vendor/` (27 MB) can be fetched again at any time; `build/gpuspike/<compiler>/`
+   holds the spike and its last scene images, CPU and GPU, to open.
+   **Next is V3b:** `tevdiff` and `copydiff`, the TEV and the copy encoder
+   made exact on the GPU (specs/gpu-backend.md V3b). Read the slice against
+   HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
