@@ -635,7 +635,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 | 2 | **V1** the captures the corpus lacks: menus, scene-to-texture, a mask effect with casters, kept as consecutive frames. **Done** 2026-10-02 (FINDINGS "V1"): a battle's start and its 30 chained frames, and a mask frame; it found the copy-stride defect | a day | none (live runs, one at a time) | V0; C5b, or C5a refuted (then no mask capture with casters) | — |
 | 3 | **V2** the seam: `gxr_cmd.h`, a reachable zero-worker path (`SOA_GXR_INLINE`), the passthrough backend, copy clears as their own commands, `tex_gen`. **Done** 2026-10-03 (FINDINGS "V2") | a day to several days | `--link` | L2; H17a (which added `DrawCmd.efb`; V2 moves it into the header and does not redo it) | — |
 | 4 | **V3a** headless Vulkan harness: fetch, build, the EFB pass with CPU clipping, geometry self test. **Done** 2026-10-03 (FINDINGS "V3"): 15 scenes, coverage exact away from edges on the Z1 Extreme's GPU, thirteen mutations red | several days | none | V2; D-17 "yes" or unanswered | — |
-| 5 | **V3b** the exact differentials: `tevdiff`, `copydiff` | several days | none | V3a | — |
+| 5 | **V3b** the exact differentials: `tevdiff`, `copydiff`. **Done** 2026-10-03 (FINDINGS "V3"): 100,000 TEV cases and 25,600 copies, 0 mismatches; every EFB copy is now the compute copy | several days | none | V3a | — |
 | 6 | **V4a** the spike on the 21 captures with no texture copies: draws, textures, depth, fog, blend, screen copy | several days to week-plus | none | V0, V3b | — |
 | 7 | **V4b** copies and logic ops, with poison and chain; V1's captures; the gate memo | several days | none | V4a, V1 | **Owner**: four side-by-sides |
 | — | **Gate G1** | — | — | V4b | **Owner** |

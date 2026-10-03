@@ -1,0 +1,42 @@
+// tevdiff (specs/gpu-backend.md V3b): tev.glsl over many setups at once, one
+// invocation a case, so its results can be held against tev_pixel's. A case
+// is a packed setup (gxv_pack_tev) and its inputs: the two raster colours
+// and, for each of the eight maps, the texel a 1x1 nearest texture returns
+// wherever it is sampled.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Setups { uint setup[]; };
+layout(std430, binding = 1) readonly buffer Inputs { uint inp[]; };      // ras0, ras1, texel[8]: RGBA bytes
+layout(std430, binding = 2) writeonly buffer Results { uint result[]; }; // RGBA bytes, then the alpha test
+
+layout(push_constant) uniform Run {
+    uint count;
+    uint setup_words; // a setup's size: GXV_TEV_WORDS
+} pc;
+
+uint g_setup;
+uint g_input;
+
+uint tev_word(uint i) { return setup[g_setup + i]; }
+
+ivec4 unpack_rgba(uint v) { return ivec4(v & 255u, (v >> 8) & 255u, (v >> 16) & 255u, v >> 24); }
+
+ivec4 tev_sample(uint map, uint tc) { return unpack_rgba(inp[g_input + 2u + map]); }
+
+#include "tev.glsl"
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    g_setup = i * pc.setup_words;
+    g_input = i * 10u;
+    ivec4 outc;
+    bool pass;
+    tev_run(unpack_rgba(inp[g_input]), unpack_rgba(inp[g_input + 1u]), outc, pass);
+    result[i * 2u] = uint(outc.r) | uint(outc.g) << 8 | uint(outc.b) << 16 | uint(outc.a) << 24;
+    result[i * 2u + 1u] = pass ? 1u : 0u;
+}

@@ -1239,6 +1239,23 @@ FINDINGS entry "V3", every copy of the test count.*
 
 ### V3b. The two exact differentials: the TEV and the copy encoder
 
+*Landed 2026-10-03 (FINDINGS "V3"). The differences from what follows:*
+- *tevdiff also randomises the texture orders (0x28-0x2F), without which every stage samples map 0
+  with texturing off, and builds one case in eight as an H15c fast shape, which random words almost
+  never make, so the "with `fast_c = fast_a = 0`" run compares something. It counts each colour and
+  alpha compare mode, shift, clamp, bias, op, alpha logic, alpha compare function, texturing, the
+  raster channel and each fast shape; the smallest of 61 counts is 3,158. A `tevdiff.comp` runs
+  `tev.glsl` a case an invocation; the includer supplies the texel, so V4a's sampler slots in.*
+- *copydiff runs the CPU and GPU sides as two processes from one seed, the GPU's copies built by the
+  renderer and run through the backend hook as V4 will run them, and compares a line a copy: the
+  bytes over the span and 64 either side, the decoded image, and a screen copy of the same
+  rectangle. "Every copy format 0-6" is every command format 0-15 (12,000 of the 25,600 are refused).*
+- *3.6's compute pass reads the EFB through a buffer copied from the image, not as a sampled image,
+  and works each texel's decoded RGBA out from its value rather than reading it back from the bytes:
+  both exact by construction. gxv now makes every copy this way, screen copies included.*
+- *Mutations are shader variants (`-D`) selected by `--mutate`: `clamp`, `rounding`, `intensity`;
+  `unseeded` is gxv's. The test runs all four; 26 more were run by hand (FINDINGS "V3").*
+
 *Several days. Rebuild: none for `soa.exe`. Prerequisites: V3a. Files: `tools/gpuspike/tev.glsl`,
 `tools/gpuspike/copy.comp`, `tools/gpuspike/driver.c`, `tools/gpuspike.py` (`tevdiff`, `copydiff`),
 `tools/tests/test_gpuspike.py`, FINDINGS entry "V3".*

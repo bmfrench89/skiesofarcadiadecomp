@@ -1,16 +1,20 @@
 """The GPU spike: the renderer drawing through a Vulkan backend, headless.
 
-    python tools/gpuspike.py build                      # shaders, then the binary
-    python tools/gpuspike.py selftest [--mutate NAME]   # build, draw on both, compare
+    python tools/gpuspike.py build                        # shaders, then the binary
+    python tools/gpuspike.py selftest [--mutate NAME]     # draw 15 scenes on both, compare
+    python tools/gpuspike.py tevdiff [--cases 100000]     # the TEV, exact against tev_pixel
+    python tools/gpuspike.py copydiff [--rects 200]       # the copies, exact against gxr.c's
 
-specs/gpu-backend.md V3a. `build` compiles tools/gpuspike/raster.vert and
-raster.frag to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
-arrays, and builds gx.c, gxr.c, gxr_tev.c and png.c with the spike's driver
-and gxv.c (the backend) into build/gpuspike/gpuspike.exe. No gen/, no disc:
-the binary links the renderer alone, as tools/citest/render_check.py does.
+specs/gpu-backend.md V3a and V3b. `build` compiles the shaders in
+tools/gpuspike/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
+arrays -- each mutation a variant of its own -- and builds gx.c, gxr.c,
+gxr_tev.c and png.c with the spike's driver and gxv.c (the backend) into
+build/gpuspike/<compiler>/gpuspike.exe, when an input is newer than it. No
+gen/, no disc: the binary links the renderer alone, as
+tools/citest/render_check.py does.
 
-`selftest` runs the binary twice, `--backend cpu` and `--backend gpu`, into
-build/gpuspike/<compiler>/cpu and gpu, and compares the scenes they wrote:
+`selftest` (V3a) runs the binary twice, `--backend cpu` and `--backend gpu`,
+into build/gpuspike/<compiler>/cpu and gpu, and judges the scenes they wrote:
 
 - the self test's two render recipes must pass on the GPU as they are
   written for the CPU (the driver checks them in-process);
@@ -21,16 +25,29 @@ build/gpuspike/<compiler>/cpu and gpu, and compares the scenes they wrote:
   perspective. Away from edges the coverage matches and colours are within one
   step (the CPU steps attributes along a span, the GPU interpolates them, 3.4);
   and in the driver the vertices the consumer uploaded must be clip_polygon's;
+- depth, depth_persp, scissor, quad_gradient and clear: an EQUAL redraw and
+  LESS against the clear, two planes crossing in perspective, per-draw
+  scissors, a quad's split, and a copy's clear;
 - lines: every pixel either side drew is within one pixel of one the other
   drew (the CPU steps a line in ceil(length) floor()ed samples; Vulkan
   rasterizes by diamond exit, so endpoints and half-pixel steps may differ);
 - points: exactly the CPU's pixels.
 
-An edge pixel is one whose 3x3 neighbourhood in the CPU's image is not all
-covered or all uncovered: Vulkan's top-left fill rule and the CPU's inclusive
-one disagree there by design. --mutate unclipped makes gxv upload every draw
-as it is, and must fail. Exit 0 pass, 1 fail, 3 skipped (no Vulkan device),
-with the reason printed.
+An edge pixel is one whose 3x3 neighbourhood in the CPU's image is not one
+colour (for the gradients, not all covered or all uncovered): Vulkan's
+top-left fill rule and the CPU's inclusive one disagree there by design.
+
+`tevdiff` (V3b) runs tev.glsl, the TEV transcribed, against tev_pixel over
+setups tev_prepare built from random registers: zero mismatches, and every
+path it counts taken at least 100 times. `copydiff` (V3b) runs the same random
+copies through the CPU renderer and through gxv's compute copy, in two
+processes at once, and compares what each left in RAM, the decoded image and a
+screen copy: byte for byte, with every refused copy leaving RAM as it was.
+
+--mutate names a mutation the command must fail on: unclipped (selftest),
+clamp (tevdiff), rounding, intensity and unseeded (copydiff). Exit 0 pass,
+1 fail, 3 skipped (no compiler, no vendor/, no Vulkan device), the reason
+printed.
 """
 
 from __future__ import annotations
@@ -39,6 +56,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections import Counter
 from itertools import compress, count, groupby
 from operator import ne
 from pathlib import Path
@@ -53,7 +71,18 @@ SPIKE = ROOT / "tools" / "gpuspike"
 RUNTIME = ROOT / "runtime"
 OUT = ROOT / "build" / "gpuspike"
 VENDOR = ROOT / "vendor"
-SHADERS = ("raster.vert", "raster.frag")
+# Each shader and the variants built from it: (source, header and array name,
+# defines). A variant is a mutation gxv_set_mutation selects; the self test
+# runs each and must fail.
+SHADERS = [
+    ("raster.vert", "raster_vert", ()),
+    ("raster.frag", "raster_frag", ()),
+    ("tevdiff.comp", "tevdiff_comp", ()),
+    ("tevdiff.comp", "tevdiff_comp_clamp", ("GXV_MUTATE_CLAMP",)),
+    ("copy.comp", "copy_comp", ()),
+    ("copy.comp", "copy_comp_rounding", ("GXV_MUTATE_ROUNDING",)),
+    ("copy.comp", "copy_comp_intensity", ("GXV_MUTATE_INTENSITY",)),
+]
 SOURCES = [RUNTIME / n for n in ("gx.c", "gxr.c", "gxr_tev.c", "png.c")]
 SOURCES += [SPIKE / "driver.c", SPIKE / "gxv.c"]
 SKIP = 3
@@ -102,7 +131,8 @@ def inputs() -> list[Path]:
     of the fetched files, and the scripts that hold the flags."""
     return [
         *SOURCES,
-        *(SPIKE / n for n in SHADERS),
+        *(SPIKE / n for n in {src for src, _, _ in SHADERS}),
+        SPIKE / "tev.glsl",
         *RUNTIME.glob("*.h"),
         *SPIKE.glob("*.h"),
         VENDOR / fetch_gpu.RECORD,
@@ -118,28 +148,30 @@ def up_to_date(prof: toolchain.Profile) -> bool:
 
 def build(prof: toolchain.Profile) -> tuple[bool, str]:
     """(built, why not). A missing compiler or vendor/ is a reason, not a
-    crash. Nothing is rebuilt when the binary is newer than every input."""
-    if toolchain.compiler_path(prof) is None:
-        return False, f"no {prof.name} compiler (tools/soa/toolchain.py compiler_path)"
+    crash. Nothing is rebuilt when the binary is newer than every input, and
+    then no compiler is looked for: finding MSVC's environment takes 2 s."""
     bad = fetch_gpu.verify(VENDOR)
     if bad:
         return False, f"vendor/ is not as recorded ({bad[0]}); run python tools/fetch_gpu.py"
     if up_to_date(prof):
         return True, ""
+    if toolchain.compiler_path(prof) is None:
+        return False, f"no {prof.name} compiler (tools/soa/toolchain.py compiler_path)"
     out = build_dir(prof)
     out.mkdir(parents=True, exist_ok=True)
     exe_path(prof).unlink(missing_ok=True)
-    for name in SHADERS:
-        var = name.replace(".", "_")
+    for src, var, defines in SHADERS:
         proc = subprocess.run(
             [
                 str(glslang()),
                 "-V",
                 "--target-env",
                 "vulkan1.1",
+                f"-I{SPIKE}",
+                *(f"-D{d}" for d in defines),
                 "--vn",
                 var,
-                str(SPIKE / name),
+                str(SPIKE / src),
                 "-o",
                 str(out / f"{var}.h"),
             ],
@@ -149,7 +181,7 @@ def build(prof: toolchain.Profile) -> tuple[bool, str]:
         )
         if proc.returncode != 0:
             print(proc.stdout + proc.stderr)
-            return False, f"glslang failed on {name}"
+            return False, f"glslang failed on {src} ({var})"
     inc = [
         f"/I{RUNTIME}",
         f"/I{SPIKE}",
@@ -323,15 +355,31 @@ def judge(name: str, how: tuple, cpu: Path, gpu: Path) -> tuple[bool, str]:
     )
 
 
-def selftest(prof: toolchain.Profile, mutate: str | None) -> int:
+def ready(prof: toolchain.Profile) -> int | None:
+    """None when the binary is built; otherwise the exit code, the reason printed."""
     built, why = build(prof)
-    if not built:
-        print(f"skip: {why}" if "compiler" in why or "vendor" in why else f"FAIL: {why}")
-        return SKIP if ("compiler" in why or "vendor" in why) else 1
-    gpu = run(prof, "gpu", mutate)
-    m = re.search(r"^skip: (.*)$", gpu.stdout, re.M)
-    if gpu.returncode == SKIP and m:
+    if built:
+        return None
+    skip = "compiler" in why or "vendor" in why
+    print(f"skip: {why}" if skip else f"FAIL: {why}")
+    return SKIP if skip else 1
+
+
+def skipped(proc: subprocess.CompletedProcess) -> bool:
+    """The driver's own skip (no Vulkan device), said aloud."""
+    m = re.search(r"^skip: (.*)$", proc.stdout, re.M)
+    if proc.returncode == SKIP and m:
         print(f"skip: {m.group(1)}")
+        return True
+    return False
+
+
+def selftest(prof: toolchain.Profile, mutate: str | None) -> int:
+    code = ready(prof)
+    if code is not None:
+        return code
+    gpu = run(prof, "gpu", mutate)
+    if skipped(gpu):
         return SKIP
     cpu = run(prof, "cpu", None)
     failures = 0
@@ -363,21 +411,164 @@ def selftest(prof: toolchain.Profile, mutate: str | None) -> int:
     return 1 if failures else 0
 
 
+# ---- V3b: the exact differentials ----------------------------------------------
+
+
+def tevdiff(prof: toolchain.Profile, cases: int, seed: int, mutate: str | None) -> int:
+    code = ready(prof)
+    if code is not None:
+        return code
+    args = [str(exe_path(prof)), "--backend", "gpu", "--tevdiff", str(cases), "--seed", str(seed)]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=False)
+    if skipped(proc):
+        return SKIP
+    for line in proc.stdout.splitlines():
+        if line.startswith("hits "):
+            words = line.split()[1:]
+            print("hits, a path a count, every one at least 100:")
+            for i in range(0, len(words), 8):
+                print("  " + "  ".join(words[i : i + 8]))
+        elif not line.startswith("device "):
+            print(line)
+    for line in proc.stderr.splitlines():
+        if line.startswith("[gxv]") or "failed" in line:
+            print(line)
+    m = re.search(r"^tevdiff \d+ cases, seed \d+: (\d+) mismatch", proc.stdout, re.M)
+    ok = proc.returncode == 0 and m is not None and m.group(1) == "0"
+    print(f"[gpuspike] tevdiff {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
+# A copydiff line: the case, then four hashes. Rows match when every field
+# does; a refused copy (texfmt 99) must leave its RAM hash equal to the seed's.
+COPY_FIELDS = [
+    "combo",
+    "rect",
+    "tpf",
+    "intensity",
+    "half",
+    "filtered",
+    "x0",
+    "y0",
+    "w",
+    "h",
+    "stride",
+    "dest",
+    "texfmt",
+    "extent",
+    "seeded",
+    "ram",
+    "image",
+    "screen",
+]
+HASHED = {"ram": 15, "image": 16, "screen": 17}
+
+
+def compare_copies(cpu: list[str], gpu: list[str]) -> tuple[list[str], Counter]:
+    """(problems, mismatches by (what, tpf, intensity, half, filtered))."""
+    problems: list[str] = []
+    mismatches: Counter = Counter()
+    if len(cpu) != len(gpu) or not cpu:
+        problems.append(f"the CPU wrote {len(cpu)} copies and the GPU {len(gpu)}")
+    for a, b in zip(cpu, gpu, strict=False):
+        fa, fb = a.split(), b.split()
+        if len(fa) != len(COPY_FIELDS) or fa[:15] != fb[:15]:
+            problems.append(f"the two runs made different copies: {a!r} against {b!r}")
+            continue
+        for side, f in (("cpu", fa), ("gpu", fb)):
+            if f[12] == "99" and f[15] != f[14]:
+                problems.append(f"{side} wrote RAM for a refused copy: {' '.join(f[:14])}")
+        for what, k in HASHED.items():
+            if fa[k] != fb[k]:
+                mismatches[(what, int(fa[2]), int(fa[3]), int(fa[4]), int(fa[5]))] += 1
+    return problems, mismatches
+
+
+def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None) -> int:
+    code = ready(prof)
+    if code is not None:
+        return code
+    base = build_dir(prof) / "copydiff"
+    procs = {}
+    for backend in ("cpu", "gpu"):
+        out = base / backend
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "copydiff.txt").unlink(missing_ok=True)
+        args = [
+            str(exe_path(prof)),
+            "--backend",
+            backend,
+            "--copydiff",
+            str(rects),
+            "--seed",
+            str(seed),
+        ]
+        args += ["--out", str(out)]
+        if mutate and backend == "gpu":
+            args += ["--mutate", mutate]
+        # The two sides are independent processes with their own output, so
+        # they run at once: each takes about 18 s at 200 rectangles.
+        procs[backend] = subprocess.Popen(
+            args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    done = {}
+    for backend, proc in procs.items():
+        out, err = proc.communicate()
+        done[backend] = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+    if skipped(done["gpu"]):
+        return SKIP
+    for backend, proc in done.items():
+        for line in (proc.stdout + proc.stderr).splitlines():
+            if line.startswith(("[gxv]", "copydiff")) or "failed" in line or "refused" in line:
+                print(f"[{backend}] {line}")
+        if proc.returncode != 0:
+            print(f"FAIL: the {backend} side exited {proc.returncode}")
+            return 1
+    cpu = (base / "cpu" / "copydiff.txt").read_text(encoding="utf-8").splitlines()
+    gpu = (base / "gpu" / "copydiff.txt").read_text(encoding="utf-8").splitlines()
+    problems, mismatches = compare_copies(cpu, gpu)
+    refused = sum(1 for line in cpu if line.split()[12] == "99")
+    print(
+        f"{len(cpu)} copies, {refused} of them refused; each also copied to the screen. "
+        f"Differences: "
+        + ", ".join(
+            f"{what} {sum(n for k, n in mismatches.items() if k[0] == what)}" for what in HASHED
+        )
+    )
+    for line in problems[:5]:
+        print(f"FAIL {line}")
+    for (what, tpf, intensity, half, filtered), n in sorted(mismatches.items())[:12]:
+        print(
+            f"FAIL {what}: format {tpf}, intensity {intensity}, half {half}, filter {filtered}: "
+            f"{n} of {rects}"
+        )
+    ok = not problems and not mismatches
+    print(f"[gpuspike] copydiff {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("command", choices=("build", "selftest"))
+    ap.add_argument("command", choices=("build", "selftest", "tevdiff", "copydiff"))
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
-    ap.add_argument(
-        "--mutate", default=None, help="selftest: a gxv mutation that must fail it (unclipped)"
-    )
+    ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
+    ap.add_argument("--cases", type=int, default=100000, help="tevdiff: random setups")
+    ap.add_argument("--rects", type=int, default=200, help="copydiff: rectangles a combination")
+    ap.add_argument("--seed", type=int, default=1, help="tevdiff and copydiff")
     args = ap.parse_args(argv)
     prof = toolchain.profile(args.cc)
     if args.command == "build":
         built, why = build(prof)
         print(f"built {exe_path(prof)}" if built else f"not built: {why}")
         return 0 if built else 1
+    if args.command == "tevdiff":
+        return tevdiff(prof, args.cases, args.seed, args.mutate)
+    if args.command == "copydiff":
+        return copydiff(prof, args.rects, args.seed, args.mutate)
     return selftest(prof, args.mutate)
 
 

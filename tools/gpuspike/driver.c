@@ -1,5 +1,5 @@
 /*
- * The GPU spike's driver (specs/gpu-backend.md V3a): the renderer with no
+ * The GPU spike's driver (specs/gpu-backend.md V3a, V3b): the renderer with no
  * game, no disc and no recompiled code, drawing a set of scenes through the
  * real GX front end either on the CPU (--backend cpu, the worker pool on one
  * thread) or through gxv, the Vulkan backend (--backend gpu). Each scene's
@@ -17,6 +17,15 @@
  * draw through gxr_clip_polygon, field by field. --mutate unclipped tells gxv
  * to upload every draw as it is, which both that check and the pixels must
  * catch.
+ *
+ * Two more modes are V3b's exact differentials. --tevdiff N runs tev_pixel
+ * and tev.glsl over N setups from random registers in this one process (gpu
+ * only) and counts mismatches and the paths taken. --copydiff N makes the
+ * same random copies, N rectangles for each of 128 combinations, through
+ * whichever backend was asked for, and writes a line a copy to
+ * <out>/copydiff.txt for tools/gpuspike.py to hold the two runs' lines
+ * against each other. --seed picks the cases; the same seed makes the same
+ * ones in both processes.
  *
  * Exit status: 0 when every check here passed, 1 when one failed, 3 when gpu
  * mode found no Vulkan device (a skip, which the caller reports as one).
@@ -540,17 +549,339 @@ static int scene_points(CpuState* s)
     return finish_scene(s, "points");
 }
 
+/* ---- V3b: the two exact differentials ------------------------------------- */
+
+/* splitmix64: the same sequence in both processes, from --seed and the case.
+ * A first version seeded xorshift32 with the case number almost as it was,
+ * and xorshift is linear: neighbouring cases came out correlated, and the
+ * alpha logic's four values each took exactly 25,000 of 100,000 cases. */
+static uint64_t g_rng;
+
+static uint32_t rnd(void)
+{
+    uint64_t z = (g_rng += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (uint32_t)((z ^ (z >> 31)) >> 32);
+}
+
+static void seed_rng(uint32_t seed, uint32_t salt)
+{
+    g_rng = (uint64_t)seed << 32 | salt;
+}
+
+static uint64_t fnv(uint64_t h, const uint8_t* p, size_t n)
+{
+    while (n--) {
+        h ^= *p++;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+#define FNV0 14695981039346656037ULL
+
+/* tevdiff: random register sets through tev_prepare, each run by tev_pixel
+ * twice -- as prepared, and with its fast shape turned off -- and by
+ * tev.glsl once, through the same packed setup. The registers are those
+ * the spec names (C0-DF, E0-E7, F3, F6-FD, GEN_MODE) and the texture orders
+ * 0x28-0x2F, without which every stage would sample map 0 with texturing
+ * off. One case in eight is built as one of H15c's fast shapes, which random
+ * words almost never make. Every map is a 1x1 nearest texture, so a stage
+ * samples the case's texel for that map wherever it looks. */
+enum {
+    H_CCMP = 0,         /* 8: colour compare modes, (cshift << 1) | cop, where cbias is 3 */
+    H_ACMP = 8,         /* 8: alpha compare modes */
+    H_CSHIFT = 16,      /* 4 */
+    H_ASHIFT = 20,      /* 4 */
+    H_CCLAMP = 24,      /* 2 */
+    H_ACLAMP = 26,      /* 2 */
+    H_CBIAS = 28,       /* 3 */
+    H_ABIAS = 31,       /* 3 */
+    H_COP = 34,         /* 2 */
+    H_AOP = 36,         /* 2 */
+    H_ALOGIC = 38,      /* 4: per case */
+    H_ACOMP = 42,       /* 8: acomp0, per case */
+    H_TEXEN = 50,       /* 2 */
+    H_CHAN = 52,        /* 2: a raster colour, or none */
+    H_FASTC = 54,       /* 3: fast_c 0, 1, 2, per case */
+    H_FASTA = 57,       /* 4: fast_a 0-3, per case */
+    H_N = 61
+};
+static const char* const g_hit_name[H_N] = {
+    "ccmp0", "ccmp1", "ccmp2", "ccmp3", "ccmp4", "ccmp5", "ccmp6", "ccmp7",
+    "acmp0", "acmp1", "acmp2", "acmp3", "acmp4", "acmp5", "acmp6", "acmp7",
+    "cshift0", "cshift1", "cshift2", "cshift3", "ashift0", "ashift1", "ashift2", "ashift3",
+    "cclamp0", "cclamp1", "aclamp0", "aclamp1", "cbias0", "cbias1", "cbias2", "abias0", "abias1", "abias2",
+    "cop0", "cop1", "aop0", "aop1", "alogic0", "alogic1", "alogic2", "alogic3",
+    "acomp0", "acomp1", "acomp2", "acomp3", "acomp4", "acomp5", "acomp6", "acomp7",
+    "texen0", "texen1", "ras", "noras", "fastc0", "fastc1", "fastc2", "fasta0", "fasta1", "fasta2", "fasta3"};
+
+/* A fast shape's registers: one stage, identity swaps, colour channel 0. */
+static void fast_shape(uint32_t* bp)
+{
+    static const uint32_t color[4] = {0x08AFFFu, 0x08FFFAu, 0x08F8AFu, 0x18F8AFu};  /* RASC, RASC as d, TEXC*RASC, doubled */
+    static const uint32_t alpha[4] = {0x08DFF0u, 0x08BFF0u, 0x08FFD0u, 0x08F2F0u};  /* KONST, RASA, RASA as d, TEXA*RASA */
+    unsigned c = rnd() & 3, a = rnd() & 3, k;
+    bp[0] = 0; /* one stage */
+    bp[0xC0] = color[c];
+    bp[0xC1] = alpha[a];
+    for (k = 0; k < 8; k++) bp[0xF6 + k] = (rnd() & 0xFFFFF0u) | ((k & 1) ? 0xEu : 0x4u);
+    bp[0x28] = (rnd() & 0x3Fu) | ((c >= 2 || a == 3) ? 0x40u : 0u); /* map, coord; texturing when sampled; channel 0 */
+}
+
+static int tevdiff(CpuState* s, unsigned n, uint32_t seed)
+{
+    uint32_t* setups = (uint32_t*)calloc((size_t)n, GXV_TEV_WORDS * 4);
+    uint32_t* inputs = (uint32_t*)calloc((size_t)n, 40);
+    uint32_t* results = (uint32_t*)calloc((size_t)n, 8);
+    uint32_t* cpu = (uint32_t*)calloc((size_t)n, 16);
+    uint8_t texel[8][4];
+    unsigned long long hits[H_N];
+    unsigned i, k, st, bad = 0, low = 0, shown = 0;
+    if (!setups || !inputs || !results || !cpu) { fprintf(stderr, "[tevdiff] out of memory\n"); return 1; }
+    memset(hits, 0, sizeof hits);
+    tex_set_memory(s);
+    for (i = 0; i < n; i++) {
+        uint32_t bp[256];
+        TevSetup T;
+        int ras[2][4], pass;
+        float tc[8][4];
+        uint8_t out[4];
+        seed_rng(seed, i);
+        memset(bp, 0, sizeof bp);
+        bp[0] = rnd() & 0xFFFFFFu;
+        for (k = 0xC0; k <= 0xDF; k++) bp[k] = rnd() & 0xFFFFFFu;
+        for (k = 0x28; k <= 0x2F; k++) bp[k] = rnd() & 0xFFFFFFu;
+        for (k = 0xF6; k <= 0xFD; k++) bp[k] = rnd() & 0xFFFFFFu;
+        bp[0xF3] = rnd() & 0xFFFFFFu;
+        for (k = 0xE0; k <= 0xE7; k++) {
+            tev_register_written(k, rnd() & 0x7FFFFFu);           /* a colour register */
+            tev_register_written(k, (rnd() & 0x7FFFFFu) | 0x800000u); /* a konst */
+        }
+        if (rnd() % 8 == 0) fast_shape(bp);
+        tev_prepare(bp, &T);
+        for (k = 0; k < 8; k++) {
+            TexCfg* C = &T.tex[k];
+            uint32_t t = rnd();
+            memcpy(texel[k], &t, 4);
+            memset(C, 0, sizeof *C);
+            C->level[0] = texel[k];
+            C->lw[0] = C->lh[0] = 1;
+            C->nlevels = 1;
+            C->w = C->h = 1;
+            C->scale_s = C->scale_t = 1.0f;
+            C->su0 = C->sv0 = 1.0f;
+            tc[k][0] = 0.25f + 0.5f * (float)(rnd() & 1);
+            tc[k][1] = 0.25f;
+            tc[k][2] = 1.0f;
+            tc[k][3] = 0.0f;
+        }
+        for (k = 0; k < 8; k++) ras[k / 4][k % 4] = (int)(rnd() & 255);
+        tev_pixel(&T, (const int (*)[4])ras, (const float (*)[4])tc, out, &pass);
+        memcpy(&cpu[i * 4], out, 4);
+        cpu[i * 4 + 1] = (uint32_t)pass;
+        hits[H_FASTC + T.fast_c]++;
+        hits[H_FASTA + T.fast_a]++;
+        T.fast_c = T.fast_a = 0;
+        tev_pixel(&T, (const int (*)[4])ras, (const float (*)[4])tc, out, &pass);
+        memcpy(&cpu[i * 4 + 2], out, 4);
+        cpu[i * 4 + 3] = (uint32_t)pass;
+        gxv_pack_tev(&T, setups + (size_t)i * GXV_TEV_WORDS);
+        for (k = 0; k < 2; k++)
+            inputs[i * 10 + k] = (uint32_t)ras[k][0] | (uint32_t)ras[k][1] << 8 | (uint32_t)ras[k][2] << 16 | (uint32_t)ras[k][3] << 24;
+        for (k = 0; k < 8; k++) memcpy(&inputs[i * 10 + 2 + k], texel[k], 4);
+        hits[H_ALOGIC + T.alogic]++;
+        hits[H_ACOMP + T.acomp0]++;
+        for (st = 0; st < T.stages; st++) {
+            const Stage* S = &T.st[st];
+            if (S->cbias == 3) hits[H_CCMP + ((S->cshift << 1) | S->cop)]++;
+            else { hits[H_CSHIFT + S->cshift]++; hits[H_CBIAS + S->cbias]++; hits[H_COP + S->cop]++; }
+            if (S->abias == 3) hits[H_ACMP + ((S->ashift << 1) | S->aop)]++;
+            else { hits[H_ASHIFT + S->ashift]++; hits[H_ABIAS + S->abias]++; hits[H_AOP + S->aop]++; }
+            hits[H_CCLAMP + S->cclamp]++;
+            hits[H_ACLAMP + S->aclamp]++;
+            hits[H_TEXEN + S->texen]++;
+            hits[H_CHAN + (S->chan < 2 ? 0 : 1)]++;
+        }
+    }
+    if (!gxv_tev_run(setups, inputs, results, n)) return 1;
+    for (i = 0; i < n; i++) {
+        uint32_t g = results[i * 2], gp = results[i * 2 + 1];
+        int a = g != cpu[i * 4] || gp != cpu[i * 4 + 1], b = g != cpu[i * 4 + 2] || gp != cpu[i * 4 + 3];
+        if (!a && !b) continue;
+        bad++;
+        if (shown++ < 8)
+            printf("mismatch case %u: gpu %08x pass %u; tev_pixel as prepared %08x pass %u, general %08x pass %u\n", i, g, gp,
+                   cpu[i * 4], cpu[i * 4 + 1], cpu[i * 4 + 2], cpu[i * 4 + 3]);
+    }
+    printf("hits");
+    for (k = 0; k < H_N; k++) {
+        printf(" %s=%llu", g_hit_name[k], hits[k]);
+        if (hits[k] < 100) low++;
+    }
+    printf("\n");
+    /* fast_c 0 with fast_a 0 is the general path; the two fast counts that
+     * matter are the shapes, which the one-in-eight cases make. */
+    printf("tevdiff %u cases, seed %u: %u mismatch%s; %u path%s under 100 hits\n", n, seed, bad, bad == 1 ? "" : "es", low,
+           low == 1 ? "" : "s");
+    free(setups);
+    free(inputs);
+    free(results);
+    free(cpu);
+    return bad || low;
+}
+
+/* copydiff: every copy command format (BP 0x52's four bits, 0-15), intensity
+ * on and off, half scale on and off, filter on and off -- 128 combinations
+ * -- each over `rects` random rectangles, with a random EFB per combination
+ * and random bytes around the destination before each copy. The same seed
+ * makes the same copies in both processes; each writes a line per copy:
+ * its parameters, then hashes of the destination before and after (64 bytes
+ * either side included), of the decoded image, and of a screen copy of the
+ * same rectangle. tools/gpuspike.py compares the two files. */
+static void copy_shape(unsigned texfmt, unsigned* tw, unsigned* th, unsigned* bpt)
+{
+    switch (texfmt) {
+    case 0: *tw = 8; *th = 8; *bpt = 32; break;
+    case 1: case 2: *tw = 8; *th = 4; *bpt = 32; break;
+    case 3: case 4: case 5: *tw = 4; *th = 4; *bpt = 32; break;
+    default: *tw = 4; *th = 4; *bpt = 64; break;
+    }
+}
+
+/* copy_texfmt as gxr.c has it: which texture format a command word makes. */
+static unsigned harness_texfmt(uint32_t v)
+{
+    unsigned tpf = (v >> 3) & 15, fmt = tpf / 2 + (tpf & 1) * 8;
+    if ((v >> 15) & 1) return fmt <= 3 ? fmt : 99;
+    switch (fmt) {
+    case 0: return 0;
+    case 1: case 7: case 8: case 9: case 10: return 1;
+    case 2: return 2;
+    case 3: case 11: case 12: return 3;
+    case 4: case 5: case 6: return fmt;
+    default: return 99;
+    }
+}
+
+static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
+{
+    char path[512];
+    FILE* f;
+    uint8_t* efb = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
+    uint8_t* img = (uint8_t*)malloc(1024u * 1024u * 4u);
+    unsigned combo, r, k;
+    snprintf(path, sizeof path, "%s/copydiff.txt", g_out);
+    f = fopen(path, "w");
+    if (!f || !efb || !img) { fprintf(stderr, "[copydiff] cannot write %s\n", path); return 1; }
+    for (combo = 0; combo < 128; combo++) {
+        unsigned tpf = combo & 15, intensity = (combo >> 4) & 1, half = (combo >> 5) & 1, filt = (combo >> 6) & 1;
+        uint32_t f0 = 0, f1 = 0;
+        seed_rng(seed, 0x10000u + combo);
+        for (k = 0; k < (unsigned)EFB_W * EFB_H; k++) {
+            uint32_t v = rnd();
+            memcpy(efb + 4 * k, &v, 4);
+        }
+        gxr_flush();
+        if (g_gpu) {
+            if (!gxv_load_efb(efb)) return 1;
+        } else {
+            memcpy(g_efb, efb, (size_t)EFB_W * EFB_H * 4);
+        }
+        if (filt) {
+            /* Seven weights; mostly near a sum of 64, as a game programs them,
+             * and now and then anything at all, which clamps. */
+            int wide = rnd() % 4 == 0;
+            for (k = 0; k < 4; k++) f0 |= (rnd() % (wide ? 64u : 19u)) << (6 * k);
+            for (k = 0; k < 3; k++) f1 |= (rnd() % (wide ? 64u : 19u)) << (6 * k);
+            if (!f0 && !f1) f0 = 22u << 18;
+        }
+        bp_w(s, 0x53, f0);
+        bp_w(s, 0x54, f1);
+        for (r = 0; r < rects; r++) {
+            uint32_t pick = rnd() % 10, x0 = rnd() % 656, y0 = rnd() % 544, w, h, v, stride = 0, dest, extent = 0, lo, hi;
+            unsigned texfmt, tw, th, bpt, ow, oh;
+            uint64_t h_seed, h_ram, h_img = 0, h_scr;
+            if (pick < 6) { w = 1 + rnd() % 64; h = 1 + rnd() % 64; }
+            else if (pick < 9) { w = 1 + rnd() % 640; h = 1 + rnd() % 528; }
+            else { w = 1 + rnd() % 1024; h = 1 + rnd() % 1024; }
+            if (x0 + w > 1024) w = 1024 - x0;
+            if (y0 + h > 1024) h = 1024 - y0;
+            v = (tpf << 3) | (intensity << 15) | (half << 9) | 3u;
+            texfmt = harness_texfmt(v);
+            ow = half ? w / 2 : w;
+            oh = half ? h / 2 : h;
+            copy_shape(texfmt, &tw, &th, &bpt);
+            if (rnd() % 4 == 0) stride = (ow + tw - 1) / tw * bpt / 32 + rnd() % 64;
+            dest = (0x00100000u + (rnd() % 0x00800000u)) & ~31u;
+            if (texfmt != 99 && ow && oh) {
+                uint32_t natural = (ow + tw - 1) / tw * bpt, row = stride * 32 > natural ? stride * 32 : natural;
+                extent = ((oh + th - 1) / th - 1) * row + (ow + tw - 1) / tw * bpt;
+            }
+            lo = dest - 64;
+            hi = dest + (extent ? extent : 256) + 64;
+            if (hi > MEM1_SIZE) hi = MEM1_SIZE;
+            for (k = lo; k < hi; k++) s->mem[k] = (uint8_t)rnd();
+            h_seed = fnv(FNV0, s->mem + lo, hi - lo);
+            bp_w(s, 0x49, (y0 << 10) | x0);
+            bp_w(s, 0x4A, ((h - 1) << 10) | (w - 1));
+            bp_w(s, 0x4B, dest >> 5);
+            bp_w(s, 0x4D, stride);
+            bp_w(s, 0x52, v);
+            gxr_flush();
+            h_ram = fnv(FNV0, s->mem + lo, hi - lo);
+            /* The decoded image: on the GPU, the copy shader's own; on the CPU,
+             * tex_decode_row over the bytes, each row of tiles where the
+             * stride put it. */
+            if (extent && dest + extent <= MEM1_SIZE) {
+                uint32_t natural = (ow + tw - 1) / tw * bpt, row = stride * 32 > natural ? stride * 32 : natural, y;
+                if (g_gpu) {
+                    unsigned gw, gh;
+                    const uint8_t* gi = gxv_last_copy_image(&gw, &gh);
+                    h_img = gw == ow && gh == oh ? fnv(FNV0, gi, (size_t)ow * oh * 4) : 0;
+                } else {
+                    for (y = 0; y < oh; y++)
+                        tex_decode_row(img, s->mem + dest + (y / th) * (row - natural), texfmt, ow, y);
+                    h_img = fnv(FNV0, img, (size_t)ow * oh * 4);
+                }
+            }
+            bp_w(s, 0x52, 0x4003u); /* the same rectangle to the screen */
+            gxr_flush();
+            h_scr = gxr_screen_hash();
+            fprintf(f, "%u %u %u %u %u %u %u %u %u %u %u %08x %u %u %016llx %016llx %016llx %016llx\n", combo, r, tpf, intensity,
+                    half, filt, x0, y0, w, h, stride, dest, texfmt, extent, (unsigned long long)h_seed,
+                    (unsigned long long)h_ram, (unsigned long long)h_img, (unsigned long long)h_scr);
+        }
+    }
+    bp_w(s, 0x53, 0);
+    bp_w(s, 0x54, 0);
+    fclose(f);
+    free(efb);
+    free(img);
+    printf("copydiff %u combinations x %u rectangles, seed %u: %s\n", 128u, rects, seed, path);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     CpuState s;
     char got[128];
     const char* mutate = NULL;
+    unsigned tev_cases = 0, copy_rects = 0;
+    uint32_t seed = 1;
     int failures, i;
 
     for (i = 1; i + 1 < argc; i++) {
         if (!strcmp(argv[i], "--backend")) g_gpu = !strcmp(argv[++i], "gpu");
         else if (!strcmp(argv[i], "--out")) g_out = argv[++i];
         else if (!strcmp(argv[i], "--mutate")) mutate = argv[++i];
+        else if (!strcmp(argv[i], "--tevdiff")) tev_cases = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--copydiff")) copy_rects = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
+    }
+    if (tev_cases && !g_gpu) {
+        fprintf(stderr, "[gpuspike] --tevdiff runs both sides itself, and needs --backend gpu\n");
+        return 2;
     }
     if (g_gpu) {
         char why[256];
@@ -564,14 +895,28 @@ int main(int argc, char** argv)
             return 2;
         }
         gxv_set_upload_hook(upload_hook);
-        gxr_set_backend(gxv_backend());
+        if (!tev_cases) gxr_set_backend(gxv_backend());
         printf("device %s\n", gxv_device_name());
     }
     memset(&s, 0, sizeof s);
-    s.mem = (uint8_t*)calloc(1, MEM1_SIZE);
+    s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
     if (!s.mem) {
         fprintf(stderr, "[gpuspike] cannot allocate MEM1\n");
         return 2;
+    }
+    if (tev_cases || copy_rects) {
+        render_env();
+        if (!gxr_enabled()) {
+            fprintf(stderr, "[gpuspike] the renderer is off\n");
+            return 2;
+        }
+        failures = tev_cases ? tevdiff(&s, tev_cases, seed) : copydiff(&s, copy_rects, seed);
+        if (g_gpu) {
+            gxv_report();
+            gxv_shutdown();
+        }
+        free(s.mem);
+        return failures ? 1 : 0;
     }
     failures = render_selftest(&s, got, sizeof got);
     printf("recipes %s\n", failures ? "FAIL" : "ok");

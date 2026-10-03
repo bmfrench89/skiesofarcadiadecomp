@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1174 passed, 2 skipped in 265.28s
+1182 passed, 2 skipped in 271.32s
 ```
 
-1176 tests in 65 files, none of which reads the disc. The two FMA probes of
+1184 tests in 65 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -62,7 +62,7 @@ its own and run it, some of the C as well:
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_fifo_summary.py` | 5 | `tools/fifo.py --summary` (specs/gpu-backend.md V1) on a synthetic stream: one draw under a logic OR, a display list of 0x40 bytes, and an R8 and an RGB565 copy, each with its destination and size; a blend overrides the logic op, as GX and the renderer have it; and intensity copies are named as such |
 | `test_gxr_backend.py` | 5 | the renderer's backend seam (GPU spec V2), on a renderer-only build with a counting backend: the commands arrive as 0 0 1 2 1 2 0 1 2 for two draws, a filtered and an unfiltered copy to texture and a screen copy, each copy's clear its own command; a texture's generation moves when its bytes change and not otherwise; the frame and presented counts agree; each command carries the EFB it was built for; and the 23 corpus captures through the passthrough keep their manifest hashes (skipped, with its reason, without `build/fifo`). Each of the spec's five mutations turns it red |
-| `test_gpuspike.py` | 11 | the GPU spike (specs/gpu-backend.md V3a): the judge passes a pixel moved at an edge and fails a hole or a one-step colour inside, takes in colour edges, holds `cull3` to nothing, lines to one pixel and points to none; the driver's recipe is still `runtime/selftest.c`'s and every scene it writes is judged; `vendor/` matches its record, and a copy with one header byte changed and `LICENSE.md` gone fails it; and on this machine's GPU the 15 scenes pass and `--mutate unclipped` fails. Those four skip, saying why, without `vendor/` (and the last two without MSVC or a Vulkan device) |
+| `test_gpuspike.py` | 19 | the GPU spike (specs/gpu-backend.md V3a, V3b): the judge passes a pixel moved at an edge and fails a hole or a one-step colour inside, takes in colour edges, holds `cull3` to nothing, lines to one pixel and points to none; copydiff's comparison counts each kind of difference and refuses a refused copy that wrote, runs whose cases differ, a short run and an empty one; the driver's recipe is still `runtime/selftest.c`'s and every scene it writes is judged; `vendor/` matches its record, and a copy with one header byte changed and `LICENSE.md` gone fails it; and on this machine's GPU the 15 scenes pass and `--mutate unclipped` fails, tevdiff's 100,000 cases and copydiff's 25,600 copies have no mismatch, and the clamp, rounding, intensity and unseeded mutations each fail as they should. The vendor tests skip, saying why, without `vendor/`; the GPU ones also without MSVC or a Vulkan device |
 | `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
@@ -120,17 +120,17 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1174 passed, 2 skipped` |
-| no capstone | `1155 passed, 3 skipped` |
-| no MSVC | `791 passed, 385 skipped` |
-| neither | `772 passed, 386 skipped` |
+| everything (MSVC + capstone) | `1182 passed, 2 skipped` |
+| no capstone | `1163 passed, 3 skipped` |
+| no MSVC | `793 passed, 391 skipped` |
+| neither | `774 passed, 392 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 383 MSVC-gated tests are the ones that build runtime
+Two things follow. The 389 MSVC-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1125,16 +1125,18 @@ it. `python tools/fifo.py BASE --summary` lists what a frame does besides
 draw: every copy with its format, destination and size, the draws under each
 logic op, and its display lists.
 
-### The GPU spike (V3a)
+### The GPU spike (V3a, V3b)
 
 The renderer drawing through Vulkan, headless and outside the port, on this
-machine's GPU (specs/gpu-backend.md V3a). It needs MSVC, a Vulkan driver and
+machine's GPU (specs/gpu-backend.md V3a, V3b). It needs MSVC, a Vulkan driver and
 `vendor/`, which one command fills and which is never committed:
 
 ```
 python tools/fetch_gpu.py            # Vulkan-Headers and glslang, pinned, into vendor/
 python tools/fetch_gpu.py --verify   # every fetched file against vendor/GPU.sha256
 python tools/gpuspike.py selftest    # build if stale, draw 15 scenes on the CPU and the GPU, compare; ~5 s
+python tools/gpuspike.py tevdiff     # tev.glsl against tev_pixel, 100,000 random setups; 1 s
+python tools/gpuspike.py copydiff    # copy.comp against gxr.c's copies, 25,600 random copies; 22 s
 ```
 
 `selftest` runs `build/gpuspike/msvc/gpuspike.exe` twice, `--backend cpu`
@@ -1149,8 +1151,19 @@ pixel of each other, and points exact. The two render recipes of
 the vertices the consumer uploaded against `gxr_clip_polygon`. Exit 0 is a
 pass, 1 a failure and 3 a skip (no compiler, no `vendor/`, no Vulkan
 device), with the reason printed. `--mutate unclipped` must fail, and the
-test runs it. `--cc clang-cl` builds into `build/gpuspike/clang-cl/`. What the
-scenes showed, and the thirteen mutations each turned red, is FINDINGS "V3".
+test runs it. `--cc clang-cl` builds into `build/gpuspike/clang-cl/`.
+
+`tevdiff` and `copydiff` are exact: zero mismatches is the only pass. `tevdiff`
+builds each case with `tev_prepare` from random registers, runs it through
+`tev_pixel` as prepared and with its fast shape off, and through `tev.glsl`,
+and fails a path counted fewer than 100 times. `copydiff` makes the same
+random copies -- every command format, intensity, half scale and filter, 200
+rectangles each -- through the CPU renderer and through gxv in two processes
+at once, and compares the bytes each left in RAM, the decoded image and a
+screen copy, and that every refused copy left RAM alone. `--mutate clamp`
+(tevdiff) and `rounding`, `intensity` and `unseeded` (copydiff) must each
+fail, and the test runs them. What the scenes and differentials showed, and
+every mutation turned red, is FINDINGS "V3".
 
 ## 6. The decompilation check
 
@@ -1292,17 +1305,17 @@ perfectly the whole time.
 | `scenario.py run … --check` | **yes** | — | no | **yes** | no | no |
 | `scenario.py replay` | **yes**³ | — | no | **yes** | **yes** | no |
 | `imgdiff.py refs` and `mutate` | **yes**³ | — | no | **yes** | **yes** | no |
-| `gpuspike.py selftest` | no | yes | no | no | no | no⁴ |
+| `gpuspike.py selftest`, `tevdiff`, `copydiff` | no | yes | no | no | no | no⁴ |
 | `decomp.py` / `matchcheck.py` | **yes** | no | **yes** | no | no | no |
 | `audio_check.py` | **yes** | — | no | **yes** | no | no |
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 385 of the 1176 skip without a C compiler: 383 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 391 of the 1184 skip without a C compiler: 389 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;
-CI runs the seven tests of `test_gpuspike.py` that need neither.
+CI runs the nine tests of `test_gpuspike.py` that need neither.
 
 ### What CI can and cannot run
 

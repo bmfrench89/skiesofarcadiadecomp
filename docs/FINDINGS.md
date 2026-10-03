@@ -5096,3 +5096,117 @@ interpolated, which is within one step.
   - **CI:** its runners have no `vendor/` and no GPU, so CI runs the
     seven.
 - **No runtime file changed.**
+
+**V3: the GPU spike (V3b, the two exact differentials).** 2026-10-03. The
+TEV and the EFB copy, the two pieces of the renderer that are all integers,
+now run on the GPU and give the CPU's bytes exactly, over random inputs.
+
+- **What it is.**
+  - `tools/gpuspike/tev.glsl` is `tev_pixel`'s general path, transcribed:
+    the 32-entry input bank, the lerp, bias, shifts, both clamps, the four
+    colour compare modes, swaps, konst, and the two alpha compares with
+    their logic. It reads a setup packed by `gxv_pack_tev` from a
+    `TevSetup`, and asks its includer for texels. `tevdiff.comp` runs it a
+    case an invocation.
+  - `tools/gpuspike/copy.comp` is `copy_to_texture` and `copy_to_screen`:
+    the filter, the half-scale box, intensity and channel choice, formats 0
+    to 6, tiling at any stride, one invocation per 32-bit word of the copy,
+    with the buffer seeded from guest RAM first. It also works out each
+    texel's decoded RGBA, what `tex_decode_row` gives from those bytes.
+  - `gxv` now makes every EFB copy with it, to a texture (into guest RAM) or
+    to the screen. Draws are still the vertex colour only, which V4a ends.
+- **`python tools/gpuspike.py tevdiff`: 100,000 cases, 0 mismatches.** The
+  same held for seeds 1, 2 and 3.
+  - **Each case:** `tev_prepare` turns random registers into a setup, with
+    every map a 1x1 nearest texture of a random texel and random raster
+    colours. `tev_pixel` runs it twice, as prepared and with `fast_c` and
+    `fast_a` turned off, and `tev.glsl` runs it once.
+  - **The registers:** the spec's C0-DF, E0-E7, F3, F6-FD and GEN_MODE,
+    and also the texture orders 0x28-0x2F. Without those every stage would
+    sample map 0 with texturing off.
+  - **The fast shapes:** one case in eight is built as an H15c fast shape,
+    which random words almost never make. So the fast path is held to the
+    general one, and both to the GPU, over 6,367 and 6,338 cases of
+    `fast_c` 1 and 2 and 3,158, 6,334 and 3,213 of `fast_a` 1 to 3.
+  - **Every path counted at least 100 times.** The smallest count is those
+    3,158. Each colour and alpha compare mode is near 23,000; each shift,
+    clamp, bias, op, alpha logic and alpha compare function runs from
+    12,342 to 383,994 times.
+  - **Found on the way:** the first version seeded `xorshift32` with the
+    case number almost as it was. Xorshift is linear, so neighbouring cases
+    came out correlated, and the alpha logic's four values each took
+    exactly 25,000 of 100,000 cases. Seeding is now splitmix64, and the
+    counts vary as random ones do (24,753 to 25,255).
+- **`python tools/gpuspike.py copydiff`: 25,600 copies, 0 differences.**
+  - **The combinations:** every copy command format (BP 0x52's four bits,
+    0 to 15), intensity on and off, half scale on and off, filter on and
+    off, 128 in all. Each has 200 random rectangles and a random EFB.
+  - **The rectangles:** 60% are up to 64x64, 30% up to the EFB's size and
+    10% up to 1024x1024, past its edge. Odd widths come up throughout.
+  - **Strides and filters:** a quarter of the copies use a wider stride.
+    Filters are mostly weights summing near 64, and a quarter are anything
+    at all, which clamps.
+  - **What is compared:** the CPU renderer and gxv make the same copies in
+    two processes at once, from one seed, with random bytes around each
+    destination. They must leave the same bytes over the copy's span and
+    64 either side, the same decoded image and the same screen copy of the
+    rectangle. All three are equal in every case.
+  - **Refusals:** 12,000 are copies the CPU refuses (intensity with a
+    format above 3, and the three unknown formats). On both sides they
+    leave RAM exactly as seeded.
+- **Mutations, all red.**
+  - **The four the Done names,** each in exactly the combinations it should:
+
+    | Mutation | What failed |
+    |---|---|
+    | the clamp flipped in `tev.glsl` (`--mutate clamp`) | tevdiff |
+    | the copy filter rounding instead of truncating (`rounding`) | RAM, image and screen, filtered copies only |
+    | intensity rounding instead of truncating (`intensity`) | RAM and image, intensity copies only |
+    | the buffer written back without seeding from RAM (`unseeded`) | RAM only |
+
+  - **Twenty-six more,** each applied to the shader source and reverted,
+    every one red.
+    - 16 in the TEV: the lerp's rounding constant; c' without `c >> 7`;
+      bias -128 as -127; shift 3 as a division; operand a unmasked; d
+      masked; GR16 comparing one channel; the RGB8 compare using channel
+      0; the alpha compare's `>` as `>=`; the raster swap ignored; the
+      texture swap ignored; channel 1 reading channel 0; XOR as XNOR;
+      LEQUAL as LESS; the alpha destination ignored; the texel dropped
+      between stages.
+    - 10 in the copy: R4's nibbles swapped; RGBA8's two halves swapped;
+      the box rounding; filter taps clamped to the EFB rather than the
+      rectangle; RGB5A3's threshold at 223; RGB565 green at 5 bits; IA4's
+      alpha unmasked; the stride ignored; screen alpha copied; the
+      decoded RGB5A3 alpha scaled by 36.
+    - **The weakest:** LEQUAL as LESS mismatched 15 of 20,000 cases, and
+      GR16 25; the run takes 100,000.
+- **Differences from 3.6, both chosen for exactness by construction.**
+  - **The EFB is read through a buffer,** copied from the image, rather
+    than as a sampled image: every byte is exact, with no
+    unorm-to-float-and-back conversion to trust.
+  - **The decoded image is worked out from each texel's value** rather than
+    read back out of the bytes. So a mistake in an encoding shows in RAM,
+    and one in a decoding shows in the image.
+- **Speed.**
+  - **Cached memory for what the host reads back:** at first copydiff's
+    GPU side took 14.5 s for 10 rectangles a combination against the CPU's
+    0.8 s, reading results out of write-combined memory. Those buffers are
+    now host-cached, and the same run takes 1.5 s.
+  - **copydiff:** 22 s at 200 rectangles, both sides at once. The 25,600
+    copies to texture and 25,600 to the screen cost 2.3 s of GPU time,
+    each copy waited for.
+  - **tevdiff:** under a second.
+  - **A built binary needs no compiler:** `build` now looks for one only
+    when something is stale, which saved 2 s a command.
+- **Compilers.** Built by the NDK's clang-cl, tevdiff, copydiff and the
+  scenes all pass with the same numbers.
+- **`test_gpuspike.py`** has 19 tests, 0 skipped here, in 32 s.
+  - **New, needing a GPU:** tevdiff and copydiff at the Done's sizes, the
+    clamp mutation, and the three copy mutations, each held to the
+    differences it must cause.
+  - **New, running anywhere:** two tests of copydiff's comparison. One
+    checks each kind of difference is counted. The other checks a refused
+    copy that wrote is caught, as are two runs whose cases differ, a run
+    cut short, and an empty run.
+  - **CI** runs the nine that need no GPU.
+- **No runtime file changed.**

@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1176 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1184 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1176 |
+| Python tests | 1184 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -536,9 +536,15 @@ C5c) is now done.
    red; hardware colour rounding is the one difference nothing here can see.
    `vendor/` (27 MB) can be fetched again at any time; `build/gpuspike/<compiler>/`
    holds the spike and its last scene images, CPU and GPU, to open.
-   **Next is V3b:** `tevdiff` and `copydiff`, the TEV and the copy encoder
-   made exact on the GPU (specs/gpu-backend.md V3b). Read the slice against
-   HEAD before any code. Still open for the owner, and not blocking: whether a
+   **V3b is done** (FINDINGS "V3"): `tools/gpuspike/tev.glsl` and
+   `copy.comp` give `tev_pixel`'s and `copy_to_texture`'s bytes exactly --
+   `gpuspike.py tevdiff`, 100,000 random setups, and `copydiff`, 25,600
+   random copies, both with 0 mismatches and each Done mutation red -- and
+   gxv now makes every EFB copy with `copy.comp`. **Next is V4a:** the spike
+   on the 21 captures with no texture copies -- `tev.glsl` and the sampler in
+   the fragment stage, textures, depth, fog, blend, the screen copy -- judged
+   by V0's oracle (specs/gpu-backend.md V4a). Read the slice against HEAD
+   before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

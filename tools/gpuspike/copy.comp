@@ -1,0 +1,218 @@
+// An EFB copy as a compute pass (specs/gpu-backend.md 3.6), transcribed from
+// runtime/gxr.c: copy_to_texture's filter, half-scale box, intensity and
+// channel choice, format conversion and tiling; the texels tex_decode_row
+// would decode from those bytes; and copy_to_screen. V3b's copydiff holds
+// all three byte for byte against the C.
+//
+// Three modes, one invocation each per:
+//   0  word of the copy's bytes, from its first tile to the end of its last.
+//      The buffer arrives seeded from guest RAM, so whatever the copy does
+//      not write -- padding past the rectangle in a partial tile, the other
+//      nibble of an R4 byte, the gap a wide stride leaves between rows of
+//      tiles -- keeps the bytes it had, as on the CPU.
+//   1  texel of the copy, ow x oh: its decoded RGBA.
+//   2  pixel of a copy to the screen: RGBA, alpha 255.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Efb { uint efb[]; };        // 640x528 RGBA, red the low byte
+layout(std430, binding = 1) buffer Dest { uint dest[]; };               // the copy's bytes, guest order
+layout(std430, binding = 2) writeonly buffer Image { uint image[]; };   // ow x oh RGBA
+layout(std430, binding = 3) writeonly buffer Screen { uint screen[]; }; // w x h RGBA
+
+layout(push_constant) uniform Copy {
+    int x0, y0, w, h; // the source rectangle, as BP 0x49/0x4A give it
+    uint mode;
+    uint texfmt;      // 0-6, copy_texfmt's
+    uint flags;       // 1 intensity, 2 half scale, 4 filtered
+    uint chans;       // chan_a | chan_b << 2
+    uint taps;        // up | mid << 8 | dn << 16: the filter collapsed onto three rows
+    uint row_bytes;   // from one row of tiles to the next
+    uint ow, oh;      // the texture's size
+    uint count;       // invocations wanted
+} pc;
+
+const int EFB_W = 640, EFB_H = 528;
+
+ivec4 efb_px(int x, int y)
+{
+    uint v = efb[y * EFB_W + x];
+    return ivec4(v & 255u, (v >> 8) & 255u, (v >> 16) & 255u, v >> 24);
+}
+
+// filter_sample: the three rows the filter reads, each tap clamped to the
+// copy rectangle, weighted, truncated by >> 6 and held to 255.
+ivec3 filtered(int sx, int sy)
+{
+    int ytop = max(pc.y0, 0), ybot = min(pc.y0 + pc.h - 1, EFB_H - 1);
+    int ya = max(sy - 1, ytop), yb = min(sy + 1, ybot);
+    uvec3 a = uvec3(efb_px(sx, ya).rgb), c = uvec3(efb_px(sx, sy).rgb), b = uvec3(efb_px(sx, yb).rgb);
+    uvec3 v = (pc.taps & 255u) * a + ((pc.taps >> 8) & 255u) * c + ((pc.taps >> 16) & 255u) * b;
+#ifdef GXV_MUTATE_ROUNDING
+    v = (v + 32u) >> 6;
+#else
+    v = v >> 6;
+#endif
+    return ivec3(min(v, uvec3(255u)));
+}
+
+// The pixel copy_to_texture converts for texel (x, y): a 2x2 box at half
+// scale, otherwise the EFB pixel through the filter, alpha the centre's;
+// (0, 0, 0, 255) outside the EFB. At half scale on the EFB's last row or
+// column there is no box, and the pixel is filtered instead, as in the C.
+ivec4 source(int x, int y)
+{
+    bool half_scale = (pc.flags & 2u) != 0u;
+    int sx = pc.x0 + (half_scale ? 2 * x : x), sy = pc.y0 + (half_scale ? 2 * y : y);
+    ivec4 px = ivec4(0, 0, 0, 255);
+    if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
+        if (half_scale && sx + 1 < EFB_W && sy + 1 < EFB_H) {
+            px = (efb_px(sx, sy) + efb_px(sx + 1, sy) + efb_px(sx, sy + 1) + efb_px(sx + 1, sy + 1)) / 4;
+        } else {
+            px = efb_px(sx, sy);
+            if ((pc.flags & 4u) != 0u) px.rgb = filtered(sx, sy);
+        }
+    }
+    return px;
+}
+
+// The value a texel stores: I, the intensity or the chosen channel, and px
+// with alpha replaced by the second channel for the two-channel formats.
+void texel_inputs(int x, int y, out int I, out ivec4 p)
+{
+    ivec4 px = source(x, y);
+    p = px;
+    if ((pc.flags & 1u) != 0u) {
+        // Bounded to 235.7 by its weights; evaluated in float, left to right,
+        // unfused, as the C does.
+        precise float f = 0.257 * float(px.r) + 0.504 * float(px.g) + 0.098 * float(px.b) + 16.0;
+#ifdef GXV_MUTATE_INTENSITY
+        I = min(int(f + 0.5), 255);
+#else
+        I = min(int(f), 255);
+#endif
+    } else {
+        I = px[pc.chans & 3u];
+        if (pc.texfmt == 2u || pc.texfmt == 3u) p.a = px[(pc.chans >> 2) & 3u];
+    }
+}
+
+uint rgb565(ivec4 p) { return uint((p.r >> 3) << 11 | (p.g >> 2) << 5 | (p.b >> 3)); }
+
+uint rgb5a3(ivec4 p)
+{
+    if (p.a >= 224) return 0x8000u | uint((p.r >> 3) << 10 | (p.g >> 3) << 5 | (p.b >> 3));
+    return uint((p.a >> 5) << 12 | (p.r >> 4) << 8 | (p.g >> 4) << 4 | (p.b >> 4));
+}
+
+// Tile shapes: 0 R4 8x8, 1-2 8x4, 3-5 4x4, all 32 bytes; 6 RGBA8 4x4 in 64.
+uvec3 tile_shape(uint fmt)
+{
+    if (fmt == 0u) return uvec3(8u, 8u, 32u);
+    if (fmt <= 2u) return uvec3(8u, 4u, 32u);
+    if (fmt <= 5u) return uvec3(4u, 4u, 32u);
+    return uvec3(4u, 4u, 64u);
+}
+
+// One byte of the copy, at offset off from its first tile: the bits it
+// writes and which bits those are. Bits it does not write keep RAM's.
+uvec2 copy_byte(uint off)
+{
+    uvec3 shape = tile_shape(pc.texfmt);
+    uint tw = shape.x, th = shape.y, bpt = shape.z;
+    uint tiles_w = (pc.ow + tw - 1u) / tw;
+    uint ty = off / pc.row_bytes, rem = off % pc.row_bytes, tx = rem / bpt, b = rem % bpt;
+    if (tx >= tiles_w) return uvec2(0u); // between rows of tiles, past the copy
+    int I;
+    ivec4 p;
+    if (pc.texfmt == 0u) {
+        // two texels a byte: the even column in the high nibble
+        uint iy = b / 4u, ix = (b % 4u) * 2u, x = tx * 8u + ix, y = ty * 8u + iy;
+        uvec2 r = uvec2(0u);
+        if (y < pc.oh && x < pc.ow) {
+            texel_inputs(int(x), int(y), I, p);
+            r |= uvec2(uint(I >> 4) << 4, 0xF0u);
+        }
+        if (y < pc.oh && x + 1u < pc.ow) {
+            texel_inputs(int(x + 1u), int(y), I, p);
+            r |= uvec2(uint(I >> 4), 0x0Fu);
+        }
+        return r;
+    }
+    if (pc.texfmt <= 2u) {
+        uint iy = b / 8u, ix = b % 8u, x = tx * 8u + ix, y = ty * 4u + iy;
+        if (y >= pc.oh || x >= pc.ow) return uvec2(0u);
+        texel_inputs(int(x), int(y), I, p);
+        if (pc.texfmt == 1u) return uvec2(uint(I), 0xFFu);
+        return uvec2(uint(p.a & 0xF0) | uint(I >> 4), 0xFFu);
+    }
+    uint half_tile = pc.texfmt == 6u ? b / 32u : 0u, t = (b % 32u) / 2u, iy = t / 4u, ix = t % 4u;
+    uint x = tx * 4u + ix, y = ty * 4u + iy;
+    bool first = (b & 1u) == 0u;
+    if (y >= pc.oh || x >= pc.ow) return uvec2(0u);
+    texel_inputs(int(x), int(y), I, p);
+    uint v;
+    if (pc.texfmt == 3u) v = first ? uint(p.a) : uint(I);
+    else if (pc.texfmt == 4u) v = first ? rgb565(p) >> 8 : rgb565(p) & 255u;
+    else if (pc.texfmt == 5u) v = first ? rgb5a3(p) >> 8 : rgb5a3(p) & 255u;
+    else if (half_tile == 0u) v = first ? uint(p.a) : uint(p.r);
+    else v = first ? uint(p.g) : uint(p.b);
+    return uvec2(v, 0xFFu);
+}
+
+// decode_texel of what copy_byte wrote for texel (x, y), worked out from
+// the same value: a texel's decode needs only its own bits.
+uvec4 decoded(int x, int y)
+{
+    int I;
+    ivec4 p;
+    texel_inputs(x, y, I, p);
+    switch (pc.texfmt) {
+    case 0u: return uvec4(uint(I >> 4) * 17u);
+    case 1u: return uvec4(uint(I));
+    case 2u: return uvec4(uvec3(uint(I >> 4) * 17u), uint(p.a >> 4) * 17u);
+    case 3u: return uvec4(uvec3(uint(I)), uint(p.a));
+    case 4u: {
+        uint c = rgb565(p);
+        return uvec4(((c >> 11) & 31u) * 255u / 31u, ((c >> 5) & 63u) * 255u / 63u, (c & 31u) * 255u / 31u, 255u);
+    }
+    case 5u: {
+        uint c = rgb5a3(p);
+        if ((c & 0x8000u) != 0u)
+            return uvec4(((c >> 10) & 31u) * 255u / 31u, ((c >> 5) & 31u) * 255u / 31u, (c & 31u) * 255u / 31u, 255u);
+        return uvec4(((c >> 8) & 15u) * 17u, ((c >> 4) & 15u) * 17u, (c & 15u) * 17u, ((c >> 12) & 7u) * 255u / 7u);
+    }
+    default: return uvec4(p);
+    }
+}
+
+uint pack_rgba(uvec4 c) { return c.r | c.g << 8 | c.b << 16 | c.a << 24; }
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    if (pc.mode == 0u) {
+        uint word = 0u, mask = 0u, k;
+        for (k = 0u; k < 4u; k++) {
+            uvec2 r = copy_byte(i * 4u + k);
+            word |= r.x << (8u * k);
+            mask |= r.y << (8u * k);
+        }
+        if (mask != 0u) dest[i] = (dest[i] & ~mask) | (word & mask);
+    } else if (pc.mode == 1u) {
+        image[i] = pack_rgba(decoded(int(i % pc.ow), int(i / pc.ow)));
+    } else {
+        // copy_to_screen: the filter (never half scale), alpha 255, black
+        // outside the EFB. The screen is min(w, 640) wide.
+        uint sw = uint(min(pc.w, EFB_W));
+        int x = int(i % sw), y = int(i / sw), sx = pc.x0 + x, sy = pc.y0 + y;
+        uvec4 o = uvec4(0u, 0u, 0u, 255u);
+        if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
+            ivec4 px = efb_px(sx, sy);
+            o.rgb = uvec3((pc.flags & 4u) != 0u ? filtered(sx, sy) : px.rgb);
+        }
+        screen[i] = pack_rgba(o);
+    }
+}

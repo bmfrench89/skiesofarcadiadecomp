@@ -1,6 +1,7 @@
 // The EFB pass's fragment stage as V3a has it: the vertex colour only, which
 // is the TEV shape the geometry checks draw with (one stage, RASC and RASA;
-// tev_prepare's fast_c 1, fast_a 2). V3b's tev.glsl replaces it.
+// tev_prepare's fast_c 1, fast_a 2). V4a puts tev.glsl, which V3b's tevdiff
+// holds exact against tev_pixel, in its place.
 #version 450
 
 layout(location = 0) noperspective in float i_depth;

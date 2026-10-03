@@ -28,6 +28,11 @@
 
 #include "raster_vert.h"
 #include "raster_frag.h"
+#include "tevdiff_comp.h"
+#include "tevdiff_comp_clamp.h"
+#include "copy_comp.h"
+#include "copy_comp_rounding.h"
+#include "copy_comp_intensity.h"
 
 /* The shader reads a Vertex as 39 floats; gxr.h's layout is what it reads. */
 typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : -1];
@@ -55,7 +60,8 @@ typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : 
     X(vkCmdWriteTimestamp) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline)            \
     X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdPushConstants) X(vkCmdSetScissor)          \
     X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdClearAttachments) X(vkCmdPipelineBarrier)                    \
-    X(vkCmdCopyImageToBuffer) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)
+    X(vkCmdCopyImageToBuffer) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)                    \
+    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage)
 
 #define GXV_DECLARE(name) static PFN_##name name;
 static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
@@ -68,7 +74,10 @@ GXV_DEVICE(GXV_DECLARE)
 #define RING_BYTES (32u << 20)     /* the vertex ring: about 215k vertices */
 #define READBACK_BYTES (EFB_W * EFB_H * 4)
 #define MAX_QUADS 16384            /* a draw's count is 16 bits: 65535 vertices */
-#define ARENA_BYTES (64u << 20)    /* one bump-allocated block per memory type */
+#define ARENA_BYTES (64u << 20)    /* the bump allocator's blocks, eight at most a memory type */
+#define ARENA_BLOCKS 8
+#define DEST_BYTES (16u << 20)     /* a copy's bytes: 1024 rows of 1024 RGBA8 texels, at any stride */
+#define IMAGE_BYTES (1024u * 1024u * 4u)
 #define NPIPE (6 * 4 * 2 * 8 * 2 * 4)
 
 enum { T_TRIS, T_STRIP, T_FAN, T_LINES, T_LSTRIP, T_POINTS };
@@ -87,13 +96,13 @@ static VkQueue g_queue;
 static uint32_t g_family;
 static VkPhysicalDeviceProperties g_props;
 static VkPhysicalDeviceMemoryProperties g_memprops;
-static Arena g_arena[VK_MAX_MEMORY_TYPES];
+static Arena g_arena[VK_MAX_MEMORY_TYPES][ARENA_BLOCKS];
 static VkImage g_color, g_depth;
 static VkImageView g_color_view, g_depth_view;
 static VkRenderPass g_pass;
 static VkFramebuffer g_fb;
-static VkBuffer g_ring, g_quad_idx, g_readback;
-static uint8_t *g_ring_map, *g_readback_map;
+static VkBuffer g_ring, g_quad_idx, g_readback, g_destbuf, g_imagebuf, g_screenbuf;
+static uint8_t *g_ring_map, *g_readback_map, *g_dest_map, *g_image_map, *g_screen_map;
 static uint32_t* g_quad_map;
 static VkDescriptorSetLayout g_dsl;
 static VkDescriptorPool g_dpool;
@@ -112,9 +121,10 @@ static VkPipeline g_bound;
 static uint32_t g_ring_used;     /* bytes, a multiple of sizeof(Vertex) */
 static Vertex* g_tmp;            /* a rebuilt draw, before it goes into the ring */
 static unsigned g_tmp_cap;
-static uint8_t* g_screen_buf;
 static GxvUploadHook g_hook;
-static int g_mut_unclipped;
+/* The mutations (gxv_set_mutation); 1 and 2 of g_mut_copy pick copy.comp's
+ * rounding and intensity variants. */
+static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev;
 static char g_devname[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 
 static unsigned long long g_n_draws, g_n_rebuilt, g_n_verts, g_n_submits, g_n_clears, g_n_copies, g_n_pipes;
@@ -204,23 +214,26 @@ static int find_type(uint32_t bits, VkMemoryPropertyFlags want)
 static int bind_memory(const VkMemoryRequirements* req, VkMemoryPropertyFlags want, VkDeviceMemory* mem,
                        VkDeviceSize* off, uint8_t** map)
 {
-    int t = find_type(req->memoryTypeBits, want);
-    Arena* a;
-    VkDeviceSize align = req->alignment, gran = g_props.limits.bufferImageGranularity, o;
+    int t = find_type(req->memoryTypeBits, want), k;
+    Arena* a = NULL;
+    VkDeviceSize align = req->alignment, gran = g_props.limits.bufferImageGranularity, o = 0;
     if (t < 0) { say("no memory type with properties %#x for bits %#x", (unsigned)want, req->memoryTypeBits); return 0; }
     if (gran > align) align = gran;
-    a = &g_arena[t];
-    if (!a->mem) {
-        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = req->size > ARENA_BYTES ? req->size : ARENA_BYTES;
-        ai.memoryTypeIndex = (uint32_t)t;
-        VKCHECK(vkAllocateMemory(g_dev, &ai, NULL, &a->mem));
-        a->size = ai.allocationSize;
-        if (g_memprops.memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
-            VKCHECK(vkMapMemory(g_dev, a->mem, 0, VK_WHOLE_SIZE, 0, (void**)&a->map));
+    for (k = 0; k < ARENA_BLOCKS; k++) {
+        a = &g_arena[t][k];
+        if (!a->mem) {
+            VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.allocationSize = req->size > ARENA_BYTES ? req->size : ARENA_BYTES;
+            ai.memoryTypeIndex = (uint32_t)t;
+            VKCHECK(vkAllocateMemory(g_dev, &ai, NULL, &a->mem));
+            a->size = ai.allocationSize;
+            if (g_memprops.memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+                VKCHECK(vkMapMemory(g_dev, a->mem, 0, VK_WHOLE_SIZE, 0, (void**)&a->map));
+        }
+        o = (a->used + align - 1) / align * align;
+        if (o + req->size <= a->size) break;
     }
-    o = (a->used + align - 1) / align * align;
-    if (o + req->size > a->size) { say("memory type %d's block is full (%llu of %llu bytes)", t, (unsigned long long)o, (unsigned long long)a->size); return 0; }
+    if (k == ARENA_BLOCKS) { say("memory type %d: all %d blocks are full", t, ARENA_BLOCKS); return 0; }
     a->used = o + req->size;
     *mem = a->mem;
     *off = o;
@@ -228,18 +241,23 @@ static int bind_memory(const VkMemoryRequirements* req, VkMemoryPropertyFlags wa
     return 1;
 }
 
-static int make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer* buf, uint8_t** map)
+/* A buffer the host maps. One the host reads back goes in cached memory
+ * where there is any: reading the write-combined kind ran copydiff's GPU side
+ * at about a twentieth of the CPU's speed. */
+static int make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, int host_reads, VkBuffer* buf, uint8_t** map)
 {
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     VkMemoryRequirements req;
     VkDeviceMemory mem;
     VkDeviceSize off;
+    VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     bi.size = size;
     bi.usage = usage;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VKCHECK(vkCreateBuffer(g_dev, &bi, NULL, buf));
     vkGetBufferMemoryRequirements(g_dev, *buf, &req);
-    if (!bind_memory(&req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &mem, &off, map)) return 0;
+    if (host_reads && find_type(req.memoryTypeBits, want | VK_MEMORY_PROPERTY_HOST_CACHED_BIT) >= 0) want |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    if (!bind_memory(&req, want, &mem, &off, map)) return 0;
     VKCHECK(vkBindBufferMemory(g_dev, *buf, mem, off));
     return 1;
 }
@@ -456,11 +474,11 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
 
 /* ---- the backend ------------------------------------------------------------ */
 
-/* What V3a cannot draw, or NULL. Each is a later slice's work, and a draw
+/* What the spike cannot draw yet, or NULL. Each is a later slice's work, and a draw
  * that needs it is refused rather than drawn as if it did not. */
 static const char* unsupported(const DrawCmd* D)
 {
-    if (D->tev.fast_c != 1 || D->tev.fast_a != 2) return "a TEV shape other than the vertex colour (V3b's tev.glsl)";
+    if (D->tev.fast_c != 1 || D->tev.fast_a != 2) return "a TEV shape other than the vertex colour (V4a: tev.glsl in the fragment stage)";
     if (!(D->nchan & 1)) return "no colour channel 0";
     if (!D->tev.alpha_always) return "an alpha test that can reject (V4a)";
     if (D->px.blend_en || D->px.logic_en) return "blending or a logic op (V4a)";
@@ -685,8 +703,165 @@ static void gxv_reset_efb(const uint32_t* bp)
     if (!clear_rect(0, 0, EFB_W, EFB_H, bp[0x4F], bp[0x50], z ? z : 0xFFFFFFu)) say("the EFB reset failed");
 }
 
-/* Read the whole EFB back into g_readback_map. */
-static int readback(void)
+/* ---- compute passes: the copies and tevdiff -------------------------------- */
+
+/* A compute pipeline over a few storage buffers and a push constant block,
+ * made on first use: a mutation picks the SPIR-V before that. */
+typedef struct {
+    VkDescriptorSetLayout dsl;
+    VkPipelineLayout layout;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkShaderModule mod;
+    VkPipeline pipe;
+} Compute;
+
+static Compute g_copy_cs, g_tev_cs;
+
+static int compute_make(Compute* c, const uint32_t* code, size_t bytes, unsigned nbuf, uint32_t push_bytes)
+{
+    VkDescriptorSetLayoutBinding b[4];
+    VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, push_bytes};
+    VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
+    VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    unsigned i;
+    for (i = 0; i < nbuf; i++) {
+        b[i].binding = i;
+        b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[i].pImmutableSamplers = NULL;
+    }
+    li.bindingCount = nbuf;
+    li.pBindings = b;
+    VKCHECK(vkCreateDescriptorSetLayout(g_dev, &li, NULL, &c->dsl));
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &c->dsl;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pr;
+    VKCHECK(vkCreatePipelineLayout(g_dev, &pli, NULL, &c->layout));
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &ps;
+    VKCHECK(vkCreateDescriptorPool(g_dev, &dpi, NULL, &c->pool));
+    ai.descriptorPool = c->pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &c->dsl;
+    VKCHECK(vkAllocateDescriptorSets(g_dev, &ai, &c->set));
+    si.codeSize = bytes;
+    si.pCode = code;
+    VKCHECK(vkCreateShaderModule(g_dev, &si, NULL, &c->mod));
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = c->mod;
+    ci.stage.pName = "main";
+    ci.layout = c->layout;
+    VKCHECK(vkCreateComputePipelines(g_dev, VK_NULL_HANDLE, 1, &ci, NULL, &c->pipe));
+    return 1;
+}
+
+static void compute_bind(Compute* c, const VkBuffer* bufs, unsigned n)
+{
+    VkDescriptorBufferInfo bi[4];
+    VkWriteDescriptorSet w[4];
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        bi[i].buffer = bufs[i];
+        bi[i].offset = 0;
+        bi[i].range = VK_WHOLE_SIZE;
+        memset(&w[i], 0, sizeof w[i]);
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = c->set;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[i].pBufferInfo = &bi[i];
+    }
+    vkUpdateDescriptorSets(g_dev, n, w, 0, NULL);
+}
+
+static void compute_free(Compute* c)
+{
+    if (c->pipe) vkDestroyPipeline(g_dev, c->pipe, NULL);
+    if (c->mod) vkDestroyShaderModule(g_dev, c->mod, NULL);
+    if (c->pool) vkDestroyDescriptorPool(g_dev, c->pool, NULL);
+    if (c->layout) vkDestroyPipelineLayout(g_dev, c->layout, NULL);
+    if (c->dsl) vkDestroyDescriptorSetLayout(g_dev, c->dsl, NULL);
+    memset(c, 0, sizeof *c);
+}
+
+static void run_compute(Compute* c, const void* push, uint32_t push_bytes, uint32_t count)
+{
+    vkCmdBindPipeline(g_cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->pipe);
+    vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_COMPUTE, c->layout, 0, 1, &c->set, 0, NULL);
+    vkCmdPushConstants(g_cb, c->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_bytes, push);
+    vkCmdDispatch(g_cb, (count + 63) / 64, 1, 1);
+}
+
+/* Everything the compute passes wrote, visible to the host. */
+static void compute_to_host(void)
+{
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+}
+
+/* ---- copies ----------------------------------------------------------------- */
+
+/* The push constants copy.comp reads (its Copy block). */
+typedef struct {
+    int32_t x0, y0, w, h;
+    uint32_t mode, texfmt, flags, chans, taps, row_bytes, ow, oh, count;
+} CopyPush;
+
+/* gxr.c's copy_texfmt, copy_row_stride and copy_extent, and copy_to_texture's
+ * channel choice, written again here because they are static there. copydiff
+ * holds the two sides to the same bytes, so they cannot drift apart
+ * unnoticed. 99 is a copy the CPU refuses. */
+static unsigned copy_texfmt(uint32_t v, unsigned* chan_a, unsigned* chan_b)
+{
+    unsigned tpf = (v >> 3) & 15, fmt = tpf / 2 + (tpf & 1) * 8;
+    *chan_a = 0;
+    *chan_b = 3;
+    if ((v >> 15) & 1) return fmt <= 3 ? fmt : 99;
+    switch (fmt) {
+    case 0: return 0;
+    case 1: case 8: return 1;
+    case 9: *chan_a = 1; return 1;
+    case 10: *chan_a = 2; return 1;
+    case 7: *chan_a = 3; return 1;
+    case 2: return 2;
+    case 3: return 3;
+    case 11: *chan_b = 1; return 3;
+    case 12: *chan_a = 1; *chan_b = 2; return 3;
+    case 4: return 4;
+    case 5: return 5;
+    case 6: return 6;
+    default: return 99;
+    }
+}
+
+static void tile_shape(unsigned texfmt, unsigned* tw, unsigned* th, unsigned* bpt)
+{
+    switch (texfmt) {
+    case 0: *tw = 8; *th = 8; *bpt = 32; break;
+    case 1: case 2: *tw = 8; *th = 4; *bpt = 32; break;
+    case 3: case 4: case 5: *tw = 4; *th = 4; *bpt = 32; break;
+    default: *tw = 4; *th = 4; *bpt = 64; break;
+    }
+}
+
+static unsigned g_img_w, g_img_h;
+static unsigned long long g_n_tex_copies, g_n_refused;
+
+/* The EFB's colour into the readback buffer, where the copy shader reads it. */
+static int efb_to_buffer(void)
 {
     VkBufferImageCopy rg;
     VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
@@ -706,58 +881,216 @@ static int readback(void)
                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    bb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    bb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bb.buffer = g_readback;
     bb.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
+    return 1;
+}
+
+static int copy_pipeline(void)
+{
+    VkBuffer bufs[4];
+    const uint32_t* code = copy_comp;
+    size_t bytes = sizeof copy_comp;
+    if (g_copy_cs.pipe) return 1;
+    if (g_mut_copy == 1) { code = copy_comp_rounding; bytes = sizeof copy_comp_rounding; }
+    if (g_mut_copy == 2) { code = copy_comp_intensity; bytes = sizeof copy_comp_intensity; }
+    if (!compute_make(&g_copy_cs, code, bytes, 4, sizeof(CopyPush))) return 0;
+    bufs[0] = g_readback;
+    bufs[1] = g_destbuf;
+    bufs[2] = g_imagebuf;
+    bufs[3] = g_screenbuf;
+    compute_bind(&g_copy_cs, bufs, 4);
+    return 1;
+}
+
+static void copy_rect(const DrawCmd* D, CopyPush* p)
+{
+    memset(p, 0, sizeof *p);
+    p->x0 = (int32_t)(D->cp_tl & 0x3FF);
+    p->y0 = (int32_t)((D->cp_tl >> 10) & 0x3FF);
+    p->w = (int32_t)(D->cp_wh & 0x3FF) + 1;
+    p->h = (int32_t)((D->cp_wh >> 10) & 0x3FF) + 1;
+    p->taps = D->cp_f_up | (uint32_t)D->cp_f_mid << 8 | (uint32_t)D->cp_f_dn << 16;
+    if (!(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64)) p->flags |= 4u;
+}
+
+/* A copy to the screen, as copy_to_screen makes it: min(w, 640) by
+ * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. */
+static int copy_screen(const DrawCmd* D)
+{
+    CopyPush p;
+    int sw, sh;
+    copy_rect(D, &p);
+    sw = p.w > EFB_W ? EFB_W : p.w;
+    sh = p.h > EFB_H ? EFB_H : p.h;
+    p.mode = 2;
+    p.count = (uint32_t)(sw * sh);
+    if (!copy_pipeline() || !efb_to_buffer()) return 0;
+    run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    compute_to_host();
+    if (!submit_wait()) return 0;
+    gxr_backend_screen(g_screen_map, sw, sh);
+    g_n_copies++;
+    return 1;
+}
+
+/* A copy to a texture, as copy_to_texture makes it: the bytes into guest
+ * RAM over the copy's span, and its decoded image (V7's copy image; kept for
+ * the self test). A format the CPU refuses, or a span past the end of
+ * memory, leaves RAM untouched, as there. */
+static int copy_texture(const DrawCmd* D)
+{
+    CopyPush p;
+    unsigned chan_a, chan_b, texfmt = copy_texfmt(D->cp_v, &chan_a, &chan_b), tw, th, bpt;
+    uint32_t dest = (D->cp_dest & 0x1FFFFFu) << 5, natural, row_bytes, rows, cols, extent;
+    int half = (D->cp_v >> 9) & 1;
+    uint8_t* ram;
+    if (texfmt == 99) { g_n_refused++; return 1; }
+    copy_rect(D, &p);
+    p.ow = (uint32_t)(half ? p.w / 2 : p.w);
+    p.oh = (uint32_t)(half ? p.h / 2 : p.h);
+    tile_shape(texfmt, &tw, &th, &bpt);
+    natural = (p.ow + tw - 1) / tw * bpt;
+    row_bytes = (D->cp_stride & 0x3FFu) * 32u;
+    if (row_bytes < natural) row_bytes = natural;
+    rows = (p.oh + th - 1) / th;
+    cols = (p.ow + tw - 1) / tw;
+    extent = rows && cols ? (rows - 1) * row_bytes + cols * bpt : 0;
+    if ((dest & MEM_MASK) + (size_t)extent > MEM1_SIZE) { g_n_refused++; return 1; }
+    if (extent > DEST_BYTES || (size_t)p.ow * p.oh * 4 > IMAGE_BYTES) {
+        say("copy refused: %ux%u, %u bytes, more than the copy buffers hold", p.ow, p.oh, extent);
+        return 0;
+    }
+    if (!extent) return 1;
+    p.texfmt = texfmt;
+    p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1;
+    p.chans = chan_a | chan_b << 2;
+    p.row_bytes = row_bytes;
+    ram = mem_ptr(D->s, dest | 0x80000000u);
+    /* Seeded from RAM: what the copy does not write keeps its bytes.
+     * --mutate unseeded writes back whatever the buffer held instead. */
+    if (!g_mut_unseeded) memcpy(g_dest_map, ram, extent);
+    if (!copy_pipeline() || !efb_to_buffer()) return 0;
+    p.mode = 0;
+    p.count = extent / 4;
+    run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    p.mode = 1;
+    p.count = p.ow * p.oh;
+    run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    compute_to_host();
+    if (!submit_wait()) return 0;
+    memcpy(ram, g_dest_map, extent);
+    g_img_w = p.ow;
+    g_img_h = p.oh;
+    if (D->cp_image) memcpy(D->cp_image, g_image_map, (size_t)p.ow * p.oh * 4);
+    g_n_tex_copies++;
+    return 1;
+}
+
+static int gxv_copy(const DrawCmd* D)
+{
+    return (D->cp_v & 0x4000u) ? copy_screen(D) : copy_texture(D);
+}
+
+const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h)
+{
+    *w = g_img_w;
+    *h = g_img_h;
+    return g_image_map;
+}
+
+/* The self test's EFB, uploaded: the GPU's own copy of what the CPU path
+ * holds in g_efb. */
+int gxv_load_efb(const uint8_t* rgba)
+{
+    VkBufferImageCopy rg;
+    if (!begin_cb()) return 0;
+    end_pass();
+    memcpy(g_readback_map, rgba, READBACK_BYTES);
+    barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    memset(&rg, 0, sizeof rg);
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageExtent.width = EFB_W;
+    rg.imageExtent.height = EFB_H;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(g_cb, g_readback, g_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+    barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     return submit_wait();
 }
 
-/* A copy to the screen, as copy_to_screen makes it from the EFB read back:
- * RGB copied (or the vertical filter, filter_sample's arithmetic) and alpha
- * 255, black outside the EFB. The GPU copy encoder is V3b's; a copy to a
- * texture is refused until then. */
-static int gxv_copy(const DrawCmd* D)
+/* ---- the TEV ---------------------------------------------------------------- */
+
+/* A TevSetup as tev.glsl reads it; its header describes the words. */
+void gxv_pack_tev(const TevSetup* T, uint32_t* o)
 {
-    int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
-    int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
-    int filtered = !(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64);
-    int ytop = y0 < 0 ? 0 : y0, ybot = y0 + h - 1 > EFB_H - 1 ? EFB_H - 1 : y0 + h - 1;
-    int x, y, k;
-    const uint8_t* efb = g_readback_map;
-    if (!(D->cp_v & 0x4000u)) { say("copy refused: a copy to a texture (V3b's copy.comp)"); return 0; }
-    if (w > EFB_W) w = EFB_W;
-    if (h > EFB_H) h = EFB_H;
-    if (!readback()) return 0;
-    for (y = 0; y < h; y++) {
-        int sy = y0 + y;
-        for (x = 0; x < w; x++) {
-            int sx = x0 + x;
-            uint8_t* o = g_screen_buf + ((size_t)y * w + x) * 4;
-            if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
-                if (filtered) {
-                    int ya = sy - 1 < ytop ? ytop : sy - 1, yb = sy + 1 > ybot ? ybot : sy + 1;
-                    for (k = 0; k < 3; k++) {
-                        unsigned v = D->cp_f_up * efb[((size_t)ya * EFB_W + sx) * 4 + k] +
-                                     D->cp_f_mid * efb[((size_t)sy * EFB_W + sx) * 4 + k] +
-                                     D->cp_f_dn * efb[((size_t)yb * EFB_W + sx) * 4 + k];
-                        v >>= 6;
-                        o[k] = (uint8_t)(v > 255u ? 255u : v);
-                    }
-                } else {
-                    memcpy(o, efb + ((size_t)sy * EFB_W + sx) * 4, 3);
-                }
-                o[3] = 255;
-            } else {
-                o[0] = o[1] = o[2] = 0;
-                o[3] = 255;
-            }
+    unsigned st, i, j;
+    memset(o, 0, GXV_TEV_WORDS * sizeof *o);
+    o[0] = T->stages;
+    o[1] = (uint32_t)T->aref0 | (uint32_t)T->aref1 << 8 | T->acomp0 << 16 | T->acomp1 << 19 | T->alogic << 22;
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 4; j++) o[2 + i * 4 + j] = (uint32_t)T->reg_init[i][j];
+    for (st = 0; st < T->stages && st < 16; st++) {
+        const Stage* S = &T->st[st];
+        uint32_t* w = o + 18 + st * 5;
+        for (i = 0; i < 3; i++) {
+            w[0] |= (uint32_t)S->ia[i] << (5 * i) | (uint32_t)S->ib[i] << (15 + 5 * i);
+            w[1] |= (uint32_t)S->ic[i] << (5 * i) | (uint32_t)S->id[i] << (15 + 5 * i);
         }
+        w[2] = (uint32_t)S->ja | (uint32_t)S->jb << 5 | (uint32_t)S->jc << 10 | (uint32_t)S->jd << 15 |
+               (uint32_t)(S->texmap & 7) << 20 | (uint32_t)(S->texcoord & 7) << 23 | (uint32_t)(S->texen & 1) << 26 |
+               (uint32_t)(S->chan & 7) << 27;
+        w[3] = (uint32_t)S->cbias | (uint32_t)S->cop << 2 | (uint32_t)S->cclamp << 3 | (uint32_t)S->cshift << 4 |
+               (uint32_t)S->cdest << 6 | (uint32_t)S->abias << 8 | (uint32_t)S->aop << 10 | (uint32_t)S->aclamp << 11 |
+               (uint32_t)S->ashift << 12 | (uint32_t)S->adest << 14;
+        for (i = 0; i < 4; i++) w[3] |= (uint32_t)(S->rswap[i] & 3) << (16 + 2 * i) | (uint32_t)(S->tswap[i] & 3) << (24 + 2 * i);
+        for (i = 0; i < 4; i++) w[4] |= (uint32_t)(S->konst[i] & 0xFF) << (8 * i);
     }
-    gxr_backend_screen(g_screen_buf, w, h);
-    g_n_copies++;
+}
+
+static VkBuffer g_tev_setups, g_tev_inputs, g_tev_results;
+static uint8_t *g_tev_setups_map, *g_tev_inputs_map, *g_tev_results_map;
+static unsigned g_tev_cap;
+
+/* tevdiff's GPU half: n packed setups (GXV_TEV_WORDS each) and their inputs
+ * (ten words each: ras0, ras1, the eight maps' texels) through tevdiff.comp,
+ * into two words a case: the RGBA bytes and the alpha test. The buffers are
+ * made for the first n asked for, and a larger n later is refused. */
+int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* results, unsigned n)
+{
+    struct { uint32_t count, setup_words; } p = {n, GXV_TEV_WORDS};
+    if (!g_tev_cs.pipe) {
+        VkBuffer bufs[3];
+        const uint32_t* code = g_mut_tev ? tevdiff_comp_clamp : tevdiff_comp;
+        size_t bytes = g_mut_tev ? sizeof tevdiff_comp_clamp : sizeof tevdiff_comp;
+        if (!make_buffer((VkDeviceSize)n * GXV_TEV_WORDS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_tev_setups, &g_tev_setups_map) ||
+            !make_buffer((VkDeviceSize)n * 40, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_tev_inputs, &g_tev_inputs_map) ||
+            !make_buffer((VkDeviceSize)n * 8, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_tev_results, &g_tev_results_map) ||
+            !compute_make(&g_tev_cs, code, bytes, 3, sizeof p))
+            return 0;
+        bufs[0] = g_tev_setups;
+        bufs[1] = g_tev_inputs;
+        bufs[2] = g_tev_results;
+        compute_bind(&g_tev_cs, bufs, 3);
+        g_tev_cap = n;
+    }
+    if (n > g_tev_cap) { say("tevdiff: %u cases, more than the %u its buffers were made for", n, g_tev_cap); return 0; }
+    memcpy(g_tev_setups_map, setups, (size_t)n * GXV_TEV_WORDS * 4);
+    memcpy(g_tev_inputs_map, inputs, (size_t)n * 40);
+    if (!begin_cb()) return 0;
+    end_pass();
+    run_compute(&g_tev_cs, &p, sizeof p, n);
+    compute_to_host();
+    if (!submit_wait()) return 0;
+    memcpy(results, g_tev_results_map, (size_t)n * 8);
     return 1;
 }
 
@@ -774,15 +1107,20 @@ void gxv_set_upload_hook(GxvUploadHook h) { g_hook = h; }
 
 int gxv_set_mutation(const char* name)
 {
-    if (!strcmp(name, "unclipped")) { g_mut_unclipped = 1; return 1; }
-    return 0;
+    if (!strcmp(name, "unclipped")) g_mut_unclipped = 1;
+    else if (!strcmp(name, "unseeded")) g_mut_unseeded = 1;
+    else if (!strcmp(name, "rounding")) g_mut_copy = 1;
+    else if (!strcmp(name, "intensity")) g_mut_copy = 2;
+    else if (!strcmp(name, "clamp")) g_mut_tev = 1;
+    else return 0;
+    return 1;
 }
 
 void gxv_report(void)
 {
-    say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu pipelines, "
-        "%llu submissions, GPU %.3f ms%s",
-        g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_pipes, g_n_submits, g_gpu_ms,
+    say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu copies to a "
+        "texture (%llu refused), %llu pipelines, %llu submissions, GPU %.3f ms%s",
+        g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused, g_n_pipes, g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
 }
 
@@ -1024,9 +1362,13 @@ int gxv_init(char* why, size_t cap)
                     VK_IMAGE_ASPECT_COLOR_BIT, &g_color, &g_color_view) ||
         !make_image(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT, &g_depth, &g_depth_view) ||
-        !make_buffer(RING_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &g_ring, &g_ring_map) ||
-        !make_buffer((VkDeviceSize)MAX_QUADS * 6 * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &g_quad_idx, (uint8_t**)&g_quad_map) ||
-        !make_buffer(READBACK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &g_readback, &g_readback_map) || !make_pass() ||
+        !make_buffer(RING_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_ring, &g_ring_map) ||
+        !make_buffer((VkDeviceSize)MAX_QUADS * 6 * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 0, &g_quad_idx, (uint8_t**)&g_quad_map) ||
+        !make_buffer(READBACK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     0, &g_readback, &g_readback_map) ||
+        !make_buffer(DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) ||
+        !make_buffer(IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
+        !make_buffer(READBACK_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_screenbuf, &g_screen_map) || !make_pass() ||
         !make_layout() || !make_commands() || !init_images()) {
         snprintf(why, cap, "setting up on %s failed (see above)", g_devname);
         return 0;
@@ -1036,8 +1378,6 @@ int gxv_init(char* why, size_t cap)
         uint32_t* q = g_quad_map + i * 6, b = i * 4;
         q[0] = b; q[1] = b + 1; q[2] = b + 2; q[3] = b; q[4] = b + 2; q[5] = b + 3;
     }
-    g_screen_buf = (uint8_t*)malloc(READBACK_BYTES);
-    if (!g_screen_buf) { snprintf(why, cap, "cannot allocate the screen buffer"); return 0; }
     say("device %s (Vulkan %u.%u.%u, driver %#x), timestamps %s", g_devname, VK_API_VERSION_MAJOR(g_props.apiVersion),
         VK_API_VERSION_MINOR(g_props.apiVersion), VK_API_VERSION_PATCH(g_props.apiVersion), g_props.driverVersion,
         g_timestamps ? "on" : "unavailable");
@@ -1064,15 +1404,27 @@ void gxv_shutdown(void)
     vkDestroyBuffer(g_dev, g_ring, NULL);
     vkDestroyBuffer(g_dev, g_quad_idx, NULL);
     vkDestroyBuffer(g_dev, g_readback, NULL);
+    vkDestroyBuffer(g_dev, g_destbuf, NULL);
+    vkDestroyBuffer(g_dev, g_imagebuf, NULL);
+    vkDestroyBuffer(g_dev, g_screenbuf, NULL);
+    if (g_tev_setups) {
+        vkDestroyBuffer(g_dev, g_tev_setups, NULL);
+        vkDestroyBuffer(g_dev, g_tev_inputs, NULL);
+        vkDestroyBuffer(g_dev, g_tev_results, NULL);
+    }
+    compute_free(&g_copy_cs);
+    compute_free(&g_tev_cs);
     vkDestroyImageView(g_dev, g_color_view, NULL);
     vkDestroyImageView(g_dev, g_depth_view, NULL);
     vkDestroyImage(g_dev, g_color, NULL);
     vkDestroyImage(g_dev, g_depth, NULL);
-    for (i = 0; i < VK_MAX_MEMORY_TYPES; i++)
-        if (g_arena[i].mem) vkFreeMemory(g_dev, g_arena[i].mem, NULL);
+    for (i = 0; i < VK_MAX_MEMORY_TYPES; i++) {
+        unsigned k;
+        for (k = 0; k < ARENA_BLOCKS; k++)
+            if (g_arena[i][k].mem) vkFreeMemory(g_dev, g_arena[i][k].mem, NULL);
+    }
     vkDestroyDevice(g_dev, NULL);
     vkDestroyInstance(g_inst, NULL);
     g_dev = VK_NULL_HANDLE;
     free(g_tmp);
-    free(g_screen_buf);
 }

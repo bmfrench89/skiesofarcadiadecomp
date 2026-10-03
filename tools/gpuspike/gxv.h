@@ -4,12 +4,14 @@
  * EFB of its own, headless: no window, no swapchain, a screen copy read back
  * and handed to gxr_backend_screen.
  *
- * V3a draws geometry only: the vertex stage of 3.3 (the CPU's own clipping,
+ * It draws geometry (V3a): the vertex stage of 3.3 (the CPU's own clipping,
  * the depth varying, invariant positions), the CPU's culling, scissor, depth
- * test and write masks, and the vertex colour. A draw that needs more -- a
- * TEV shape other than the vertex colour, an alpha test that can reject,
- * blending, a logic op, fog -- or a copy to a texture is refused: the backend
+ * test and write masks, and the vertex colour. It copies (V3b): every EFB
+ * copy, to a texture or the screen, is copy.comp, byte for byte the CPU's. A
+ * draw that needs more -- a TEV shape other than the vertex colour, an alpha
+ * test that can reject, blending, a logic op, fog -- is refused: the backend
  * says which, and the renderer stops the run, rather than drawing it wrong.
+ * tev.glsl, the whole TEV, is V3b's too, but only tevdiff runs it so far.
  */
 #ifndef SOA_GXV_H
 #define SOA_GXV_H
@@ -28,12 +30,29 @@ const char* gxv_device_name(void);
 void gxv_report(void);
 void gxv_shutdown(void);
 
+/* The TEV (V3b's tevdiff): a TevSetup packed as tev.glsl reads it, and n
+ * of them run through tevdiff.comp. inputs is ten words a case -- the two
+ * raster colours, then the texel each of the eight maps gives -- and results
+ * two: the RGBA bytes and whether the alpha test passed. */
+#define GXV_TEV_WORDS (18 + 16 * 5)
+void gxv_pack_tev(const TevSetup* T, uint32_t* out);
+int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* results, unsigned n);
+
+/* For copydiff: the GPU's EFB set to these 640x528 RGBA pixels, and the
+ * decoded image of the last copy to a texture. */
+int gxv_load_efb(const uint8_t* rgba);
+const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h);
+
 /* For the self test: called with each draw's vertices as they were uploaded,
  * after any rebuild, and whether the draw was rebuilt. */
 typedef void (*GxvUploadHook)(const DrawCmd* D, const Vertex* up, unsigned n, int rebuilt);
 void gxv_set_upload_hook(GxvUploadHook h);
-/* The self test's mutations, which must make it fail: "unclipped" uploads
- * every draw as it is, a vertex outside the clip volume or not. */
+/* The self test's mutations, each of which must make it fail: "unclipped"
+ * uploads every draw as it is, a vertex outside the clip volume or not;
+ * "unseeded" writes a copy's buffer back without first reading RAM into it;
+ * "rounding" rounds the copy filter where the C truncates; "intensity"
+ * rounds the intensity where the C truncates; "clamp" swaps tev.glsl's two
+ * clamps. Set before the first draw or copy. */
 int gxv_set_mutation(const char* name);
 
 #endif

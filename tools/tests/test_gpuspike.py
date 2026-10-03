@@ -1,14 +1,16 @@
-"""Tests for the GPU spike (tools/gpuspike.py, tools/fetch_gpu.py; V3a).
+"""Tests for the GPU spike (tools/gpuspike.py, tools/fetch_gpu.py; V3a, V3b).
 
-Three kinds. The judge that compares a CPU scene with a GPU one, and the
-copy of the render recipe in tools/gpuspike/driver.c, are text and arithmetic
-and run everywhere. fetch_gpu.py's record is checked against vendor/, and a
-copy of vendor/ with one byte changed must fail it. The self test itself
-builds the spike and draws on this machine's GPU, and so does its mutation,
-which must fail; those need MSVC, vendor/ and a Vulkan device, and without
-one they skip saying which -- pytest -rs shows it -- never quietly.
+Three kinds. The judge that compares a CPU scene with a GPU one, copydiff's
+comparison of two runs, and the copy of the render recipe in
+tools/gpuspike/driver.c are text and arithmetic and run everywhere.
+fetch_gpu.py's record is checked against vendor/, and a copy of vendor/ with
+one byte changed must fail it. The self test, tevdiff and copydiff build the
+spike and run on this machine's GPU, and so do the mutations each must fail
+on; those need MSVC, vendor/ and a Vulkan device, and without one they skip
+saying which -- pytest -rs shows it -- never quietly.
 """
 
+import re
 import shutil
 import subprocess
 import sys
@@ -130,8 +132,6 @@ def test_every_scene_the_driver_writes_is_judged():
     """A scene drawn and never compared would be a check that passes by not
     running; a judged name the driver never writes fails the self test."""
     driver = (ROOT / "tools" / "gpuspike" / "driver.c").read_text(encoding="utf-8")
-    import re
-
     written = set(re.findall(r'finish_scene\(s, "(\w+)"\)', driver))
     written |= {"cull0", "cull1", "cull2", "cull3"}  # named by snprintf
     written |= set(re.findall(r'scene_clip\(s, "(\w+)"', driver))
@@ -174,14 +174,46 @@ def test_one_changed_byte_or_a_missing_file_fails_the_record(tmp_path):
     assert fetch_gpu.main(["--vendor", str(copy), "--verify"]) == 1
 
 
-def run_selftest(*extra):
+def copy_row(
+    combo=5, tpf=3, texfmt=3, seeded="a" * 16, ram="b" * 16, image="c" * 16, screen="d" * 16
+):
+    return (
+        f"{combo} 0 {tpf} 0 0 1 10 20 31 7 0 00100000 {texfmt} 256 {seeded} {ram} {image} {screen}"
+    )
+
+
+def test_copydiff_counts_each_kind_of_difference():
+    rows = [copy_row(combo=i) for i in range(4)]
+    problems, mismatches = gpuspike.compare_copies(rows, list(rows))
+    assert not problems and not mismatches
+    gpu = [copy_row(combo=0, ram="e" * 16), copy_row(combo=1, image="e" * 16), rows[2], rows[3]]
+    gpu[3] = copy_row(combo=3, screen="e" * 16)
+    problems, mismatches = gpuspike.compare_copies(rows, gpu)
+    assert not problems
+    assert {k[0] for k in mismatches} == {"ram", "image", "screen"}
+
+
+def test_copydiff_refuses_a_refused_copy_that_wrote_and_runs_that_disagree():
+    """A copy the CPU refuses (texfmt 99) must leave RAM as it was on both
+    sides, which equal hashes alone would not show; and two runs whose cases
+    differ, or one cut short, compare nothing and must say so."""
+    refused = copy_row(texfmt=99, seeded="a" * 16, ram="a" * 16)
+    wrote = copy_row(texfmt=99, seeded="a" * 16, ram="f" * 16)
+    assert gpuspike.compare_copies([refused], [refused]) == ([], gpuspike.Counter())
+    assert gpuspike.compare_copies([wrote], [wrote])[0]
+    assert gpuspike.compare_copies([copy_row()], [copy_row(tpf=4)])[0]
+    assert gpuspike.compare_copies([copy_row(), copy_row()], [copy_row()])[0]
+    assert gpuspike.compare_copies([], [])[0], "an empty run compares vacuously"
+
+
+def run_spike(command, *extra):
     if toolchain.compiler_path(toolchain.MSVC) is None:
         reason = "no MSVC (tools/soa/toolchain.py compiler_path): the spike is built with cl"
         print(f"skip: {reason}")
         pytest.skip(reason)
     need_vendor()
     proc = subprocess.run(
-        [sys.executable, "tools/gpuspike.py", "selftest", *extra],
+        [sys.executable, "tools/gpuspike.py", command, *extra],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -194,6 +226,10 @@ def run_selftest(*extra):
         print(f"skip: {reason}")
         pytest.skip(reason)
     return proc
+
+
+def run_selftest(*extra):
+    return run_spike("selftest", *extra)
 
 
 def test_the_gpu_draws_what_the_cpu_draws():
@@ -216,3 +252,49 @@ def test_uploading_unclipped_fails_it():
     for name in ("clip_near_ortho", "clip_far_ortho", "clip_near_persp", "clip_far_persp"):
         assert f"clip {name} " in out and f"FAIL {name}:" in out, name
     assert "FAIL cull" not in out, "the mutation touches clipping only"
+
+
+def test_the_tev_on_the_gpu_is_tev_pixel():
+    """V3b: 100,000 setups from random registers, each through tev_pixel as
+    prepared and with its fast shape off, and through tev.glsl: no mismatch,
+    and every path counted at least 100 times."""
+    proc = run_spike("tevdiff")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    assert "tevdiff 100000 cases, seed 1: 0 mismatches; 0 paths under 100 hits" in out
+    assert "fastc2=" in out and "ccmp7=" in out and "alogic3=" in out
+
+
+def test_a_flipped_clamp_fails_tevdiff():
+    proc = run_spike("tevdiff", "--cases", "20000", "--mutate", "clamp")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "mismatch case" in proc.stdout
+
+
+def test_the_copies_on_the_gpu_are_the_cpus():
+    """V3b: 128 combinations of format, intensity, half scale and filter, 200
+    random rectangles each: the same bytes in RAM, the same decoded image and
+    the same screen copy, and every refused copy leaving RAM alone."""
+    proc = run_spike("copydiff")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    assert "25600 copies, 12000 of them refused" in out
+    assert "Differences: ram 0, image 0, screen 0" in out
+
+
+@pytest.mark.parametrize(
+    ("mutation", "breaks"),
+    [
+        ("rounding", ("ram", "image", "screen")),
+        ("intensity", ("ram", "image")),
+        ("unseeded", ("ram",)),
+    ],
+)
+def test_each_copy_mutation_fails_copydiff(mutation, breaks):
+    proc = run_spike("copydiff", "--rects", "10", "--mutate", mutation)
+    out = proc.stdout
+    assert proc.returncode == 1, out + proc.stderr
+    totals = re.search(r"Differences: ram (\d+), image (\d+), screen (\d+)", out)
+    assert totals, out
+    for what, n in zip(("ram", "image", "screen"), totals.groups(), strict=True):
+        assert (int(n) > 0) == (what in breaks), (mutation, what, out)
