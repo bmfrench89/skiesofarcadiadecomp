@@ -39,6 +39,12 @@ void gxv_shutdown(void);
 void gxv_pack_tev(const TevSetup* T, uint32_t* out);
 int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* results, unsigned n);
 
+/* The level of detail (V5's loddiff): n cases of one kind through lod.glsl,
+ * GXV_LOD_WORDS words each in and three out (loddiff.comp lays them out):
+ * kind 0 the level and its scaled coordinates, kind 1 span_lod's formula. */
+#define GXV_LOD_WORDS 35
+int gxv_lod_run(unsigned kind, const uint32_t* inputs, uint32_t* results, unsigned n);
+
 /* For copydiff: the GPU's EFB set to these 640x528 RGBA pixels, and the
  * decoded image of the last copy to a texture. */
 int gxv_load_efb(const uint8_t* rgba);

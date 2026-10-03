@@ -1400,6 +1400,13 @@ and the differentials; if Q-V1 was answered before V3a, no port is needed.
 
 ### V5. The backend in `soa.exe`, synchronous
 
+*`loddiff` landed 2026-10-03 (FINDINGS "V5, first"): the level 0 mismatches in 100,000 cases and
+the formula within 1/1024, each mutation red. It added `tools/gpuspike/lod.glsl` (raster.frag's
+level of detail, now shared), `tex_level` and gxr_tev.c's `SAMPLE_AT` macro, and `gxr_span_lod`;
+every existing runtime function compiles to the same instructions. Its first run found the GPU's
+division one ULP out for a side that is not a power of two, and lod.glsl now divides exactly. The
+rest of V5 is next.*
+
 *A day to several days. `--link`. Prerequisites: the gate; V4b. Files: `runtime/gxv.c` and
 `runtime/gxv/*.glsl` (from the spike), `tools/recompile.py` (the SPIR-V step, optional),
 `runtime/settings.c` (`gpu`), `runtime/main.c` (`SOA_GPU`), `runtime/plat.c` and `runtime/plat.h` (the
@@ -1418,7 +1425,8 @@ switch), `tools/gpuspike/loddiff.comp` and `tools/gpuspike.py` (`loddiff`, first
   coordinates; and random plane sets through `span_lod` and through the shader's formula given the
   same derivatives, agreeing within a tolerance fixed before the run. The derivatives themselves
   differ by design (3.4) and stay V0's. Mutation: `--mutate lod` (bias +1) fails it wherever the
-  clamps leave room for the change.
+  clamps leave room for the change, and `--mutate lodmin` (the footprint's smaller axis) fails the
+  formula.
 - The contract, with `SOA_GPU` unset.
 - **Same session, same replays**: the spike binary and `gen/soa.exe --replay`, both with
   `SOA_GPU=vulkan`, replay each of the 35 and V1's captures, and their PNGs are byte-identical; both

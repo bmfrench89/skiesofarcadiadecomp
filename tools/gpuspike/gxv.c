@@ -34,6 +34,9 @@
 #include "raster_frag_fog.h"
 #include "tevdiff_comp.h"
 #include "tevdiff_comp_clamp.h"
+#include "loddiff_comp.h"
+#include "loddiff_comp_lod.h"
+#include "loddiff_comp_lodmin.h"
 #include "copy_comp.h"
 #include "copy_comp_rounding.h"
 #include "copy_comp_intensity.h"
@@ -148,7 +151,7 @@ static GxvUploadHook g_hook;
  * rounding and intensity variants. */
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
-static int g_mut_noinvariant;
+static int g_mut_noinvariant, g_mut_lodmin;
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -1050,7 +1053,7 @@ typedef struct {
     VkPipeline pipe;
 } Compute;
 
-static Compute g_copy_cs, g_tev_cs;
+static Compute g_copy_cs, g_tev_cs, g_lod_cs;
 
 static int compute_make(Compute* c, const uint32_t* code, size_t bytes, unsigned nbuf, uint32_t push_bytes)
 {
@@ -1477,6 +1480,41 @@ int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* result
     return 1;
 }
 
+static VkBuffer g_lod_inputs, g_lod_results;
+static uint8_t *g_lod_inputs_map, *g_lod_results_map;
+static unsigned g_lod_cap;
+
+/* loddiff's GPU half: n cases of one kind (GXV_LOD_WORDS words each; 0 the
+ * level, 1 the formula, loddiff.comp says how they are laid out) through
+ * lod.glsl, into three words a case. The --mutate lod and lodmin variants are
+ * lod.glsl's. As with tevdiff, a larger n than the first is refused. */
+int gxv_lod_run(unsigned kind, const uint32_t* inputs, uint32_t* results, unsigned n)
+{
+    struct { uint32_t count, kind; } p = {n, kind};
+    if (!g_lod_cs.pipe) {
+        VkBuffer bufs[2];
+        const uint32_t* code = g_mut_frag == 2 ? loddiff_comp_lod : g_mut_lodmin ? loddiff_comp_lodmin : loddiff_comp;
+        size_t bytes = g_mut_frag == 2 ? sizeof loddiff_comp_lod : g_mut_lodmin ? sizeof loddiff_comp_lodmin : sizeof loddiff_comp;
+        if (!make_buffer((VkDeviceSize)n * GXV_LOD_WORDS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_lod_inputs, &g_lod_inputs_map) ||
+            !make_buffer((VkDeviceSize)n * 12, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_lod_results, &g_lod_results_map) ||
+            !compute_make(&g_lod_cs, code, bytes, 2, sizeof p))
+            return 0;
+        bufs[0] = g_lod_inputs;
+        bufs[1] = g_lod_results;
+        compute_bind(&g_lod_cs, bufs, 2);
+        g_lod_cap = n;
+    }
+    if (n > g_lod_cap) { say("loddiff: %u cases, more than the %u its buffers were made for", n, g_lod_cap); return 0; }
+    memcpy(g_lod_inputs_map, inputs, (size_t)n * GXV_LOD_WORDS * 4);
+    if (!begin_cb()) return 0;
+    end_pass();
+    run_compute(&g_lod_cs, &p, sizeof p, n);
+    compute_to_host();
+    if (!submit_wait()) return 0;
+    memcpy(results, g_lod_results_map, (size_t)n * 12);
+    return 1;
+}
+
 static void gxv_finish(void)
 {
     if (!submit_wait()) say("a submission failed");
@@ -1549,6 +1587,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "fog")) g_mut_frag = 3;
     else if (!strcmp(name, "nofilter")) g_mut_nofilter = 1;
     else if (!strcmp(name, "noinvariant")) g_mut_noinvariant = 1;
+    else if (!strcmp(name, "lodmin")) g_mut_lodmin = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -1914,8 +1953,13 @@ void gxv_shutdown(void)
         vkDestroyBuffer(g_dev, g_tev_inputs, NULL);
         vkDestroyBuffer(g_dev, g_tev_results, NULL);
     }
+    if (g_lod_inputs) {
+        vkDestroyBuffer(g_dev, g_lod_inputs, NULL);
+        vkDestroyBuffer(g_dev, g_lod_results, NULL);
+    }
     compute_free(&g_copy_cs);
     compute_free(&g_tev_cs);
+    compute_free(&g_lod_cs);
     vkDestroyImageView(g_dev, g_color_view, NULL);
     vkDestroyImageView(g_dev, g_depth_view, NULL);
     vkDestroyImage(g_dev, g_color, NULL);

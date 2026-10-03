@@ -5496,3 +5496,75 @@ and the mechanism is one the CPU reference gets wrong.
   `efb_at`'s cut. `ramdiff`, `chain` and the mutations are commands, about
   20 s, 30 s and 16 min.
 - **No runtime file changed.**
+
+**V5, first: `loddiff`, the level of detail held exactly.** 2026-10-03. This
+is the owner's answer at the gate for V0's blind spot. LOD +1 passes V0 on
+three distinct frames ("V4"), so the GPU's choice of mip level is now held
+to the CPU's directly, as `tevdiff` holds the TEV.
+
+- **What it compares.** `python tools/gpuspike.py loddiff` runs two kinds of
+  case, 100,000 of each, in one process.
+  - **The level:** a random level of detail, bias, clamps, level count,
+    texture size, scale and coordinate. They go through the sampler's own
+    level choice (`tex_level`, a wrapper of gxr_tev.c's `SAMPLE_AT`) and
+    through lod.glsl's `gx_level` and `gx_level_uv`. These must agree bit for
+    bit, in the level and in u and v scaled to it.
+    - The registers' own ranges are used.
+    - One case in four lands within four ULPs of a rounding boundary.
+    - One in 64 is a NaN, which `span_lod` returns for a degenerate
+      triangle.
+    - Nine paths are counted, and each must be taken 100 times. The smallest
+      count is 1,615 (NaN).
+  - **The formula:** random planes of 1/w, s/w, t/w and q/w and a pixel.
+    They go through `span_lod` (`gxr_span_lod`) and through `gx_lod`, given
+    the derivatives worked in double from the same planes.
+    - The derivatives themselves differ by design (3.4) and stay V0's.
+    - The tolerance, fixed before the first run: within 1/1024 of a level.
+    - 67 cases are left out, where the CPU's float subtraction cancels
+      (condition over 1,000) or the footprint sits by `span_lod`'s floor.
+- **The first run failed, on the coordinates, not the level.**
+  - **The count:** 5,256 of 100,000 cases had u or v one ULP away. All 5,256
+    were levels above 0 of a texture whose side is not a power of two. The
+    level matched in every case.
+  - **The cause:** `scale * lw / w` is a division, and Vulkan allows a GPU's
+    division to be 2.5 ULP out. This GPU is exact only when dividing by a
+    power of two, which no rule promises.
+  - **The fix:** lod.glsl now divides by a side exactly. A power of two is an
+    `ldexp`; any other side is divided out of the 24-bit significand in
+    integers, a bit at a time, and rounded to nearest even, as C's division
+    rounds.
+  - **The result:** 0 mismatches.
+- **What it shows now** [V, seed 1]:
+  - level: 0 mismatches in 100,000;
+  - formula: 99,933 cases, none over 1/1024, the largest 0.00044 of a level.
+- **The mutations fail.**
+  - `--mutate lod`, the same bias +1 the oracle runs, gives 12,096 level
+    mismatches. It cannot show where the clamps already hold the level.
+  - `--mutate lodmin`, the footprint's smaller axis for its larger, puts
+    99,877 formula cases over the tolerance.
+- **The fragment stage reads the same code.** raster.frag now takes its level
+  of detail from lod.glsl.
+  - **One comparison covers both changes:** the move into lod.glsl and the
+    exact division. Afterwards, all 67 captures' GPU frames were
+    byte-identical to a run taken just before the move, and V0's verdicts are
+    unchanged (65, two by design). The self test passes.
+  - **What that says:** the division changed nothing these frames sample. A
+    captured frame either reads no mipmapped texture with a side that is not
+    a power of two above level 0, or its one-ULP change moved no pixel.
+- **The runtime is unchanged in what it runs.**
+  - **Why that needed checking:** the level choice became gxr_tev.c's
+    `SAMPLE_AT`, which `sample()` and the new `tex_level` share, and gxr.c
+    gained `gxr_span_lod`.
+  - **A macro, not an inline function:** a forced-inline function moved
+    `tev_pixel`'s register allocation. With the macro, every function that
+    existed compiles to the same instructions as before in MSVC's `/O2`
+    listing (labels normalised); only the two wrappers are new.
+  - **The checks:** the 23 pinned frames match at 1, 2, 3 and 8 threads; the
+    runtime compiles under MSVC and clang-cl; and the self test reports 0
+    failures.
+- **Still a GPU division.** Two remain in the fragment stage: `s/q` for a
+  projective texture coordinate, and `gx_lod`'s `/q`. Neither is held
+  exactly; V0 judges what they do. For q = 1, an ST texture coordinate,
+  both are exact.
+- `test_gpuspike.py` gains three tests: the pass, and each mutation failing
+  its own half.

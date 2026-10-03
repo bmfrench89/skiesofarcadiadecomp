@@ -1,0 +1,52 @@
+// loddiff (specs/gpu-backend.md V5): lod.glsl, the fragment stage's own level
+// of detail, over many cases at once, so its results can be held against
+// gxr's. One invocation a case, LOD_WORDS words in and three out.
+//
+// kind 0, the level: lod, bias, min_lod, max_lod (float bits), nlevels | mip
+// << 8, s, t, su0, sv0, scale_s, scale_t (float bits), w, h, then eleven
+// level widths and eleven heights; out the level and u, v (float bits),
+// which must equal tex_level's bit for bit.
+// kind 1, the formula: s's and t's derivatives in x, then in y, q, scale_s,
+// scale_t (float bits); out the level of detail (float bits), which must
+// agree with span_lod's within loddiff's tolerance.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Inputs { uint inp[]; };
+layout(std430, binding = 1) writeonly buffer Results { uint result[]; };
+
+layout(push_constant) uniform Run {
+    uint count;
+    uint kind;
+} pc;
+
+const uint LOD_WORDS = 35u;
+
+#include "lod.glsl"
+
+float f(uint i) { return uintBitsToFloat(i); }
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    uint b = i * LOD_WORDS;
+    if (pc.kind == 0u) {
+        uint lv = inp[b + 4u];
+        int l = gx_level(f(inp[b]), f(inp[b + 1u]), f(inp[b + 2u]), f(inp[b + 3u]), int(lv & 255u), (lv >> 8) != 0u);
+        vec2 uv = gx_level_uv(f(inp[b + 5u]), f(inp[b + 6u]), l, f(inp[b + 7u]), f(inp[b + 8u]), f(inp[b + 9u]),
+                              f(inp[b + 10u]), int(inp[b + 13u + uint(l)]), int(inp[b + 24u + uint(l)]),
+                              int(inp[b + 11u]), int(inp[b + 12u]));
+        result[i * 3u] = uint(l);
+        result[i * 3u + 1u] = floatBitsToUint(uv.x);
+        result[i * 3u + 2u] = floatBitsToUint(uv.y);
+    } else {
+        float lod = gx_lod(vec2(f(inp[b]), f(inp[b + 1u])), vec2(f(inp[b + 2u]), f(inp[b + 3u])), f(inp[b + 4u]),
+                           f(inp[b + 5u]), f(inp[b + 6u]));
+        result[i * 3u] = floatBitsToUint(lod);
+        result[i * 3u + 1u] = 0u;
+        result[i * 3u + 2u] = 0u;
+    }
+}

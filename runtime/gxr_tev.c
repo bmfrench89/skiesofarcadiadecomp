@@ -1250,6 +1250,39 @@ TEX_INLINE void sample_level(const TexCfg* C, int l, float u, float v, uint8_t o
     }
 }
 
+/* The level sample() reads at lod (l, which starts at 0), with s and t scaled
+ * to its texels (u, v): the part of sampling a GPU must reproduce bit for bit
+ * (loddiff). A macro, because as a function, even forced inline, it moved
+ * tev_pixel's register allocation. */
+#define SAMPLE_AT(C, s, t, lod, l, u, v)                                       \
+    do {                                                                       \
+        if ((C)->mip && (C)->nlevels > 1) {                                    \
+            float L = (lod) + (C)->lod_bias;                                   \
+            if (L < (C)->min_lod) L = (C)->min_lod;                            \
+            if (L > (C)->max_lod) L = (C)->max_lod;                            \
+            (l) = plat_f2i(L + 0.5f); /* a NaN passes both clamps above */     \
+            if ((l) >= (C)->nlevels) (l) = (C)->nlevels - 1;                   \
+            if ((l) < 0) (l) = 0;                                              \
+        }                                                                      \
+        if ((l) == 0) {                                                        \
+            (u) = (s) * (C)->su0;                                              \
+            (v) = (t) * (C)->sv0;                                              \
+        } else {                                                               \
+            (u) = (s) * ((C)->scale_s * (float)(C)->lw[l] / (float)(C)->w);    \
+            (v) = (t) * ((C)->scale_t * (float)(C)->lh[l] / (float)(C)->h);    \
+        }                                                                      \
+    } while (0)
+
+int tex_level(const TexCfg* C, float s, float t, float lod, float* u, float* v)
+{
+    int l = 0;
+    float uu, vv;
+    SAMPLE_AT(C, s, t, lod, l, uu, vv);
+    *u = uu;
+    *v = vv;
+    return l;
+}
+
 /* lod: log2 of texels per pixel at this pixel, from the rasterizer. */
 TEX_INLINE void sample(const TexCfg* C, float s, float t, float lod, uint8_t out[4])
 {
@@ -1257,21 +1290,7 @@ TEX_INLINE void sample(const TexCfg* C, float s, float t, float lod, uint8_t out
     float u, v;
     if (g_notex > 0) { out[0] = out[1] = out[2] = out[3] = 200; return; } /* read only: tev_prepare decides */
     if (!C->level[0] || C->w <= 0 || C->h <= 0) { out[0] = out[1] = out[2] = out[3] = 0; return; }
-    if (C->mip && C->nlevels > 1) {
-        float L = lod + C->lod_bias;
-        if (L < C->min_lod) L = C->min_lod;
-        if (L > C->max_lod) L = C->max_lod;
-        l = plat_f2i(L + 0.5f); /* a NaN passes both clamps above */
-        if (l >= C->nlevels) l = C->nlevels - 1;
-        if (l < 0) l = 0;
-    }
-    if (l == 0) {
-        u = s * C->su0;
-        v = t * C->sv0;
-    } else {
-        u = s * (C->scale_s * (float)C->lw[l] / (float)C->w);
-        v = t * (C->scale_t * (float)C->lh[l] / (float)C->h);
-    }
+    SAMPLE_AT(C, s, t, lod, l, u, v);
     sample_level(C, l, u, v, out);
 }
 

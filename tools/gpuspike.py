@@ -4,13 +4,14 @@
     python tools/gpuspike.py selftest [--mutate NAME]     # draw 17 scenes on both, compare
     python tools/gpuspike.py tevdiff [--cases 100000]     # the TEV, exact against tev_pixel
     python tools/gpuspike.py copydiff [--rects 200]       # the copies, exact against gxr.c's
+    python tools/gpuspike.py loddiff [--cases 100000]     # the level of detail, against gxr's
     python tools/gpuspike.py oracle [--mutations]         # the captures, CPU against GPU, V0's verdict
     python tools/gpuspike.py time                         # GPU and consumer ms a frame
     python tools/gpuspike.py logicop [--mutate M]         # logic ops native, blend and snapshot
     python tools/gpuspike.py ramdiff                      # each copy's RAM, CPU against GPU
     python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
 
-specs/gpu-backend.md V3a, V3b, V4a and V4b. `build` compiles the shaders in
+specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 tools/gpuspike/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
 arrays -- each mutation a variant of its own -- and builds gx.c, gxr.c,
 gxr_tev.c and png.c with the spike's driver and gxv.c (the backend) into
@@ -48,13 +49,17 @@ path it counts taken at least 100 times. `copydiff` (V3b) runs the same random
 copies through the CPU renderer and through gxv's compute copy, in two
 processes at once, and compares what each left in RAM, the decoded image and a
 screen copy: byte for byte, with every refused copy leaving RAM as it was.
+`loddiff` (V5) runs lod.glsl, the fragment stage's level of detail, against
+the sampler's own level choice (tex_level) bit for bit, and against span_lod's
+formula within 1/1024, the derivatives given to both, since V0 does not
+reliably see a level's blur (FINDINGS "V4").
 
 `oracle` (V4a, V4b) replays every capture of --set (corpus,perfset; add
 gpuset for V1's): on the CPU, a reference that must hash to the manifest
 (corpus) or equal V0's inspected image, and on the GPU, which V0 judges. A
 frame that copies to a texture is replayed from a scratch copy with 0xA5 over
 every row of tiles it copies into (3.12's poison). A failure must be listed
-in BY_DESIGN, bisected. --mutations then runs the five GPU mutations, each of which must fail
+in BY_DESIGN, bisected. --mutations then runs the GPU mutations, each of which must fail
 V0 wherever it changes 0.5% of a frame, on five captures or more, but for the
 exceptions GPU_BLIND_SPOTS and SHORT_OF_FIVE list. `time` gives the GPU's and
 the consumer's milliseconds a frame, beside perfbench's CPU figures.
@@ -66,7 +71,8 @@ difference to the EFB the copy read; `chain` carries each frame's copies into
 the next frame's RAM, as V1's battle start needs.
 
 --mutate names a mutation the command must fail on: unclipped (selftest),
-clamp (tevdiff), rounding, intensity and unseeded (copydiff), and-copy,
+clamp (tevdiff), rounding, intensity and unseeded (copydiff), lod and
+lodmin (loddiff), and-copy,
 or-copy and or-and (logicop), dest+32 (ramdiff). Exit 0 pass,
 1 fail, 3 skipped (no compiler, no vendor/, no Vulkan device), the reason
 printed.
@@ -112,6 +118,9 @@ SHADERS = [
     ("raster.frag", "raster_frag_fog", ("GXV_MUTATE_FOG",)),
     ("tevdiff.comp", "tevdiff_comp", ()),
     ("tevdiff.comp", "tevdiff_comp_clamp", ("GXV_MUTATE_CLAMP",)),
+    ("loddiff.comp", "loddiff_comp", ()),
+    ("loddiff.comp", "loddiff_comp_lod", ("GXV_MUTATE_LOD",)),
+    ("loddiff.comp", "loddiff_comp_lodmin", ("GXV_MUTATE_LODMIN",)),
     ("copy.comp", "copy_comp", ()),
     ("copy.comp", "copy_comp_rounding", ("GXV_MUTATE_ROUNDING",)),
     ("copy.comp", "copy_comp_intensity", ("GXV_MUTATE_INTENSITY",)),
@@ -477,6 +486,42 @@ def tevdiff(prof: toolchain.Profile, cases: int, seed: int, mutate: str | None) 
     m = re.search(r"^tevdiff \d+ cases, seed \d+: (\d+) mismatch", proc.stdout, re.M)
     ok = proc.returncode == 0 and m is not None and m.group(1) == "0"
     print(f"[gpuspike] tevdiff {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
+def loddiff(prof: toolchain.Profile, cases: int, seed: int, mutate: str | None) -> int:
+    code = ready(prof)
+    if code is not None:
+        return code
+    args = [str(exe_path(prof)), "--backend", "gpu", "--loddiff", str(cases), "--seed", str(seed)]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=False)
+    if skipped(proc):
+        return SKIP
+    for line in proc.stdout.splitlines():
+        if line.startswith("lodhits "):
+            print("hits, a path a count, every one at least 100:")
+            print("  " + "  ".join(line.split()[1:]))
+        elif not line.startswith("device "):
+            print(line)
+    for line in proc.stderr.splitlines():
+        if line.startswith("[gxv]") or "failed" in line:
+            print(line)
+    level = re.search(
+        r"^loddiff level \d+ cases, seed \d+: (\d+) mismatch\w*; (\d+) path", proc.stdout, re.M
+    )
+    formula = re.search(r"^loddiff formula (\d+) cases, seed \d+: (\d+) over", proc.stdout, re.M)
+    ok = (
+        proc.returncode == 0
+        and level is not None
+        and level.group(1) == "0"
+        and level.group(2) == "0"
+        and formula is not None
+        and int(formula.group(1)) > 0
+        and formula.group(2) == "0"
+    )
+    print(f"[gpuspike] loddiff {'passes' if ok else 'FAILS'}")
     return 0 if ok else 1
 
 
@@ -1321,6 +1366,7 @@ def main(argv: list[str] | None = None) -> int:
             "selftest",
             "tevdiff",
             "copydiff",
+            "loddiff",
             "oracle",
             "time",
             "logicop",
@@ -1333,9 +1379,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
     ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
-    ap.add_argument("--cases", type=int, default=100000, help="tevdiff: random setups")
+    ap.add_argument("--cases", type=int, default=100000, help="tevdiff and loddiff: random cases")
     ap.add_argument("--rects", type=int, default=200, help="copydiff: rectangles a combination")
-    ap.add_argument("--seed", type=int, default=1, help="tevdiff and copydiff")
+    ap.add_argument("--seed", type=int, default=1, help="tevdiff, copydiff and loddiff")
     ap.add_argument("--set", default="corpus,perfset", help="oracle and time: capture sets")
     ap.add_argument("--mutations", action="store_true", help="oracle: also the GPU mutations")
     ap.add_argument("--runs", type=int, default=5, help="time: replays a capture")
@@ -1354,6 +1400,8 @@ def main(argv: list[str] | None = None) -> int:
         return tevdiff(prof, args.cases, args.seed, args.mutate)
     if args.command == "copydiff":
         return copydiff(prof, args.rects, args.seed, args.mutate)
+    if args.command == "loddiff":
+        return loddiff(prof, args.cases, args.seed, args.mutate)
     if args.command == "oracle":
         return oracle(prof, args.set.split(","), args.mutations)
     if args.command == "logicop":

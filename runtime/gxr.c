@@ -1061,6 +1061,18 @@ static float span_lod(const Plane* attr, int wi, int ti, float px, float py, flo
     return 0.5f * soa_log2f(f); /* correctly rounded (crmath.h, L6) */
 }
 
+float gxr_span_lod(const float planes[4][3], float px, float py, float scale_s, float scale_t)
+{
+    Plane attr[4];
+    int i;
+    for (i = 0; i < 4; i++) {
+        attr[i].a = planes[i][0];
+        attr[i].b = planes[i][1];
+        attr[i].c = planes[i][2];
+    }
+    return span_lod(attr, 0, 1, px, py, scale_s, scale_t);
+}
+
 static void raster_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, const Vertex* c)
 {
     const Rect* sc = &D->rc.scissor;

@@ -25,7 +25,9 @@
  * whichever backend was asked for, and writes a line a copy to
  * <out>/copydiff.txt for tools/gpuspike.py to hold the two runs' lines
  * against each other. --seed picks the cases; the same seed makes the same
- * ones in both processes.
+ * ones in both processes. --loddiff N (V5, gpu only) holds lod.glsl, the
+ * fragment stage's level of detail, against the sampler's own and span_lod
+ * over N cases of each kind.
  *
  * --replay BASE runs a capture (BASE.fifo, .regs, .ram) on either backend and
  * prints the frame's hash; --png writes the frame, --dump-ram the RAM it left
@@ -40,6 +42,7 @@
 #include "gxr.h"
 #include "gxr_cmd.h"
 #include "gxv.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -819,6 +822,214 @@ static int tevdiff(CpuState* s, unsigned n, uint32_t seed)
     return bad || low;
 }
 
+/* loddiff (V5): the level of detail, which V0 cannot hold to a level -- LOD
+ * +1 passes it on three distinct frames (FINDINGS "V4"). Two kinds of case,
+ * n of each:
+ *
+ * The level: a random level of detail, bias, clamps, level count, texture
+ * size, scale and coordinate through tex_level (the sampler's own
+ * SAMPLE_AT) and lod.glsl's gx_level and gx_level_uv, which must agree bit
+ * for bit in the level and the scaled u and v. The registers' own ranges are
+ * used (bias in 32nds, clamps in 16ths); one case in four puts the biased
+ * level of detail within a few ULPs of a rounding boundary, and one in 64 is
+ * a NaN, which span_lod returns for a degenerate triangle.
+ *
+ * The formula: random planes of 1/w, s/w, t/w and q/w and a pixel, through
+ * span_lod (gxr_span_lod) and gx_lod given the derivatives of s and t worked
+ * in double from the same planes. The derivatives themselves differ by
+ * design (the GPU's come from a pixel quad, 3.4), so only the formula is
+ * held, within LOD_TOL. A case whose float derivative cancels badly, or
+ * whose footprint sits by span_lod's 1e-12 floor, is left out and counted. */
+#define LOD_TOL (1.0 / 1024.0)
+enum { L_LEVEL0, L_LEVELN, L_TOP, L_MIN, L_MAX, L_NAN, L_EDGE, L_NOMIP, L_NPOT, L_N };
+static const char* const g_lod_hit[L_N] = {"level0", "level1+", "top", "min", "max", "nan", "boundary", "nomip", "npot"};
+
+static float rnd_range(float lo, float hi) { return lo + (hi - lo) * (float)(rnd() >> 8) / 16777216.0f; }
+
+static int loddiff(unsigned n, uint32_t seed)
+{
+    uint32_t* in = (uint32_t*)calloc((size_t)n, GXV_LOD_WORDS * 4);
+    uint32_t* out = (uint32_t*)calloc((size_t)n, 12);
+    uint32_t* cpu = (uint32_t*)calloc((size_t)n, 12);
+    unsigned long long hits[L_N];
+    unsigned i, k, bad = 0, shown = 0, low = 0, over = 0, left = 0, kept = 0;
+    double worst = 0.0;
+    if (!in || !out || !cpu) { fprintf(stderr, "[loddiff] out of memory\n"); return 1; }
+    memset(hits, 0, sizeof hits);
+    for (i = 0; i < n; i++) {
+        uint32_t* w = in + (size_t)i * GXV_LOD_WORDS;
+        TexCfg C;
+        float lod, s, t, u, v;
+        int l;
+        seed_rng(seed, i);
+        memset(&C, 0, sizeof C);
+        C.w = rnd() % 8 == 0 ? (int)(1 + rnd() % 1024) : 1 << (rnd() % 11);
+        C.h = rnd() % 8 == 0 ? (int)(1 + rnd() % 1024) : 1 << (rnd() % 11);
+        C.mip = rnd() % 8 != 0;
+        C.nlevels = C.mip ? (int)(1 + rnd() % MAX_MIPS) : 1;
+        for (k = 0; k < MAX_MIPS; k++) {
+            C.lw[k] = C.w >> k ? C.w >> k : 1;
+            C.lh[k] = C.h >> k ? C.h >> k : 1;
+        }
+        C.lod_bias = (float)(int8_t)(rnd() & 0xFF) / 32.0f;
+        C.min_lod = (float)(rnd() & 0xFF) / 16.0f;
+        C.max_lod = (float)(rnd() & 0xFF) / 16.0f;
+        if (rnd() % 2) C.min_lod = 0.0f; /* the usual setting, so the level of detail decides */
+        C.scale_s = rnd() % 8 == 0 ? (float)(1 + rnd() % 1024) : (float)C.w;
+        C.scale_t = rnd() % 8 == 0 ? (float)(1 + rnd() % 1024) : (float)C.h;
+        C.su0 = C.scale_s * (float)C.lw[0] / (float)C.w; /* tev_prepare's expression */
+        C.sv0 = C.scale_t * (float)C.lh[0] / (float)C.h;
+        lod = rnd_range(-4.0f, 14.0f);
+        if (rnd() % 4 == 0) { /* within a few ULPs of a .5 once biased */
+            uint32_t b;
+            lod = (float)(rnd() % 12) + 0.5f - C.lod_bias;
+            memcpy(&b, &lod, 4);
+            b += (rnd() % 9) - 4;
+            memcpy(&lod, &b, 4);
+            hits[L_EDGE]++;
+        }
+        if (rnd() % 64 == 0) {
+            uint32_t nan = 0x7FC00000u;
+            memcpy(&lod, &nan, 4);
+            hits[L_NAN]++;
+        }
+        s = rnd_range(-4.0f, 4.0f);
+        t = rnd_range(-4.0f, 4.0f);
+        l = tex_level(&C, s, t, lod, &u, &v);
+        cpu[i * 3] = (uint32_t)l;
+        memcpy(&cpu[i * 3 + 1], &u, 4);
+        memcpy(&cpu[i * 3 + 2], &v, 4);
+        if (!C.mip || C.nlevels <= 1) hits[L_NOMIP]++;
+        else if (lod == lod) {
+            float L = lod + C.lod_bias;
+            if (L < C.min_lod) hits[L_MIN]++;
+            else if (L > C.max_lod) hits[L_MAX]++;
+            if (l == C.nlevels - 1) hits[L_TOP]++;
+        }
+        hits[l ? L_LEVELN : L_LEVEL0]++;
+        if ((C.w & (C.w - 1)) || (C.h & (C.h - 1))) hits[L_NPOT]++;
+        memcpy(&w[0], &lod, 4);
+        memcpy(&w[1], &C.lod_bias, 4);
+        memcpy(&w[2], &C.min_lod, 4);
+        memcpy(&w[3], &C.max_lod, 4);
+        w[4] = (uint32_t)C.nlevels | (uint32_t)C.mip << 8;
+        memcpy(&w[5], &s, 4);
+        memcpy(&w[6], &t, 4);
+        memcpy(&w[7], &C.su0, 4);
+        memcpy(&w[8], &C.sv0, 4);
+        memcpy(&w[9], &C.scale_s, 4);
+        memcpy(&w[10], &C.scale_t, 4);
+        w[11] = (uint32_t)C.w;
+        w[12] = (uint32_t)C.h;
+        for (k = 0; k < MAX_MIPS; k++) {
+            w[13 + k] = (uint32_t)C.lw[k];
+            w[24 + k] = (uint32_t)C.lh[k];
+        }
+    }
+    if (!gxv_lod_run(0, in, out, n)) return 1;
+    for (i = 0; i < n; i++) {
+        if (!memcmp(&out[i * 3], &cpu[i * 3], 12)) continue;
+        bad++;
+        if (shown++ < 8) {
+            float lod, gu, gv, cu, cv;
+            memcpy(&lod, &in[(size_t)i * GXV_LOD_WORDS], 4);
+            memcpy(&gu, &out[i * 3 + 1], 4);
+            memcpy(&gv, &out[i * 3 + 2], 4);
+            memcpy(&cu, &cpu[i * 3 + 1], 4);
+            memcpy(&cv, &cpu[i * 3 + 2], 4);
+            printf("level mismatch case %u: lod %.9g; gpu level %u u %.9g v %.9g; tex_level level %u u %.9g v %.9g\n", i, lod,
+                   out[i * 3], gu, gv, cpu[i * 3], cu, cv);
+        }
+    }
+    printf("lodhits");
+    for (k = 0; k < L_N; k++) {
+        printf(" %s=%llu", g_lod_hit[k], hits[k]);
+        if (hits[k] < 100) low++;
+    }
+    printf("\n");
+    printf("loddiff level %u cases, seed %u: %u mismatch%s; %u path%s under 100 hits\n", n, seed, bad, bad == 1 ? "" : "es", low,
+           low == 1 ? "" : "s");
+
+    /* The formula. */
+    shown = 0;
+    for (i = 0; i < n; i++) {
+        uint32_t* w = in + (size_t)kept * GXV_LOD_WORDS;
+        float planes[4][3], px, py, sc_s, sc_t, f[7];
+        double W, S, T, Q, ds[2], dt[2], q, cond, fx, fy;
+        seed_rng(seed ^ 0x10D10Du, i);
+        px = (float)(rnd() % 640) + 0.5f;
+        py = (float)(rnd() % 528) + 0.5f;
+        for (k = 0; k < 4; k++) {
+            planes[k][0] = rnd_range(-1.0f, 1.0f) * (k ? 0.05f : 1e-4f);
+            planes[k][1] = rnd_range(-1.0f, 1.0f) * (k ? 0.05f : 1e-4f);
+        }
+        W = rnd_range(1e-3f, 1.0f);
+        planes[0][2] = (float)(W - planes[0][0] * (double)px - planes[0][1] * (double)py);
+        planes[1][2] = rnd_range(-50.0f, 50.0f);
+        planes[2][2] = rnd_range(-50.0f, 50.0f);
+        if (rnd() % 4) { /* q is 1: an ST texgen */
+            planes[3][0] = planes[0][0];
+            planes[3][1] = planes[0][1];
+            planes[3][2] = planes[0][2];
+        } else {
+            planes[3][2] = rnd_range(-2.0f, 2.0f);
+        }
+        sc_s = (float)(1 << (rnd() % 11));
+        sc_t = (float)(1 << (rnd() % 11));
+        W = planes[0][0] * (double)px + planes[0][1] * py + planes[0][2];
+        S = planes[1][0] * (double)px + planes[1][1] * py + planes[1][2];
+        T = planes[2][0] * (double)px + planes[2][1] * py + planes[2][2];
+        Q = planes[3][0] * (double)px + planes[3][1] * py + planes[3][2];
+        if (W <= 1e-6) { left++; continue; }
+        q = Q / W;
+        if (q == 0.0) q = 1.0;
+        /* d(S/W)/dx and the rest, and how badly the CPU's float subtraction
+         * of the same two products can cancel. */
+        cond = 0.0;
+        for (k = 0; k < 2; k++) {
+            double sa = planes[1][k], ta = planes[2][k], wa = planes[0][k];
+            ds[k] = (sa * W - S * wa) / (W * W);
+            dt[k] = (ta * W - T * wa) / (W * W);
+            if (ds[k] != 0.0 && (fabs(sa * W) + fabs(S * wa)) / fabs(sa * W - S * wa) > cond) cond = (fabs(sa * W) + fabs(S * wa)) / fabs(sa * W - S * wa);
+            if (dt[k] != 0.0 && (fabs(ta * W) + fabs(T * wa)) / fabs(ta * W - T * wa) > cond) cond = (fabs(ta * W) + fabs(T * wa)) / fabs(ta * W - T * wa);
+        }
+        fx = (ds[0] / q * sc_s) * (ds[0] / q * sc_s) + (dt[0] / q * sc_t) * (dt[0] / q * sc_t);
+        fy = (ds[1] / q * sc_s) * (ds[1] / q * sc_s) + (dt[1] / q * sc_t) * (dt[1] / q * sc_t);
+        if (cond > 1000.0 || fabs(fx > fy ? fx : fy) < 1e-10) { left++; continue; }
+        f[0] = (float)ds[0];
+        f[1] = (float)dt[0];
+        f[2] = (float)ds[1];
+        f[3] = (float)dt[1];
+        f[4] = (float)q;
+        f[5] = sc_s;
+        f[6] = sc_t;
+        memset(w, 0, GXV_LOD_WORDS * 4);
+        memcpy(w, f, sizeof f);
+        {
+            float c = gxr_span_lod((const float (*)[3])planes, px, py, sc_s, sc_t);
+            memcpy(&cpu[kept * 3], &c, 4);
+        }
+        kept++;
+    }
+    if (kept && !gxv_lod_run(1, in, out, kept)) return 1;
+    for (i = 0; i < kept; i++) {
+        float g, c;
+        double d;
+        memcpy(&g, &out[i * 3], 4);
+        memcpy(&c, &cpu[i * 3], 4);
+        d = fabs((double)g - (double)c);
+        if (d > worst || d != d) worst = d;
+        if (d <= LOD_TOL) continue;
+        over++;
+        if (shown++ < 8) printf("formula over case %u: gpu %.9g span_lod %.9g\n", i, g, c);
+    }
+    printf("loddiff formula %u cases, seed %u: %u over 1/1024 (largest %.3g); %u left out\n", kept, seed, over, worst, left);
+    free(in);
+    free(out);
+    free(cpu);
+    return bad || low || over || !kept;
+}
+
 /* copydiff: every copy command format (BP 0x52's four bits, 0-15), intensity
  * on and off, half scale on and off, filter on and off -- 128 combinations
  * -- each over `rects` random rectangles, with a random EFB per combination
@@ -960,7 +1171,7 @@ int main(int argc, char** argv)
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
-    unsigned tev_cases = 0, copy_rects = 0;
+    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0;
     uint32_t seed = 1;
     int failures, i;
 
@@ -970,6 +1181,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--mutate")) mutate = argv[++i];
         else if (!strcmp(argv[i], "--tevdiff")) tev_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--copydiff")) copy_rects = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--loddiff")) lod_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
@@ -977,8 +1189,8 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--dump-ram")) dump_ram = argv[++i];
         else if (!strcmp(argv[i], "--dump-depth")) dump_depth = argv[++i];
     }
-    if (tev_cases && !g_gpu) {
-        fprintf(stderr, "[gpuspike] --tevdiff runs both sides itself, and needs --backend gpu\n");
+    if ((tev_cases || lod_cases) && !g_gpu) {
+        fprintf(stderr, "[gpuspike] --tevdiff and --loddiff run both sides themselves, and need --backend gpu\n");
         return 2;
     }
     if (g_gpu) {
@@ -997,7 +1209,7 @@ int main(int argc, char** argv)
             return 2;
         }
         gxv_set_upload_hook(upload_hook);
-        if (!tev_cases) gxr_set_backend(gxv_backend());
+        if (!tev_cases && !lod_cases) gxr_set_backend(gxv_backend());
         printf("device %s\n", gxv_device_name());
     }
     memset(&s, 0, sizeof s);
@@ -1057,13 +1269,15 @@ int main(int argc, char** argv)
         free(s.mem);
         return r ? 1 : 0;
     }
-    if (tev_cases || copy_rects) {
+    if (tev_cases || copy_rects || lod_cases) {
         render_env();
         if (!gxr_enabled()) {
             fprintf(stderr, "[gpuspike] the renderer is off\n");
             return 2;
         }
-        failures = tev_cases ? tevdiff(&s, tev_cases, seed) : copydiff(&s, copy_rects, seed);
+        failures = tev_cases ? tevdiff(&s, tev_cases, seed)
+                 : lod_cases ? loddiff(lod_cases, seed)
+                             : copydiff(&s, copy_rects, seed);
         if (g_gpu) {
             gxv_report();
             gxv_shutdown();

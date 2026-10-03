@@ -140,6 +140,11 @@ typedef struct {
 void tev_prepare(const uint32_t* bp, TevSetup* out);
 void tev_pixel(const TevSetup* T, const int ras[2][4], const float tex[8][4], uint8_t out[4], int* alpha_pass);
 void tev_register_written(uint32_t reg, uint32_t v);
+/* For tools (loddiff): the level a sample at lod reads, and s, t scaled to its
+ * texels, exactly as the sampler finds them; and span_lod's level of detail
+ * at (px, py), from the planes of W, S, T and Q in that order. */
+int tex_level(const TexCfg* C, float s, float t, float lod, float* u, float* v);
+float gxr_span_lod(const float planes[4][3], float px, float py, float scale_s, float scale_t);
 void tex_invalidate_all(void);
 void tex_graveyard_empty(void); /* frees textures no queued draw can reference any more */
 int tex_graveyard_full(void);

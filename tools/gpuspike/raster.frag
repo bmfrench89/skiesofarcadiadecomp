@@ -53,6 +53,8 @@ float rec_float(uint i) { return uintBitsToFloat(dw[pc.record + i]); }
 
 // ---- sampling: gxr_tev.c's sample and sample_level -------------------------
 
+#include "lod.glsl"
+
 // C's division and remainder truncate toward zero; GLSL leaves % of a
 // negative number undefined, so the remainder is built from the division.
 int c_rem(int a, int b) { return a - b * (a / b); }
@@ -112,28 +114,10 @@ ivec4 tex_sample(uint map, float s, float t, float lod)
     uint rec = tev_word(m), flags = tev_word(m + 1u);
     int nlevels = int(tev_word(m + 9u)), w = int(tev_word(m + 10u)), h = int(tev_word(m + 11u));
     if (rec == NO_TEXTURE || w <= 0 || h <= 0) return ivec4(0);
-    int l = 0;
-    if ((flags & 32u) != 0u && nlevels > 1) {
-#ifdef GXV_MUTATE_LOD
-        float L = lod + rec_float(m + 2u) + 1.0;
-#else
-        float L = lod + rec_float(m + 2u);
-#endif
-        if (L < rec_float(m + 3u)) L = rec_float(m + 3u);
-        if (L > rec_float(m + 4u)) L = rec_float(m + 4u);
-        l = int(L + 0.5);
-        if (l >= nlevels) l = nlevels - 1;
-        if (l < 0) l = 0;
-    }
-    float u, v;
-    if (l == 0) {
-        u = s * rec_float(m + 7u);
-        v = t * rec_float(m + 8u);
-    } else {
-        u = s * (rec_float(m + 5u) * float(texrec[rec + 11u + uint(l)]) / float(w));
-        v = t * (rec_float(m + 6u) * float(texrec[rec + 22u + uint(l)]) / float(h));
-    }
-    return sample_level(rec, flags, l, u, v);
+    int l = gx_level(lod, rec_float(m + 2u), rec_float(m + 3u), rec_float(m + 4u), nlevels, (flags & 32u) != 0u);
+    vec2 uv = gx_level_uv(s, t, l, rec_float(m + 7u), rec_float(m + 8u), rec_float(m + 5u), rec_float(m + 6u),
+                          int(texrec[rec + 11u + uint(l)]), int(texrec[rec + 22u + uint(l)]), w, h);
+    return sample_level(rec, flags, l, uv.x, uv.y);
 }
 
 // The texel a stage samples: its coordinate's s/q, t/q and level of detail,
@@ -230,11 +214,7 @@ void main()
         g_lod[i] = 0.0;
         if (interpolated && ((miptex >> i) & 1u) != 0u) {
             uint m = DRAW_MAPS + ((texmap_of >> (3u * i)) & 7u) * MAP_WORDS;
-            float q = tc.z != 0.0 ? tc.z : 1.0;
-            float sc_s = rec_float(m + 5u), sc_t = rec_float(m + 6u);
-            float dsdx = dx.x / q * sc_s, dsdy = dy.x / q * sc_s, dtdx = dx.y / q * sc_t, dtdy = dy.y / q * sc_t;
-            float f = max(dsdx * dsdx + dtdx * dtdx, dsdy * dsdy + dtdy * dtdy);
-            g_lod[i] = f <= 1e-12 ? -16.0 : 0.5 * log2(f);
+            g_lod[i] = gx_lod(dx, dy, tc.z != 0.0 ? tc.z : 1.0, rec_float(m + 5u), rec_float(m + 6u));
         }
     }
     ivec4 ras0 = (nchan & 1u) != 0u ? quantised(i_col0) : ivec4(0);

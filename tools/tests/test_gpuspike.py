@@ -274,6 +274,34 @@ def test_a_flipped_clamp_fails_tevdiff():
     assert "mismatch case" in proc.stdout
 
 
+def test_the_level_of_detail_on_the_gpu_is_the_samplers():
+    """V5, the owner's answer at the gate for V0's blind spot: 100,000 cases
+    through tex_level and lod.glsl, bit for bit in the level and the scaled
+    coordinates, every path at least 100 times (sides that are not a power of
+    two and NaN among them); and span_lod's formula within 1/1024 of
+    lod.glsl's, the same derivatives given to both."""
+    proc = run_spike("loddiff")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    assert "loddiff level 100000 cases, seed 1: 0 mismatches; 0 paths under 100 hits" in out
+    assert "loddiff formula 99933 cases, seed 1: 0 over 1/1024" in out
+    assert "npot=" in out and "nan=" in out and "boundary=" in out
+
+
+@pytest.mark.parametrize(("mutation", "fails"), [("lod", "level"), ("lodmin", "formula")])
+def test_each_lod_mutation_fails_loddiff(mutation, fails):
+    """LOD bias +1, which V0 misses on three distinct frames, and the
+    footprint's smaller axis taken for its larger: each fails its own half."""
+    proc = run_spike("loddiff", "--cases", "20000", "--mutate", mutation)
+    out = proc.stdout
+    assert proc.returncode == 1, out + proc.stderr
+    level = re.search(r"loddiff level \d+ cases, seed 1: (\d+) mismatch", out)
+    formula = re.search(r"loddiff formula \d+ cases, seed 1: (\d+) over", out)
+    assert level and formula, out
+    assert (int(level.group(1)) > 0) == (fails == "level"), out
+    assert (int(formula.group(1)) > 0) == (fails == "formula"), out
+
+
 def test_the_copies_on_the_gpu_are_the_cpus():
     """V3b: 128 combinations of format, intensity, half scale and filter, 200
     random rectangles each: the same bytes in RAM, the same decoded image and
