@@ -54,6 +54,12 @@ Non-negotiable, applies to every commit:
 3. **Analysis metadata is fine.** Addresses, sizes, symbol names, signature hashes and
    structural offsets are facts about the binary, not copies of it. These live in `config/`.
 4. The user runs extraction and build against a disc they own.
+5. **A release holds only what this repository's original sources and third-party toolchains
+   build:** the runtime, the tools, and a compiler to run them with. `gen/` and `src/` (the
+   decompiled game code, which the MIT licence cannot cover) are compiled on the player's
+   machine from their own dump, and no release carries a DOL or anything built from one.
+   Decided 2026-10-03 at gate G3 ([PLAN-NEXT.md](PLAN-NEXT.md) §0,
+   [research/distribution.md](research/distribution.md)).
 
 ---
 

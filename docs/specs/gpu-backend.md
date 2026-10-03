@@ -1349,6 +1349,8 @@ FINDINGS entry "V4".*
   frames, listed. V1 caught no menu copy, so `chain` runs the battle transition.*
 - *A defect was found and fixed: logic pipelines had a ZERO, ZERO blend beside their logic op. A
   selftest scene of the mask effect's three logic draws now holds every mode to the CPU.*
+- *The owner looked at five side-by-sides, not four (the field pair that fails by design, a battle, a
+  ship battle, the mask effect, the chained transition), on 2026-10-03, and judged them right.*
 
 *Several days. Rebuild: none for `soa.exe`. Prerequisites: V4a, V1. Files: `tools/gpuspike/*`,
 `tools/gpuspike.py` (`logicop`, `ramdiff`, `chain`, the poison step), this spec's section 8 (the
@@ -1390,6 +1392,8 @@ numbers), FINDINGS entry "V4".* **Owner:** four side-by-sides.
 
 ### The gate
 
+*Answered 2026-10-03: A (section 8; ../PLAN-NEXT.md §0).*
+
 The owner decides A, B, C or D (section 8). V5 onward happens only on A or B. If the spike was built
 on the other API than the one chosen, V5 ports it (a week-plus more), keeping the oracle, the seam
 and the differentials; if Q-V1 was answered before V3a, no port is needed.
@@ -1403,9 +1407,18 @@ and the differentials; if Q-V1 was answered before V3a, no port is needed.
 `tools/scenario.py` (the sweep's `[gxv]` refusal), `tools/citest/compile_runtime.py` (the headers'
 include path), `.github/workflows/ci.yml`
 (fetch headers, compile `gxv.c`), `tools/tests/test_gxv_live.py` (new: the log checks), README (the
-switch), FINDINGS entry "V5".*
+switch), `tools/gpuspike/loddiff.comp` and `tools/gpuspike.py` (`loddiff`, first), FINDINGS entry "V5".*
 
 *Done:*
+- **The level of detail, checked exactly, first** (the owner's answer at the gate, 2026-10-03, for
+  V0's blind spot: LOD +1 passes V0 on three distinct frames, FINDINGS "V4").
+  `python tools/gpuspike.py loddiff`, built as `tevdiff` is: random (level of detail, bias, minimum
+  and maximum, level count, texture and level sizes) cases through `tex_sample`'s level choice and
+  per-level coordinate scale and through gxr.c's, with 0 mismatches in the level chosen and the scaled
+  coordinates; and random plane sets through `span_lod` and through the shader's formula given the
+  same derivatives, agreeing within a tolerance fixed before the run. The derivatives themselves
+  differ by design (3.4) and stay V0's. Mutation: `--mutate lod` (bias +1) fails it wherever the
+  clamps leave room for the change.
 - The contract, with `SOA_GPU` unset.
 - **Same session, same replays**: the spike binary and `gen/soa.exe --replay`, both with
   `SOA_GPU=vulkan`, replay each of the 35 and V1's captures, and their PNGs are byte-identical; both
@@ -1520,7 +1533,9 @@ landed), `runtime/gxv/filters.glsl` (if P5a landed), `tools/tests/test_gxv_prese
 - `SOA_GPU_SCALE` 2 and 3: EFB, copies and their filters scaled; RAM readbacks and `g_screen`
   resampled to native size; texel footprints follow the scale; copy images stay scaled in the pool
   and are sampled with texcoords normalised by the game's declared size (3.13). The wide mode: EFB
-  854×480 for perspective draws, orthographic HUD placed as M10 places it.
+  854×480 for perspective draws, orthographic HUD placed as M10 places it. *The owner also wants
+  21:9 for the 3440×1440 ultrawide (D-26, 2026-10-03): the wide EFB's width is to follow the
+  display's aspect, as M10's factor is, sized when M10 starts.*
 
 *Done:*
 - With scale 1, V5's same-session contrast still byte-identical.
@@ -1595,6 +1610,8 @@ entry "V12".*
   Deck. This is the question everything else waits on; answered before V3a starts, it also picks the
   spike's API, so nothing is built twice.
 - **Q-V2. Do you want 2×/3× resolution and unsqueezed widescreen?** They are most of V8–V9.
+  (Answered 2026-10-03: yes, 2× and 3×, 16:9, and 21:9 for the ultrawide, which V9 does not yet
+  specify.)
 - **Q-V3. May the build fetch Vulkan-Headers and glslang** (pinned, into `vendor/`, like the Metrowerks
   compilers), reopening SPEC §10's "no shader compiler" for an optional build step?
 - **Q-V4. Do you accept a tolerance-judged GPU picture,** with the CPU renderer kept as the pinned
@@ -1677,6 +1694,11 @@ each, 2026-10-03, on the Z1 Extreme's GPU, FINDINGS "V3" and "V4"):
 
 **What it cannot tell you:** live frame rate with the game running, presentation and pacing,
 long-run stability, device loss, any Android driver's behaviour, or energy use.
+
+**The owner's answer, 2026-10-03: A, Vulkan.** The five side-by-sides were judged right. V0's
+level-of-detail blind spot is closed by an exact check at the start of V5 (`loddiff`), thresholds
+unchanged. Q-V2: 2×, 3×, 16:9 and 21:9. The GPU build comes before gameplay milestone 2
+(../PLAN-NEXT.md §0).
 
 **My recommendation.** Answer Q-V1 now. C5a has confirmed the display-list chain (750cef0), so C5b and
 C5c come first; then run V0 and V1 (they touch no renderer code) and V2–V4 after the comfort pack's

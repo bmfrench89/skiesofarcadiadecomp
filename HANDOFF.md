@@ -553,10 +553,12 @@ C5c) is now done.
    is the one that agrees with exact arithmetic); logic ops are exact three
    ways; every copy's RAM difference traces to the EFB; the battle
    transition chains. The spec's section 8 holds the numbers. LOD +1 is
-   V0's one blind spot, three distinct frames. **Next is the gate:** the
-   owner looks at `build/gpuspike/review/index.html` (field, battle, ship
-   battle, the mask effect, the transition) and decides A, B, C or D
-   (specs/gpu-backend.md section 8). V5 onward waits on A or B. Still open for the owner, and not blocking: whether a
+   V0's one blind spot, three distinct frames. **The gate answered A,
+   Vulkan,** on 2026-10-03, after the owner judged the five side-by-sides
+   right (PLAN-NEXT §0, with D-26 and D-27). **Next is V5**, opening with
+   `loddiff`, the exact level-of-detail check the owner chose for V0's
+   blind spot (specs/gpu-backend.md V5). Read the slice against HEAD
+   before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

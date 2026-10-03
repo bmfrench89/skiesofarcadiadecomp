@@ -124,7 +124,7 @@ Rough total [I]: 2–3 weeks of evenings to native Linux, a week more for ARM64,
 
 ## 6. Decisions for the owner
 
-- **Distribution (Q3, section F's G4):** personal sideloading only, a runtime-only APK, or prebuilt binaries like the other projects.
+- **Distribution (Q3, section F's G4):** personal sideloading only, a runtime-only APK, or prebuilt binaries like the other projects. *Answered 2026-10-03: a runtime-only APK, with a prebuilt runtime that builds the game on the player's PC ([distribution.md](distribution.md)).*
 - **SDL3 (Q6):** it reopens "no third-party runtime dependency" (`SPEC.md:463-464`), but it covers window, pads and audio on Linux, the Deck and Android at once. It would be fetched at build time, because `vendor/` is refused.
 - **GPU backend:** a Vulkan backend of the port's own or a fork of Aurora. Either way, GPU frames will not match the 23 pinned hashes bit for bit.
 - **Target devices:** 8 Elite-class handhelds only, or mid-range phones too. Mid-range also needs the game-logic thread speed-ups (H13).

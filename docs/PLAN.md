@@ -968,7 +968,8 @@ replace the one piece of this port that is a trustworthy reference. The
 undesigned part is `copy_to_texture` writing tiled bytes into MEM1 every
 frame, which needs readback or guest-write tracking that does not exist.
 *Reopened 2026-09-25 as a three-to-four-week spike ending in the owner's
-decision: `docs/specs/gpu-backend.md`, PLAN-NEXT M5 and gate G1.*
+decision: `docs/specs/gpu-backend.md`, PLAN-NEXT M5 and gate G1. Answered
+2026-10-03: A, Vulkan.*
 
 **The reference interpreter (slice 3.7).** Narrower than this file used to
 claim: decode is cross-checked against capstone (19 tests in

@@ -12,7 +12,7 @@ docs/FINDINGS.md, and move a slice here to done the way docs/PLAN.md does. -->
 - a handful of windowed sessions: the paced presenter (H8), vblank locking on your monitor (H9), live interpolation (H17b), the settings file (M5), the overlay (M8) and widescreen (M10, M14). The first is about 15 minutes.
 - setting up Task Scheduler and lending two nights to the overnight runner (S6);
 - noting the handheld's power mode, and whether it was plugged in, on every measured run;
-- one decision: the GPU backend, taken at PLAN-NEXT's gate G1 after a three-to-four-week spike (`docs/specs/gpu-backend.md`);
+- one decision: the GPU backend, taken at PLAN-NEXT's gate G1 after a three-to-four-week spike (`docs/specs/gpu-backend.md`); answered 2026-10-03: A, Vulkan;
 - one headless card rebuild on your machine (S7a).
 
 Sizes are in evenings, as in PLAN.md: **hours**, **a day**, **several days**, **week-plus**. **Owner** marks a slice that needs a window on the owner's screen or a person playing. **[V]** means the research quotes the instruction, file:line or log line. **[I]** means it is inferred. *Checked here* means the source was re-read while writing this plan. The new tracks are **H** (speed and frame pacing), **M** (mods), **F4–F7** (Track F continued) and **S** (soak and regression).
@@ -591,6 +591,7 @@ Actions are queued to the safe point, and an environment variable drives them fo
 - The switch is in the settings file, off by default.
 
 **M10. Widescreen, stage 1 (anamorphic)** — *several days, `--link`. **Owner:** judges it in a window.*
+*The owner wants 21:9 for the ultrawide as well as 16:9 (PLAN-NEXT D-26, 2026-10-03): the factor is to follow the display's aspect, and the edges' problems are listed at each.*
 - Perspective draws (XF 0x1026 bit 0 clear) get p0 × 3/4.
 - The image is presented at 16:9.
 - Orthographic HUD draws are pillarboxed, except full-screen quads.

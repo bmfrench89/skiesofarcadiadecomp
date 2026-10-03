@@ -100,10 +100,34 @@ The owner answered four questions, with the research behind them summarised in t
   tolerance, with the CPU renderer kept as the pinned reference and the fallback. **D-20, yes:**
   about three to four weeks of evenings on V0-V4b before the gate. D-17 and D-18 were already
   settled by the table above (Android firm; Vulkan headers and a shader compiler may be fetched).
-- **Still open, and still the owner's:** G3,
-  distribution (assumed for now: the owner's own devices, built from source on the PC); the primary
+- **At the gate, the owner's answers of 2026-10-03:**
+  - **The look:** the five side-by-sides in `build/gpuspike/review/` (the field pair that fails by
+    design, a battle, a ship battle, the mask effect, the chained battle transition) judged right.
+  - **G1: A, Vulkan.** V5 onward. H15d and H16 stay deferred: no target was named on which the CPU
+    renderer, kept as reference and fallback, is too slow (A3's second condition).
+  - **V0's level-of-detail blind spot:** closed by an exact check early in V5 (`loddiff`,
+    specs/gpu-backend.md V5), not by a threshold change.
+  - **D-26: 2× and 3×, 16:9, and 21:9 for the ultrawide.** V8 and V9 are wanted. 21:9 is in no spec
+    yet: M10's anamorphic factor and V9's wide EFB are to follow the display's aspect, sized when M10
+    starts.
+  - **D-27: the GPU build first,** then the Android path; gameplay milestone 2 waits.
+  - **G3, distribution: "What's the easiest for users. Do more research on this is needed and go with
+    the best path forward for all users."** The research is
+    [research/distribution.md](research/distribution.md), and the path chosen on that instruction:
+    - **Windows and the Deck: a prebuilt runtime that builds the game on the player's machine from
+      their own disc** (download, run, pick the disc, wait minutes once). The download holds no
+      translated or decompiled game code.
+    - **Android: a runtime-only APK that loads the game library built that way on a PC.** Building
+      on the phone itself comes later, and only if it matters.
+    - **Not prebuilt full binaries,** which most similar projects ship: on 2026-09-11 SNK took down a
+      static recompilation's release archives. SPEC §2 rule 2 stands; rule 5 now says what a
+      release may hold.
+    - **When:** specified after V7 and built before L12, whose APK needs it. Until then players
+      build from source. Two questions return before the first public release: registering the APK
+      under the owner's ID, and signing the runtime.
+- **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
-  no spec); D-26 (2× and 3×, and 21:9, at the gate).
+  no spec).
 - **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
 
 ---
@@ -605,7 +629,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 **Gated, not scheduled:**
 - **L10**, native Linux: gate G2 (SDL3).
 - **L11**, ARM64 on a device: hardware you name.
-- **L12**, Android: gate G1 answering A, gate G3, and Android as a goal.
+- **L12**, Android: gate G1 answering A, gate G3, and Android as a goal (all three since 2026-10-03), and G3's builder.
 
 **The order question the portability spec asked (its Q8).**
 - **(a) L2a in M1:** recommended here (D-12).
@@ -637,8 +661,8 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 | 4 | **V3a** headless Vulkan harness: fetch, build, the EFB pass with CPU clipping, geometry self test. **Done** 2026-10-03 (FINDINGS "V3"): 15 scenes, coverage exact away from edges on the Z1 Extreme's GPU, thirteen mutations red | several days | none | V2; D-17 "yes" or unanswered | — |
 | 5 | **V3b** the exact differentials: `tevdiff`, `copydiff`. **Done** 2026-10-03 (FINDINGS "V3"): 100,000 TEV cases and 25,600 copies, 0 mismatches; every EFB copy is now the compute copy | several days | none | V3a | — |
 | 6 | **V4a** the spike on the 21 captures with no texture copies: draws, textures, depth, fog, blend, screen copy. **Done** 2026-10-03 (FINDINGS "V4"): 21 of 21 pass V0 on the first run; one LOD blind spot (the sky pair) and the alpha mutation short of five, both listed | several days to week-plus | none | V0, V3b | — |
-| 7 | **V4b** copies and logic ops, with poison and chain; V1's captures; the gate memo. **Done** 2026-10-03 (FINDINGS "V4"): 65 of 67 captures pass V0, 2 by design; logic ops exact three ways; every copy's RAM difference traced to the EFB; the battle transition chains; the owner's look pending | several days | none | V4a, V1 | **Owner**: four side-by-sides |
-| — | **Gate G1** | — | — | V4b | **Owner** |
+| 7 | **V4b** copies and logic ops, with poison and chain; V1's captures; the gate memo. **Done** 2026-10-03 (FINDINGS "V4"): 65 of 67 captures pass V0, 2 by design; logic ops exact three ways; every copy's RAM difference traced to the EFB; the battle transition chains; the owner's look judged right 2026-10-03 | several days | none | V4a, V1 | **Owner**: four side-by-sides |
+| — | **Gate G1**. **Answered 2026-10-03: A, Vulkan** (§0) | — | — | V4b | **Owner** |
 
 If D-17 is "no" before V3a starts, V3-V4 are built on Direct3D 11 (V3′/V4′), with the same Done
 lines.
@@ -697,7 +721,7 @@ cancellation. Each returns on the condition shown.
 | **Session B** | End of M1 | about 60 min, with Dolphin at hand | **P10b**: two pads, one battle (Parsec optional). **M11a**: turbo feel and music pitch. **P3**: import a Dolphin save, and export one back to Dolphin. **C5 (optional)**: the same scene in Dolphin and the port, a character in sunlight and a menu over a field (D-29), which feeds C5b/C5c. P5a at a glance |
 | **Look C** | M2, after C5b | about 20 min, no play | **C5c**: open each changed frame beside the old one; the bless commit says you did. **Done 2026-10-01:** all 16 judged right |
 | **Session D** | M2, after H17b | about 30 min windowed, at 60 or 120 Hz | **H17b**: does 60 look right? A list of anything wrong, which is H18's input. Judder here reopens H9 |
-| **Gate sitting** | After V4b | about 30 min | Four side-by-sides; **G1**; then D-26 (2×/3×) and, if the answer is A with Android or Linux, G2 and G3 |
+| **Gate sitting** | After V4b | about 30 min | Four side-by-sides; **G1**; then D-26 (2×/3×) and, if the answer is A with Android or Linux, G2 and G3. **Done 2026-10-03:** five side-by-sides judged right; G1 A; D-26 and D-27 answered (§0) |
 
 **Optional, not a gate:** the Proton session on a Deck, if you have one (L1).
 
@@ -716,6 +740,7 @@ cancellation. Each returns on the condition shown.
 | **Choices** | **A** Vulkan; **B** Direct3D 11; **C** not now; **D** not ever (specs/gpu-backend.md §8) |
 | **It decides** | V5+; whether H15d and H16 return (A3); whether L12 can ever be playable; V8/V9 (2×, 3×, unsqueezed widescreen) |
 | **If unanswered** | C: nothing new is built, the oracle and the seam stay, and H15d/H16 stay deferred until you answer |
+| **Answered** | 2026-10-03: **A** (§0) |
 
 ### D2. G2: SDL3 (gameplay Q6 = portability Q6)
 
@@ -734,6 +759,7 @@ cancellation. Each returns on the condition shown.
 | **Choices** | Source only, built on each player's machine (today); a runtime-only APK that loads a player-built game library (android-and-native.md §4); prebuilt binaries, which conflict with SPEC §2 rule 2 |
 | **It bears on** | I3 (after it, `soa.exe` holds your copy of the executable verbatim, so never share it); portability Q3 (the default compiler); L12 |
 | **If unanswered** | Source only |
+| **Answered** | 2026-10-03, on the owner's instruction to take the easiest path for all players: a prebuilt runtime that builds the game from the player's disc on their machine, and a runtime-only APK (§0; research/distribution.md) |
 
 ### D4. G4: the handheld and its refresh rate (gameplay Q1 = comfort Q-O4)
 
@@ -785,8 +811,8 @@ until you say otherwise.
 | D-23 | Text deltas for disc files | disc Q3 | I7 (gameplay milestone 2) | yes, as specified |
 | D-24 | H18 follows H17b and is not held by the GPU gate (A4) | this plan | M2 | yes |
 | D-25 | Keep a long play log, to count guest threads | portability Q9 | any time | yes, please |
-| D-26 | 2×/3× resolution and unsqueezed widescreen wanted | GPU Q-V2 | V8/V9 | ask at the gate |
-| D-27 | GPU build or gameplay milestone 2 first, after the gate | this plan | C6 | ask at the gate |
+| D-26 | 2×/3× resolution and unsqueezed widescreen wanted | GPU Q-V2 | V8/V9 | **answered 2026-10-03: 2×, 3×, 16:9 and 21:9** (§0) |
+| D-27 | GPU build or gameplay milestone 2 first, after the gate | this plan | C6 | **answered 2026-10-03: the GPU build first** |
 | D-28 | Delete the loose tree (I2), and later `disc.iso` and your original dump (I5) | disc Q6 | session A; I5 | nothing is deleted without you; the commands check first |
 | D-29 | A Dolphin comparison for C5 | GPU Q-V6 | session B | **answered 2026-10-01: not before C5c's bless.** The shadow C5b seemed to lose is drawn (FINDINGS "The shadows were drawn out of order") |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |

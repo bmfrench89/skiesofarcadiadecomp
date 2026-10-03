@@ -5486,7 +5486,8 @@ and the mechanism is one the CPU reference gets wrong.
   - the mask effect (mask_3200);
   - the battle transition, chained.
 
-  Recorded with the owner's answer.
+  The owner looked on 2026-10-03 and judged them right; the gate answered
+  A, Vulkan (PLAN-NEXT §0).
 - **Compilers.** The NDK's clang-cl build gives the same oracle verdicts.
 - **`test_gpuspike.py`:** the oracle test now covers the 35 captures with
   copies (33 pass and 2 by design). It adds `logicop` and four GPU-free

@@ -1418,6 +1418,8 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - It recognises NKit, GCZ, WIA and CISO images and points at Dolphin's Convert File.
   - A "dump your own disc" page. The menu is M8's overlay, not a separate launcher.
 - **G4. Decide how the port reaches other players** — *several days.* The owner's side of it is Q3.
+  - *Decided 2026-10-03 (PLAN-NEXT §0, gate G3; research/distribution.md): the one-step build below,
+    shipped as a prebuilt runtime with its compiler, and a runtime-only APK on Android. SPEC §2 rule 5.*
   - SPEC.md already rules out a prebuilt exe, because it would carry the translated game.
   - The open option is a one-step build on the player's machine with a compiler the project may ship: zig cc or llvm-mingw, since clang-cl still needs Microsoft's headers.
   - It also needs:
