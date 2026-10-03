@@ -149,6 +149,17 @@ static GxvUploadHook g_hook;
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
 static int g_mut_noinvariant;
+/* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
+ * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
+ * (the EFB copied out before the draw and the op done in the shader). */
+enum { LOGIC_NATIVE, LOGIC_BLEND, LOGIC_SNAPSHOT };
+static int g_logic_mode = -1, g_has_logicop;
+/* The logic and copy mutations: every logic op drawn as a copy, the AND as
+ * one, the ORs as ones, OR and AND swapped; copies to a texture skipped, or
+ * written 32 bytes on. */
+enum { MUT_LOGIC_NONE, MUT_LOGIC_COPY, MUT_AND_COPY, MUT_OR_COPY, MUT_OR_AND };
+static int g_mut_logic, g_mut_skip_copies, g_mut_dest32;
+static unsigned long long g_n_logic;
 /* --mutate measure: an occlusion query around every draw, to find the
  * frame's largest -- the one the skip-draw mutation leaves out (V4a). */
 #define OCC_QUERIES 16384
@@ -478,6 +489,21 @@ static const VkBlendFactor k_dst_factor[8] = {
     VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
     VK_BLEND_FACTOR_DST_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA};
 
+/* The logic op a draw is drawn with, or -1: GX's 0-15, which Vulkan's
+ * VkLogicOp numbers the same way. A blend overrides it, as on the CPU. The
+ * mutations change it here, so every mode draws them alike. 3, COPY, is no
+ * logic op at all. */
+static int draw_lop(const DrawCmd* D)
+{
+    int lop;
+    if (D->px.blend_en || !D->px.logic_en) return -1;
+    lop = (int)(D->px.lop & 15);
+    if (g_mut_logic == MUT_LOGIC_COPY || (g_mut_logic == MUT_AND_COPY && lop == 1) || (g_mut_logic == MUT_OR_COPY && lop == 7))
+        return 3;
+    if (g_mut_logic == MUT_OR_AND) lop = lop == 7 ? 1 : lop == 1 ? 7 : lop;
+    return lop;
+}
+
 static int fragment_module(void)
 {
     VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -502,7 +528,11 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
     int z_upd = z_en && D->px.z_upd;
     unsigned mask = (D->px.col_upd ? 1u : 0u) | (D->px.alpha_upd ? 2u : 0u);
     unsigned cull = topo <= T_FAN ? (D->rc.cull & 3) : 0;
-    unsigned blend = D->px.blend_en ? 1u | (D->px.sfac & 7) << 1 | (D->px.dfac & 7) << 4 | (D->px.subtract ? 1u : 0u) << 7 : 0u;
+    int lop = draw_lop(D);
+    /* The blend field: a blend's factors, or -- the blend being off -- a logic
+     * op's number above bit 0, which never collides with a blend's. */
+    unsigned blend = D->px.blend_en ? 1u | (D->px.sfac & 7) << 1 | (D->px.dfac & 7) << 4 | (D->px.subtract ? 1u : 0u) << 7
+                   : lop >= 0 && lop != 3 ? (unsigned)lop << 1 | 0x20u : 0u;
     uint32_t key = 1u + ((((((((uint32_t)topo * 4 + cull) * 2 + (uint32_t)z_en) * 8 + zf) * 2 + (uint32_t)z_upd) * 4 + mask) << 8) | blend);
     unsigned slot = (key * 2654435761u) >> 20 & (PIPE_SLOTS - 1), probes;
     VkPipelineShaderStageCreateInfo st[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
@@ -552,7 +582,7 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
     /* blend_pixel: the colour blended by the factors, or the destination
      * less the source with the factors ignored; the alpha stored as the
      * source gives it, never blended. */
-    if (blend) {
+    if (D->px.blend_en) { /* not `blend`, which also carries a logic op's number */
         ba.blendEnable = VK_TRUE;
         if (D->px.subtract) {
             ba.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
@@ -566,6 +596,24 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
         ba.alphaBlendOp = VK_BLEND_OP_ADD;
         ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    }
+    if (!D->px.blend_en && lop >= 0 && lop != 3) {
+        if (g_logic_mode == LOGIC_NATIVE) {
+            /* All four channels: the CPU applies the op to RGB and stores the
+             * source alpha, which nothing in this game reads (3.5). */
+            cb.logicOpEnable = VK_TRUE;
+            cb.logicOp = (VkLogicOp)lop;
+        } else if (g_logic_mode == LOGIC_BLEND) {
+            /* OR as src(1 - dst) + dst, AND as src dst; the alpha stored as it is. */
+            ba.blendEnable = VK_TRUE;
+            ba.colorBlendOp = VK_BLEND_OP_ADD;
+            ba.srcColorBlendFactor = lop == 7 ? VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR : VK_BLEND_FACTOR_DST_COLOR;
+            ba.dstColorBlendFactor = lop == 7 ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
+            ba.alphaBlendOp = VK_BLEND_OP_ADD;
+            ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        }
+        /* snapshot: the shader computes it, against the EFB read before */
     }
     cb.attachmentCount = 1;
     cb.pAttachments = &ba;
@@ -597,7 +645,9 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
  * dual-source blending to store (3.4). Refused rather than drawn wrong. */
 static const char* unsupported(const DrawCmd* D)
 {
-    if (!D->px.blend_en && D->px.logic_en) return "a logic op (V4b)";
+    int lop = draw_lop(D);
+    if (lop >= 0 && lop != 3 && g_logic_mode == LOGIC_BLEND && lop != 1 && lop != 7)
+        return "a logic op other than OR and AND, which the blend approximation cannot draw (3.5)";
     if (D->px.const_alpha >= 0) return "a constant alpha (3.4: the corpus has none)";
     return NULL;
 }
@@ -671,6 +721,10 @@ static int draw_record(const DrawCmd* D, uint32_t* r)
     r[102] = float_bits(D->px.fog_c);
     r[103] = D->px.fog_b_mag;
     r[104] = (uint32_t)D->px.fog_color[0] | (uint32_t)D->px.fog_color[1] << 8 | (uint32_t)D->px.fog_color[2] << 16;
+    {
+        int lop = draw_lop(D);
+        if (lop >= 0 && lop != 3 && g_logic_mode == LOGIC_SNAPSHOT) r[105] = 1u | (uint32_t)lop << 1;
+    }
     for (m = 0; m < 8; m++) {
         const TexCfg* C = &D->tev.tex[m];
         uint32_t* w = r + 108 + 12 * m;
@@ -791,6 +845,39 @@ static int needs_rebuild(const DrawCmd* D)
     return 0;
 }
 
+static int efb_to_buffer(VkPipelineStageFlags reader);
+
+static void describe_draw(const DrawCmd* D)
+{
+    unsigned st, i;
+    say("draw %llu: prim %#x, %u vertices, cull %u, scissor %d,%d-%d,%d, z_en %d z_func %u z_upd %d, blend %d (%u, %u, sub %d), "
+        "logic %d (%u), masks %d%d, ntex %#x nchan %#x, %u stages, fast %u/%u, alpha_always %d, fog %u",
+        g_n_draws, D->prim, D->count, D->rc.cull, D->rc.scissor.x0, D->rc.scissor.y0, D->rc.scissor.x1, D->rc.scissor.y1,
+        D->px.z_en, D->px.z_func, D->px.z_upd, D->px.blend_en, D->px.sfac, D->px.dfac, D->px.subtract, D->px.logic_en,
+        D->px.lop, D->px.col_upd, D->px.alpha_upd, D->ntex, D->nchan, D->tev.stages, D->tev.fast_c, D->tev.fast_a,
+        D->tev.alpha_always, D->px.fog_type);
+    for (st = 0; st < D->tev.stages; st++) {
+        const Stage* S = &D->tev.st[st];
+        if (!S->texen) continue;
+        {
+            const TexCfg* C = &D->tev.tex[S->texmap];
+            say("  stage %u samples map %u (coord %u): %dx%d, %d levels, linear %d, mip %d, wrap %u/%u, lod %.2f..%.2f bias %.2f, scale %.0fx%.0f",
+                st, S->texmap, S->texcoord, C->w, C->h, C->nlevels, C->linear, C->mip, C->wrap_s, C->wrap_t, C->min_lod, C->max_lod,
+                C->lod_bias, C->scale_s, C->scale_t);
+        }
+    }
+    say("  viewport wd %.3f ht %.3f xorig %.3f yorig %.3f zrange %.1f farz %.1f", D->rc.wd, D->rc.ht, D->rc.xorig, D->rc.yorig,
+        D->rc.zrange, D->rc.farz);
+    for (i = 0; i < D->count && i < 16; i++) {
+        const Vertex* v = &D->v[i];
+        float iw = v->w != 0.0f ? 1.0f / v->w : 0.0f;
+        say("  v%u clip (%.9g, %.9g, %.9g, %.9g) screen (%.2f, %.2f) depth %.6f col0 (%.2f %.2f %.2f %.2f) tex0 (%.4f, %.4f, %.4f)", i,
+            v->x, v->y, v->z, v->w, D->rc.xorig + v->x * iw * D->rc.wd, D->rc.yorig + v->y * iw * D->rc.ht,
+            (D->rc.farz + v->z * iw * D->rc.zrange) / 16777216.0f, v->col[0].r, v->col[0].g, v->col[0].b, v->col[0].a,
+            v->tex[0][0], v->tex[0][1], v->tex[0][2]);
+    }
+}
+
 static int gxv_draw(const DrawCmd* D)
 {
     const char* why = unsupported(D);
@@ -821,6 +908,12 @@ static int gxv_draw(const DrawCmd* D)
     }
     g_n_draws++;
     if (g_skip_draw && g_n_draws == g_skip_draw) return 1;
+    {
+        /* GXV_DRAW=N: draw N's state, for a bisection's first diverging draw. */
+        static long long want = -2;
+        if (want == -2) want = getenv("GXV_DRAW") ? atoll(getenv("GXV_DRAW")) : -1;
+        if ((long long)g_n_draws == want) describe_draw(D);
+    }
     if (needs_rebuild(D)) {
         if (!rebuild(D, &topo)) return 0;
         up = g_tmp;
@@ -850,6 +943,17 @@ static int gxv_draw(const DrawCmd* D)
         if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used)) {
             say("draw refused: its textures do not fit the %u-texel pool", g_pool_cap);
             return 0;
+        }
+    }
+    {
+        int lop = draw_lop(D);
+        if (lop >= 0 && lop != 3) {
+            g_n_logic++;
+            /* The EFB as it is before this draw, where the shader reads the
+             * destination from. Exact while the draw's triangles do not
+             * overlap each other, which every logic draw here satisfies (one
+             * full-screen quad each, 3.5). */
+            if (g_logic_mode == LOGIC_SNAPSHOT && !efb_to_buffer(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) return 0;
         }
     }
     if (!begin_pass()) return 0;
@@ -1091,12 +1195,18 @@ static unsigned g_img_w, g_img_h;
 static unsigned long long g_n_tex_copies, g_n_refused;
 
 /* The EFB's colour into the readback buffer, where the copy shader reads it. */
-static int efb_to_buffer(void)
+static int efb_to_buffer(VkPipelineStageFlags reader)
 {
     VkBufferImageCopy rg;
     VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    VkMemoryBarrier war = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     if (!begin_cb()) return 0;
     end_pass();
+    /* A snapshot or copy before this one may still be read. */
+    war.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    war.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &war, 0, NULL, 0, NULL);
     barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -1116,7 +1226,7 @@ static int efb_to_buffer(void)
     bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bb.buffer = g_readback;
     bb.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, reader, 0, 0, NULL, 1, &bb, 0, NULL);
     return 1;
 }
 
@@ -1160,7 +1270,7 @@ static int copy_screen(const DrawCmd* D)
     sh = p.h > EFB_H ? EFB_H : p.h;
     p.mode = 2;
     p.count = (uint32_t)(sw * sh);
-    if (!copy_pipeline() || !efb_to_buffer()) return 0;
+    if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) return 0;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
     if (!submit_wait()) return 0;
@@ -1181,6 +1291,8 @@ static int copy_texture(const DrawCmd* D)
     int half = (D->cp_v >> 9) & 1;
     uint8_t* ram;
     if (texfmt == 99) { g_n_refused++; return 1; }
+    if (g_mut_skip_copies) return 1;
+    if (g_mut_dest32) dest += 32;
     copy_rect(D, &p);
     p.ow = (uint32_t)(half ? p.w / 2 : p.w);
     p.oh = (uint32_t)(half ? p.h / 2 : p.h);
@@ -1205,7 +1317,7 @@ static int copy_texture(const DrawCmd* D)
     /* Seeded from RAM: what the copy does not write keeps its bytes.
      * --mutate unseeded writes back whatever the buffer held instead. */
     if (!g_mut_unseeded) memcpy(g_dest_map, ram, extent);
-    if (!copy_pipeline() || !efb_to_buffer()) return 0;
+    if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) return 0;
     p.mode = 0;
     p.count = extent / 4;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
@@ -1215,6 +1327,8 @@ static int copy_texture(const DrawCmd* D)
     compute_to_host();
     if (!submit_wait()) return 0;
     memcpy(ram, g_dest_map, extent);
+    /* For ramdiff: which bytes, and the EFB as of which draw. */
+    say("copy to texture at %08X, %u bytes, format %u, after draw %llu", dest, extent, texfmt, g_n_draws);
     g_img_w = p.ow;
     g_img_h = p.oh;
     if (D->cp_image) memcpy(D->cp_image, g_image_map, (size_t)p.ow * p.oh * 4);
@@ -1225,6 +1339,44 @@ static int copy_texture(const DrawCmd* D)
 static int gxv_copy(const DrawCmd* D)
 {
     return (D->cp_v & 0x4000u) ? copy_screen(D) : copy_texture(D);
+}
+
+/* The depth buffer as 24-bit values, 640x528, for a bisection to compare
+ * with the CPU's g_efb_z: what each pixel's depth test was against. */
+int gxv_read_depth(uint32_t* out)
+{
+    VkBufferImageCopy rg;
+    VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    unsigned i;
+    if (!begin_cb()) return 0;
+    end_pass();
+    barrier_image(g_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    memset(&rg, 0, sizeof rg);
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageExtent.width = EFB_W;
+    rg.imageExtent.height = EFB_H;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyImageToBuffer(g_cb, g_depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_screenbuf, 1, &rg);
+    barrier_image(g_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = g_screenbuf;
+    bb.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
+    if (!submit_wait()) return 0;
+    for (i = 0; i < (unsigned)(EFB_W * EFB_H); i++) {
+        float f;
+        memcpy(&f, g_screen_map + 4 * (size_t)i, 4);
+        out[i] = (uint32_t)(f * 16777216.0f); /* zq * 2^-24 exactly, as written */
+    }
+    return 1;
 }
 
 const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h)
@@ -1371,6 +1523,17 @@ static void timed_finish(void)
 static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
+
+int gxv_set_logicop(const char* mode)
+{
+    if (!strcmp(mode, "native")) {
+        if (!g_has_logicop) { say("--logicop native: this device has no logicOp"); return 0; }
+        g_logic_mode = LOGIC_NATIVE;
+    } else if (!strcmp(mode, "blend")) g_logic_mode = LOGIC_BLEND;
+    else if (!strcmp(mode, "snapshot")) g_logic_mode = LOGIC_SNAPSHOT;
+    else return 0;
+    return 1;
+}
 const char* gxv_device_name(void) { return g_devname; }
 void gxv_set_upload_hook(GxvUploadHook h) { g_hook = h; }
 
@@ -1387,6 +1550,12 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "nofilter")) g_mut_nofilter = 1;
     else if (!strcmp(name, "noinvariant")) g_mut_noinvariant = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
+    else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
+    else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
+    else if (!strcmp(name, "or-copy")) g_mut_logic = MUT_OR_COPY;
+    else if (!strcmp(name, "or-and")) g_mut_logic = MUT_OR_AND;
+    else if (!strcmp(name, "skip-copies")) g_mut_skip_copies = 1;
+    else if (!strcmp(name, "dest+32")) g_mut_dest32 = 1;
     else if (!strncmp(name, "skip-draw:", 10) && atoi(name + 10) > 0) g_skip_draw = (unsigned long long)atoi(name + 10);
     else return 0;
     return 1;
@@ -1399,6 +1568,8 @@ void gxv_report(void)
         g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused, g_n_pipes, g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
+    say("logic ops: %llu draws, drawn %s", g_n_logic,
+        g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot");
     if (g_measure)
         say("largest draws (draw:samples) %llu:%llu %llu:%llu %llu:%llu %llu:%llu %llu:%llu%s", g_top_draw[0], g_top_samples[0],
             g_top_draw[1], g_top_samples[1], g_top_draw[2], g_top_samples[2], g_top_draw[3], g_top_samples[3], g_top_draw[4],
@@ -1468,6 +1639,8 @@ static int make_device(char* why, size_t cap)
             get(g_phys, &have);
             feat.occlusionQueryPrecise = have.occlusionQueryPrecise;
             g_precise = have.occlusionQueryPrecise != 0;
+            feat.logicOp = have.logicOp; /* 3.5's first choice for logic ops */
+            g_has_logicop = have.logicOp != 0;
         }
     }
     qi.queueFamilyIndex = g_family;
@@ -1530,32 +1703,33 @@ static int make_pass(void)
 
 static int make_layout(void)
 {
-    VkDescriptorSetLayoutBinding b[4];
+    VkDescriptorSetLayoutBinding b[5];
     VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     VkPushConstantRange pr = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushDraw)};
     VkPipelineLayoutCreateInfo pi = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    VkDescriptorBufferInfo bi[4];
-    VkWriteDescriptorSet w[4];
+    VkDescriptorBufferInfo bi[5];
+    VkWriteDescriptorSet w[5];
     VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    VkBuffer bufs[4];
+    VkBuffer bufs[5];
     unsigned i;
     /* 0 the vertices (the vertex stage); 1 the draw records, 2 the texel
-     * pool, 3 the texture records (the fragment stage). */
+     * pool, 3 the texture records, 4 the EFB snapshot (the fragment stage). */
     bufs[0] = g_ring;
     bufs[1] = g_drawbuf;
     bufs[2] = g_poolbuf;
     bufs[3] = g_texrecbuf;
-    for (i = 0; i < 4; i++) {
+    bufs[4] = g_readback;
+    for (i = 0; i < 5; i++) {
         b[i].binding = i;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = i == 0 ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
         b[i].pImmutableSamplers = NULL;
     }
-    li.bindingCount = 4;
+    li.bindingCount = 5;
     li.pBindings = b;
     VKCHECK(vkCreateDescriptorSetLayout(g_dev, &li, NULL, &g_dsl));
     pi.setLayoutCount = 1;
@@ -1571,7 +1745,7 @@ static int make_layout(void)
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &g_dsl;
     VKCHECK(vkAllocateDescriptorSets(g_dev, &ai, &g_dset));
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 5; i++) {
         bi[i].buffer = bufs[i];
         bi[i].offset = 0;
         bi[i].range = VK_WHOLE_SIZE;
@@ -1583,7 +1757,7 @@ static int make_layout(void)
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &bi[i];
     }
-    vkUpdateDescriptorSets(g_dev, 4, w, 0, NULL);
+    vkUpdateDescriptorSets(g_dev, 5, w, 0, NULL);
     (void)si;
     return 1;
 }
@@ -1679,7 +1853,8 @@ int gxv_init(char* why, size_t cap)
     if (!load_instance(why, cap) || !pick_device(why, cap) || !make_device(why, cap)) return 0;
     if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_ASPECT_COLOR_BIT, &g_color, &g_color_view) ||
-        !make_image(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        !make_image(VK_FORMAT_D32_SFLOAT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT, &g_depth, &g_depth_view) ||
         !make_buffer(RING_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_ring, &g_ring_map) ||
         !make_buffer((VkDeviceSize)MAX_QUADS * 6 * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 0, &g_quad_idx, (uint8_t**)&g_quad_map) ||
@@ -1700,6 +1875,7 @@ int gxv_init(char* why, size_t cap)
         uint32_t* q = g_quad_map + i * 6, b = i * 4;
         q[0] = b; q[1] = b + 1; q[2] = b + 2; q[3] = b; q[4] = b + 2; q[5] = b + 3;
     }
+    if (g_logic_mode < 0) g_logic_mode = g_has_logicop ? LOGIC_NATIVE : LOGIC_SNAPSHOT;
     say("device %s (Vulkan %u.%u.%u, driver %#x), timestamps %s", g_devname, VK_API_VERSION_MAJOR(g_props.apiVersion),
         VK_API_VERSION_MINOR(g_props.apiVersion), VK_API_VERSION_PATCH(g_props.apiVersion), g_props.driverVersion,
         g_timestamps ? "on" : "unavailable");

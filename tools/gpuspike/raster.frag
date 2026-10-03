@@ -12,7 +12,8 @@
 //   99       texmap_of: the map each texcoord slot feeds, three bits a slot
 //   100      fog: type | proj << 3 | b_shift << 8
 //   101-104  fog: a, c (float bits), b_mag, colour (r | g << 8 | b << 16)
-//   105-107  unused
+//   105      a logic op drawn from the EFB's snapshot: 1 | lop << 1, or 0
+//   106-107  unused
 //   108-     twelve words for each of the eight maps:
 //     0  the texture's record in the texture table, or ~0 for none
 //     1  wrap_s | wrap_t << 2 | linear << 4 | mip << 5
@@ -26,6 +27,7 @@
 layout(std430, set = 0, binding = 1) readonly buffer Draws { uint dw[]; };
 layout(std430, set = 0, binding = 2) readonly buffer Pool { uint pool[]; };
 layout(std430, set = 0, binding = 3) readonly buffer TexRecs { uint texrec[]; };
+layout(std430, set = 0, binding = 4) readonly buffer Snapshot { uint snap[]; }; // the EFB before this draw, 640x528
 
 layout(push_constant) uniform Draw {
     float wd, ht, xorig, yorig, zrange, farz;
@@ -40,7 +42,7 @@ layout(location = 3) in vec4 i_tex[8];
 
 layout(location = 0) out vec4 o_color;
 
-const uint DRAW_CHANNELS = 98u, DRAW_TEXMAP_OF = 99u, DRAW_FOG = 100u, DRAW_MAPS = 108u, MAP_WORDS = 12u;
+const uint DRAW_CHANNELS = 98u, DRAW_TEXMAP_OF = 99u, DRAW_FOG = 100u, DRAW_LOGIC = 105u, DRAW_MAPS = 108u, MAP_WORDS = 12u;
 const uint NO_TEXTURE = 0xFFFFFFFFu;
 
 vec3 g_tc[8];   // each texcoord slot's s, t, q at this pixel
@@ -186,6 +188,29 @@ ivec3 fogged(ivec3 c, uint zs)
     return (c * (256 - fi) + fc * fi) >> 8;
 }
 
+// blend_pixel's logic ops, on the RGB bytes; the alpha is the source's.
+uvec3 logic_op(uint lop, uvec3 s, uvec3 d)
+{
+    switch (lop) {
+    case 0u: return uvec3(0u);
+    case 1u: return s & d;
+    case 2u: return s & ~d;
+    case 3u: return s;
+    case 4u: return ~s & d;
+    case 5u: return d;
+    case 6u: return s ^ d;
+    case 7u: return s | d;
+    case 8u: return ~(s | d);
+    case 9u: return ~(s ^ d);
+    case 10u: return ~d;
+    case 11u: return s | ~d;
+    case 12u: return ~s;
+    case 13u: return ~s | d;
+    case 14u: return ~(s & d);
+    default: return uvec3(255u);
+    }
+}
+
 // The CPU's colour: perspective-correct, then int(c * 255 + 0.5), clamped.
 ivec4 quantised(vec4 c) { return clamp(ivec4(c * 255.0 + 0.5), ivec4(0), ivec4(255)); }
 
@@ -223,6 +248,11 @@ void main()
     // The 24-bit z, truncated, as depth_test and fog_apply both take it.
     uint zs = uint(clamp(i_depth, 0.0, 1.0) * 16777215.0);
     outc.rgb = fogged(outc.rgb, zs);
+    uint logic = tev_word(DRAW_LOGIC);
+    if ((logic & 1u) != 0u) {
+        uvec4 d = uvec4(unpack_rgba(snap[uint(gl_FragCoord.y) * 640u + uint(gl_FragCoord.x)]));
+        outc.rgb = ivec3(logic_op(logic >> 1, uvec3(outc.rgb), d.rgb) & 255u);
+    }
     o_color = vec4(outc) / 255.0;
     gl_FragDepth = float(zs) / 16777216.0;
 }

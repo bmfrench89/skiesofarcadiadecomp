@@ -5350,3 +5350,148 @@ fixing, and no frame needed bisecting.
   - **Not run by pytest:** the mutations, about two minutes, run by
     `oracle --mutations`.
 - **No runtime file changed.**
+
+**V4: the GPU spike on captures (V4b: copies, logic ops, the new captures).**
+2026-10-03. All 67 captures replay on the GPU:
+- the corpus's 23, the benchmark set's 12 and V1's 32;
+- the 16 that copy to a texture poisoned, as 3.12 asks, and copied by the
+  GPU's own compute pass.
+
+65 pass V0. The two that fail, the Dangral base field pair, fail by design,
+and the mechanism is one the CPU reference gets wrong.
+
+- **What it adds.**
+  - **Logic ops three ways, `--logicop`:**
+    - native, Vulkan's `logicOp`, whose 16 numbers are GX's;
+    - blend, OR as `src(1 - dst) + dst` and AND as `src dst`;
+    - snapshot, the EFB copied out before the draw and the CPU's bitwise op
+      done in the shader, with the source alpha kept.
+  - **The poison step:** each copy-to-texture destination is found by
+    pre-scanning the stream with `copy_bytes`' arithmetic, and filled with
+    0xA5 in a scratch copy of the capture. Only the rows of tiles a copy
+    writes are filled, not the gaps a wide stride leaves.
+  - **New commands:** `logicop`, `ramdiff` and `chain`.
+  - **A selftest scene for logic ops,** and `GXV_DRAW=N` and
+    `--dump-depth` for classifying a failure.
+- **A defect, found and fixed in the slice.** With native or snapshot logic
+  ops the mask-effect frames came out white or black.
+  - **Bisected** to the AND draw: draw 2347 of 6000.
+  - **The cause:** the pipeline's blend block tested the key's blend field,
+    which also carries a logic op's number. So every logic pipeline was given
+    a blend with factors ZERO, ZERO besides its logic op. The blend mode
+    overwrote the factors, which is why it alone was right.
+  - **The guard:** the new selftest scene (a quad, then OR, AND, OR as the
+    mask effect draws them) caught it, and holds all three modes to the CPU.
+- **Poison.** All 8 corpus copy captures, poisoned, still hash to the
+  manifest on the CPU, so every sampler reads this replay's own copies
+  (the same-replay contrast). All 16 copy captures' poisoned CPU references
+  equal V0's inspected ones or the manifest.
+- **The oracle**, `python tools/gpuspike.py oracle --set
+  corpus,perfset,gpuset`: 65 of 67 pass V0. Field_5000 and field_5001, one
+  moment, fail on blobs (172 blob pixels, the largest 59).
+  - **Bisected:** their five clusters go to draws 374, 393, 653, 656 and
+    76. All are by design.
+  - **Three are coplanar decals whose depth the CPU gets wrong.** The CPU
+    steps depth along a span by float additions (`av[n] += attr[n].a`), and
+    over long spans it drifts.
+
+    | Pixel | Draw that set the depth | Its exact depth | GPU stored | CPU stored | The decal, exact | The decal on the CPU |
+    |---|---|---|---|---|---|---|
+    | (600, 179) | 346 | 16,712,140.0 | 16,712,140 | 16,712,197 | 374: 16,712,156.9 | passes |
+    | (227, 345) | 355 | 16,454,135.9 | 16,454,137 | 16,454,163 | 393: 16,454,154.6 | passes |
+    | (273, 172) | -- | -- | 16,702,776 | 16,702,765 | 653: 16,702,806.9 | 16,702,756, passes |
+
+    - **Exact arithmetic** puts each decal behind the surface, and the GPU,
+      within 2 steps of exact, leaves it out.
+    - **The CPU draws it** only because its stored depth drifted 27 to 57
+      steps deep, or its decal's depth 51 shallow.
+    - **Where:** these are pixels 142 to 227 along their spans.
+  - **The fourth, draw 656,** ties exactly: its exact depth is 16,710,535.5,
+    which truncates to the 16,710,535 stored. LEQUAL passes it on the GPU,
+    and the CPU's last bit fails it.
+  - **The fifth, draw 76,** agrees in depth. The CPU narrates its level of
+    detail as 3.50, on the boundary of two mip levels this texture makes
+    very different (dark blue and light grey): 3.4's level choice near a
+    boundary, over five pixels.
+  - **The method.** Each depth was read from both paths after draw N
+    (`SOA_GXR_DRAWS=N`, the frame's last screen copy cut off so nothing
+    clears it). The exact values were worked in double precision from the
+    draw's clip-space vertices, printed to nine digits. A first pass with
+    three decimals was off by about 40 steps, which is the size of the
+    effect, so it decided nothing.
+  - **The verdict:** two by-design failures in one distinct scene, under
+    3.12's three. `BY_DESIGN` in `gpuspike.py` names them.
+- **Logic ops, `logicop`.** On the 14 mask-effect captures (12 distinct),
+  native, blend and snapshot give byte-identical frames, 3 logic draws
+  each.
+  - **The Done's three mutations,** applied to the native path only, each
+    part the paths by 226,000 to 307,000 pixels and fail V0 on all 14: the
+    AND as a copy, the ORs as copies, OR and AND swapped.
+- **`ramdiff`**, 33 copies to a texture, both paths poisoned.
+  - **Every copy writes:** each of the 32 R8 copies writes 306,600 to
+    307,200 of its 307,200 bytes (a byte can be 0xA5 by chance), and the
+    RGB5A3 copy 602,218 of the 614,400 its rows of tiles hold.
+  - **Differences:** 0 to 22,811 bytes differ per copy, the largest
+    difference 224, in the RGB5A3 copy's packed bytes.
+  - **Every differing byte is traced to the EFB.** The tool cuts the
+    stream just before the copy, appends an unfiltered screen copy, and
+    replays it on both paths. A differing byte must sit over a pixel, among
+    the ones its filter reads, that differs there, the encoders being equal
+    (V3b). 0 untraced.
+  - **The trace can fail:** with the GPU's copies written 32 bytes on,
+    most of the differences are untraced (259,675 of 288,221 in one copy).
+- **`chain`**, V1's battle start, 4421 to 4451, 31 frames.
+  - **What is carried:** 4421's three copies (the two R8 masks and the
+    screen into a 1,024-wide RGB5A3 texture), kept from each path and
+    spliced into each later frame's RAM.
+  - **On the CPU** the 1,228,800 spliced bytes equal what those frames'
+    RAM already holds, so nothing wrote them between frames.
+  - **On the GPU** every chained frame, sampling the GPU's own copy,
+    passes V0.
+  - **A fix on the way:** the first version spliced and poisoned the
+    RGB5A3 copy's whole span, gaps included, and so failed the equality.
+    Now only the rows of tiles are carried.
+- **Mutations**, `oracle --set corpus,perfset,gpuset --mutations`, poisoned.
+  A frame failing V0 by design is left out.
+
+  | Mutation | Applies on | Fails V0 on | Blind spots (distinct) |
+  |---|---|---|---|
+  | skip the most visible of the five largest draws | 35 | 35 | 0 |
+  | fog off | 14 | 14 | 0 |
+  | the screen copy unfiltered | 65 | 65 | 0 |
+  | the alpha test off | 5 | 5 | 0 |
+  | LOD bias +1 | 28 | 23 | 5 (3) |
+  | logic ops drawn as copies | 14 | 14 | 0 |
+  | copies to a texture skipped | 14 | 14 | 0 |
+  | copies written 32 bytes on | 14 | 14 | 0 |
+
+  - **The alpha test now applies on five** with V1's captures included,
+    which meets 3.12's rule.
+  - **LOD +1 adds the ship's hold to V4a's sky pair:** 15200, 15800 and
+    the benchmark set's copy of 15800.
+    - **What it does there:** a level blurrier fades the floor's rivets
+      almost away, 12% of pixels moving and about 1,012 far.
+    - **What V0 sees:** its vertical blur measure reads 0.089 against its
+      0.10.
+    - **The count:** three distinct frames, at the limit. **V0 does not
+      reliably catch a one-level blur of texture detail.** The thresholds
+      stay as they are here; changing one is its own commit (3.12), and
+      the gate should weigh this.
+- **The owner's look:** `build/gpuspike/review/index.html` has five rows,
+  each CPU | GPU | heat map:
+  - the field (field_5000, the by-design pair, captions naming its
+    clusters);
+  - a battle;
+  - a ship battle;
+  - the mask effect (mask_3200);
+  - the battle transition, chained.
+
+  Recorded with the owner's answer.
+- **Compilers.** The NDK's clang-cl build gives the same oracle verdicts.
+- **`test_gpuspike.py`:** the oracle test now covers the 35 captures with
+  copies (33 pass and 2 by design). It adds `logicop` and four GPU-free
+  tests: `copy_texfmt` against gxr.c's table, a copy's runs and texels
+  across a stride gap, poison touching only what a copy writes, and
+  `efb_at`'s cut. `ramdiff`, `chain` and the mutations are commands, about
+  20 s, 30 s and 16 min.
+- **No runtime file changed.**

@@ -1335,6 +1335,21 @@ FINDINGS entry "V4".*
 
 ### V4b. The spike on captures: copies, logic ops, the new captures, and the gate memo
 
+*Landed 2026-10-03 (FINDINGS "V4"); section 8 holds the numbers. The differences from what follows:*
+- *Poison is applied by the tool, not the driver: a scratch copy of the capture with 0xA5 over the
+  rows of tiles each copy to a texture writes (not the gaps a wide stride leaves), found with
+  `fifo.walk` and `copy_bytes`' arithmetic, so `gx_replay` and the runtime are untouched. `chain`
+  splices the same way.*
+- *`ramdiff` traces each differing byte to the EFB as that copy found it by cutting the stream before
+  the copy and appending an unfiltered screen copy, on both paths.*
+- *`SOA_GPU_LOGICOP` is the driver's `--logicop`; native is the default where the device has
+  `logicOp`. The three logic mutations apply to the native path only, so the paths can differ.*
+- *The oracle runs over all 67 captures, poisoned where they copy. Field_5000 and field_5001 fail by
+  design (`BY_DESIGN`, bisected to five draws); the LOD +1 mutation's blind spots are three distinct
+  frames, listed. V1 caught no menu copy, so `chain` runs the battle transition.*
+- *A defect was found and fixed: logic pipelines had a ZERO, ZERO blend beside their logic op. A
+  selftest scene of the mask effect's three logic draws now holds every mode to the CPU.*
+
 *Several days. Rebuild: none for `soa.exe`. Prerequisites: V4a, V1. Files: `tools/gpuspike/*`,
 `tools/gpuspike.py` (`logicop`, `ramdiff`, `chain`, the poison step), this spec's section 8 (the
 numbers), FINDINGS entry "V4".* **Owner:** four side-by-sides.
@@ -1614,7 +1629,8 @@ entry "V12".*
 
 ## 8. The decision
 
-**What you will be choosing between** (the numbers in brackets are filled by V4b):
+**What you will be choosing between** (the brackets were V4b's to fill; what it measured follows
+each, 2026-10-03, on the Z1 Extreme's GPU, FINDINGS "V3" and "V4"):
 
 - **A. Build the Vulkan backend.** About 4–6 weeks of evenings to a live GPU renderer at native
   resolution with the CPU's picture within tolerance (V5–V7), then 4–6 more for GPU presentation,
@@ -1629,16 +1645,35 @@ entry "V12".*
 
 **What the spike adds that you do not have today:**
 - whether the GPU's frames agree with the CPU's, capture by capture, under a checker proven able to
-  fail [V4a/V4b verdicts];
-- that the TEV arithmetic and the copy encoder are exact on the GPU [V3b];
+  fail [V4a/V4b verdicts]. **Measured: 65 of all 67 captures pass V0** (the corpus's 23, the
+  benchmark set's 12, V1's 32; the 16 with copies to a texture poisoned). The other two, one field
+  moment, fail by design, and in three of their five places the GPU is the one that agrees with
+  exact arithmetic: the CPU's depth, stepped along a span by float adds, drifts up to 57 24-bit steps
+  and lets decals through that exact arithmetic hides. Eight mutations of the GPU path each fail V0
+  wherever they apply, but one: **V0 misses a one-level blur of texture detail (LOD +1) on three
+  distinct frames**, the sky's ship and the hold's rivets. Worth weighing; a threshold change is its
+  own commit;
+- that the TEV arithmetic and the copy encoder are exact on the GPU [V3b]. **Measured: exact**,
+  100,000 random TEV setups and 25,600 random copies with no mismatch;
 - whether the logic-op fallbacks are exact for this game, which decides the older Android phones
   [V4b's contrast], and whether the Android capability set (`SOA_GPU_FEATURES=core`) gives the same
-  verdicts [V4a];
+  verdicts [V4a]. **Measured: exact.** On the 14 mask-effect captures native logic ops, the blend
+  approximation and the EFB snapshot give byte-identical frames; the blend and snapshot paths use
+  core Vulkan 1.1 alone, so a device without `logicOp` gets the same picture;
 - whether the menu copies Dolphin needed RAM for render right [V4b's `chain` replays of V1's
-  consecutive captures];
+  consecutive captures]. **Measured in part:** V1 found no menu that copies (the save menu, the camp
+  menu and a map change copy only to the screen). The copy it did catch, a battle's start copying the
+  screen into a 1,024-wide texture and breaking it into squares, chains across all 31 frames: the
+  GPU's own copy, carried forward, gives frames that pass V0, and on the CPU the carried bytes equal
+  the RAM each later frame already holds;
 - GPU milliseconds a frame on your Z1 Extreme's GPU against today's CPU cost [V4a], which bounds
-  60 fps, 2× and 3×;
-- a list of what the spike found missing from `DrawCmd`, if anything.
+  60 fps, 2× and 3×. **Measured: the GPU takes 1.3 to 4.7 ms a frame** at native resolution, against
+  roughly 16 ms of eight CPU workers for the ship battle. The spike's consumer adds 2.7 to 19 ms on
+  the CPU, because it waits for every submission and copies every texture in; that is V7's to
+  pipeline, not a GPU cost;
+- a list of what the spike found missing from `DrawCmd`, if anything. **Measured: nothing.** Every
+  draw, copy and clear of the 67 captures was drawn from the `DrawCmd` and its `TevSetup` as V2 left
+  them.
 
 **What it cannot tell you:** live frame rate with the game running, presentation and pacing,
 long-run stability, device loss, any Android driver's behaviour, or energy use.

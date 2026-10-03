@@ -323,10 +323,11 @@ def test_a_mutation_applies_by_the_pixels_it_changes(tmp_path):
 ORACLE_DATA = (ROOT / "build" / "fifo").exists() and (ROOT / "build" / "perfset").exists()
 
 
-def test_the_captures_without_copies_pass_v0_on_the_gpu():
-    """V4a: the 21 captures with no copy to a texture, each replayed on the
-    CPU -- a reference that must be the manifest's or V0's, byte for byte --
-    and on the GPU, and V0's verdict: all pass."""
+def test_the_captures_pass_v0_on_the_gpu():
+    """V4a and V4b: the corpus and the benchmark set, 35 captures, each
+    replayed on the CPU -- a reference that must be the manifest's or V0's,
+    byte for byte, poisoned where the frame copies to a texture -- and on the
+    GPU, and V0's verdict: every one passes but the two listed by design."""
     if not ORACLE_DATA:
         reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
         print(f"skip: {reason}")
@@ -334,5 +335,90 @@ def test_the_captures_without_copies_pass_v0_on_the_gpu():
     proc = run_spike("oracle")
     out = proc.stdout
     assert proc.returncode == 0, out + proc.stderr
-    assert "21 captures without copies to a texture" in out
-    assert "[gpuspike] oracle: 21 of 21 pass V0" in out
+    assert "35 captures from corpus, perfset; 14 copy to a texture and are replayed poisoned" in out
+    assert "[gpuspike] oracle: 33 of 35 pass V0, 2 fail by design" in out
+
+
+def test_the_three_logic_op_paths_draw_the_same_frames():
+    """V4b: the mask effect's 14 captures through native logic ops, the
+    blend approximation and the EFB snapshot: byte-identical frames."""
+    if not ORACLE_DATA:
+        reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
+        print(f"skip: {reason}")
+        pytest.skip(reason)
+    proc = run_spike("logicop")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    assert "[gpuspike] logicop over 14 captures: the three paths give byte-identical images" in out
+    assert out.count("logic draws 3;") == 14
+
+
+def test_copy_texfmt_is_gxr_cs():
+    """gpuspike.py's third copy of copy_texfmt, against gxr.c's switch: every
+    format with intensity off, the four intensity formats, and the refusals."""
+    want = {
+        0: 0,
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+        5: 5,
+        6: 6,
+        7: 1,
+        8: 1,
+        9: 1,
+        10: 1,
+        11: 3,
+        12: 3,
+        13: 99,
+        14: 99,
+        15: 99,
+    }
+    for fmt, texfmt in want.items():
+        tpf = (fmt % 8) * 2 + fmt // 8
+        assert gpuspike.copy_texfmt(tpf << 3) == texfmt, fmt
+        assert gpuspike.copy_texfmt(tpf << 3 | 1 << 15) == (fmt if fmt <= 3 else 99), fmt
+
+
+def test_a_copys_runs_and_texels_skip_the_stride_gaps():
+    """The bytes a copy writes are its rows of tiles, not the gaps a wide
+    stride leaves; and each byte maps back to the texel it holds."""
+    r8 = gpuspike.TexCopy(0, 0, 0x1000, 307200, 1, 0, 0, 640, 480, 0, 2560)
+    assert len(r8.runs()) == 120 and r8.runs()[1] == (0x1000 + 2560, 2560)
+    assert gpuspike.texel_of(0, r8) == (0, 0)
+    assert gpuspike.texel_of(8, r8) == (0, 1)  # the tile's second row
+    assert gpuspike.texel_of(32, r8) == (8, 0)  # the next tile
+    rgb5a3 = gpuspike.TexCopy(0, 0, 0x1000, 979968, 5, 0, 0, 640, 480, 0, 8192)
+    assert rgb5a3.runs()[0] == (0x1000, 5120)  # 160 tiles of 32 bytes; then a gap to 8192
+    assert gpuspike.texel_of(5119, rgb5a3) == (639, 3)
+    assert gpuspike.texel_of(5120, rgb5a3) is None
+
+
+def test_poison_covers_only_what_the_copies_write(tmp_path):
+    base = tmp_path / "cap" / "frame"
+    base.parent.mkdir()
+    (tmp_path / "cap" / "frame.fifo").write_bytes(b"\x00" * 16)
+    (tmp_path / "cap" / "frame.regs").write_bytes(b"\x01" * 16)
+    (tmp_path / "cap" / "frame.ram").write_bytes(bytes(range(256)) * 64)
+    c = gpuspike.TexCopy(
+        0, 0, 0x100, 96, 1, 0, 0, 8, 12, 0, 64
+    )  # 3 rows of one 32-byte tile, 64 apart
+    out = gpuspike.scratch_capture(base, tmp_path / "out", [c], splice={0x10: b"\xee" * 4})
+    ram = (tmp_path / "out" / "frame.ram").read_bytes()
+    assert ram[0x100:0x120] == bytes([gpuspike.POISON]) * 32
+    assert ram[0x120:0x140] == bytes(range(0x20, 0x40))  # the gap keeps its bytes
+    assert ram[0x140:0x160] == bytes([gpuspike.POISON]) * 32
+    assert ram[0x10:0x14] == b"\xee" * 4
+    assert (tmp_path / "out" / "frame.regs").read_bytes() == b"\x01" * 16
+    assert out == tmp_path / "out" / "frame"
+
+
+def test_efb_at_cuts_before_the_copy_and_shows_the_efb_unfiltered(tmp_path):
+    base = tmp_path / "frame"
+    (tmp_path / "frame.fifo").write_bytes(bytes(range(40)))
+    c = gpuspike.TexCopy(0, 20, 0, 32, 1, 0, 0, 8, 4, 0, 32)
+    stream = gpuspike.efb_at(base, c)
+    assert stream[:20] == bytes(range(20))
+    tail = stream[20:]
+    assert tail[:10] == bytes([0x61, 0x53, 0, 0, 0, 0x61, 0x54, 0, 0, 0])  # the filter off
+    assert tail[-5:] == bytes([0x61, 0x52, 0x00, 0x40, 0x03])  # to the screen, no clear

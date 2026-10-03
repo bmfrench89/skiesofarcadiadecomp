@@ -8,9 +8,11 @@
  * depth varying, invariant positions), the CPU's culling, scissor, depth test
  * and write masks; the TEV with texture sampling, the alpha test and fog in
  * the fragment stage; and blending by 3.5's table. It copies (V3b): every EFB
- * copy, to a texture or the screen, is copy.comp, byte for byte the CPU's. A
- * draw with a logic op (V4b's) or a constant alpha is refused: the backend
- * says which, and the renderer stops the run, rather than drawing it wrong.
+ * copy, to a texture or the screen, is copy.comp, byte for byte the CPU's.
+ * Logic ops are drawn one of three ways (V4b, gxv_set_logicop). A draw with
+ * a constant alpha, or a logic op the chosen way cannot draw, is refused: the
+ * backend says which, and the renderer stops the run, rather than drawing it
+ * wrong.
  */
 #ifndef SOA_GXV_H
 #define SOA_GXV_H
@@ -41,6 +43,8 @@ int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* result
  * decoded image of the last copy to a texture. */
 int gxv_load_efb(const uint8_t* rgba);
 const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h);
+/* The depth buffer as 24-bit values, 640x528, row by row. */
+int gxv_read_depth(uint32_t* out);
 
 /* For the self test: called with each draw's vertices as they were uploaded,
  * after any rebuild, and whether the draw was rebuilt. */
@@ -54,8 +58,16 @@ void gxv_set_upload_hook(GxvUploadHook h);
  * clamps; "alpha", "lod" and "fog" are raster.frag with the alpha test off,
  * the level of detail one higher and fog off; "nofilter" is the screen copy
  * unfiltered; "skip-draw:N" leaves out draw N; "noinvariant" drops
- * `invariant gl_Position`. "measure" changes no pixel: it counts each draw's
- * samples and reports the five largest. Set before the first draw or copy. */
+ * `invariant gl_Position`; "logic-copy", "and-copy", "or-copy" and "or-and"
+ * draw every logic op, the AND, the ORs as copies, or swap OR and AND;
+ * "skip-copies" leaves copies to a texture out, and "dest+32" writes them 32
+ * bytes on. "measure" changes no pixel: it counts each draw's samples and
+ * reports the five largest. Set before the first draw or copy. */
 int gxv_set_mutation(const char* name);
+/* How logic ops are drawn (3.5, V4b): "native", Vulkan's logicOp, the default
+ * where the device has it; "blend", OR and AND as blends; "snapshot", the EFB
+ * copied out before the draw and the op done in the shader, the default
+ * otherwise. Set after gxv_init and before the first draw. */
+int gxv_set_logicop(const char* mode);
 
 #endif

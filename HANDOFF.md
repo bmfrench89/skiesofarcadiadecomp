@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1187 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1192 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1187 |
+| Python tests | 1192 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -547,10 +547,16 @@ C5c) is now done.
    (`gpuspike.py oracle`). Two results are for the owner and the gate: the
    LOD +1 mutation passes V0 on the sky pair though the ship is visibly
    blurrier (a V0 blind spot, listed), and the alpha mutation applies on 3
-   captures, not five. **Next is V4b:** copies to texture through the
-   compute copy, logic ops, poison and `chain`, all 35 captures and V1's,
-   and the gate memo with four side-by-sides for the owner
-   (specs/gpu-backend.md V4b). Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
+   captures, not five. **V4b is done** (FINDINGS "V4"): all 67 captures on
+   the GPU, the copy captures poisoned; 65 pass V0 and the Dangral base
+   pair fails by design (the CPU's span-stepped depth drifts, and the GPU
+   is the one that agrees with exact arithmetic); logic ops are exact three
+   ways; every copy's RAM difference traces to the EFB; the battle
+   transition chains. The spec's section 8 holds the numbers. LOD +1 is
+   V0's one blind spot, three distinct frames. **Next is the gate:** the
+   owner looks at `build/gpuspike/review/index.html` (field, battle, ship
+   battle, the mask effect, the transition) and decides A, B, C or D
+   (specs/gpu-backend.md section 8). V5 onward waits on A or B. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

@@ -1,13 +1,16 @@
 """The GPU spike: the renderer drawing through a Vulkan backend, headless.
 
     python tools/gpuspike.py build                        # shaders, then the binary
-    python tools/gpuspike.py selftest [--mutate NAME]     # draw 16 scenes on both, compare
+    python tools/gpuspike.py selftest [--mutate NAME]     # draw 17 scenes on both, compare
     python tools/gpuspike.py tevdiff [--cases 100000]     # the TEV, exact against tev_pixel
     python tools/gpuspike.py copydiff [--rects 200]       # the copies, exact against gxr.c's
     python tools/gpuspike.py oracle [--mutations]         # the captures, CPU against GPU, V0's verdict
     python tools/gpuspike.py time                         # GPU and consumer ms a frame
+    python tools/gpuspike.py logicop [--mutate M]         # logic ops native, blend and snapshot
+    python tools/gpuspike.py ramdiff                      # each copy's RAM, CPU against GPU
+    python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
 
-specs/gpu-backend.md V3a, V3b and V4a. `build` compiles the shaders in
+specs/gpu-backend.md V3a, V3b, V4a and V4b. `build` compiles the shaders in
 tools/gpuspike/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
 arrays -- each mutation a variant of its own -- and builds gx.c, gxr.c,
 gxr_tev.c and png.c with the spike's driver and gxv.c (the backend) into
@@ -46,16 +49,25 @@ copies through the CPU renderer and through gxv's compute copy, in two
 processes at once, and compares what each left in RAM, the decoded image and a
 screen copy: byte for byte, with every refused copy leaving RAM as it was.
 
-`oracle` (V4a) replays every capture of --set (corpus,perfset) that copies
-nothing to a texture: on the CPU, a reference that must hash to the manifest
-(corpus) or equal V0's inspected image (perfset), and on the GPU, which V0
-judges. --mutations then runs the five GPU mutations, each of which must fail
+`oracle` (V4a, V4b) replays every capture of --set (corpus,perfset; add
+gpuset for V1's): on the CPU, a reference that must hash to the manifest
+(corpus) or equal V0's inspected image, and on the GPU, which V0 judges. A
+frame that copies to a texture is replayed from a scratch copy with 0xA5 over
+every row of tiles it copies into (3.12's poison). A failure must be listed
+in BY_DESIGN, bisected. --mutations then runs the five GPU mutations, each of which must fail
 V0 wherever it changes 0.5% of a frame, on five captures or more, but for the
 exceptions GPU_BLIND_SPOTS and SHORT_OF_FIVE list. `time` gives the GPU's and
 the consumer's milliseconds a frame, beside perfbench's CPU figures.
 
+`logicop` (V4b) draws the mask effect's 14 captures with native logic ops,
+the blend approximation and the EFB snapshot, which must give byte-identical
+frames; `ramdiff` holds every copy's bytes, CPU against GPU, and traces each
+difference to the EFB the copy read; `chain` carries each frame's copies into
+the next frame's RAM, as V1's battle start needs.
+
 --mutate names a mutation the command must fail on: unclipped (selftest),
-clamp (tevdiff), rounding, intensity and unseeded (copydiff). Exit 0 pass,
+clamp (tevdiff), rounding, intensity and unseeded (copydiff), and-copy,
+or-copy and or-and (logicop), dest+32 (ramdiff). Exit 0 pass,
 1 fail, 3 skipped (no compiler, no vendor/, no Vulkan device), the reason
 printed.
 """
@@ -65,10 +77,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from itertools import compress, count, groupby
 from operator import ne
 from pathlib import Path
@@ -77,7 +91,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import fetch_gpu  # noqa: E402
+import fifo  # noqa: E402
 import imgdiff  # noqa: E402
+import scenario  # noqa: E402
 from soa import png, toolchain  # noqa: E402
 
 SPIKE = ROOT / "tools" / "gpuspike"
@@ -123,6 +139,7 @@ SCENES: dict[str, tuple] = {
     "quad_gradient": ("area", 1, "coverage"),
     "clear": ("area", 0, "colour"),
     "invariance": ("area", 0, "colour"),
+    "logic": ("area", 0, "colour"),
     "lines": ("lines",),
     "points": ("points",),
 }
@@ -226,7 +243,9 @@ def build(prof: toolchain.Profile) -> tuple[bool, str]:
     return True, ""
 
 
-def run(prof: toolchain.Profile, backend: str, mutate: str | None) -> subprocess.CompletedProcess:
+def run(
+    prof: toolchain.Profile, backend: str, mutate: str | None, logicop: str | None = None
+) -> subprocess.CompletedProcess:
     out = build_dir(prof) / backend
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob("*.png"):
@@ -234,6 +253,8 @@ def run(prof: toolchain.Profile, backend: str, mutate: str | None) -> subprocess
     args = [str(exe_path(prof)), "--backend", backend, "--out", str(out)]
     if mutate:
         args += ["--mutate", mutate]
+    if logicop and backend == "gpu":
+        args += ["--logicop", logicop]
     return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=False)
 
 
@@ -392,11 +413,11 @@ def skipped(proc: subprocess.CompletedProcess) -> bool:
     return False
 
 
-def selftest(prof: toolchain.Profile, mutate: str | None) -> int:
+def selftest(prof: toolchain.Profile, mutate: str | None, logicop: str | None = None) -> int:
     code = ready(prof)
     if code is not None:
         return code
-    gpu = run(prof, "gpu", mutate)
+    gpu = run(prof, "gpu", mutate, logicop)
     if skipped(gpu):
         return SKIP
     cpu = run(prof, "cpu", None)
@@ -579,34 +600,52 @@ def clean_env() -> dict[str, str]:
     return env
 
 
-def no_copy_captures(sets: list[str]) -> list[tuple[str, imgdiff.Capture]]:
-    """The captures of those sets whose frame copies nothing to a texture --
-    V4a's, by tools/fifo.py --summary; the rest are V4b's."""
-    out = []
-    for name in sets:
-        for c in imgdiff.SETS[name]():
-            summary = subprocess.run(
-                [sys.executable, str(ROOT / "tools" / "fifo.py"), str(c.base), "--summary"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-            if "summary:" not in summary:
-                raise SystemExit(f"gpuspike: no summary of {c.base}")
-            if "to texture" not in summary:
-                out.append((name, c))
-    return out
+@dataclass
+class Cap:
+    setname: str
+    capture: imgdiff.Capture
+    copies: list  # TexCopy: what the frame copies to a texture
+
+
+def captures(sets: list[str]) -> list[Cap]:
+    """Every capture of those sets, with the copies to a texture its stream
+    makes (V4a's 21 have none)."""
+    return [Cap(name, c, texture_copies(c.base)) for name in sets for c in imgdiff.SETS[name]()]
+
+
+def replay_base(cap: Cap, scratch: Path) -> Path:
+    """What to replay: the capture itself, or -- when its frame copies to a
+    texture -- a scratch copy with every destination poisoned (3.12)."""
+    if not cap.copies:
+        return cap.capture.base
+    return scratch_capture(cap.capture.base, scratch / cap.capture.name, cap.copies)
 
 
 def replay(
-    prof: toolchain.Profile, backend: str, base: Path, png_out: Path, mutate: str | None = None
+    prof: toolchain.Profile,
+    backend: str,
+    base: Path,
+    png_out: Path,
+    mutate: str | None = None,
+    logicop: str | None = None,
+    dump_ram: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess, str | None]:
     """One capture through the spike: the run, and the frame's hash."""
     args = [str(exe_path(prof)), "--backend", backend, "--replay", str(base), "--png", str(png_out)]
     if mutate:
         args += ["--mutate", mutate]
+    if logicop and backend == "gpu":
+        args += ["--logicop", logicop]
+    if dump_ram:
+        args += ["--dump-ram", str(dump_ram)]
     proc = subprocess.run(
-        args, cwd=ROOT, env=clean_env(), capture_output=True, text=True, check=False
+        args,
+        cwd=ROOT,
+        env={**clean_env(), **(env or {})},
+        capture_output=True,
+        text=True,
+        check=False,
     )
     m = re.search(r"^frame \d+x\d+ hash ([0-9a-f]{16})$", proc.stdout, re.M)
     return proc, m.group(1) if m else None
@@ -634,6 +673,9 @@ GPU_MUTATIONS = {
     "nofilter": "the copy filter off in the screen copy",
     "alpha": "the alpha test off",
     "lod": "level-of-detail bias +1",
+    "logic-copy": "logic ops ignored, drawn as copies (V4b)",
+    "skip-copies": "copies to a texture skipped (V4b)",
+    "dest+32": "copies to a texture written 32 bytes on (V4b)",
 }
 APPLIES = 0.005
 
@@ -645,11 +687,38 @@ GPU_BLIND_SPOTS: dict[str, dict[str, str]] = {
         "sky_4000": "one level blurrier on the player's ship and the cloud band only: 12% of pixels move, "
         "most by one or two steps, 137 far; V0's whole-frame blur and MAE are diluted by the empty sky",
         "sky_4001": "the frame after sky_4000, the same",
+        "15200": "the ship's hold: one level blurrier fades the floor's rivets almost away; 12% of pixels "
+        "move, 1,012 far, and V0's vertical blur measure reads 0.089 against its 0.10",
+        "15800": "the hold, later: the same, 0.089 again",
+        "corpus_15800": "15800 as the benchmark set captured it: the same",
     },
 }
+# Captures of one moment, for counting blind spots over distinct frames
+# (3.12): each "+1" benchmark frame and the benchmark set's copies of corpus
+# frames, under the frame they repeat.
+SAME_MOMENT: dict[str, str] = {
+    "sky_4001": "sky_4000",
+    "battle_4001": "battle_4000",
+    "ship_6001": "ship_6000",
+    "cutscene_4501": "cutscene_4500",
+    "field_5001": "field_5000",
+    "corpus_15800": "15800",
+    "corpus_6000": "6000",
+}
+# Captures that fail V0 for a cause 3.12 calls by design, each bisected to
+# its first diverging draws (FINDINGS "V4"). An unlisted failure fails the
+# run, and so do more than three listed ones (3.12: the threshold question).
+BY_DESIGN: dict[str, str] = {
+    "field_5000": "coplanar decals' depth: the CPU steps depth along a span by float adds and drifts 27 to 57 "
+    "24-bit steps over long spans (draws 346, 355 and 653), so decals 374, 393 and 653 pass LEQUAL on the CPU "
+    "that exact arithmetic and the GPU (within 2 steps of it) fail; draw 656 ties exactly and the CPU's last "
+    "bit fails it; draw 76 samples at LOD 3.50, on the boundary of two very different mip levels",
+    "field_5001": "the frame after field_5000, the same",
+}
 # A mutation that applies on fewer than five captures, with why. The rule
-# (3.12) wants five; these captures have no more to give, and V4b counts again
-# over 35 captures and V1's.
+# (3.12) wants five; the corpus and the benchmark set have no more to give,
+# and with V1's captures (--set corpus,perfset,gpuset) the alpha test applies
+# on five.
 SHORT_OF_FIVE: dict[str, str] = {
     "alpha": "only 8000 and the ship pair have alpha-tested pixels that show once drawn (0.9%, 3.8%); "
     "sky's come to 0.49% and 12100's to 0.23%",
@@ -657,22 +726,30 @@ SHORT_OF_FIVE: dict[str, str] = {
 
 
 def oracle(prof: toolchain.Profile, sets: list[str], mutations: bool) -> int:
-    """V4a's Done: the captures without texture copies, each replayed on the
-    CPU (the reference, checked against the manifest's hash or V0's inspected
-    image) and on the GPU, and V0's verdict on the pair."""
+    """V4a's and V4b's Done: every capture of the sets, poisoned where its
+    frame copies to a texture, replayed on the CPU (the reference, checked
+    against the manifest's hash or V0's inspected image) and on the GPU, and
+    V0's verdict on the pair."""
     code = ready(prof)
     if code is not None:
         return code
     out = build_dir(prof) / "oracle"
     out.mkdir(parents=True, exist_ok=True)
-    caps = no_copy_captures(sets)
-    print(f"{len(caps)} captures without copies to a texture, from {', '.join(sets)}")
+    caps = captures(sets)
+    with_copies = sum(1 for cap in caps if cap.copies)
+    print(
+        f"{len(caps)} captures from {', '.join(sets)}; {with_copies} copy to a texture and are "
+        f"replayed poisoned, {len(caps) - with_copies} do not"
+    )
     failures = 0
-    largest: dict[str, str] = {}
+    largest: dict[str, list[str]] = {}
+    bases: dict[str, Path] = {}
     rows = []
-    for setname, c in caps:
+    for cap in caps:
+        setname, c = cap.setname, cap.capture
+        base = bases[c.name] = replay_base(cap, out / "poisoned")
         ref, gpu = out / f"{c.name}_cpu.png", out / f"{c.name}_gpu.png"
-        proc, h = replay(prof, "cpu", c.base, ref)
+        proc, h = replay(prof, "cpu", base, ref)
         if proc.returncode != 0 or h is None:
             print(f"FAIL {c.name}: the CPU replay exited {proc.returncode}")
             failures += 1
@@ -692,7 +769,7 @@ def oracle(prof: toolchain.Profile, sets: list[str], mutations: bool) -> int:
             continue
         # The GPU's frame, counting each draw's samples on the way (which
         # changes no pixel) for the skip-largest mutation.
-        proc, _ = replay(prof, "gpu", c.base, gpu, "measure")
+        proc, _ = replay(prof, "gpu", base, gpu, "measure")
         if skipped(proc):
             return SKIP
         m = re.search(r"largest draws \(draw:samples\)((?: \d+:\d+)+)", proc.stderr)
@@ -706,15 +783,29 @@ def oracle(prof: toolchain.Profile, sets: list[str], mutations: bool) -> int:
         largest[c.name] = [d.split(":")[0] for d in m.group(1).split() if not d.endswith(":0")]
         metrics = imgdiff.compare(ref, gpu, out / f"{c.name}_heat.png")
         bad = metrics.failures()
-        failures += bool(bad)
-        rows.append((c.name, not bad))
-        print(f"{'pass' if not bad else 'FAIL'} {setname:7} {c.name:13} {metrics.line()}")
+        listed = bool(bad) and c.name in BY_DESIGN
+        failures += bool(bad) and not listed
+        rows.append((c.name, not bad, listed))
+        verdict = "pass" if not bad else "by design" if listed else "FAIL"
+        print(
+            f"{verdict} {setname:7} {c.name:14} {'poisoned ' if cap.copies else ''}{metrics.line()}"
+        )
         for line in bad:
             print(f"     {line}")
-    passed = sum(ok for _, ok in rows)
-    print(f"[gpuspike] oracle: {passed} of {len(caps)} pass V0")
+        if listed:
+            print(f"     by design: {BY_DESIGN[c.name]}")
+    passed = sum(ok for _, ok, _ in rows)
+    by_design = sum(listed for _, _, listed in rows)
+    if by_design > 3:
+        print(
+            f"FAIL {by_design} by-design failures: more than three is the threshold question (3.12)"
+        )
+        failures += 1
+    print(f"[gpuspike] oracle: {passed} of {len(caps)} pass V0, {by_design} fail by design")
     if mutations and not failures:
-        failures += oracle_mutations(prof, caps, out, largest)
+        # A frame that already fails V0 cannot show a mutation failing it.
+        judged = [(cap.setname, cap.capture) for cap in caps if cap.capture.name not in BY_DESIGN]
+        failures += oracle_mutations(prof, judged, out, largest, bases)
     return 1 if failures else 0
 
 
@@ -723,6 +814,7 @@ def oracle_mutations(
     caps: list[tuple[str, imgdiff.Capture]],
     out: Path,
     largest: dict[str, list[str]],
+    bases: dict[str, Path],
 ) -> int:
     """Each GPU mutation on every capture: where it changes 0.5% of the
     pixels or more it applies, and there V0 must fail. The draw skipped is
@@ -739,7 +831,7 @@ def oracle_mutations(
                 best, frac = None, -1.0
                 for draw in largest[c.name]:
                     trial = out / f"{c.name}_skip{draw}.png"
-                    proc, _ = replay(prof, "gpu", c.base, trial, f"skip-draw:{draw}")
+                    proc, _ = replay(prof, "gpu", bases[c.name], trial, f"skip-draw:{draw}")
                     f = (
                         changed_fraction(out / f"{c.name}_gpu.png", trial)
                         if proc.returncode == 0
@@ -755,7 +847,7 @@ def oracle_mutations(
                     bad += 1
                     continue
             else:
-                proc, _ = replay(prof, "gpu", c.base, mutated, name)
+                proc, _ = replay(prof, "gpu", bases[c.name], mutated, name)
                 if proc.returncode != 0:
                     cells.append(f"{c.name} exit {proc.returncode}")
                     bad += 1
@@ -771,11 +863,12 @@ def oracle_mutations(
         listed = GPU_BLIND_SPOTS.get(name, {})
         spots = [cell.split()[0] for cell in cells if cell.endswith("PASSES")]
         unlisted = [n for n in spots if n not in listed]
-        ok = (applies >= 5 or name in SHORT_OF_FIVE) and not unlisted and len(spots) <= 3
+        distinct = {SAME_MOMENT.get(n, n) for n in spots}
+        ok = (applies >= 5 or name in SHORT_OF_FIVE) and not unlisted and len(distinct) <= 3
         bad += not ok
         print(
             f"{'ok  ' if ok else 'FAIL'} mutation {name} ({what}): applies on {applies}, "
-            f"fails V0 on {failed}, blind spots {len(spots)}"
+            f"fails V0 on {failed}, blind spots {len(spots)} ({len(distinct)} distinct)"
         )
         for i in range(0, len(cells), 4):
             print("       " + ";  ".join(cells[i : i + 4]))
@@ -815,7 +908,7 @@ def time_frames(prof: toolchain.Profile, sets: list[str], runs: int, perf_runs: 
 
     perfbench()
     print(f"{'capture':<16} {'GPU ms':>8} {'consumer ms':>12}   (median of {runs})")
-    for _, c in no_copy_captures(sets):
+    for c in (c for name in sets for c in imgdiff.SETS[name]()):
         gpu_ms, consumer_ms = [], []
         for _ in range(runs):
             proc, _ = replay(prof, "gpu", c.base, scratch / "frame.png")
@@ -835,12 +928,408 @@ def time_frames(prof: toolchain.Profile, sets: list[str], runs: int, perf_runs: 
     return 0
 
 
+# ---- V4b: copies to a texture: poison, ramdiff, chain ---------------------------
+
+MEM1_SIZE = 0x01800000
+POISON = 0xA5
+# Each texture format's tile: width, height, bytes (gxr.c copy_bytes).
+TILE = {
+    0: (8, 8, 32),
+    1: (8, 4, 32),
+    2: (8, 4, 32),
+    3: (4, 4, 32),
+    4: (4, 4, 32),
+    5: (4, 4, 32),
+    6: (4, 4, 64),
+}
+
+
+def copy_texfmt(v: int) -> int:
+    """gxr.c's copy_texfmt: the texture format a copy command makes, 99 for
+    one it refuses. A third copy of it (gxv.c has the second), held to the
+    first by the CPU replays this file's poison step must leave unmoved."""
+    tpf = (v >> 3) & 15
+    fmt = tpf // 2 + (tpf & 1) * 8
+    if (v >> 15) & 1:
+        return fmt if fmt <= 3 else 99
+    return {0: 0, 1: 1, 7: 1, 8: 1, 9: 1, 10: 1, 2: 2, 3: 3, 11: 3, 12: 3, 4: 4, 5: 5, 6: 6}.get(
+        fmt, 99
+    )
+
+
+@dataclass
+class TexCopy:
+    """A copy to a texture, as the stream makes it."""
+
+    index: int  # among the frame's copies to a texture
+    offset: int  # where its BP 0x52 write starts in the stream
+    dest: int
+    extent: int  # bytes, from its first tile to the end of its last
+    texfmt: int
+    x0: int
+    y0: int
+    ow: int
+    oh: int
+    half: int
+    row_bytes: int
+
+    def runs(self) -> list[tuple[int, int]]:
+        """The bytes the copy writes, a run a row of tiles: a stride wider than
+        the copy leaves gaps between them that it never touches."""
+        tw, th, bpt = TILE[self.texfmt]
+        cols, rows = (self.ow + tw - 1) // tw, (self.oh + th - 1) // th
+        return [(self.dest + r * self.row_bytes, cols * bpt) for r in range(rows)]
+
+
+def texture_copies(base: Path) -> list[TexCopy]:
+    """Every copy to a texture a capture's stream makes, with copy_bytes'
+    arithmetic (strides included), from the registers as the stream sets
+    them. Only copies in the stream itself: a copy inside a display list is
+    refused, since cutting the stream there (ramdiff) would cut the list."""
+    cp_regs, xf_regs, bp_regs = fifo.read_regs(str(scenario.part(base, ".regs")))
+    cp = {i: v for i, v in enumerate(cp_regs) if v}
+    bp = dict(enumerate(bp_regs))
+    ram = scenario.part(base, ".ram").read_bytes()
+    stream = scenario.part(base, ".fifo").read_bytes()
+    out: list[TexCopy] = []
+    for cmd in fifo.walk(stream, cp, list(xf_regs), ram, bp=bp, follow_lists=True):
+        if cmd[0] != "bp" or cmd[3] != 0x52 or cmd[4] & 0x4000:
+            continue
+        if cmd[2] is not None:
+            raise SystemExit(f"gpuspike: {base.name} copies to a texture inside a display list")
+        v = cmd[4]
+        texfmt = copy_texfmt(v)
+        if texfmt == 99:
+            continue
+        tl, wh = bp.get(0x49, 0), bp.get(0x4A, 0)
+        w, h = (wh & 0x3FF) + 1, ((wh >> 10) & 0x3FF) + 1
+        half = (v >> 9) & 1
+        ow, oh = (w // 2, h // 2) if half else (w, h)
+        tw, th, bpt = TILE[texfmt]
+        natural = (ow + tw - 1) // tw * bpt
+        row = max((bp.get(0x4D, 0) & 0x3FF) * 32, natural)
+        rows, cols = (oh + th - 1) // th, (ow + tw - 1) // tw
+        extent = (rows - 1) * row + cols * bpt if rows and cols else 0
+        dest = ((bp.get(0x4B, 0) & 0x1FFFFF) << 5) & fifo.MEM_MASK
+        if extent and dest + extent <= MEM1_SIZE:
+            out.append(
+                TexCopy(
+                    len(out),
+                    cmd[1],
+                    dest,
+                    extent,
+                    texfmt,
+                    tl & 0x3FF,
+                    (tl >> 10) & 0x3FF,
+                    ow,
+                    oh,
+                    half,
+                    row,
+                )
+            )
+    return out
+
+
+def scratch_capture(
+    base: Path,
+    out: Path,
+    poison: list[TexCopy],
+    splice: dict[int, bytes] | None = None,
+    stream: bytes | None = None,
+) -> Path:
+    """A copy of a capture in `out`: its RAM with `splice`'s bytes laid over
+    it (chain) and then 0xA5 over every range in `poison` (3.12: a sampler
+    can then see only what this replay's copies wrote), and its stream
+    replaced by `stream` when given (ramdiff)."""
+    out.mkdir(parents=True, exist_ok=True)
+    dst = out / base.name
+    shutil.copyfile(scenario.part(base, ".regs"), scenario.part(dst, ".regs"))
+    if stream is None:
+        shutil.copyfile(scenario.part(base, ".fifo"), scenario.part(dst, ".fifo"))
+    else:
+        scenario.part(dst, ".fifo").write_bytes(stream)
+    ram = bytearray(scenario.part(base, ".ram").read_bytes())
+    for at, data in (splice or {}).items():
+        ram[at : at + len(data)] = data
+    for c in poison:
+        for at, n in c.runs():
+            ram[at : at + n] = bytes([POISON]) * n
+    scenario.part(dst, ".ram").write_bytes(bytes(ram))
+    return dst
+
+
+def bp_write(reg: int, value: int) -> bytes:
+    return bytes([0x61, reg]) + (value & 0xFFFFFF).to_bytes(3, "big")
+
+
+def efb_at(base: Path, c: TexCopy) -> bytes:
+    """The capture's stream cut just before copy c, then an unfiltered
+    640x480 screen copy: replayed, its frame is the EFB as that copy found it."""
+    stream = scenario.part(base, ".fifo").read_bytes()[: c.offset]
+    tail = bp_write(0x53, 0) + bp_write(0x54, 0) + bp_write(0x49, 0) + bp_write(0x4A, 0x077E7F)
+    return stream + tail + bp_write(0x52, 0x4003)
+
+
+def texel_of(off: int, c: TexCopy) -> tuple[int, int] | None:
+    """The texel byte `off` of a copy holds (the first, for R4's two), or
+    None for a byte between rows of tiles or past the copy's edge."""
+    tw, th, bpt = TILE[c.texfmt]
+    ty, rem = divmod(off, c.row_bytes)
+    tx, b = divmod(rem, bpt)
+    if tx >= (c.ow + tw - 1) // tw:
+        return None
+    if c.texfmt == 0:
+        iy, ix = b // 4, (b % 4) * 2
+    elif c.texfmt in (1, 2):
+        iy, ix = divmod(b, 8)
+    elif c.texfmt == 6:
+        iy, ix = divmod((b % 32) // 2, 4)
+    else:
+        iy, ix = divmod(b // 2, 4)
+    x, y = tx * tw + ix, ty * th + iy
+    return (x, y) if x < c.ow and y < c.oh else None
+
+
+def logic_captures() -> list[Cap]:
+    """The captures that draw under a logic op: the mask effect's 14."""
+    out = []
+    for cap in captures(["corpus", "perfset"]):
+        summary = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "fifo.py"), str(cap.capture.base), "--summary"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        m = re.search(r"(\d+) draws under a logic op", summary)
+        if m and int(m.group(1)):
+            out.append(cap)
+    return out
+
+
+LOGIC_MODES = ("native", "blend", "snapshot")
+
+
+def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
+    """V4b: the mask effect's captures through the three ways of drawing a
+    logic op, poisoned; byte-identical images (a same-replay contrast). With
+    --mutate, the mutation is applied to the native path alone: the paths must
+    then differ, and the native frame must fail V0 against the CPU's."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "logicop"
+    out.mkdir(parents=True, exist_ok=True)
+    caps = logic_captures()
+    bad = 0
+    for cap in caps:
+        c = cap.capture
+        base = replay_base(cap, out / "poisoned")
+        pngs, counts = {}, {}
+        for mode in LOGIC_MODES:
+            pngs[mode] = out / f"{c.name}_{mode}.png"
+            proc, _ = replay(
+                prof, "gpu", base, pngs[mode], mutate if mode == "native" else None, mode
+            )
+            if skipped(proc):
+                return SKIP
+            m = re.search(r"logic ops: (\d+) draws", proc.stderr)
+            counts[mode] = int(m.group(1)) if proc.returncode == 0 and m else -1
+        images = {mode: png.read_rgba(pngs[mode]) for mode in LOGIC_MODES}
+        w, h, _ = images["native"]
+        rows = {mode: pixel_rows(w, h, images[mode][2]) for mode in LOGIC_MODES}
+        differ = {
+            mode: sum(
+                sum(map(ne, a, b, strict=True))
+                for a, b in zip(rows["native"], rows[mode], strict=True)
+            )
+            for mode in ("blend", "snapshot")
+        }
+        same = images["blend"] == images["snapshot"]
+        drawn = min(counts.values())
+        line = (
+            f"{c.name:14} logic draws {drawn}; native differs from blend at {differ['blend']} px, "
+            f"from snapshot at {differ['snapshot']}; blend {'=' if same else '!='} snapshot"
+        )
+        if mutate:
+            ref = out / f"{c.name}_cpu.png"
+            replay(prof, "cpu", base, ref)
+            fails = bool(imgdiff.compare(ref, pngs["native"]).failures())
+            ok = drawn > 0 and differ["blend"] > 0 and differ["snapshot"] > 0 and same and fails
+            line += f"; the mutated native frame {'fails' if fails else 'PASSES'} V0"
+        else:
+            ok = drawn > 0 and not differ["blend"] and not differ["snapshot"] and same
+        bad += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {line}")
+    what = (
+        f"--mutate {mutate}: every capture's paths differ and the native one fails V0"
+        if mutate
+        else ("the three paths give byte-identical images")
+    )
+    print(f"[gpuspike] logicop over {len(caps)} captures: {what if not bad else f'{bad} FAIL'}")
+    return 1 if bad else 0
+
+
+def ramdiff(prof: toolchain.Profile, sets: list[str], mutate: str | None = None) -> int:
+    """V4b: after each copy to a texture, the GPU's bytes against the CPU's,
+    both poisoned: bytes written, bytes differing and the largest difference.
+    Each differing byte is traced to the EFB as that copy found it (efb_at,
+    on both paths): a texel can differ only where one of the pixels its
+    filter reads does, the encoders being byte for byte the same (V3b)."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "ramdiff"
+    out.mkdir(parents=True, exist_ok=True)
+    bad = 0
+    copies_seen = 0
+    for cap in (cap for cap in captures(sets) if cap.copies):
+        c = cap.capture
+        base = replay_base(cap, out / "poisoned")
+        rams = {}
+        for b in ("cpu", "gpu"):
+            rams[b] = out / f"{c.name}_{b}.ram"
+            proc, _ = replay(
+                prof,
+                b,
+                base,
+                out / f"{c.name}_{b}.png",
+                mutate if b == "gpu" else None,
+                dump_ram=rams[b],
+            )
+            if b == "gpu" and skipped(proc):
+                return SKIP
+        cpu_ram, gpu_ram = rams["cpu"].read_bytes(), rams["gpu"].read_bytes()
+        for tc in cap.copies:
+            copies_seen += 1
+            a = cpu_ram[tc.dest : tc.dest + tc.extent]
+            g = gpu_ram[tc.dest : tc.dest + tc.extent]
+            written = sum(1 for at, n in tc.runs() for x in cpu_ram[at : at + n] if x != POISON)
+            differ = [i for i in range(tc.extent) if a[i] != g[i]]
+            largest = max((abs(a[i] - g[i]) for i in differ), default=0)
+            untraced = 0
+            if differ:
+                efb = {}
+                for b in ("cpu", "gpu"):
+                    cut = scratch_capture(
+                        c.base,
+                        out / f"{c.name}_at{tc.index}_{b}",
+                        cap.copies,
+                        stream=efb_at(c.base, tc),
+                    )
+                    replay(prof, b, cut, out / f"{c.name}_at{tc.index}_{b}.png")
+                    efb[b] = png.read_rgba(out / f"{c.name}_at{tc.index}_{b}.png")[2]
+                for i in differ:
+                    t = texel_of(i, tc)
+                    if t is None:
+                        untraced += 1
+                        continue
+                    sx = tc.x0 + (2 * t[0] if tc.half else t[0])
+                    sy = tc.y0 + (2 * t[1] if tc.half else t[1])
+                    rows = range(max(sy - 1, 0), min(sy + 2 + tc.half, 480))
+                    cols = range(sx, min(sx + 1 + tc.half, 640))
+                    if not any(
+                        efb["cpu"][(y * 640 + x) * 4 : (y * 640 + x) * 4 + 3]
+                        != efb["gpu"][(y * 640 + x) * 4 : (y * 640 + x) * 4 + 3]
+                        for y in rows
+                        for x in cols
+                    ):
+                        untraced += 1
+            ok = written > 0 and not untraced
+            bad += not ok
+            print(
+                f"{'ok  ' if ok else 'FAIL'} {c.name:14} copy {tc.index + 1} to {tc.dest:08X} (format {tc.texfmt}, "
+                f"{tc.extent} bytes): {written} written, {len(differ)} differ, largest {largest}, "
+                f"{untraced} not traced to the EFB"
+            )
+    print(
+        f"[gpuspike] ramdiff over {copies_seen} copies: {'every difference is the EFB' if not bad else f'{bad} FAIL'}"
+    )
+    return 1 if bad else 0
+
+
+def chain(prof: toolchain.Profile, names: list[str]) -> int:
+    """V4b: a sequence of V1's captures N ... N+k, each frame's copies kept
+    and spliced into the next frame's RAM, except where that frame copies
+    itself. On the CPU the spliced bytes must equal what the next frame's RAM
+    already holds there (no CPU write came between); each chained GPU frame
+    must pass V0 against the chained CPU frame."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "chain"
+    out.mkdir(parents=True, exist_ok=True)
+    caps = {cap.capture.name: cap for cap in captures(["gpuset"])}
+    kept: dict[str, dict[int, bytes]] = {"cpu": {}, "gpu": {}}
+    bad = 0
+    for name in names:
+        cap = caps[name]
+        own = [(tc.dest, tc.dest + tc.extent) for tc in cap.copies]
+
+        def outside(at: int, n: int, own: list[tuple[int, int]] = own) -> bool:
+            return all(at + n <= lo or at >= hi for lo, hi in own)
+
+        splice = {
+            b: {at: data for at, data in kept[b].items() if outside(at, len(data))} for b in kept
+        }
+        ram = scenario.part(cap.capture.base, ".ram").read_bytes()
+        mismatched = sum(
+            sum(map(ne, ram[at : at + len(data)], data, strict=True))
+            for at, data in splice["cpu"].items()
+        )
+        pngs = {}
+        for b in ("cpu", "gpu"):
+            base = scratch_capture(cap.capture.base, out / f"{name}_{b}", cap.copies, splice[b])
+            pngs[b] = out / f"{name}_{b}.png"
+            dump = out / f"{name}_{b}.ram"
+            proc, _ = replay(prof, b, base, pngs[b], dump_ram=dump)
+            if b == "gpu" and skipped(proc):
+                return SKIP
+            after = dump.read_bytes()
+            for tc in cap.copies:
+                kept[b] = {
+                    at: d
+                    for at, d in kept[b].items()
+                    if at + len(d) <= tc.dest or at >= tc.dest + tc.extent
+                }
+                for at, n in tc.runs():
+                    kept[b][at] = after[at : at + n]
+            dump.unlink()
+        metrics = imgdiff.compare(pngs["cpu"], pngs["gpu"])
+        fails = metrics.failures()
+        ok = not mismatched and not fails
+        bad += not ok
+        spliced = sum(len(d) for d in splice["cpu"].values())
+        print(
+            f"{'ok  ' if ok else 'FAIL'} {name}: {len(splice['cpu'])} range(s), {spliced} bytes spliced, "
+            f"{'equal to its RAM' if not mismatched else f'{mismatched} byte(s) NOT equal to its RAM'}; "
+            f"V0 {'passes' if not fails else 'FAILS'}: {metrics.line()}"
+        )
+    print(
+        f"[gpuspike] chain over {len(names)} frames: {'every frame chains and passes' if not bad else f'{bad} FAIL'}"
+    )
+    return 1 if bad else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
-        "command", choices=("build", "selftest", "tevdiff", "copydiff", "oracle", "time")
+        "command",
+        choices=(
+            "build",
+            "selftest",
+            "tevdiff",
+            "copydiff",
+            "oracle",
+            "time",
+            "logicop",
+            "ramdiff",
+            "chain",
+        ),
+    )
+    ap.add_argument(
+        "frames", nargs="*", help="chain: V1's captures in order, e.g. battle_4421 battle_4422"
     )
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
     ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
@@ -850,6 +1339,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--set", default="corpus,perfset", help="oracle and time: capture sets")
     ap.add_argument("--mutations", action="store_true", help="oracle: also the GPU mutations")
     ap.add_argument("--runs", type=int, default=5, help="time: replays a capture")
+    ap.add_argument(
+        "--logicop",
+        default=None,
+        help="selftest: how gxv draws logic ops (native, blend, snapshot)",
+    )
     args = ap.parse_args(argv)
     prof = toolchain.profile(args.cc)
     if args.command == "build":
@@ -862,9 +1356,15 @@ def main(argv: list[str] | None = None) -> int:
         return copydiff(prof, args.rects, args.seed, args.mutate)
     if args.command == "oracle":
         return oracle(prof, args.set.split(","), args.mutations)
+    if args.command == "logicop":
+        return logicop(prof, args.mutate)
+    if args.command == "ramdiff":
+        return ramdiff(prof, args.set.split(","), args.mutate)
+    if args.command == "chain":
+        return chain(prof, args.frames)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
-    return selftest(prof, args.mutate)
+    return selftest(prof, args.mutate, args.logicop)
 
 
 if __name__ == "__main__":

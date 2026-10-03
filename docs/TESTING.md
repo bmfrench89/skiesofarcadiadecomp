@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1185 passed, 2 skipped in 244.79s
+1190 passed, 2 skipped in 306.21s
 ```
 
-1187 tests in 65 files, none of which reads the disc. The two FMA probes of
+1192 tests in 65 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -62,7 +62,7 @@ its own and run it, some of the C as well:
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
 | `test_fifo_summary.py` | 5 | `tools/fifo.py --summary` (specs/gpu-backend.md V1) on a synthetic stream: one draw under a logic OR, a display list of 0x40 bytes, and an R8 and an RGB565 copy, each with its destination and size; a blend overrides the logic op, as GX and the renderer have it; and intensity copies are named as such |
 | `test_gxr_backend.py` | 5 | the renderer's backend seam (GPU spec V2), on a renderer-only build with a counting backend: the commands arrive as 0 0 1 2 1 2 0 1 2 for two draws, a filtered and an unfiltered copy to texture and a screen copy, each copy's clear its own command; a texture's generation moves when its bytes change and not otherwise; the frame and presented counts agree; each command carries the EFB it was built for; and the 23 corpus captures through the passthrough keep their manifest hashes (skipped, with its reason, without `build/fifo`). Each of the spec's five mutations turns it red |
-| `test_gpuspike.py` | 22 | the GPU spike (specs/gpu-backend.md V3a, V3b, V4a): the judge passes a pixel moved at an edge and fails a hole or a one-step colour inside, takes in colour edges, holds `cull3` to nothing, lines to one pixel and points to none; copydiff's comparison counts each kind of difference and refuses a refused copy that wrote, runs whose cases differ, a short run and an empty one; a replay sees no `SOA_*` but `SOA_SETTINGS=0`, and one pixel of a frame does not count as a mutation applying; the driver's recipe is still `runtime/selftest.c`'s and every scene it writes is judged; `vendor/` matches its record, and a copy with one header byte changed and `LICENSE.md` gone fails it; and on this machine's GPU the 16 scenes pass (the invariance strip among them) and `--mutate unclipped` fails, tevdiff's 100,000 cases and copydiff's 25,600 copies have no mismatch, the clamp, rounding, intensity and unseeded mutations each fail as they should, and the 21 captures without a copy to a texture pass V0 against references equal to the manifest's and V0's. The vendor tests skip, saying why, without `vendor/`; the GPU ones also without MSVC or a Vulkan device, and the oracle without the captures |
+| `test_gpuspike.py` | 27 | the GPU spike (specs/gpu-backend.md V3a, V3b, V4a, V4b): the judge passes a pixel moved at an edge and fails a hole or a one-step colour inside, takes in colour edges, holds `cull3` to nothing, lines to one pixel and points to none; copydiff's comparison counts each kind of difference and refuses a refused copy that wrote, runs whose cases differ, a short run and an empty one; a replay sees no `SOA_*` but `SOA_SETTINGS=0`, and one pixel of a frame does not count as a mutation applying; the Python copy_texfmt is gxr.c's, a copy's runs and texels skip a stride's gaps, poison covers only what a copy writes, and efb_at cuts the stream before the copy; the driver's recipe is still `runtime/selftest.c`'s and every scene it writes is judged; `vendor/` matches its record, and a copy with one header byte changed and `LICENSE.md` gone fails it; and on this machine's GPU the 17 scenes pass (the invariance strip and the logic ops among them) and `--mutate unclipped` fails, tevdiff's 100,000 cases and copydiff's 25,600 copies have no mismatch, the clamp, rounding, intensity and unseeded mutations each fail as they should, the 35 captures of the corpus and the benchmark set pass V0 (two by design, listed) against references equal to the manifest's and V0's, the copy captures poisoned, and the mask effect's 14 give byte-identical frames under all three logic-op paths. The vendor tests skip, saying why, without `vendor/`; the GPU ones also without MSVC or a Vulkan device, and the capture ones without the captures |
 | `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
@@ -120,17 +120,17 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1185 passed, 2 skipped` |
-| no capstone | `1166 passed, 3 skipped` |
-| no MSVC | `795 passed, 392 skipped` |
-| neither | `776 passed, 393 skipped` |
+| everything (MSVC + capstone) | `1190 passed, 2 skipped` |
+| no capstone | `1171 passed, 3 skipped` |
+| no MSVC | `799 passed, 393 skipped` |
+| neither | `780 passed, 394 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 390 MSVC-gated tests are the ones that build runtime
+Two things follow. The 391 MSVC-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1125,20 +1125,23 @@ it. `python tools/fifo.py BASE --summary` lists what a frame does besides
 draw: every copy with its format, destination and size, the draws under each
 logic op, and its display lists.
 
-### The GPU spike (V3a, V3b, V4a)
+### The GPU spike (V3a, V3b, V4a, V4b)
 
 The renderer drawing through Vulkan, headless and outside the port, on this
-machine's GPU (specs/gpu-backend.md V3a, V3b, V4a). It needs MSVC, a Vulkan driver and
+machine's GPU (specs/gpu-backend.md V3a, V3b, V4a, V4b). It needs MSVC, a Vulkan driver and
 `vendor/`, which one command fills and which is never committed:
 
 ```
 python tools/fetch_gpu.py            # Vulkan-Headers and glslang, pinned, into vendor/
 python tools/fetch_gpu.py --verify   # every fetched file against vendor/GPU.sha256
-python tools/gpuspike.py selftest    # build if stale, draw 16 scenes on the CPU and the GPU, compare; ~5 s
+python tools/gpuspike.py selftest    # build if stale, draw 17 scenes on the CPU and the GPU, compare; ~5 s
 python tools/gpuspike.py tevdiff     # tev.glsl against tev_pixel, 100,000 random setups; 1 s
 python tools/gpuspike.py copydiff    # copy.comp against gxr.c's copies, 25,600 random copies; 22 s
-python tools/gpuspike.py oracle      # the 21 captures with no texture copy, CPU against GPU, V0's verdict; 30 s
-python tools/gpuspike.py oracle --mutations   # and the five GPU mutations; 2 min
+python tools/gpuspike.py oracle      # corpus and benchmark set, CPU against GPU, V0's verdict; 40 s
+python tools/gpuspike.py oracle --set corpus,perfset,gpuset --mutations   # all 67 and eight mutations; 16 min
+python tools/gpuspike.py logicop     # the mask effect's 14 captures, logic ops three ways; 22 s
+python tools/gpuspike.py ramdiff --set corpus,perfset,gpuset   # every copy's RAM, CPU against GPU; 20 s
+python tools/gpuspike.py chain battle_4421 ... battle_4451     # V1's battle start, chained; 30 s
 python tools/gpuspike.py time        # GPU and consumer ms a frame, perfbench before and after; 30 s
 ```
 
@@ -1176,7 +1179,12 @@ inspected reference byte for byte. The GPU frame is then judged by V0
 With `--mutations`, each GPU mutation must fail V0 wherever it changes 0.5% of
 a frame or more, on five captures or more; the exceptions are listed in
 `GPU_BLIND_SPOTS` and `SHORT_OF_FIVE` with their reasons, and an unlisted one
-fails. What the 21 showed is FINDINGS "V4".
+fails. A capture whose frame copies to a texture is replayed from a scratch copy with 0xA5 over
+every row of tiles it copies into (3.12's poison), so its samplers can only see this replay's
+copies; a failure must be by design and bisected (`BY_DESIGN`, with `SOA_GXR_DRAWS=N`,
+`GXV_DRAW=N` and `--dump-depth`). `logicop` holds native, blend and snapshot logic ops to
+byte-identical frames; `ramdiff` traces every byte a copy writes differently to the EFB the copy
+read; `chain` carries a frame's copies into the next. What they showed is FINDINGS "V4".
 
 ## 6. The decompilation check
 
@@ -1325,7 +1333,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 392 of the 1187 skip without a C compiler: 390 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 393 of the 1192 skip without a C compiler: 391 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

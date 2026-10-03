@@ -637,7 +637,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 | 4 | **V3a** headless Vulkan harness: fetch, build, the EFB pass with CPU clipping, geometry self test. **Done** 2026-10-03 (FINDINGS "V3"): 15 scenes, coverage exact away from edges on the Z1 Extreme's GPU, thirteen mutations red | several days | none | V2; D-17 "yes" or unanswered | — |
 | 5 | **V3b** the exact differentials: `tevdiff`, `copydiff`. **Done** 2026-10-03 (FINDINGS "V3"): 100,000 TEV cases and 25,600 copies, 0 mismatches; every EFB copy is now the compute copy | several days | none | V3a | — |
 | 6 | **V4a** the spike on the 21 captures with no texture copies: draws, textures, depth, fog, blend, screen copy. **Done** 2026-10-03 (FINDINGS "V4"): 21 of 21 pass V0 on the first run; one LOD blind spot (the sky pair) and the alpha mutation short of five, both listed | several days to week-plus | none | V0, V3b | — |
-| 7 | **V4b** copies and logic ops, with poison and chain; V1's captures; the gate memo | several days | none | V4a, V1 | **Owner**: four side-by-sides |
+| 7 | **V4b** copies and logic ops, with poison and chain; V1's captures; the gate memo. **Done** 2026-10-03 (FINDINGS "V4"): 65 of 67 captures pass V0, 2 by design; logic ops exact three ways; every copy's RAM difference traced to the EFB; the battle transition chains; the owner's look pending | several days | none | V4a, V1 | **Owner**: four side-by-sides |
 | — | **Gate G1** | — | — | V4b | **Owner** |
 
 If D-17 is "no" before V3a starts, V3-V4 are built on Direct3D 11 (V3′/V4′), with the same Done

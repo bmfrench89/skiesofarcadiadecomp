@@ -28,7 +28,9 @@
  * ones in both processes.
  *
  * --replay BASE runs a capture (BASE.fifo, .regs, .ram) on either backend and
- * prints the frame's hash; --png writes the frame.
+ * prints the frame's hash; --png writes the frame, --dump-ram the RAM it left
+ * and --dump-depth the depth buffer, as 24-bit values. --logicop picks how
+ * gxv draws logic ops.
  *
  * Exit status: 0 when every check here passed, 1 when one failed, 3 when gpu
  * mode found no Vulkan device (a skip, which the caller reports as one).
@@ -540,6 +542,24 @@ static int scene_invariance(CpuState* s)
     return !(first > 0 && first == second && left == 0);
 }
 
+/* Logic ops as the mask effect draws them (FINDINGS "V4"): a quad of a known
+ * colour, then OR (255, 0, 0), AND (0, 255, 255) and OR (128, 0, 0), each a
+ * quad over part of the last, through PE_CMODE0's logic op with blending off.
+ * Every gxv mode (--logicop) must draw what blend_pixel does. */
+static int scene_logic(CpuState* s)
+{
+    gxr_reset_efb();
+    quad(s, 40, 40, 600, 440, 50, 0xFF6E77FFu);
+    bp_w(s, 0x41, 0x701Au); /* logic OR, colour and alpha written */
+    quad(s, 80, 60, 560, 300, 50, 0xFF0000FFu);
+    bp_w(s, 0x41, 0x101Au); /* logic AND */
+    quad(s, 120, 100, 520, 400, 50, 0x00FFFFFFu);
+    bp_w(s, 0x41, 0x701Au); /* logic OR */
+    quad(s, 160, 140, 480, 420, 50, 0x800000FFu);
+    bp_w(s, 0x41, 0x18u);
+    return finish_scene(s, "logic");
+}
+
 /* A copy's clear (its own command with a backend, kind 2): a grey quad at z
  * 50, then a screen copy of a 300x200 rectangle with the clear bit, clearing
  * it to (0x30, 0x60, 0x90) and depth 0x400000 (a quarter: nearer than the
@@ -937,6 +957,9 @@ int main(int argc, char** argv)
     const char* mutate = NULL;
     const char* replay = NULL;
     const char* png = NULL;
+    const char* logicop = NULL;
+    const char* dump_ram = NULL;
+    const char* dump_depth = NULL;
     unsigned tev_cases = 0, copy_rects = 0;
     uint32_t seed = 1;
     int failures, i;
@@ -950,6 +973,9 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
+        else if (!strcmp(argv[i], "--logicop")) logicop = argv[++i];
+        else if (!strcmp(argv[i], "--dump-ram")) dump_ram = argv[++i];
+        else if (!strcmp(argv[i], "--dump-depth")) dump_depth = argv[++i];
     }
     if (tev_cases && !g_gpu) {
         fprintf(stderr, "[gpuspike] --tevdiff runs both sides itself, and needs --backend gpu\n");
@@ -964,6 +990,10 @@ int main(int argc, char** argv)
         }
         if (mutate && !gxv_set_mutation(mutate)) {
             fprintf(stderr, "[gpuspike] no mutation %s\n", mutate);
+            return 2;
+        }
+        if (logicop && !gxv_set_logicop(logicop)) {
+            fprintf(stderr, "[gpuspike] no logic-op mode %s (native, blend, snapshot)\n", logicop);
             return 2;
         }
         gxv_set_upload_hook(upload_hook);
@@ -993,6 +1023,32 @@ int main(int argc, char** argv)
         if (png && !png_write_rgba(png, screen, w, h, EFB_W * 4)) {
             fprintf(stderr, "[gpuspike] cannot write %s\n", png);
             r = 1;
+        }
+        /* MEM1 as the frame left it, for chain and ramdiff: what each copy to
+         * a texture wrote is in it. */
+        if (dump_ram) {
+            FILE* f = fopen(dump_ram, "wb");
+            if (!f || fwrite(s.mem, 1, MEM1_SIZE, f) != MEM1_SIZE) {
+                fprintf(stderr, "[gpuspike] cannot write %s\n", dump_ram);
+                r = 1;
+            }
+            if (f) fclose(f);
+        }
+        /* The depth buffer as 24-bit values, 640x528 little-endian words:
+         * the CPU's g_efb_z, or the GPU's read back. */
+        if (dump_depth) {
+            static uint32_t z[EFB_H][EFB_W];
+            FILE* f = fopen(dump_depth, "wb");
+            if (g_gpu) {
+                if (!gxv_read_depth(&z[0][0])) r = 1;
+            } else {
+                memcpy(z, g_efb_z, sizeof z);
+            }
+            if (!f || fwrite(z, 1, sizeof z, f) != sizeof z) {
+                fprintf(stderr, "[gpuspike] cannot write %s\n", dump_depth);
+                r = 1;
+            }
+            if (f) fclose(f);
         }
         if (g_gpu) {
             gxv_report();
@@ -1024,6 +1080,7 @@ int main(int argc, char** argv)
     failures += scene_scissor(&s);
     failures += scene_quad_gradient(&s);
     failures += scene_clear(&s);
+    failures += scene_logic(&s);
     failures += scene_invariance(&s);
     failures += scene_lines(&s);
     failures += scene_points(&s);
