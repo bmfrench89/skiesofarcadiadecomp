@@ -9,19 +9,26 @@
 
 layout(std430, set = 0, binding = 0) readonly buffer Verts { float v[]; };
 
-// RasterCfg's viewport with its offsets applied, and where this draw's first
-// vertex is in the buffer (in vertices).
+// RasterCfg's viewport with its offsets applied, where this draw's first
+// vertex is in the buffer (in vertices), and its record (raster.frag's).
 layout(push_constant) uniform Draw {
     float wd, ht, xorig, yorig, zrange, farz;
     uint base;
+    uint record;
 } pc;
 
 // The game draws the same vertices more than once under different TEV and
 // blend states and relies on LEQUAL ties; every pipeline must place them alike.
+// GXV_MUTATE_NOINVARIANT drops the qualifier, for V4a's finding on whether
+// this GPU needs it.
+#ifndef GXV_MUTATE_NOINVARIANT
 invariant gl_Position;
+#endif
 
 layout(location = 0) noperspective out float o_depth;
 layout(location = 1) out vec4 o_col0;
+layout(location = 2) out vec4 o_col1;
+layout(location = 3) out vec4 o_tex[8]; // s, t, q; perspective-correct, as the CPU's planes of value/w
 
 void main()
 {
@@ -40,5 +47,7 @@ void main()
     precise float d = (pc.farz + z * iw * pc.zrange) / 16777216.0;
     o_depth = d;
     o_col0 = vec4(v[o + 7u], v[o + 8u], v[o + 9u], v[o + 10u]);
+    o_col1 = vec4(v[o + 11u], v[o + 12u], v[o + 13u], v[o + 14u]);
+    for (uint k = 0u; k < 8u; k++) o_tex[k] = vec4(v[o + 15u + 3u * k], v[o + 16u + 3u * k], v[o + 17u + 3u * k], 0.0);
     gl_PointSize = 1.0;
 }

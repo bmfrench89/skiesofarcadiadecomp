@@ -4,14 +4,13 @@
  * EFB of its own, headless: no window, no swapchain, a screen copy read back
  * and handed to gxr_backend_screen.
  *
- * It draws geometry (V3a): the vertex stage of 3.3 (the CPU's own clipping,
- * the depth varying, invariant positions), the CPU's culling, scissor, depth
- * test and write masks, and the vertex colour. It copies (V3b): every EFB
+ * It draws (V3a, V4a): the vertex stage of 3.3 (the CPU's own clipping, the
+ * depth varying, invariant positions), the CPU's culling, scissor, depth test
+ * and write masks; the TEV with texture sampling, the alpha test and fog in
+ * the fragment stage; and blending by 3.5's table. It copies (V3b): every EFB
  * copy, to a texture or the screen, is copy.comp, byte for byte the CPU's. A
- * draw that needs more -- a TEV shape other than the vertex colour, an alpha
- * test that can reject, blending, a logic op, fog -- is refused: the backend
+ * draw with a logic op (V4b's) or a constant alpha is refused: the backend
  * says which, and the renderer stops the run, rather than drawing it wrong.
- * tev.glsl, the whole TEV, is V3b's too, but only tevdiff runs it so far.
  */
 #ifndef SOA_GXV_H
 #define SOA_GXV_H
@@ -52,7 +51,11 @@ void gxv_set_upload_hook(GxvUploadHook h);
  * "unseeded" writes a copy's buffer back without first reading RAM into it;
  * "rounding" rounds the copy filter where the C truncates; "intensity"
  * rounds the intensity where the C truncates; "clamp" swaps tev.glsl's two
- * clamps. Set before the first draw or copy. */
+ * clamps; "alpha", "lod" and "fog" are raster.frag with the alpha test off,
+ * the level of detail one higher and fog off; "nofilter" is the screen copy
+ * unfiltered; "skip-draw:N" leaves out draw N; "noinvariant" drops
+ * `invariant gl_Position`. "measure" changes no pixel: it counts each draw's
+ * samples and reports the five largest. Set before the first draw or copy. */
 int gxv_set_mutation(const char* name);
 
 #endif

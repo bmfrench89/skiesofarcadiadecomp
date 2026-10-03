@@ -240,6 +240,9 @@ def test_the_gpu_draws_what_the_cpu_draws():
     assert out.count('render full-screen quad      ok    got "307200 of 307200 red"') == 2, out
     for name in gpuspike.SCENES:
         assert f"ok   {name}:" in out, name
+    assert out.count("invariance first ") == 2 and "left red 0 ok" in out, (
+        "the strip drawn twice must cover itself"
+    )
     assert out.count(" ok\n") >= 4 and "rebuilt 0" not in out, (
         "every clip scene must rebuild a draw"
     )
@@ -298,3 +301,38 @@ def test_each_copy_mutation_fails_copydiff(mutation, breaks):
     assert totals, out
     for what, n in zip(("ram", "image", "screen"), totals.groups(), strict=True):
         assert (int(n) > 0) == (what in breaks), (mutation, what, out)
+
+
+def test_a_replay_sees_no_soa_variable_but_its_own(monkeypatch):
+    """3.12: nothing set for another run reaches a replay the oracle runs."""
+    monkeypatch.setenv("SOA_GPU", "1")
+    monkeypatch.setenv("SOA_THREADS", "3")
+    env = gpuspike.clean_env()
+    assert {k for k in env if k.startswith("SOA_")} == {"SOA_SETTINGS"}
+    assert env["SOA_SETTINGS"] == "0"
+
+
+def test_a_mutation_applies_by_the_pixels_it_changes(tmp_path):
+    a = scene(tmp_path, "a", square)
+    b = scene(tmp_path, "b", lambda x, y: (201, 40, 40) if (x, y) == (25, 18) else square(x, y))
+    assert gpuspike.changed_fraction(a, a) == 0.0
+    assert gpuspike.changed_fraction(a, b) == 1 / (W * H)
+    assert 1 / (W * H) < gpuspike.APPLIES, "one pixel in a frame must not count as applying"
+
+
+ORACLE_DATA = (ROOT / "build" / "fifo").exists() and (ROOT / "build" / "perfset").exists()
+
+
+def test_the_captures_without_copies_pass_v0_on_the_gpu():
+    """V4a: the 21 captures with no copy to a texture, each replayed on the
+    CPU -- a reference that must be the manifest's or V0's, byte for byte --
+    and on the GPU, and V0's verdict: all pass."""
+    if not ORACLE_DATA:
+        reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
+        print(f"skip: {reason}")
+        pytest.skip(reason)
+    proc = run_spike("oracle")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    assert "21 captures without copies to a texture" in out
+    assert "[gpuspike] oracle: 21 of 21 pass V0" in out

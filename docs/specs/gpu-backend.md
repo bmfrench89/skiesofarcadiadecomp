@@ -1288,6 +1288,23 @@ chain, through H8's DXGI; `SOA_GPU_FEATURES=core` means "no `OutputMergerLogicOp
 
 ### V4a. The spike on captures: draws, textures, depth, fog, blend, the screen copy
 
+*Landed 2026-10-03 (FINDINGS "V4"). The differences from what follows:*
+- *All 21 pass V0 on the first run, so nothing was bisected; `SOA_GXR_DRAWS=N` stops either path
+  after N draws when something does fail.*
+- *"The frame's largest draw" is the most visible of its five largest by samples (an occlusion query
+  around each draw): by samples alone it is often a full-screen fill that later draws cover, whose
+  absence changes nothing. `occlusionQueryPrecise` is the one optional feature enabled, where the
+  device has it, for those counts; nothing that draws uses it. There is no `SOA_GPU_FEATURES`: the
+  spike uses core Vulkan 1.1 throughout otherwise.*
+- *Two mutation results are listed in `gpuspike.py` with their reasons rather than met: the alpha
+  test off applies on 3 captures, not five (only 8000 and the ship pair have alpha-tested pixels
+  that show), and the LOD bias +1 passes V0 on the sky pair (a visibly blurrier ship over 12% of
+  the frame, diluted by the empty sky). Thresholds are unchanged; V4b counts again over more
+  captures.*
+- *The invariance strip is a selftest scene; without `invariant` it still passes on this GPU, and it
+  fails when the second pass's depth moves one 24-bit step.*
+- *`time` runs perfbench (8 workers) before and after the GPU timings, A B A.*
+
 *Several days to week-plus, bounded by 3.12's failure rule. Rebuild: none for `soa.exe`.
 Prerequisites: V0, V3b. Files: `tools/gpuspike/*`, `tools/gpuspike.py` (`oracle`, `time`),
 FINDINGS entry "V4".*

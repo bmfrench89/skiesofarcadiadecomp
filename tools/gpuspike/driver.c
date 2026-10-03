@@ -27,6 +27,9 @@
  * against each other. --seed picks the cases; the same seed makes the same
  * ones in both processes.
  *
+ * --replay BASE runs a capture (BASE.fifo, .regs, .ram) on either backend and
+ * prints the frame's hash; --png writes the frame.
+ *
  * Exit status: 0 when every check here passed, 1 when one failed, 3 when gpu
  * mode found no Vulkan device (a skip, which the caller reports as one).
  */
@@ -52,6 +55,10 @@ uint32_t mmio_read32(CpuState* s, uint32_t ea)
 }
 
 void hle_report(void) {}
+
+/* gx.c's capture replay, which no header declares: the port reaches it from
+ * main.c, and tools/tests/test_gxr_backend.py's driver declares it too. */
+int gx_replay(CpuState* s, const char* base);
 
 /* One thread, as the port's own self test has it: the CPU images are then
  * the ones that test pins. */
@@ -472,6 +479,67 @@ static int scene_quad_gradient(CpuState* s)
     return finish_scene(s, "quad_gradient");
 }
 
+/* V4a's invariance check: one strip in perspective, drawn twice with depth
+ * LEQUAL and update -- first red through the vertex colour with no blend,
+ * then a konst blue added to it (blend ONE, ONE), a different TEV and a
+ * different pipeline. The second pass passes the depth test only where it
+ * places every vertex exactly where the first did, so every red pixel must
+ * turn magenta: as many as the first pass drew, above zero, none left red.
+ * GXV_MUTATE_NOINVARIANT (--mutate noinvariant) asks whether this GPU needs
+ * `invariant gl_Position` for that. */
+static unsigned count_rgb(const uint8_t* screen, int w, int h, uint8_t r, uint8_t g, uint8_t b)
+{
+    unsigned n = 0;
+    int x, y;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            const uint8_t* p = screen + ((size_t)y * EFB_W + x) * 4;
+            n += p[0] == r && p[1] == g && p[2] == b;
+        }
+    return n;
+}
+
+static void invariance_strip(CpuState* s)
+{
+    unsigned k;
+    gp8(s, 0x98);
+    gp16(s, 12);
+    for (k = 0; k < 12; k++) {
+        float x = 80.0f + 44.0f * (float)k, y = (k & 1) ? 380.0f : 110.0f, z = (k % 3 == 0) ? -60.0f : (k % 3 == 1 ? 10.0f : -25.0f);
+        vertex(s, x, y, z, 0xFF0000FFu);
+    }
+}
+
+static int scene_invariance(CpuState* s)
+{
+    const uint8_t* screen;
+    int w = 0, h = 0;
+    unsigned first, second, left;
+    gxr_reset_efb();
+    projection(s, g_persp, 0);
+    invariance_strip(s);
+    present(s);
+    screen = gxr_screen(&w, &h);
+    first = count_rgb(screen, w, h, 255, 0, 0);
+    bp_w(s, 0xE0, 0x800000u | (0xFFu << 12)); /* konst 0: red 0, alpha 255 */
+    bp_w(s, 0xE1, 0x800000u | 0xFFu);         /* konst 0: blue 255, green 0 */
+    bp_w(s, 0xF6, 0x0180C4u);                 /* stage 0's konst colour: konst 0 (the recipe's swaps kept) */
+    bp_w(s, 0xC0, 0x08FFFEu);                 /* stage 0 colour: the konst, clamped */
+    bp_w(s, 0x41, 0x139u);                    /* blend ONE, ONE; colour and alpha written */
+    invariance_strip(s);
+    bp_w(s, 0x41, 0x18u);
+    bp_w(s, 0xC0, 0x08AFFFu);
+    bp_w(s, 0xF6, 0x018064u);
+    projection(s, g_ortho, 1);
+    if (finish_scene(s, "invariance")) return 1;
+    screen = gxr_screen(&w, &h);
+    second = count_rgb(screen, w, h, 255, 0, 255);
+    left = count_rgb(screen, w, h, 255, 0, 0);
+    printf("invariance first %u second %u left red %u %s\n", first, second, left,
+           first > 0 && first == second && left == 0 ? "ok" : "FAIL");
+    return !(first > 0 && first == second && left == 0);
+}
+
 /* A copy's clear (its own command with a backend, kind 2): a grey quad at z
  * 50, then a screen copy of a 300x200 rectangle with the clear bit, clearing
  * it to (0x30, 0x60, 0x90) and depth 0x400000 (a quarter: nearer than the
@@ -867,6 +935,8 @@ int main(int argc, char** argv)
     CpuState s;
     char got[128];
     const char* mutate = NULL;
+    const char* replay = NULL;
+    const char* png = NULL;
     unsigned tev_cases = 0, copy_rects = 0;
     uint32_t seed = 1;
     int failures, i;
@@ -878,6 +948,8 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--tevdiff")) tev_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--copydiff")) copy_rects = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
+        else if (!strcmp(argv[i], "--png")) png = argv[++i];
     }
     if (tev_cases && !g_gpu) {
         fprintf(stderr, "[gpuspike] --tevdiff runs both sides itself, and needs --backend gpu\n");
@@ -904,6 +976,31 @@ int main(int argc, char** argv)
         fprintf(stderr, "[gpuspike] cannot allocate MEM1\n");
         return 2;
     }
+    if (replay) {
+        /* A capture through the real front end, as the port's --replay runs
+         * it: its registers, its RAM and its command stream. The frame is
+         * the last screen copy; its hash is gxr_screen_hash, the manifest's. */
+        const uint8_t* screen;
+        int w = 0, h = 0, r;
+        render_env();
+        if (!gxr_enabled()) {
+            fprintf(stderr, "[gpuspike] the renderer is off\n");
+            return 2;
+        }
+        r = gx_replay(&s, replay);
+        screen = gxr_screen(&w, &h);
+        printf("frame %dx%d hash %016llx\n", w, h, (unsigned long long)gxr_screen_hash());
+        if (png && !png_write_rgba(png, screen, w, h, EFB_W * 4)) {
+            fprintf(stderr, "[gpuspike] cannot write %s\n", png);
+            r = 1;
+        }
+        if (g_gpu) {
+            gxv_report();
+            gxv_shutdown();
+        }
+        free(s.mem);
+        return r ? 1 : 0;
+    }
     if (tev_cases || copy_rects) {
         render_env();
         if (!gxr_enabled()) {
@@ -927,6 +1024,7 @@ int main(int argc, char** argv)
     failures += scene_scissor(&s);
     failures += scene_quad_gradient(&s);
     failures += scene_clear(&s);
+    failures += scene_invariance(&s);
     failures += scene_lines(&s);
     failures += scene_points(&s);
     if (g_mmio_reads) fprintf(stderr, "[gpuspike] %u MMIO reads, which these frames should not need\n", g_mmio_reads);

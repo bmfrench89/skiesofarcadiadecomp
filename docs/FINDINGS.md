@@ -5210,3 +5210,143 @@ now run on the GPU and give the CPU's bytes exactly, over random inputs.
     cut short, and an empty run.
   - **CI** runs the nine that need no GPU.
 - **No runtime file changed.**
+
+**V4: the GPU spike on captures (V4a, draws, textures, depth, fog and blend).**
+2026-10-03. The GPU draws the game's captured frames, and all 21 frames
+without a copy to a texture pass V0's oracle against the CPU's, on the first
+run. They are 15 of the corpus and 6 of the benchmark set; nothing needed
+fixing, and no frame needed bisecting.
+
+- **What it is.**
+  - **The fragment stage, `raster.frag`:**
+    - `tev.glsl`, the TEV, which V3b's tevdiff holds exact;
+    - `sample` and `sample_level`, transcribed: wrap modes, the
+      non-power-of-two remainder (rebuilt from the division, since GLSL
+      leaves `%` of a negative number undefined), nearest, and bilinear
+      with the CPU's 8-bit weights;
+    - each texcoord's level of detail, from `dFdxFine` and `dFdyFine` with
+      `span_lod`'s formula;
+    - the alpha test as a `discard`, fog as `fog_apply` does it, and depth
+      quantised as before.
+  - **What it reads:** a record a draw (TEV, texture slots, fog) in a
+    storage buffer, and the texel pool. Each texture is uploaded once a
+    submission per cache slot and generation, as 3.2 has it.
+  - **Blending, write masks and depth** are the pipeline's, by 3.5's table.
+    Pipelines are keyed by topology, cull, depth, masks and blend, and made
+    on first use: 8000 made 9.
+  - **Refused, and stopping the run:** logic ops (V4b's) and a constant
+    alpha. Neither occurs in these 21.
+  - **`gpuspike.py oracle`** replays each capture on the CPU and on the GPU
+    through `gx_replay`, the port's own replay, and prints V0's verdict.
+  - **`gpuspike.py time`** reports the GPU's and the consumer's
+    milliseconds beside perfbench.
+- **The references.**
+  - **They are the spike's own CPU replays,** made in the same session.
+  - **All 15 corpus frames** hash to the manifest's FNV.
+  - **All 6 benchmark frames** are V0's inspected references, byte for
+    byte.
+  - **The NDK's clang-cl build** reproduces both, and its GPU frames pass
+    too.
+- **The 21 captures**, every one passing V0 (`python tools/gpuspike.py
+  oracle`):
+
+  | Capture | Exact | Near | Far | Blob | MAE |
+  |---|---|---|---|---|---|
+  | 0100 | 306,296 | 904 | 0 | 0 | 0.001 |
+  | 0300 | 304,834 | 2,366 | 0 | 0 | 0.005 |
+  | 0500 | 306,747 | 453 | 0 | 0 | 0.001 |
+  | 0700 | 305,662 | 1,538 | 0 | 0 | 0.005 |
+  | 11900 | 294,140 | 13,023 | 37 | 0 | 0.038 |
+  | 12000 | 293,359 | 13,808 | 33 | 0 | 0.039 |
+  | 12100 | 297,567 | 9,537 | 96 | 0 | 0.030 |
+  | 1500 | 255,461 | 51,735 | 4 | 0 | 0.063 |
+  | 2000 | 293,273 | 13,927 | 0 | 0 | 0.017 |
+  | 2050 | 293,426 | 13,774 | 0 | 0 | 0.017 |
+  | 2100 | 293,295 | 13,905 | 0 | 0 | 0.017 |
+  | 3600 | 300,484 | 6,711 | 5 | 0 | 0.010 |
+  | 3900 | 292,740 | 14,373 | 87 | 0 | 0.033 |
+  | 4200 | 292,160 | 15,013 | 27 | 0 | 0.023 |
+  | 8000 | 291,987 | 15,145 | 68 | 1 | 0.028 |
+  | battle_4000 | 293,344 | 13,732 | 124 | 0 | 0.035 |
+  | battle_4001 | 293,304 | 13,758 | 138 | 0 | 0.036 |
+  | ship_6000 | 252,131 | 54,957 | 112 | 9 | 0.097 |
+  | ship_6001 | 251,841 | 55,247 | 112 | 9 | 0.098 |
+  | sky_4000 | 299,788 | 7,412 | 0 | 0 | 0.011 |
+  | sky_4001 | 299,833 | 7,367 | 0 | 0 | 0.011 |
+
+  - **The largest far count is 0.045% of a frame,** against V0's 1%. The
+    largest blob is 6 pixels, against 32.
+  - **Opened:** 8000's GPU frame is the battleship and the Little Jack, as
+    the CPU draws them. Its heat map shows one-step differences across the
+    textured clouds and along edges, nothing missing.
+  - **Ship_6000's far pixels, magnified:** a row of isolated pixels inside
+    the hull's texture (y 319), each one texel over, and one pixel on a
+    mountain's edge. These are 3.4's last-bit sampling and edge classes.
+  - **The GPU drew every draw:** 8000's replay ran 4,387 draws on the GPU,
+    1,801 of them rebuilt by clipping, while the CPU rasterizer shaded 0
+    pixels.
+- **Mutations** (`oracle --mutations`). A mutation applies where it
+  changes at least 0.5% of the unmutated GPU frame's pixels (3.12).
+
+  | Mutation | Applies on | Fails V0 on | Blind spots |
+  |---|---|---|---|
+  | skip the frame's most visible large draw | 21 | 21 | 0 |
+  | fog off | 7 (3900, 4200, 8000, ship, sky) | 7 | 0 |
+  | the copy filter off in the screen copy | 21 | 21 | 0 |
+  | the alpha test off | 3 (8000, the ship pair) | 3 | 0 |
+  | level-of-detail bias +1 | 16 | 14 | 2 (the sky pair) |
+
+  - **"The largest draw" needed defining.** By samples passed (an
+    occlusion query around each draw), the largest is often a full-screen
+    fill that later draws cover entirely. Skipping 8000's (307,200
+    samples) changed nothing. The mutation now takes the five largest by
+    samples and skips the one whose absence changes the most pixels.
+  - **The alpha test off applies on only 3 captures,** two distinct frames,
+    short of 3.12's five. Only those frames have alpha-tested pixels that
+    show once drawn (0.9% and 3.8%); sky's come to 0.49% and 12100's to
+    0.23%. It fails V0 on all 3. `SHORT_OF_FIVE` in `gpuspike.py` names it
+    with that reason, and V4b counts it again over 35 captures and V1's.
+  - **The LOD bias +1 passes V0 on the sky pair,** one distinct frame. 12%
+    of the pixels move, most by one or two steps (22,178 by 1, 6,622 by 2,
+    the largest 32), and 137 are far.
+    - **Where:** only on the player's ship and the cloud band at the
+      horizon. Magnified, the ship is visibly a level blurrier: the blue
+      band and hull lose detail.
+    - **Why V0 passes it:** its whole-frame blur and MAE are diluted by the
+      empty sky.
+    - **This is a real blind spot.** It is listed in `GPU_BLIND_SPOTS` with
+      that reason. The thresholds are not changed here: that is its own
+      commit with its own inspected frames (3.12). The gate should weigh it.
+- **Invariance.** A strip in perspective is drawn twice with depth LEQUAL
+  and update.
+  - **The two passes:** first red through the vertex colour, then a konst
+    blue added to it (blend ONE, ONE). The second pass is a different TEV
+    and a different pipeline.
+  - **The result:** 87,120 pixels red after the first pass, 87,120 magenta
+    after the second, none left red, on the CPU and the GPU alike.
+  - **Without `invariant gl_Position`** (`--mutate noinvariant`) the result
+    is the same on this GPU: the driver evidently places the vertices alike
+    without being told to. The qualifier stays, as 3.3 requires.
+  - **The check can fail:** pushing only the second pass's depth one 24-bit
+    step deeper, by hand, gives 0 magenta and 87,120 left red.
+- **Time** (`gpuspike.py time`, median of 5). Reported, not a gate.
+  - **GPU:** 1.3 to 4.7 ms a frame.
+  - **The consumer:** 2.7 to 18.9 ms a frame; the battle frames take about
+    16 ms and 11900 19 ms. Every submission is waited for and every texture
+    copied in on the CPU, which V7's pipelining is for.
+  - **perfbench, 8 workers on the CPU,** before and after in the same
+    session: 57.1 and 58.1 ns a fragment over the benchmark set. Ship_6000,
+    for instance, is 1.77 M fragments at 73.6 ns, about 130 ms of worker
+    time or 16 ms across eight. On the GPU it is 3.9 ms, and 7.8 ms of
+    consumer.
+- **Device features:** core only, but for `occlusionQueryPrecise`, enabled
+  where the device has it (this one does) so that `measure` counts samples
+  exactly. Nothing that draws depends on it.
+- **`test_gpuspike.py`** has 22 tests, 0 skipped here, in 50 s.
+  - **New:** the 21-capture oracle (it skips, saying why, without
+    `build/fifo` or `build/perfset`), the replay's environment, and the
+    mutation threshold.
+  - **The scenes' test** now also holds the invariance strip.
+  - **Not run by pytest:** the mutations, about two minutes, run by
+    `oracle --mutations`.
+- **No runtime file changed.**

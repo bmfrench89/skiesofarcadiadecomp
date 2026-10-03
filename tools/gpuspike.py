@@ -1,11 +1,13 @@
 """The GPU spike: the renderer drawing through a Vulkan backend, headless.
 
     python tools/gpuspike.py build                        # shaders, then the binary
-    python tools/gpuspike.py selftest [--mutate NAME]     # draw 15 scenes on both, compare
+    python tools/gpuspike.py selftest [--mutate NAME]     # draw 16 scenes on both, compare
     python tools/gpuspike.py tevdiff [--cases 100000]     # the TEV, exact against tev_pixel
     python tools/gpuspike.py copydiff [--rects 200]       # the copies, exact against gxr.c's
+    python tools/gpuspike.py oracle [--mutations]         # the captures, CPU against GPU, V0's verdict
+    python tools/gpuspike.py time                         # GPU and consumer ms a frame
 
-specs/gpu-backend.md V3a and V3b. `build` compiles the shaders in
+specs/gpu-backend.md V3a, V3b and V4a. `build` compiles the shaders in
 tools/gpuspike/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
 arrays -- each mutation a variant of its own -- and builds gx.c, gxr.c,
 gxr_tev.c and png.c with the spike's driver and gxv.c (the backend) into
@@ -44,6 +46,14 @@ copies through the CPU renderer and through gxv's compute copy, in two
 processes at once, and compares what each left in RAM, the decoded image and a
 screen copy: byte for byte, with every refused copy leaving RAM as it was.
 
+`oracle` (V4a) replays every capture of --set (corpus,perfset) that copies
+nothing to a texture: on the CPU, a reference that must hash to the manifest
+(corpus) or equal V0's inspected image (perfset), and on the GPU, which V0
+judges. --mutations then runs the five GPU mutations, each of which must fail
+V0 wherever it changes 0.5% of a frame, on five captures or more, but for the
+exceptions GPU_BLIND_SPOTS and SHORT_OF_FIVE list. `time` gives the GPU's and
+the consumer's milliseconds a frame, beside perfbench's CPU figures.
+
 --mutate names a mutation the command must fail on: unclipped (selftest),
 clamp (tevdiff), rounding, intensity and unseeded (copydiff). Exit 0 pass,
 1 fail, 3 skipped (no compiler, no vendor/, no Vulkan device), the reason
@@ -53,7 +63,9 @@ printed.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import statistics
 import subprocess
 import sys
 from collections import Counter
@@ -65,6 +77,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import fetch_gpu  # noqa: E402
+import imgdiff  # noqa: E402
 from soa import png, toolchain  # noqa: E402
 
 SPIKE = ROOT / "tools" / "gpuspike"
@@ -76,7 +89,11 @@ VENDOR = ROOT / "vendor"
 # runs each and must fail.
 SHADERS = [
     ("raster.vert", "raster_vert", ()),
+    ("raster.vert", "raster_vert_noinvariant", ("GXV_MUTATE_NOINVARIANT",)),
     ("raster.frag", "raster_frag", ()),
+    ("raster.frag", "raster_frag_alpha", ("GXV_MUTATE_ALPHA",)),
+    ("raster.frag", "raster_frag_lod", ("GXV_MUTATE_LOD",)),
+    ("raster.frag", "raster_frag_fog", ("GXV_MUTATE_FOG",)),
     ("tevdiff.comp", "tevdiff_comp", ()),
     ("tevdiff.comp", "tevdiff_comp_clamp", ("GXV_MUTATE_CLAMP",)),
     ("copy.comp", "copy_comp", ()),
@@ -105,6 +122,7 @@ SCENES: dict[str, tuple] = {
     "scissor": ("area", 0, "colour"),
     "quad_gradient": ("area", 1, "coverage"),
     "clear": ("area", 0, "colour"),
+    "invariance": ("area", 0, "colour"),
     "lines": ("lines",),
     "points": ("points",),
 }
@@ -394,7 +412,7 @@ def selftest(prof: toolchain.Profile, mutate: str | None) -> int:
             ):
                 print(f"  {line}")
         for line in proc.stdout.splitlines():
-            if line.startswith(("recipes", "clip ")):
+            if line.startswith(("recipes", "clip ", "invariance ")):
                 print(f"  {line}")
         if proc.returncode != 0:
             failures += 1
@@ -549,16 +567,289 @@ def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None)
     return 0 if ok else 1
 
 
+# ---- V4a: captures -------------------------------------------------------------
+
+
+def clean_env() -> dict[str, str]:
+    """The parent's environment with every SOA_* taken out, and SOA_SETTINGS=0:
+    nothing set for another run may reach a replay (3.12's rule, and imgdiff's
+    for its references)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env["SOA_SETTINGS"] = "0"
+    return env
+
+
+def no_copy_captures(sets: list[str]) -> list[tuple[str, imgdiff.Capture]]:
+    """The captures of those sets whose frame copies nothing to a texture --
+    V4a's, by tools/fifo.py --summary; the rest are V4b's."""
+    out = []
+    for name in sets:
+        for c in imgdiff.SETS[name]():
+            summary = subprocess.run(
+                [sys.executable, str(ROOT / "tools" / "fifo.py"), str(c.base), "--summary"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            if "summary:" not in summary:
+                raise SystemExit(f"gpuspike: no summary of {c.base}")
+            if "to texture" not in summary:
+                out.append((name, c))
+    return out
+
+
+def replay(
+    prof: toolchain.Profile, backend: str, base: Path, png_out: Path, mutate: str | None = None
+) -> tuple[subprocess.CompletedProcess, str | None]:
+    """One capture through the spike: the run, and the frame's hash."""
+    args = [str(exe_path(prof)), "--backend", backend, "--replay", str(base), "--png", str(png_out)]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(
+        args, cwd=ROOT, env=clean_env(), capture_output=True, text=True, check=False
+    )
+    m = re.search(r"^frame \d+x\d+ hash ([0-9a-f]{16})$", proc.stdout, re.M)
+    return proc, m.group(1) if m else None
+
+
+def same_pixels(a: Path, b: Path) -> bool:
+    return png.read_rgba(a) == png.read_rgba(b)
+
+
+def changed_fraction(a: Path, b: Path) -> float:
+    """The fraction of pixels whose RGB differs at all."""
+    w, h, x = png.read_rgba(a)
+    _, _, y = png.read_rgba(b)
+    rows_x, rows_y = pixel_rows(w, h, x), pixel_rows(w, h, y)
+    differ = sum(sum(map(ne, rx, ry, strict=True)) for rx, ry in zip(rows_x, rows_y, strict=True))
+    return differ / (w * h)
+
+
+# V4a's mutations of the GPU path (specs/gpu-backend.md V4a): each must change
+# at least 0.5% of the pixels of at least five captures ("applies", 3.12), and
+# fail V0 on every capture where it applies.
+GPU_MUTATIONS = {
+    "skip-largest": "the most visible of the frame's five largest draws (by samples) skipped",
+    "fog": "fog off",
+    "nofilter": "the copy filter off in the screen copy",
+    "alpha": "the alpha test off",
+    "lod": "level-of-detail bias +1",
+}
+APPLIES = 0.005
+
+# Where a mutation applies and V0 still passes, each found on 2026-10-03 and
+# looked at (FINDINGS "V4"), as imgdiff lists V0's own. A blind spot that is
+# not listed fails the run, and so do more than three for one mutation.
+GPU_BLIND_SPOTS: dict[str, dict[str, str]] = {
+    "lod": {
+        "sky_4000": "one level blurrier on the player's ship and the cloud band only: 12% of pixels move, "
+        "most by one or two steps, 137 far; V0's whole-frame blur and MAE are diluted by the empty sky",
+        "sky_4001": "the frame after sky_4000, the same",
+    },
+}
+# A mutation that applies on fewer than five captures, with why. The rule
+# (3.12) wants five; these captures have no more to give, and V4b counts again
+# over 35 captures and V1's.
+SHORT_OF_FIVE: dict[str, str] = {
+    "alpha": "only 8000 and the ship pair have alpha-tested pixels that show once drawn (0.9%, 3.8%); "
+    "sky's come to 0.49% and 12100's to 0.23%",
+}
+
+
+def oracle(prof: toolchain.Profile, sets: list[str], mutations: bool) -> int:
+    """V4a's Done: the captures without texture copies, each replayed on the
+    CPU (the reference, checked against the manifest's hash or V0's inspected
+    image) and on the GPU, and V0's verdict on the pair."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "oracle"
+    out.mkdir(parents=True, exist_ok=True)
+    caps = no_copy_captures(sets)
+    print(f"{len(caps)} captures without copies to a texture, from {', '.join(sets)}")
+    failures = 0
+    largest: dict[str, str] = {}
+    rows = []
+    for setname, c in caps:
+        ref, gpu = out / f"{c.name}_cpu.png", out / f"{c.name}_gpu.png"
+        proc, h = replay(prof, "cpu", c.base, ref)
+        if proc.returncode != 0 or h is None:
+            print(f"FAIL {c.name}: the CPU replay exited {proc.returncode}")
+            failures += 1
+            continue
+        if c.frame_hash is not None:
+            ref_ok = h == c.frame_hash
+            ref_note = f"reference {h} {'is' if ref_ok else 'is NOT'} the manifest's"
+        else:
+            v0 = imgdiff.OUT / "ref" / setname / f"{c.name}.png"
+            ref_ok = v0.exists() and same_pixels(ref, v0)
+            ref_note = (
+                f"reference {'is' if ref_ok else 'is NOT'} V0's {v0.relative_to(ROOT).as_posix()}"
+            )
+        if not ref_ok:
+            print(f"FAIL {c.name}: {ref_note}")
+            failures += 1
+            continue
+        # The GPU's frame, counting each draw's samples on the way (which
+        # changes no pixel) for the skip-largest mutation.
+        proc, _ = replay(prof, "gpu", c.base, gpu, "measure")
+        if skipped(proc):
+            return SKIP
+        m = re.search(r"largest draws \(draw:samples\)((?: \d+:\d+)+)", proc.stderr)
+        if proc.returncode != 0 or not m:
+            print(f"FAIL {c.name}: the GPU replay exited {proc.returncode}")
+            for line in proc.stderr.splitlines():
+                if "refused" in line or "failed" in line:
+                    print(f"  {line}")
+            failures += 1
+            continue
+        largest[c.name] = [d.split(":")[0] for d in m.group(1).split() if not d.endswith(":0")]
+        metrics = imgdiff.compare(ref, gpu, out / f"{c.name}_heat.png")
+        bad = metrics.failures()
+        failures += bool(bad)
+        rows.append((c.name, not bad))
+        print(f"{'pass' if not bad else 'FAIL'} {setname:7} {c.name:13} {metrics.line()}")
+        for line in bad:
+            print(f"     {line}")
+    passed = sum(ok for _, ok in rows)
+    print(f"[gpuspike] oracle: {passed} of {len(caps)} pass V0")
+    if mutations and not failures:
+        failures += oracle_mutations(prof, caps, out, largest)
+    return 1 if failures else 0
+
+
+def oracle_mutations(
+    prof: toolchain.Profile,
+    caps: list[tuple[str, imgdiff.Capture]],
+    out: Path,
+    largest: dict[str, list[str]],
+) -> int:
+    """Each GPU mutation on every capture: where it changes 0.5% of the
+    pixels or more it applies, and there V0 must fail. The draw skipped is
+    the one, of the five that passed the most samples, whose absence changes
+    the most pixels: the most samples alone picks a full-screen fill that
+    later draws cover entirely, whose absence nobody could see."""
+    bad = 0
+    for name, what in GPU_MUTATIONS.items():
+        applies = failed = 0
+        cells = []
+        for _, c in caps:
+            mutated = out / f"{c.name}_{name}.png"
+            if name == "skip-largest":
+                best, frac = None, -1.0
+                for draw in largest[c.name]:
+                    trial = out / f"{c.name}_skip{draw}.png"
+                    proc, _ = replay(prof, "gpu", c.base, trial, f"skip-draw:{draw}")
+                    f = (
+                        changed_fraction(out / f"{c.name}_gpu.png", trial)
+                        if proc.returncode == 0
+                        else -1.0
+                    )
+                    if f > frac:
+                        best, frac = draw, f
+                        trial.replace(mutated)
+                    else:
+                        trial.unlink(missing_ok=True)
+                if best is None:
+                    cells.append(f"{c.name} no draw to skip")
+                    bad += 1
+                    continue
+            else:
+                proc, _ = replay(prof, "gpu", c.base, mutated, name)
+                if proc.returncode != 0:
+                    cells.append(f"{c.name} exit {proc.returncode}")
+                    bad += 1
+                    continue
+                frac = changed_fraction(out / f"{c.name}_gpu.png", mutated)
+            fails = bool(imgdiff.compare(out / f"{c.name}_cpu.png", mutated).failures())
+            if frac >= APPLIES:
+                applies += 1
+                failed += fails
+                cells.append(f"{c.name} {frac:.1%} {'fails' if fails else 'PASSES'}")
+            else:
+                cells.append(f"{c.name} {frac:.2%} -")
+        listed = GPU_BLIND_SPOTS.get(name, {})
+        spots = [cell.split()[0] for cell in cells if cell.endswith("PASSES")]
+        unlisted = [n for n in spots if n not in listed]
+        ok = (applies >= 5 or name in SHORT_OF_FIVE) and not unlisted and len(spots) <= 3
+        bad += not ok
+        print(
+            f"{'ok  ' if ok else 'FAIL'} mutation {name} ({what}): applies on {applies}, "
+            f"fails V0 on {failed}, blind spots {len(spots)}"
+        )
+        for i in range(0, len(cells), 4):
+            print("       " + ";  ".join(cells[i : i + 4]))
+        if applies < 5:
+            print(f"       applies on fewer than five: {SHORT_OF_FIVE.get(name, 'NOT LISTED')}")
+        for n in spots:
+            print(f"       blind spot {n}: {listed.get(n, 'NOT LISTED')}")
+    print(
+        f"[gpuspike] mutations: {'each fails V0 wherever it applies, but for the blind spots listed' if not bad else f'{bad} problem(s)'}"
+    )
+    return bad
+
+
+def time_frames(prof: toolchain.Profile, sets: list[str], runs: int, perf_runs: int) -> int:
+    """GPU and consumer milliseconds a frame, median of `runs` replays, beside
+    tools/perfbench.py's CPU figures taken before and after in the same
+    session (A B A). Reported, not a gate (V4a)."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    scratch = build_dir(prof) / "time"
+    scratch.mkdir(parents=True, exist_ok=True)
+
+    def perfbench() -> None:
+        exe = ROOT / "gen" / "soa.exe"
+        if not exe.exists():
+            print("perfbench: no gen/soa.exe here, so no CPU figures")
+            return
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "perfbench.py"), "run", "--runs", str(perf_runs)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        print(proc.stdout.rstrip())
+
+    perfbench()
+    print(f"{'capture':<16} {'GPU ms':>8} {'consumer ms':>12}   (median of {runs})")
+    for _, c in no_copy_captures(sets):
+        gpu_ms, consumer_ms = [], []
+        for _ in range(runs):
+            proc, _ = replay(prof, "gpu", c.base, scratch / "frame.png")
+            if skipped(proc):
+                return SKIP
+            g = re.search(r"GPU ([0-9.]+) ms", proc.stderr)
+            k = re.search(r"consumer ([0-9.]+) ms", proc.stderr)
+            if proc.returncode != 0 or not g or not k:
+                print(f"FAIL {c.name}: exit {proc.returncode}")
+                return 1
+            gpu_ms.append(float(g.group(1)))
+            consumer_ms.append(float(k.group(1)))
+        print(
+            f"{c.name:<16} {statistics.median(gpu_ms):8.2f} {statistics.median(consumer_ms):12.2f}"
+        )
+    perfbench()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("command", choices=("build", "selftest", "tevdiff", "copydiff"))
+    ap.add_argument(
+        "command", choices=("build", "selftest", "tevdiff", "copydiff", "oracle", "time")
+    )
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
     ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
     ap.add_argument("--cases", type=int, default=100000, help="tevdiff: random setups")
     ap.add_argument("--rects", type=int, default=200, help="copydiff: rectangles a combination")
     ap.add_argument("--seed", type=int, default=1, help="tevdiff and copydiff")
+    ap.add_argument("--set", default="corpus,perfset", help="oracle and time: capture sets")
+    ap.add_argument("--mutations", action="store_true", help="oracle: also the GPU mutations")
+    ap.add_argument("--runs", type=int, default=5, help="time: replays a capture")
     args = ap.parse_args(argv)
     prof = toolchain.profile(args.cc)
     if args.command == "build":
@@ -569,6 +860,10 @@ def main(argv: list[str] | None = None) -> int:
         return tevdiff(prof, args.cases, args.seed, args.mutate)
     if args.command == "copydiff":
         return copydiff(prof, args.rects, args.seed, args.mutate)
+    if args.command == "oracle":
+        return oracle(prof, args.set.split(","), args.mutations)
+    if args.command == "time":
+        return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate)
 
 
