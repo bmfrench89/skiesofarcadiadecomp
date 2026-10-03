@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1151 passed, 2 skipped in 216.39s
+1156 passed, 2 skipped in 262.10s
 ```
 
-1153 tests in 62 files, none of which reads the disc. The two FMA probes of
+1158 tests in 63 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -60,6 +60,7 @@ its own and run it, some of the C as well:
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
+| `test_fifo_summary.py` | 5 | `tools/fifo.py --summary` (specs/gpu-backend.md V1) on a synthetic stream: one draw under a logic OR, a display list of 0x40 bytes, and an R8 and an RGB565 copy, each with its destination and size; a blend overrides the logic op, as GX and the renderer have it; and intensity copies are named as such |
 | `test_imgdiff.py` | 13 | the frame oracle (specs/gpu-backend.md V0) on synthetic frames: identity passes; +-1 noise and 0.3% scattered pixels pass; a black block, +4 brightness and a channel swap fail; a frame drawn a pixel over fails the shift test and a second vertical filter the blur test, while noise explains nothing; a block is a blob and a one-pixel line is not; the screen hash is `gxr_screen_hash`'s, worked by hand, and one pixel moves it; and the replay that makes a reference runs on a scratch copy and sees no `SOA_*` but the tool's own, even with `SOA_GPU` set |
 | `test_midpoint.py` | 18 | `tools/midpoint.py` on canned output: the `[pair]` and hash lines parse, each of the seven verdicts fails when its one thing breaks, a mutation that costs no pair is not a pass, and a capture that drifted from the manifest is refused before anything runs |
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
@@ -117,10 +118,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1151 passed, 2 skipped` |
-| no capstone | `1132 passed, 3 skipped` |
-| no MSVC | `775 passed, 378 skipped` |
-| neither | `756 passed, 379 skipped` |
+| everything (MSVC + capstone) | `1156 passed, 2 skipped` |
+| no capstone | `1137 passed, 3 skipped` |
+| no MSVC | `780 passed, 378 skipped` |
+| neither | `761 passed, 379 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1107,6 +1108,15 @@ blur must fail on all 23 but the blind spots `BLIND_SPOTS` lists with their
 reasons (two near-white boot frames for brightness, two grey frames for the
 swap). The verdict and the thresholds are FINDINGS "V0"'s.
 
+`--set gpuset` is V1's captures in `build/gpuset`, pinned by input in
+`config/gpuset_manifest.tsv`: a random battle's first frame, whose screen is
+copied to a texture, the 30 frames that sample it, and a field frame with the
+mask effect. They were captured with `SOA_RENDER=1`: a capture's RAM holds a
+copy's output only when the live run drew, and the frames after a copy read
+it. `python tools/fifo.py BASE --summary` lists what a frame does besides
+draw: every copy with its format, destination and size, the draws under each
+logic op, and its display lists.
+
 ## 6. The decompilation check
 
 ```
@@ -1252,7 +1262,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 378 of the 1153 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
+² 378 of the 1158 skip without a C compiler: 376 build one runtime file with MSVC and run it, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 

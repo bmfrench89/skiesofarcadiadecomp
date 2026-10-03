@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1153 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1158 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1153 |
+| Python tests | 1158 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -520,9 +520,14 @@ C5c) is now done.
    its thresholds frozen by mutations, with a filter test added because
    3.12's metric passed a one-pixel shift and a second vertical blur.
    The references are in `build/gpu-oracle/ref/` (corpus and perfset).
-   **Next is V1:** live runs of the game, one `soa.exe` at a time, to
-   capture menus, scene-to-texture copies and a mask frame with casters
-   into `build/gpuset` (never `build/fifo`).
+   **V1 is done** (FINDINGS "V1"): `build/gpuset` holds a random battle's
+   start, whose screen-to-texture copy also showed the renderer ignored a
+   copy's destination stride, fixed in 2d48bbe (FINDINGS "The battle
+   transition"); and a mask-effect frame. Captures with copies must be
+   made with `SOA_RENDER=1`. **Next is V2:** the seam -- `DrawCmd` in a
+   header, a reachable zero-worker path and a backend hook
+   (specs/gpu-backend.md V2), which also adds H17a's `DrawCmd.efb`, since
+   H17a has not landed (PLAN-NEXT section 0).
    Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

@@ -610,6 +610,78 @@ def decode(fifo: bytes, cp: dict, out, xf=None, ram=None, verts=None):
         emit(f"  ({nops} nops)")
 
 
+# EFB copy formats as BP 0x52 names them (gxr.c copy_texfmt and copy_to_texture)
+COPY_FORMATS = {
+    0: "R4", 1: "R8", 2: "RA4", 3: "RA8", 4: "RGB565", 5: "RGB5A3", 6: "RGBA8", 7: "A8",
+    8: "R8", 9: "G8", 10: "B8", 11: "RG8", 12: "GB8",
+}  # fmt: skip
+INTENSITY_FORMATS = {0: "I4", 1: "I8", 2: "IA4", 3: "IA8"}
+LOGIC_OPS = (
+    "CLEAR", "AND", "REVAND", "COPY", "INVAND", "NOOP", "XOR", "OR",
+    "NOR", "EQUIV", "INV", "REVOR", "INVCOPY", "INVOR", "NAND", "SET",
+)  # fmt: skip
+
+
+def copy_format(v: int) -> str:
+    """BP 0x52's format as the renderer reads it: bits 3-6 rotated, bit 15
+    for an intensity copy."""
+    tpf = (v >> 3) & 15
+    fmt = tpf // 2 + (tpf & 1) * 8
+    if (v >> 15) & 1:
+        return INTENSITY_FORMATS.get(fmt, f"intensity {fmt}")
+    return COPY_FORMATS.get(fmt, f"format {fmt}")
+
+
+def summary(fifo: bytes, cp: dict, xf: list, bp: dict, ram=None) -> list[str]:
+    """What a GPU path has to reproduce beyond the draws (specs/gpu-backend.md
+    V1): every EFB copy with its format, destination and size, the draws made
+    under each logic op, and the size of every display list, lists followed as
+    the runtime follows them."""
+    draws = 0
+    copies: list[str] = []
+    logic: dict[str, int] = {}
+    lists: list[int] = []
+    for cmd in walk(fifo, cp, xf, ram, bp=bp, follow_lists=True):
+        kind = cmd[0]
+        if kind == "draw":
+            draws += 1
+            cmode = bp.get(0x41, 0)
+            if (cmode >> 1) & 1 and not cmode & 1:  # a blend overrides the logic op
+                name = LOGIC_OPS[(cmode >> 12) & 15]
+                logic[name] = logic.get(name, 0) + 1
+        elif kind == "call":
+            lists.append(cmd[4])
+        elif kind == "bp" and cmd[3] == 0x52:
+            v = cmd[4]
+            tl, wh = bp.get(0x49, 0), bp.get(0x4A, 0)
+            w, h = (wh & 0x3FF) + 1, ((wh >> 10) & 0x3FF) + 1
+            x0, y0 = tl & 0x3FF, (tl >> 10) & 0x3FF
+            half = (v >> 9) & 1
+            clear = " clear" if v & 0x800 else ""
+            if v & 0x4000:
+                copies.append(
+                    f"copy {len(copies) + 1}: to the screen {w}x{h} at ({x0},{y0}){clear}"
+                )
+            else:
+                dest = ((bp.get(0x4B, 0) & 0x1FFFFF) << 5) & MEM_MASK
+                ow, oh = (w // 2, h // 2) if half else (w, h)
+                copies.append(
+                    f"copy {len(copies) + 1}: to texture {copy_format(v)} at {dest:08X}, "
+                    f"{ow}x{oh} from ({x0},{y0}){' halved' if half else ''}{clear}"
+                )
+    empty = sum(1 for n in lists if n == 0)
+    out = [
+        f"summary: {draws} draws, {len(copies)} copies, "
+        f"{sum(logic.values())} draws under a logic op, {len(lists)} display lists"
+    ]
+    out += copies
+    out += [f"logic {name}: {n} draws" for name, n in sorted(logic.items())]
+    if lists:
+        sizes = " ".join(f"0x{n:X}" for n in lists[:24]) + (" ..." if len(lists) > 24 else "")
+        out.append(f"lists: {len(lists)} ({empty} empty, {sum(lists)} bytes): {sizes}")
+    return out
+
+
 def parse_range(spec: str) -> tuple[int, int]:
     """An inclusive draw-number range from 12, 12-30, 12-, -30 or all."""
     spec = spec.strip()
@@ -640,9 +712,22 @@ def main() -> int:
     ap.add_argument(
         "--ram", metavar="PATH", help="RAM image for indexed attributes (default BASE.ram)"
     )
+    ap.add_argument(
+        "--summary",
+        action="store_true",
+        help="copies (format, destination, size), logic ops and display-list sizes only",
+    )
     args = ap.parse_args()
     cp_regs, xf_regs, bp_regs = read_regs(args.base + ".regs")
     cp = {i: v for i, v in enumerate(cp_regs) if v}
+    if args.summary:
+        ram_path = Path(args.ram) if args.ram else Path(args.base + ".ram")
+        ram = ram_path.read_bytes() if ram_path.exists() else None
+        bp = {i: v for i, v in enumerate(bp_regs)}
+        print(
+            "\n".join(summary(Path(args.base + ".fifo").read_bytes(), cp, list(xf_regs), bp, ram))
+        )
+        return 0
     if args.regs:
         for i, v in enumerate(cp_regs):
             if v:

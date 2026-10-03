@@ -4837,3 +4837,62 @@ the battle beginning at frame 4421.
   - **Also passing:** the self test; `title --check`; `compile_runtime` and
     `render_check` under MSVC and clang-cl; `queue_check` 18 of 18; and the
     renderer's test modules, 94 passed.
+
+**V1: the captures the corpus lacks.** 2026-10-02. One live run a target,
+one `soa.exe` at a time, each on a fresh copy of a save card. Consecutive
+frames were captured into a scratch scan directory, never `build/fifo`, then
+read with the new `tools/fifo.py --summary`.
+
+- **The save menu** (a101b, `card-saved`, the one-word request poked at 3200):
+  not found. The field gives way to a black frame at 3204, and the menu builds
+  over ten frames to 741 draws, with no copy but the screen's. Frames
+  3200-3359 searched.
+- **The camp menu:** not found.
+  - START at 3200 does nothing here; `docs/research/save-load.md` lists the
+    conditions it needs.
+  - Y switches to the first-person view.
+  - X opens the camp menu on the party's status page (Vyse and Aika at level
+    1, 10 gold). It cuts in at 3200 with no copy to a texture.
+  - Frames 3195-3359 searched, once for each button.
+- **A map change** (the game's own warp to `116c`, poked at 3300): not
+  found. The screen is black from 3301 to 3361 and the new map draws from
+  3364, with no copy. Frames 3295-3554 searched.
+- **The start of a random battle:** found.
+  - **The route:** a101b cannot fight (story flag 1025, S3's negative
+    control). Part G's card on `a116a` with S3's exact recipe, the seed-33
+    walk and the accelerator every 600 frames, starts a battle at 4421, the
+    step counter falling to 0 between 4420 and 4424. All six runs with that
+    input started it there.
+  - **The summary at 4421:** `copy 3: to texture RGB5A3 at 00667540,
+    640x480 from (0,0) clear`, beside the mask effect's two R8 copies.
+  - **After it:** every frame from 4422 binds that texture 1,536 times
+    (`SETIMAGE3` naming 0x333AA) as the field breaks into squares, well past
+    V1's limit of 30. Kept: 4421 and 4422-4451.
+  - **The defect:** this capture showed the renderer ignored a copy's
+    destination stride, fixed first (FINDINGS "The battle transition").
+- **A mask-effect frame with non-empty display lists:** a101b 3200: 2,279
+  draws, the two R8 copies, logic AND (1 draw) and OR (2), and 11 display
+  lists, none empty.
+- **Captures with copies must be rendered.** The first battle captures ran
+  without `SOA_RENDER`, and their replays from 4422 showed the battle UI's
+  texture atlas where the field's pieces belong.
+  - **Why:** decoded from the captured RAM, the copy's destination held that
+    atlas in every frame, because with the renderer off no EFB copy writes
+    memory.
+  - **Proof the shards read there:** filling the destination with 0xA5 turned
+    every shard that colour.
+  - **Consequence:** 3.12 assumes "a capture's RAM already holds the live
+    run's copy output", which holds only for a rendered run. Every kept
+    capture was made again with `SOA_RENDER=1`, the battle after the stride
+    fix.
+- **`build/gpuset`:** 32 captures, 784 MB, pinned by input in
+  `config/gpuset_manifest.tsv` (no frame hashes). `imgdiff refs --set gpuset`
+  renders all 32 and checks every input.
+  - **Opened, as a contact sheet and singly:** 4421 is Vyse in the corridor
+    before a steel door. Through 4451 that picture breaks into squares that
+    scatter and darken. The mask frame is Vyse at the a101b save point under
+    its spotlight.
+  - **The live run** at 4421, 4436 and 4451, rendered with the fix, matches
+    the replays.
+- **Also:** `test_fifo_summary.py` has 5 tests. The scan directory (21 GB,
+  this session's) is deleted.

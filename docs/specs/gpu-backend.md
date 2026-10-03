@@ -1087,6 +1087,17 @@ count.*
 
 ### V1. The captures the corpus lacks
 
+*Landed 2026-10-02 (FINDINGS "V1"). The differences from what follows:*
+- *Of the four targets, only the start of a random battle copies the scene to a texture. The save
+  menu, the camp menu (X here; START does not open it on this map, and Y is the first-person view)
+  and a warp each cut straight to their next picture.*
+- *Those captures are made with `SOA_RENDER=1`. 3.12 assumes a capture's RAM holds the live run's
+  copy output, and that is true only when the live run drew. Without it the frames after a copy
+  sampled stale memory, and the chain check would mark every pair unusable.*
+- *The battle capture found a CPU-renderer defect: copies ignored their destination stride
+  (BP 0x4D). It is fixed in its own commit (FINDINGS "The battle transition"), and the kept
+  frames were captured after the fix.*
+
 *A day. Rebuild: none (live runs of the current `gen/soa.exe`, one at a time, on card copies).
 Prerequisites: V0 for the references; C5b for the mask-effect capture with casters (if C5a was
 refuted, there is no such capture). Files:

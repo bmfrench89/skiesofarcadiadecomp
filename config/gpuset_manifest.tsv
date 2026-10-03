@@ -1,0 +1,39 @@
+# The captures V1 adds for the GPU spike (specs/gpu-backend.md V1), in build/gpuset,
+# which is gitignored game data. Columns: the capture, sha256 over its .fifo,
+# .regs and .ram (to 16 hex digits, as config/fifo_manifest.tsv), and what it is.
+# Every one was captured with SOA_RENDER=1, so each RAM image holds what the
+# frame's copies wrote, which the frames chained after a copy read. No frame
+# hashes: tools/imgdiff.py refs --set gpuset makes the references, which were
+# opened, not pinned.
+battle/4421	1e611c85c3bfe858	a116a, a random battle's first frame: the screen copied to a 1024-wide RGB5A3 texture (BP 0x4D 0x100)
+battle/4422	cd91c1eebf5618fc	the battle transition, 1 frames on: the copied screen in pieces
+battle/4423	06888e1f2ff99eb8	the battle transition, 2 frames on: the copied screen in pieces
+battle/4424	8491a0354d7cefd5	the battle transition, 3 frames on: the copied screen in pieces
+battle/4425	796efc1dc0b766e7	the battle transition, 4 frames on: the copied screen in pieces
+battle/4426	3aa2b546bfbb0aec	the battle transition, 5 frames on: the copied screen in pieces
+battle/4427	c3be2e6dad2e8810	the battle transition, 6 frames on: the copied screen in pieces
+battle/4428	6e35709dc3fed52a	the battle transition, 7 frames on: the copied screen in pieces
+battle/4429	8b943d62a23dedf2	the battle transition, 8 frames on: the copied screen in pieces
+battle/4430	730290eba1e2e13e	the battle transition, 9 frames on: the copied screen in pieces
+battle/4431	2bbe206ed75c72d2	the battle transition, 10 frames on: the copied screen in pieces
+battle/4432	af16523ff003057c	the battle transition, 11 frames on: the copied screen in pieces
+battle/4433	6b63b3af79a271d5	the battle transition, 12 frames on: the copied screen in pieces
+battle/4434	4ec84cfab56bf752	the battle transition, 13 frames on: the copied screen in pieces
+battle/4435	88cc563a267c422b	the battle transition, 14 frames on: the copied screen in pieces
+battle/4436	9f1e2d36d1cff124	the battle transition, 15 frames on: the copied screen in pieces
+battle/4437	2fcef1582dddad96	the battle transition, 16 frames on: the copied screen in pieces
+battle/4438	8666ad343dd8f5be	the battle transition, 17 frames on: the copied screen in pieces
+battle/4439	5fc415eb37b7feb0	the battle transition, 18 frames on: the copied screen in pieces
+battle/4440	ca3038acb744b33d	the battle transition, 19 frames on: the copied screen in pieces
+battle/4441	d021b4efd8615f8b	the battle transition, 20 frames on: the copied screen in pieces
+battle/4442	010e71b260e62d15	the battle transition, 21 frames on: the copied screen in pieces
+battle/4443	2467d33c7a4a5af6	the battle transition, 22 frames on: the copied screen in pieces
+battle/4444	66849650253a3417	the battle transition, 23 frames on: the copied screen in pieces
+battle/4445	324c4b010518806e	the battle transition, 24 frames on: the copied screen in pieces
+battle/4446	12f6b0a4913a5832	the battle transition, 25 frames on: the copied screen in pieces
+battle/4447	3a88d8716b7675db	the battle transition, 26 frames on: the copied screen in pieces
+battle/4448	b9712bb36e7a2a6e	the battle transition, 27 frames on: the copied screen in pieces
+battle/4449	e41e755ef8d6fce2	the battle transition, 28 frames on: the copied screen in pieces
+battle/4450	4e99cace623b63d4	the battle transition, 29 frames on: the copied screen in pieces
+battle/4451	5cb24427ea8cefb6	the battle transition, 30 frames on: the copied screen in pieces
+mask/3200	b472d09151f80640	a101b field after a Continue, the mask effect's two R8 copies and its logic ops, 11 display lists
