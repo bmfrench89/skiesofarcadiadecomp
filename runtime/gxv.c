@@ -902,9 +902,9 @@ static int gxv_draw(const DrawCmd* D)
      * ztop draw whose alpha test can reject, which the corpus has none of
      * (3.4); said once if one comes. */
     if (D->px.ztop && !D->tev.alpha_always && !ztop_said++)
-        say("draw %llu is ztop with an alpha test that can reject: the GPU tests depth after the TEV, the CPU before "
-            "(tripwire, 3.4; SOA_GPU_DRAW=%llu describes it)",
-            g_n_draws + 1, g_n_draws + 1);
+        say("draw %llu, after %llu screen copies, is ztop with an alpha test that can reject: the GPU tests depth "
+            "after the TEV, the CPU before (tripwire, 3.4; SOA_GPU_DRAW=%llu describes it)",
+            g_n_draws + 1, g_n_copies, g_n_draws + 1);
     switch (D->prim) {
     case 0x80: topo = T_TRIS; quads = 1; n = n / 4 * 4; break;
     case 0x90: topo = T_TRIS; n = n / 3 * 3; break;

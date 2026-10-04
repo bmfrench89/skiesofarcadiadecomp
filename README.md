@@ -308,7 +308,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1211 tests; any that need a dump skip themselves
+python -m pytest                     # 1212 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

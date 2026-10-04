@@ -554,9 +554,10 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
   late order. The CPU tests depth first only for `ztop` draws and where `TevSetup.alpha_always` says
   the order cannot change a pixel (gxr.c:1030-1056); no draw in the corpus is `ztop` with an alpha
   test that can reject (HANDOFF, wrong statement 2) [V], so the late order gives the CPU's result
-  everywhere, and such a draw is a tripwire. *It fired in V5's live title run (FINDINGS "V5"):
-  the game makes such a draw outside the corpus. Whether a pixel differs is open; a capture of that
-  frame, replayed both ways, decides.* If V7 adds early depth as a speed-up, it takes
+  everywhere, and such a draw is a tripwire. *It fired in V5's live title run (FINDINGS "V5",
+  "V5, after"): the title's full-screen fade quad, from frame 1290, at vertex alpha 1.0, which the
+  test passes everywhere; every frame 1290-1400 passes V0 CPU against GPU. It stays a tripwire for
+  a fade at partial alpha.* If V7 adds early depth as a speed-up, it takes
   `alpha_always` from the CPU and never re-derives it (the XOR-of-always-true trap H15a avoided).
 - **Depth quantised as the CPU compares it**: `zq = uint(clamp(depth, 0, 1) · 16777215)` from the
   depth varying (truncating, as `depth_test`, gxr.c:1009), written as `gl_FragDepth = zq · 2⁻²⁴`,
@@ -1425,7 +1426,10 @@ checked by `scenario.py check <log>`, and `test_gxv_live.py` holds the check to 
 from the Done below: the live check holds the GPU's counts to what the renderer sent the backend
 (`[gxr] vulkan backend: ...`, new) and screen copies to `[gxr]`'s, not to `[gx]`'s draw count,
 which a run with `SOA_SNAP` cannot meet, the renderer drawing only the frames it snapshots. A
-3.4 tripwire fired in the title; see there.*
+3.4 tripwire fired in the title; see there. After it, `gpuspike.py live` compares a running game,
+seeded, judging only the frames two CPU runs reproduce: guest time follows the host, so an undrawn
+stretch is not reproducible, and `--range A-B` (every frame drawn) is the mode that is (FINDINGS
+"V5, after").*
 
 *A day to several days. `--link`. Prerequisites: the gate; V4b. Files: `runtime/gxv.c` and
 `runtime/gxv/*.glsl` (from the spike), `tools/recompile.py` (the SPIR-V step, optional),
@@ -1500,7 +1504,9 @@ cases run with the GPU.*
 - `python tools/scenario.py run title --check --env SOA_GPU=vulkan` and
   `python tools/scenario.py run battle --check --env SOA_GPU=vulkan` pass their four invariants **and**
   V5's log checks (start line, no fallback, draw and screen-copy counts above zero and equal to the
-  `[gx]` report's), via `tools/tests/test_gxv_live.py`.
+  `[gx]` report's), via `tools/tests/test_gxv_live.py`. *As V5 built them: the fifth invariant,
+  `the GPU drew the run`, holding the counts to what the renderer sent the backend; and `gpuspike.py
+  live title --range A-B` and `live battle --range A-B` pass V0 on every reproducible frame.*
 - **Owner**: fifteen minutes windowed from a part-select save, `SOA_GPU=vulkan`; anything that looks
   wrong is noted with its frame (`SOA_PAD_RECORD` on).
 

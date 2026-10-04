@@ -11,6 +11,7 @@
     python tools/gpuspike.py ramdiff                      # each copy's RAM, CPU against GPU
     python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
     python tools/gpuspike.py contrast [--mutate M]        # the spike and soa.exe --replay, the same pixels
+    python tools/gpuspike.py live title [--range A-B]     # a scenario on CPU and GPU, seeded, V0 each frame
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -77,6 +78,16 @@ SOA_GPU=vulkan, from one scratch copy of it, and holds the two pictures to the
 same pixels, with both runs' start lines naming the same device and driver.
 --mutate hands one of gxv's mutations to soa.exe alone (SOA_GPU_MUTATE), and
 the pictures must then differ, failing it.
+
+`live` (after V5) runs a scenario through scenario.py three times -- on the
+CPU twice and with SOA_GPU=vulkan once -- and holds each GPU snapshot to the
+CPU's by V0: the scenario's own every N frames, or with --range every frame
+from A to B. It is what replays cannot show: copies and textures carried from
+frame to frame in a running game. A running game is not reproducible: it
+reseeds from the clock, which SOA_SEED pins, and much of it is timed by the
+clock, which follows the host's pace, so only the frames the two CPU runs
+make byte for byte alike are judged; the rest are counted as not judged
+(FINDINGS "V5, after").
 
 --mutate names a mutation the command must fail on: unclipped (selftest),
 clamp (tevdiff), rounding, intensity and unseeded (copydiff), lod and
@@ -1192,6 +1203,105 @@ def contrast(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> in
     return 0 if ok else 1
 
 
+def reproduced(a: Path, b: Path) -> set[str]:
+    """The snapshots two runs made byte for byte alike, by name."""
+    theirs = {p.name for p in b.glob("*.png")}
+    return {
+        p.name
+        for p in a.glob("*.png")
+        if p.name in theirs and png.read_rgba(p)[2] == png.read_rgba(b / p.name)[2]
+    }
+
+
+def compare_frames(
+    cpu: Path, gpu: Path, only: set[str] | None = None
+) -> tuple[list[str], list[str], int]:
+    """Each snapshot in cpu against the one of the same name in gpu, by V0 --
+    of those named in only, when given: (the frames that fail it, with V0's
+    reasons; problems -- a frame one side lacks, or none at all; and how many
+    were identical)."""
+    names = sorted(p.name for p in cpu.glob("*.png") if only is None or p.name in only)
+    problems = [] if names else [f"no snapshots in {cpu}"]
+    theirs = {p.name for p in gpu.glob("*.png") if only is None or p.name in only}
+    problems += [f"{n}: the GPU run has none" for n in names if n not in theirs]
+    problems += [f"{n}: the CPU run has none" for n in sorted(theirs - set(names))]
+    fails, same = [], 0
+    for n in names:
+        if n not in theirs:
+            continue
+        if png.read_rgba(cpu / n)[2] == png.read_rgba(gpu / n)[2]:
+            same += 1
+            continue
+        f = imgdiff.compare(cpu / n, gpu / n).failures()
+        if f:
+            fails.append(f"{n}: {'; '.join(f)}")
+    return fails, problems, same
+
+
+def live(
+    prof: toolchain.Profile, name: str, frames_range: str | None, mutate: str | None, seed: str
+) -> int:
+    """A scenario on each renderer, then compare_frames. Run one at a time,
+    as every soa.exe run is (CLAUDE.md)."""
+    exe = ROOT / "gen" / f"soa{prof.exeext}"
+    if not exe.exists():
+        print(f"skip: no {exe.relative_to(ROOT)} (python tools/recompile.py --link)")
+        return SKIP
+    out = build_dir(prof) / "live" / name
+    dirs = {side: out / side for side in ("cpu", "cpu2", "gpu")}
+    for side, d in dirs.items():
+        shutil.rmtree(d, ignore_errors=True)
+        env = [f"SOA_SEED={seed}", f"SOA_FRAMES_DIR={d}"]
+        args = []
+        if frames_range:
+            first, last = frames_range.split("-")
+            env.append(f"SOA_SNAP=1@{int(first)}-{int(last)}")
+            args += ["--frames", str(int(last) + 1)]
+        if side == "gpu":
+            env.append("SOA_GPU=vulkan")
+            if mutate:
+                env.append(f"SOA_GPU_MUTATE={mutate}")
+        cmd = [
+            sys.executable,
+            str(ROOT / "tools" / "scenario.py"),
+            "run",
+            name,
+            "--check",
+            "--quiet",
+        ]
+        cmd += [*args, "--log", str(out / f"{side}.log")]
+        for e in env:
+            cmd += ["--env", e]
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
+        verdict = next(
+            (ln for ln in proc.stdout.splitlines() if "invariants hold" in ln or "FAILED" in ln), ""
+        )
+        print(f"[gpuspike] {side}: {verdict or 'no verdict'}")
+        if proc.returncode != 0:
+            print(proc.stdout[-2000:])
+            return 1
+    total = len(list(dirs["cpu"].glob("*.png")))
+    stable = reproduced(dirs["cpu"], dirs["cpu2"])
+    print(
+        f"[gpuspike] {len(stable)} of {total} frames the same in both CPU runs; the other {total - len(stable)} are not judged"
+    )
+    if not stable:
+        print("skip: no frame of this stretch reproduces on the CPU here, so nothing can be judged")
+        return SKIP
+    fails, problems, same = compare_frames(dirs["cpu"], dirs["gpu"], stable)
+    for p in problems:
+        print(f"PROBLEM {p}")
+    for f in fails[:12]:
+        print(f"  FAIL {f}")
+    print(
+        f"[gpuspike] live {name}: {len(stable) - len(fails)} of {len(stable)} reproducible frames "
+        f"pass V0 ({same} identical), SOA_SEED={seed}"
+    )
+    ok = not problems and not fails
+    print(f"[gpuspike] live {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
     """V4b: the mask effect's captures through the three ways of drawing a
     logic op, poisoned; byte-identical images (a same-replay contrast). With
@@ -1411,11 +1521,16 @@ def main(argv: list[str] | None = None) -> int:
             "ramdiff",
             "chain",
             "contrast",
+            "live",
         ),
     )
     ap.add_argument(
-        "frames", nargs="*", help="chain: V1's captures in order, e.g. battle_4421 battle_4422"
+        "frames",
+        nargs="*",
+        help="chain: V1's captures in order, e.g. battle_4421 battle_4422; live: a scenario",
     )
+    ap.add_argument("--range", default=None, help="live: every frame from A to B, as A-B")
+    ap.add_argument("--live-seed", default="12345", help="live: the SOA_SEED both runs get")
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
     ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
     ap.add_argument("--cases", type=int, default=100000, help="tevdiff and loddiff: random cases")
@@ -1449,6 +1564,10 @@ def main(argv: list[str] | None = None) -> int:
         return ramdiff(prof, args.set.split(","), args.mutate)
     if args.command == "chain":
         return chain(prof, args.frames)
+    if args.command == "live":
+        if len(args.frames) != 1:
+            ap.error("live takes one scenario, e.g. title")
+        return live(prof, args.frames[0], args.range, args.mutate, args.live_seed)
     if args.command == "contrast":
         return contrast(prof, args.set.split(","), args.mutate)
     if args.command == "time":

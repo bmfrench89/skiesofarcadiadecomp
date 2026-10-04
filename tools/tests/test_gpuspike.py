@@ -429,6 +429,30 @@ def test_the_backend_compiles_and_fails_without_vulkans_declarations(tmp_path):
     assert compile_runtime.compile_backend(tmp_path / "none", headers=tmp_path / "x") == (None, "")
 
 
+def test_the_live_comparison_fails_a_changed_or_missing_frame(tmp_path):
+    """gpuspike.py live's half that needs no game: snapshots of one name held
+    to each other by V0. Identical ones pass; a frame with a block painted
+    over fails; a frame one run lacks, or no frames at all, is a problem."""
+    cpu, gpu = tmp_path / "cpu", tmp_path / "gpu"
+    cpu.mkdir()
+    gpu.mkdir()
+    for n in ("0050", "0100"):
+        shutil.copyfile(scene(tmp_path, n, square), cpu / f"{n}.png")
+        shutil.copyfile(cpu / f"{n}.png", gpu / f"{n}.png")
+    assert gpuspike.compare_frames(cpu, gpu) == ([], [], 2)
+    scene(gpu, "0100", lambda x, y: (40, 200, 40) if 5 <= x < 60 and 5 <= y < 40 else None)
+    fails, problems, same = gpuspike.compare_frames(cpu, gpu)
+    assert len(fails) == 1 and fails[0].startswith("0100.png") and same == 1 and not problems
+    # Only the frames two CPU runs reproduced are judged: 0100 is not among them.
+    assert gpuspike.reproduced(cpu, gpu) == {"0050.png"}
+    assert gpuspike.compare_frames(cpu, gpu, {"0050.png"}) == ([], [], 1)
+    (gpu / "0050.png").unlink()
+    assert "0050.png: the GPU run has none" in gpuspike.compare_frames(cpu, gpu)[1]
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert gpuspike.compare_frames(empty, gpu)[1][0].startswith("no snapshots")
+
+
 def test_copy_texfmt_is_gxr_cs():
     """gpuspike.py's third copy of copy_texfmt, against gxr.c's switch: every
     format with intensity off, the four intensity formats, and the refusals."""

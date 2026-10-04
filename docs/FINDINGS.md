@@ -5709,3 +5709,60 @@ moves that to a thread.
 - **Tests:** `test_gxv_live.py` (10); `test_scenario.py`,
   two more (the sweep refuses a GPU replay, and a replay cannot see
   `SOA_GPU`).
+
+**V5, after: the ztop tripwire, and comparing a running game.** 2026-10-03.
+
+- **The tripwire is answered: no pixel moves.**
+  - **Where it fires:** the line now gives the screen copies before it,
+    which is the frame. It is frame 1300 of the title run, and every drawn
+    frame from 1290.
+  - **The draw** (`SOA_GPU_DRAW=6425`) is a full-screen strip of 4 vertices
+    at depth 0.99999: black, vertex alpha 1.0, no texture, blended source
+    over destination, depth LEQUAL with writes on.
+  - **Why it can't differ here:** its alpha test can reject only because
+    its alpha comes from the vertex colour. At alpha 1.0 it passes
+    everywhere, so the order of the depth test makes no difference.
+  - **The evidence** [V]: every frame from 1290 to 1400 drawn on both
+    renderers, seeded, passes V0 CPU against GPU, 111 of 111.
+  - **What stays:** the tripwire, since a fade at partial alpha elsewhere
+    would be the case it guards.
+- **A running game is not reproducible, and that nearly made a false
+  defect.**
+  - **The first comparison:** the title run on each renderer, snapshots every
+    50 frames, gave 7 of 40 frames failing V0, three of them wholesale.
+  - **What they showed:** frames 900-1050, the opening's flight through
+    cloud, had the clouds somewhere else entirely.
+  - **The CPU against itself:** two CPU runs of frames 880-960, every frame
+    drawn, differed in all 81, failing V0 too. The game reseeds from the
+    clock.
+  - **With the seed pinned** (`SOA_SEED=12345`): two CPU runs are identical
+    in all 81 frames, and the GPU's 81 all pass V0 against them.
+  - **Still not enough:** with snapshots every 50 frames even two seeded CPU
+    runs differ. Frame 450 is off by 7 in every pixel, a fade caught at
+    another moment.
+  - **The cause:** guest time is the host's monotonic time (M19). Much of
+    the game is timed by it (34,261 `OSGetTick` reads in one run), and an
+    undrawn frame runs at whatever pace the host manages. Of 40 snapshots,
+    18 come out alike in two CPU runs; with every frame drawn, 81 of 81 did.
+- **`gpuspike.py live <scenario> [--range A-B]`.** It runs the scenario
+  three times through `scenario.py`: on the CPU twice and with
+  `SOA_GPU=vulkan` once, all with `SOA_SEED`. It then holds each GPU
+  snapshot to the CPU's by V0, judging only the frames the two CPU runs make
+  byte for byte alike and counting the rest as not judged.
+  - **Results** [V]:
+
+    | Run | Reproduced on the CPU | GPU frames passing V0 |
+    |---|---|---|
+    | `live title` | 18 of 40 | 18 |
+    | `live title --range 1290-1330` (before the guard) | -- | 41 of 41 |
+    | the 880-960 and 1290-1400 runs above, every frame drawn | all | all 81 and all 111 |
+
+  - **The mutation:** `--mutate nofilter`, soa.exe's screen copy
+    unfiltered, fails all 11 frames of 1290-1300.
+  - **Which mode to use:** `--range`, every frame drawn, is the mode that
+    reproduces. A frame-locked guest clock would make every frame
+    judgeable, but it touches every device that reads guest time (DVD, DSP,
+    ARAM, the VI fields, audio), and it is not this slice's to build.
+- **Tests:** one, GPU-free. Identical snapshots pass, a frame painted over
+  fails, only the reproduced frames are judged, and a missing frame or an
+  empty folder is a problem.
