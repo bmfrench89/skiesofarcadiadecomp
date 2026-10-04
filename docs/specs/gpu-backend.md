@@ -1652,6 +1652,18 @@ landed), `runtime/gxv/filters.glsl` (if P5a landed), `tools/tests/test_gxv_prese
 
 ### V10. Logic ops without `logicOp`
 
+*Landed 2026-10-04 (FINDINGS "V10").*
+
+- *Each logic draw is routed when the device lacks `logicOp`: a snapshot for one quad; the interlock
+  for a draw that may overlap itself and tests no depth (its pass has no depth attachment); otherwise
+  blend for OR and AND and a snapshot for the rest, said once.*
+- *`SOA_GPU_FEATURES` takes `core` and `nologicop`. `gpuspike.py logicop` holds 16 captures to every
+  path, and `logictest` holds the two synthetic scenes.*
+- *The shader is `raster.frag` built with `GXV_LOGIC_INTERLOCK`, not the `logicop.glsl` named
+  below.*
+- *Framebuffer fetch with rasterization-order access is not built: this GPU has no such extension to
+  try it on.*
+
 *A day to several days. `--link`. Prerequisites: V5. Files: `runtime/gxv.c`,
 `runtime/gxv/logicop.glsl`, `tools/tests/test_gxv_logicop.py` (new), FINDINGS entry "V10".*
 

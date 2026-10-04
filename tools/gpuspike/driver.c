@@ -967,6 +967,59 @@ static int scene_copyimage(CpuState* s)
     return right != 16;
 }
 
+/* ---- V10's logic ops --------------------------------------------------------
+ *
+ * test_gxv_logicop.py's scenes (specs/gpu-backend.md V10), depth off:
+ *   1  a quad of 0x55 ORed into a quad of 0xAA: 0xFF where the op is done
+ *      exactly, 198 from the blend approximation (src(1 - dst) + dst);
+ *   2  two triangles of 0xF0, overlapping, XORed onto black: each fragment
+ *      must see the one before it, so the overlap comes back black. A route
+ *      that reads a snapshot taken before the draw leaves it 0xF0.
+ * PE_CMODE0 (BP 0x41): colour and alpha update 0x18, logic enable 2, the op
+ * at bit 12. */
+static int scene_logictest(CpuState* s, int which)
+{
+    char path[512];
+    const uint8_t* screen;
+    int w = 0, h = 0;
+    gxr_reset_efb();
+    queue_recipe(s, 0);
+    bp_w(s, 0x40, 0); /* no depth test: the interlock route takes no depth */
+    if (which == 1) {
+        gp8(s, 0x80); gp16(s, 4);
+        vertex(s, 0, 0, 50, 0xAAAAAAFFu); vertex(s, 640, 0, 50, 0xAAAAAAFFu);
+        vertex(s, 640, 480, 50, 0xAAAAAAFFu); vertex(s, 0, 480, 50, 0xAAAAAAFFu);
+        bp_w(s, 0x41, 0x18u | 2u | 7u << 12); /* OR */
+        gp8(s, 0x80); gp16(s, 4);
+        vertex(s, 220, 140, 50, 0x555555FFu); vertex(s, 420, 140, 50, 0x555555FFu);
+        vertex(s, 420, 340, 50, 0x555555FFu); vertex(s, 220, 340, 50, 0x555555FFu);
+    } else {
+        bp_w(s, 0x41, 0x18u | 2u | 6u << 12); /* XOR */
+        gp8(s, 0x90); gp16(s, 6);
+        vertex(s, 100, 100, 50, 0xF0F0F0FFu); vertex(s, 400, 100, 50, 0xF0F0F0FFu); vertex(s, 100, 400, 50, 0xF0F0F0FFu);
+        vertex(s, 160, 160, 50, 0xF0F0F0FFu); vertex(s, 460, 160, 50, 0xF0F0F0FFu); vertex(s, 160, 460, 50, 0xF0F0F0FFu);
+    }
+    bp_w(s, 0x41, 0x18);
+    present(s);
+    screen = gxr_screen(&w, &h);
+    snprintf(path, sizeof path, "%s/logic%d.png", g_out, which);
+    if (!png_write_rgba(path, screen, w, h, EFB_W * 4)) {
+        fprintf(stderr, "[gpuspike] cannot write %s\n", path);
+        return 1;
+    }
+    if (which == 1) {
+        const uint8_t* c = screen + ((size_t)240 * EFB_W + 320) * 4;
+        printf("logictest or: centre %u %u %u; frame hash %016llx\n", c[0], c[1], c[2], (unsigned long long)gxr_screen_hash());
+    } else {
+        const uint8_t* o = screen + ((size_t)200 * EFB_W + 200) * 4; /* both triangles */
+        const uint8_t* a = screen + ((size_t)120 * EFB_W + 120) * 4; /* the first alone */
+        printf("logictest xor: overlap %u, first alone %u; frame hash %016llx\n", o[0], a[0],
+               (unsigned long long)gxr_screen_hash());
+    }
+    gxr_report();
+    return 0;
+}
+
 /* ---- V8's presenter ----------------------------------------------------------
  *
  * test_gxv_present.py's check (specs/gpu-backend.md V8): two synthetic screen
@@ -1378,7 +1431,7 @@ int main(int argc, char** argv)
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
-    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0, copyimage = 0, present = 0;
+    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0, copyimage = 0, present = 0, logictest = 0;
     uint32_t seed = 1;
     int failures, i;
 
@@ -1392,6 +1445,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--queue")) queue = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--copyimage")) copyimage = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--present")) present = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--logictest")) logictest = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
@@ -1502,11 +1556,11 @@ int main(int argc, char** argv)
         free(s.mem);
         return failures ? 1 : 0;
     }
-    if (queue || copyimage) {
-        /* V6a's queue frame, or V7's copy image, alone; gxr_report prints the
-         * backend's report. */
+    if (queue || copyimage || logictest) {
+        /* V6a's queue frame, V7's copy image or a V10 logic scene, alone;
+         * gxr_report prints the backend's report. */
         render_env();
-        failures = queue ? scene_queue(&s) : scene_copyimage(&s);
+        failures = queue ? scene_queue(&s) : copyimage ? scene_copyimage(&s) : scene_logictest(&s, (int)logictest);
         if (g_gpu) gxv_shutdown();
         free(s.mem);
         return failures ? 1 : 0;

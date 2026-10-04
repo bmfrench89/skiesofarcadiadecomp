@@ -17,6 +17,7 @@
     python tools/gpuspike.py specdiff [--mutate M]        # V7: specialised and interpreted, the same bytes
     python tools/gpuspike.py copyimage [--mutate M]       # V7: a copy sampled in its frame, from the pool
     python tools/gpuspike.py present [--mutate M]         # V8: the GPU's presenter against picture_scale
+    python tools/gpuspike.py logictest                    # V10: logic ops routed without logicOp
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -90,6 +91,12 @@ CPU's hash and all 16 cells, serve the sampler from the copy's image in its
 pool, and land the copy with the frame's submission rather than a wait of
 its own. --mutate cimg-cpu (the producer's image, not yet landed, sampled)
 and land-at-copy (V6's wait at each copy) must fail it.
+
+`logictest` (V10) draws two synthetic logic-op scenes -- an OR quad, and two
+overlapping triangles XORed -- through every route: the OR must be 0xFF but for
+the forced blend's 198, and the overlapping XOR must come back black where
+SOA_GPU_FEATURES=nologicop routes it to the interlock, and be a snapshot named
+in a line, never a blend, under core.
 
 `present` (V8) draws two synthetic screen copies through the GPU presenter's
 pass into eight target sizes at both layouts (integer and fit) and holds each
@@ -669,6 +676,10 @@ def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None)
 # leave gxv's default (1: specialised pipelines made on the compiler thread,
 # the interpreter drawing meanwhile).
 SPECIALIZE: str | None = None
+# --features core: SOA_GPU_FEATURES=core for every run (V10, spec 3.10): every
+# optional feature treated as absent -- logicOp, the interlock -- which is how
+# an Android GPU's capability set is tried on this one.
+FEATURES: str | None = None
 
 
 def clean_env() -> dict[str, str]:
@@ -679,6 +690,8 @@ def clean_env() -> dict[str, str]:
     env["SOA_SETTINGS"] = "0"
     if SPECIALIZE is not None:
         env["SOA_GPU_SPECIALIZE"] = SPECIALIZE
+    if FEATURES is not None:
+        env["SOA_GPU_FEATURES"] = FEATURES
     return env
 
 
@@ -1172,10 +1185,11 @@ def texel_of(off: int, c: TexCopy) -> tuple[int, int] | None:
     return (x, y) if x < c.ow and y < c.oh else None
 
 
-def logic_captures() -> list[Cap]:
-    """The captures that draw under a logic op: the mask effect's 14."""
+def logic_captures(sets=("corpus", "perfset", "gpuset")) -> list[Cap]:
+    """The captures that draw under a logic op: the mask effect's 14, and
+    V1's that do (V10 holds those too)."""
     out = []
-    for cap in captures(["corpus", "perfset"]):
+    for cap in captures(list(sets)):
         summary = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "fifo.py"), str(cap.capture.base), "--summary"],
             capture_output=True,
@@ -1188,7 +1202,7 @@ def logic_captures() -> list[Cap]:
     return out
 
 
-LOGIC_MODES = ("native", "blend", "snapshot")
+LOGIC_MODES = ("native", "blend", "snapshot", "interlock")
 
 
 # The GPU backend's start line; contrast holds both binaries' to one device.
@@ -1484,6 +1498,105 @@ def queue(prof: toolchain.Profile, mutate: str | None) -> int:
     return 0 if ok else 1
 
 
+RE_LOGIC_OR = re.compile(
+    r"^logictest or: centre (\d+) (\d+) (\d+); frame hash ([0-9a-f]{16})$", re.M
+)
+RE_LOGIC_XOR = re.compile(
+    r"^logictest xor: overlap (\d+), first alone (\d+); frame hash ([0-9a-f]{16})$", re.M
+)
+RE_LOGIC_ROUTES = re.compile(
+    r"logic ops: (\d+) draws: (\d+) native, (\d+) from a snapshot, (\d+) through the interlock, (\d+) as blends"
+)
+
+
+def logictest_run(prof: toolchain.Profile, backend: str, scene: int, logicop=None, features=None):
+    """One of V10's logic scenes: (the parsed line, the routes or None, the
+    output), or "skip"."""
+    out = build_dir(prof) / "logictest"
+    out.mkdir(parents=True, exist_ok=True)
+    args = [str(exe_path(prof)), "--backend", backend, "--out", str(out), "--logictest", str(scene)]
+    if logicop:
+        args += ["--logicop", logicop]
+    env = clean_env()
+    if features:
+        env["SOA_GPU_FEATURES"] = features
+    proc = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+    if skipped(proc):
+        return "skip"
+    text = proc.stdout + proc.stderr
+    m = (RE_LOGIC_OR if scene == 1 else RE_LOGIC_XOR).search(text)
+    r = RE_LOGIC_ROUTES.search(text)
+    return (m.groups() if m else None), (tuple(map(int, r.groups())) if r else None), text
+
+
+def logictest(prof: toolchain.Profile) -> int:
+    """V10: logic ops without logicOp, on two synthetic scenes, depth off.
+    1, 0x55 ORed into 0xAA: 0xFF from the CPU, native, a snapshot, the
+    interlock and the routes SOA_GPU_FEATURES=core takes; 198 from the forced
+    blend -- so the modes differ where they should. 2, two overlapping
+    triangles XORed onto black: the overlap comes back black from the CPU,
+    native and the interlock, which SOA_GPU_FEATURES=nologicop must route it
+    to; with core (no interlock either) it goes to a snapshot, said by name,
+    and leaves the overlap 0xF0 -- never to blend, which cannot draw XOR."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    problems = []
+
+    def run(scene, backend="gpu", logicop=None, features=None):
+        got = logictest_run(prof, backend, scene, logicop, features)
+        if got == "skip":
+            raise SystemExit(SKIP)
+        return got
+
+    cpu1, _, _ = run(1, "cpu")
+    native1, routes, text = run(1)
+    has_interlock = "; interlock yes" in text
+    print(f"or: cpu {cpu1}; native {native1}")
+    if not cpu1 or cpu1[0] != "255" or not native1 or native1[0] != "255":
+        problems.append("the OR scene is not 0xFF from the CPU and native")
+    for mode, want in (("snapshot", "255"), ("blend", "198")) + (
+        (("interlock", "255"),) if has_interlock else ()
+    ):
+        got, _, _ = run(1, logicop=mode)
+        print(f"or, {mode}: {got}")
+        if not got or got[0] != want:
+            problems.append(f"the OR scene through {mode} gives {got and got[0]}, not {want}")
+    core1, routes1, _ = run(1, features="core")
+    print(f"or, core: {core1}, routes {routes1}")
+    if not core1 or core1[0] != "255" or not routes1 or routes1[2] != 1:
+        problems.append("SOA_GPU_FEATURES=core does not draw the OR quad from a snapshot as 0xFF")
+
+    cpu2, _, _ = run(2, "cpu")
+    native2, _, _ = run(2)
+    print(f"xor: cpu {cpu2}; native {native2}")
+    if not cpu2 or cpu2[0] != "0" or not native2 or native2[0] != "0":
+        problems.append("the XOR scene's overlap is not black from the CPU and native")
+    if has_interlock:
+        nl, routes2, _ = run(2, features="nologicop")
+        print(f"xor, nologicop: {nl}, routes {routes2}")
+        if not nl or nl[0] != "0" or nl[2] != native2[2] or not routes2 or routes2[3] != 1:
+            problems.append(
+                "with no logicOp the overlapping XOR is not routed to the interlock and drawn as native"
+            )
+    core2, routes3, text = run(2, features="core")
+    print(f"xor, core: {core2}, routes {routes3}")
+    if (
+        not core2
+        or core2[0] != "240"
+        or not routes3
+        or routes3[2] != 1
+        or "may overlap itself" not in text
+    ):
+        problems.append(
+            "with neither logicOp nor interlock the XOR is not a snapshot named in a line"
+        )
+    for p in problems:
+        print(f"PROBLEM {p}")
+    print(f"[gpuspike] logictest {'passes' if not problems else 'FAILS'}")
+    return 0 if not problems else 1
+
+
 RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact$", re.M)
 
 
@@ -1692,8 +1805,10 @@ def overlap(prof: toolchain.Profile, mutate: str | None) -> int:
 
 
 def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
-    """V4b: the mask effect's captures through the three ways of drawing a
-    logic op, poisoned; byte-identical images (a same-replay contrast). With
+    """V4b: the mask effect's captures through the ways of drawing a logic op
+    -- native, blend, snapshot and (V10, where the device has it) interlock --
+    poisoned; byte-identical images (a same-replay contrast). V10 adds V1's
+    captures that draw logic ops. With
     --mutate, the mutation is applied to the native path alone: the paths must
     then differ, and the native frame must fail V0 against the CPU's."""
     code = ready(prof)
@@ -1707,45 +1822,52 @@ def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
         c = cap.capture
         base = replay_base(cap, out / "poisoned")
         pngs, counts = {}, {}
+        modes = list(LOGIC_MODES)
         for mode in LOGIC_MODES:
+            if mode not in modes:
+                continue
             pngs[mode] = out / f"{c.name}_{mode}.png"
             proc, _ = replay(
                 prof, "gpu", base, pngs[mode], mutate if mode == "native" else None, mode
             )
             if skipped(proc):
                 return SKIP
+            if mode == "native" and "; interlock yes" not in proc.stderr:
+                modes.remove("interlock")  # V10's route, where the device has it
             m = re.search(r"logic ops: (\d+) draws", proc.stderr)
             counts[mode] = int(m.group(1)) if proc.returncode == 0 and m else -1
-        images = {mode: png.read_rgba(pngs[mode]) for mode in LOGIC_MODES}
+        images = {mode: png.read_rgba(pngs[mode]) for mode in modes}
         w, h, _ = images["native"]
-        rows = {mode: pixel_rows(w, h, images[mode][2]) for mode in LOGIC_MODES}
+        rows = {mode: pixel_rows(w, h, images[mode][2]) for mode in modes}
         differ = {
             mode: sum(
                 sum(map(ne, a, b, strict=True))
                 for a, b in zip(rows["native"], rows[mode], strict=True)
             )
-            for mode in ("blend", "snapshot")
+            for mode in modes
+            if mode != "native"
         }
         same = images["blend"] == images["snapshot"]
         drawn = min(counts.values())
         line = (
             f"{c.name:14} logic draws {drawn}; native differs from blend at {differ['blend']} px, "
-            f"from snapshot at {differ['snapshot']}; blend {'=' if same else '!='} snapshot"
+            f"from snapshot at {differ['snapshot']}, from interlock at {differ.get('interlock', '-')}; "
+            f"blend {'=' if same else '!='} snapshot"
         )
         if mutate:
             ref = out / f"{c.name}_cpu.png"
             replay(prof, "cpu", base, ref)
             fails = bool(imgdiff.compare(ref, pngs["native"]).failures())
-            ok = drawn > 0 and differ["blend"] > 0 and differ["snapshot"] > 0 and same and fails
+            ok = drawn > 0 and all(differ.values()) and same and fails
             line += f"; the mutated native frame {'fails' if fails else 'PASSES'} V0"
         else:
-            ok = drawn > 0 and not differ["blend"] and not differ["snapshot"] and same
+            ok = drawn > 0 and not any(differ.values()) and same
         bad += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {line}")
     what = (
         f"--mutate {mutate}: every capture's paths differ and the native one fails V0"
         if mutate
-        else ("the three paths give byte-identical images")
+        else ("every path gives byte-identical images")
     )
     print(f"[gpuspike] logicop over {len(caps)} captures: {what if not bad else f'{bad} FAIL'}")
     return 1 if bad else 0
@@ -1916,6 +2038,7 @@ def main(argv: list[str] | None = None) -> int:
             "specdiff",
             "copyimage",
             "present",
+            "logictest",
         ),
     )
     ap.add_argument(
@@ -1944,9 +2067,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="SOA_GPU_SPECIALIZE for every run: 1 in the background, wait on the draw path, 0 never",
     )
+    ap.add_argument(
+        "--features",
+        choices=("core",),
+        default=None,
+        help="SOA_GPU_FEATURES for every run: core treats every optional feature as absent",
+    )
     args = ap.parse_args(argv)
-    global SPECIALIZE
+    global SPECIALIZE, FEATURES
     SPECIALIZE = args.specialize
+    FEATURES = args.features
     prof = toolchain.profile(args.cc)
     if args.command == "build":
         built, why = build(prof)
@@ -1982,6 +2112,8 @@ def main(argv: list[str] | None = None) -> int:
         return copyimage(prof, args.mutate)
     if args.command == "present":
         return present(prof, args.mutate)
+    if args.command == "logictest":
+        return logictest(prof)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)

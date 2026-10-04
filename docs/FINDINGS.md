@@ -6292,3 +6292,70 @@ producer, which is the game's thread, publishes each command and goes on.
   - **M8's overlay,** when M8 lands.
   - **The pacing target and the owner's windowed session** at 60 or 120 Hz.
     The display here is set to 85.
+
+**V10: logic ops without `logicOp`.** 2026-10-04.
+
+- **What it does.** Where the device lacks `logicOp`, as many phone GPUs
+  do, each logic draw is now routed on its own (`logic_route`):
+  - **a snapshot** for a draw of one quad, which cannot overlap itself;
+    every logic draw in this game is one (3.5);
+  - **the interlock** for a draw that may overlap itself and tests no
+    depth, where the device has `VK_EXT_fragment_shader_interlock`;
+  - **otherwise** blend for OR and AND, a snapshot for the rest, each said
+    once by draw, since neither is exact where the draw overlaps itself.
+    Never a blend for an op the blend cannot draw: that is refused, as
+    before.
+  - **`SOA_GPU_LOGICOP`** forces any route for testing, `interlock` among
+    them.
+- **The interlock route:**
+  - **the shader:** `raster.frag` built with `GXV_LOGIC_INTERLOCK` reads
+    and writes the EFB pixel as a storage image inside
+    `beginInvocationInterlockARB`, applying the write masks itself;
+  - **the pass:** the EFB goes into GENERAL for one draw, in a pass of no
+    attachments, and back;
+  - **what the device must allow:** the EFB image has storage usage, and
+    `fragmentStoresAndAtomics` and pixel interlock are enabled where the
+    device has them.
+  - **No depth:** the route is taken only with the depth test off, because
+    the shader writes depth, so the hardware tests it after the store.
+- **`SOA_GPU_FEATURES`** (3.10), now implemented:
+  - `core` treats every optional feature as absent: `logicOp`, the
+    interlock, the creation feedback;
+  - `nologicop` drops `logicOp` alone, which is how the routing to the
+    interlock is tried on this GPU, which has both.
+  - **The start line now names** the interlock and the mode, and the
+    report counts each route.
+- **Measured** [V]:
+  - **`gpuspike.py logicop`** now covers 16 captures, the mask effect's 14
+    and V1's two that draw logic ops (`battle_4421`, `mask_3200`). Native,
+    blend, snapshot and the forced interlock give byte-identical frames on
+    all 16, and `--mutate or-and` makes every capture's paths differ.
+  - **`gpuspike.py oracle --set corpus,perfset,gpuset --features core`:**
+    the same verdicts as the default (65 of 67, 2 by design), and the 67
+    GPU images byte-identical to the base. Its logic draws went through
+    the snapshot (`3 from a snapshot`).
+  - **`gpuspike.py logictest` (new),** depth off throughout:
+
+    | Scene | CPU | native | snapshot | blend | interlock | `nologicop` | `core` |
+    |---|---|---|---|---|---|---|---|
+    | 0x55 ORed into 0xAA, one quad | 255 | 255 | 255 | **198** | 255 | 255 (snapshot) | 255 (snapshot) |
+    | two triangles XORed, the overlap | 0 | 0 | **240** | refused | 0 | 0 (interlock) | **240** (snapshot, named) |
+
+    - **The interlock's frame** is native's, hash for hash. The CPU's
+      differs at triangle edges, which is by design between the two
+      renderers.
+    - **What the forced snapshot shows:** its 240 is what a route that
+      reads the EFB from before the draw gives an overlapping draw. So the
+      check would fail on a wrong route.
+- **Unchanged:**
+  - the oracle's 67 images, the contrast 67/67 and `replay` 23/23;
+  - `title` 5/5 on the GPU and the self tests;
+  - the spike's checks: `queue`, `overlap`, `copyimage`, `present`.
+- **Tests:**
+  - `test_gxv_logicop.py` (new, 1): the two scenes through every route.
+  - `test_gpuspike.py`'s logic-op test now holds the 16 captures to every
+    path.
+- **What V10 does not do:** framebuffer fetch with rasterization-order
+  access, the spec's next choice after the interlock. This GPU has no such
+  extension to try it on, so a device with neither interlock nor
+  `logicOp` takes the snapshot, with its line.

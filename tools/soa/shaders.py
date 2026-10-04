@@ -31,6 +31,7 @@ SHADERS = [
     ("raster.frag", "raster_frag_alpha", ("GXV_MUTATE_ALPHA",)),
     ("raster.frag", "raster_frag_lod", ("GXV_MUTATE_LOD",)),
     ("raster.frag", "raster_frag_fog", ("GXV_MUTATE_FOG",)),
+    ("raster.frag", "raster_frag_interlock", ("GXV_LOGIC_INTERLOCK",)),
     ("tevdiff.comp", "tevdiff_comp", ()),
     ("tevdiff.comp", "tevdiff_comp_clamp", ("GXV_MUTATE_CLAMP",)),
     ("loddiff.comp", "loddiff_comp", ()),

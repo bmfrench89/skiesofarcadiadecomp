@@ -33,6 +33,7 @@
 #include "raster_frag_alpha.h"
 #include "raster_frag_lod.h"
 #include "raster_frag_fog.h"
+#include "raster_frag_interlock.h"
 #include "tevdiff_comp.h"
 #include "tevdiff_comp_clamp.h"
 #include "loddiff_comp.h"
@@ -231,8 +232,18 @@ static int g_mut_present; /* --mutate present (V8): present.frag one column over
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
-enum { LOGIC_NATIVE, LOGIC_BLEND, LOGIC_SNAPSHOT };
-static int g_logic_mode = -1, g_has_logicop;
+enum { LOGIC_NATIVE, LOGIC_BLEND, LOGIC_SNAPSHOT, LOGIC_INTERLOCK };
+/* g_logic_mode: a route forced for every logic draw (SOA_GPU_LOGICOP,
+ * gxv_set_logicop), or -1, each draw routed by logic_route (V10).
+ * LOGIC_INTERLOCK (V10): the op done in the shader on the EFB itself, read
+ * and written inside fragment-shader interlock, for a draw that may overlap
+ * itself, where the device has VK_EXT_fragment_shader_interlock. */
+static int g_logic_mode = -1, g_has_logicop, g_has_interlock;
+static unsigned long long g_logic_routes[4];
+static int g_core; /* SOA_GPU_FEATURES=core (3.10): every optional feature treated as absent */
+static VkShaderModule g_fs_il;   /* raster.frag built with GXV_LOGIC_INTERLOCK */
+static VkRenderPass g_pass_il;   /* the interlock route's pass: no attachments */
+static VkFramebuffer g_fb_il;
 /* The logic and copy mutations: every logic op drawn as a copy, the AND as
  * one, the ORs as ones, OR and AND swapped; copies to a texture skipped, or
  * written 32 bytes on. */
@@ -506,6 +517,37 @@ static void end_pass(void)
     g_inpass = 0;
 }
 
+/* V10's interlock route, one draw: the EFB out of its pass and into GENERAL,
+ * where the shader reads and writes it as a storage image, a pass of no
+ * attachments for the draw, and the EFB back after (end_interlock). */
+static int begin_interlock(void)
+{
+    VkRenderPassBeginInfo rb = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    if (!begin_cb()) return 0;
+    end_pass();
+    barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    rb.renderPass = g_pass_il;
+    rb.framebuffer = g_fb_il;
+    rb.renderArea.extent.width = EFB_W;
+    rb.renderArea.extent.height = EFB_H;
+    vkCmdBeginRenderPass(g_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_layout, 0, 1, &g_dset, 0, NULL);
+    vkCmdBindIndexBuffer(g_cb, g_quad_idx, 0, VK_INDEX_TYPE_UINT32);
+    g_bound = VK_NULL_HANDLE;
+    return 1;
+}
+
+static void end_interlock(void)
+{
+    vkCmdEndRenderPass(g_cb);
+    barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    g_bound = VK_NULL_HANDLE;
+}
+
 /* What the submission just done held for guest RAM (V7): each copy's bytes
  * into RAM and its image into the producer's copy image, the pool's copy of
  * it gone with the submission, and gxr told. --mutate late-readback (V6b)
@@ -640,6 +682,29 @@ static int draw_lop(const DrawCmd* D)
     return lop;
 }
 
+/* V10: how a logic draw is drawn, or -1 for a draw that is not one. Forced
+ * (SOA_GPU_LOGICOP); or native, where the device has logicOp; or, without it,
+ * a snapshot for one quad, which cannot overlap itself (every logic draw in
+ * this game, 3.5); else the interlock, where the device has it and the draw
+ * tests no depth (its pass has no depth attachment); else blend for OR and AND
+ * and a snapshot for the rest, said once, as neither is exact for a draw that
+ * overlaps itself. */
+static int logic_route(const DrawCmd* D, int lop)
+{
+    static int said;
+    if (lop < 0 || lop == 3) return -1;
+    if (g_logic_mode >= 0) return g_logic_mode;
+    if (g_has_logicop) return LOGIC_NATIVE;
+    if (D->prim == 0x80 && D->count == 4) return LOGIC_SNAPSHOT;
+    if (g_has_interlock && !D->px.z_en) return LOGIC_INTERLOCK;
+    if (!said++)
+        say("draw %llu: logic op %d on %u vertices (primitive %#x) may overlap itself, and this device has neither "
+            "logicOp nor %s: drawn %s, exact only where it does not overlap",
+            g_n_draws + 1, lop, D->count, D->prim, D->px.z_en ? "an interlock route for a depth-tested draw" : "interlock",
+            lop == 1 || lop == 7 ? "as a blend" : "from a snapshot");
+    return lop == 1 || lop == 7 ? LOGIC_BLEND : LOGIC_SNAPSHOT;
+}
+
 static int fragment_module(void)
 {
     VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -654,6 +719,11 @@ static int fragment_module(void)
     si.pCode = g_mut_frag == 1 ? raster_frag_alpha : g_mut_frag == 2 ? raster_frag_lod
              : g_mut_frag == 3 ? raster_frag_fog : raster_frag;
     VKCHECK(vkCreateShaderModule(g_dev, &si, NULL, &g_fs));
+    if (g_has_interlock && !g_fs_il) {
+        si.codeSize = sizeof raster_frag_interlock;
+        si.pCode = raster_frag_interlock;
+        VKCHECK(vkCreateShaderModule(g_dev, &si, NULL, &g_fs_il));
+    }
     return 1;
 }
 
@@ -690,7 +760,7 @@ static void shape_seen(const uint32_t* shape)
 
 /* The fixed-function state a pipeline is made for; pipe_state gives its key. */
 typedef struct {
-    int topo, z_en, z_upd, blend_en, subtract, lop;
+    int topo, z_en, z_upd, blend_en, subtract, lop, route;
     unsigned cull, zf, mask, sfac, dfac;
 } PipeState;
 
@@ -708,10 +778,12 @@ static uint32_t pipe_state(int topo, const DrawCmd* D, PipeState* S)
     S->subtract = D->px.subtract != 0;
     S->sfac = D->px.sfac & 7;
     S->dfac = D->px.dfac & 7;
+    S->route = S->blend_en ? -1 : logic_route(D, S->lop);
     /* The blend field: a blend's factors, or -- the blend being off -- a logic
-     * op's number above bit 0, which never collides with a blend's. */
+     * op's number above bit 0, which never collides with a blend's, and its
+     * route above that (V10). */
     blend = S->blend_en ? 1u | S->sfac << 1 | S->dfac << 4 | (S->subtract ? 1u : 0u) << 7
-          : S->lop >= 0 && S->lop != 3 ? (unsigned)S->lop << 1 | 0x20u : 0u;
+          : S->lop >= 0 && S->lop != 3 ? (unsigned)S->lop << 1 | 0x20u | (unsigned)(S->route & 3) << 6 : 0u;
     return 1u + ((((((((uint32_t)topo * 4 + S->cull) * 2 + (uint32_t)S->z_en) * 8 + S->zf) * 2 + (uint32_t)S->z_upd) * 4 +
                    S->mask) << 8) | blend);
 }
@@ -797,12 +869,12 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     }
     if (!S->blend_en && S->lop >= 0 && S->lop != 3) {
-        if (g_logic_mode == LOGIC_NATIVE) {
+        if (S->route == LOGIC_NATIVE) {
             /* All four channels: the CPU applies the op to RGB and stores the
              * source alpha, which nothing in this game reads (3.5). */
             cb.logicOpEnable = VK_TRUE;
             cb.logicOp = (VkLogicOp)S->lop;
-        } else if (g_logic_mode == LOGIC_BLEND) {
+        } else if (S->route == LOGIC_BLEND) {
             /* OR as src(1 - dst) + dst, AND as src dst; the alpha stored as it is. */
             ba.blendEnable = VK_TRUE;
             ba.colorBlendOp = VK_BLEND_OP_ADD;
@@ -816,6 +888,16 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     }
     cb.attachmentCount = 1;
     cb.pAttachments = &ba;
+    if (!S->blend_en && S->lop >= 0 && S->lop != 3 && S->route == LOGIC_INTERLOCK) {
+        /* V10: the interlock variant, in a pass of no attachments: the shader
+         * writes the EFB itself, and there is no depth to test. */
+        st[1].module = g_fs_il;
+        st[1].pSpecializationInfo = NULL;
+        cb.attachmentCount = 0;
+        cb.pAttachments = NULL;
+        ds.depthTestEnable = VK_FALSE;
+        ds.depthWriteEnable = VK_FALSE;
+    }
     dys.dynamicStateCount = 1;
     dys.pDynamicStates = dyn;
     pi.stageCount = 2;
@@ -829,7 +911,7 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     pi.pColorBlendState = &cb;
     pi.pDynamicState = &dys;
     pi.layout = g_layout;
-    pi.renderPass = g_pass;
+    pi.renderPass = cb.attachmentCount ? g_pass : g_pass_il;
     if (g_feedback) {
         fci.pPipelineCreationFeedback = &fb;
         pi.pNext = &fci;
@@ -1003,7 +1085,7 @@ static VkPipeline pipeline(int topo, const DrawCmd* D, const uint32_t* tev)
     int at;
     if (!fragment_module()) return VK_NULL_HANDLE; /* before any job: the thread uses the modules */
     if (g_specialize < 0) compiler_start();
-    if (g_specialize != SPEC_OFF) {
+    if (g_specialize != SPEC_OFF && S.route != LOGIC_INTERLOCK) {
         tev_shape(tev, shape);
         at = pipe_find(key, shape, &slot);
         if (at > 0) {
@@ -1057,7 +1139,7 @@ static VkPipeline pipeline(int topo, const DrawCmd* D, const uint32_t* tev)
 static const char* unsupported(const DrawCmd* D)
 {
     int lop = draw_lop(D);
-    if (lop >= 0 && lop != 3 && g_logic_mode == LOGIC_BLEND && lop != 1 && lop != 7)
+    if (logic_route(D, lop) == LOGIC_BLEND && lop != 1 && lop != 7)
         return "a logic op other than OR and AND, which the blend approximation cannot draw (3.5)";
     if (D->px.const_alpha >= 0) return "a constant alpha (3.4: the corpus has none)";
     return NULL;
@@ -1160,8 +1242,10 @@ static int draw_record(const DrawCmd* D, uint32_t* dst, uint32_t* tev)
     r[103] = D->px.fog_b_mag;
     r[104] = (uint32_t)D->px.fog_color[0] | (uint32_t)D->px.fog_color[1] << 8 | (uint32_t)D->px.fog_color[2] << 16;
     {
-        int lop = draw_lop(D);
-        if (lop >= 0 && lop != 3 && g_logic_mode == LOGIC_SNAPSHOT) r[105] = 1u | (uint32_t)lop << 1;
+        int lop = draw_lop(D), route = logic_route(D, lop);
+        uint32_t masks = (D->px.col_upd ? 1u : 0u) | (D->px.alpha_upd ? 2u : 0u);
+        if (route == LOGIC_SNAPSHOT) r[105] = 1u | (uint32_t)lop << 1;
+        if (route == LOGIC_INTERLOCK) r[105] = 1u | (uint32_t)lop << 1 | masks << 5;
     }
     for (m = 0; m < 8; m++) {
         const TexCfg* C = &D->tev.tex[m];
@@ -1327,6 +1411,7 @@ static int gxv_draw(const DrawCmd* D)
     VkRect2D sc;
     PushDraw pc;
     uint32_t tev[GXV_TEV_WORDS]; /* the draw's TEV words, for its pipeline */
+    int route;
     VkPipeline p;
 
     static int ztop_said;
@@ -1387,18 +1472,17 @@ static int gxv_draw(const DrawCmd* D)
             return 0;
         }
     }
-    {
-        int lop = draw_lop(D);
-        if (lop >= 0 && lop != 3) {
-            g_n_logic++;
-            /* The EFB as it is before this draw, where the shader reads the
-             * destination from. Exact while the draw's triangles do not
-             * overlap each other, which every logic draw here satisfies (one
-             * full-screen quad each, 3.5). */
-            if (g_logic_mode == LOGIC_SNAPSHOT && !efb_to_buffer(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) return 0;
-        }
+    route = logic_route(D, draw_lop(D));
+    if (route >= 0) {
+        g_n_logic++;
+        g_logic_routes[route]++;
+        /* The EFB as it is before this draw, where the shader reads the
+         * destination from. Exact while the draw's triangles do not overlap
+         * each other, which every logic draw here satisfies (one full-screen
+         * quad each, 3.5); the interlock route is for those that may. */
+        if (route == LOGIC_SNAPSHOT && !efb_to_buffer(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) return 0;
     }
-    if (!begin_pass()) return 0;
+    if (route == LOGIC_INTERLOCK ? !begin_interlock() : !begin_pass()) return 0;
     p = pipeline(topo, D, tev);
     if (!p) return 0;
     first = g_ring_used / (uint32_t)sizeof(Vertex);
@@ -1428,6 +1512,7 @@ static int gxv_draw(const DrawCmd* D)
     if (quads) vkCmdDrawIndexed(g_cb, n / 4 * 6, 1, 0, 0, 0);
     else vkCmdDraw(g_cb, n, 1, 0, 0);
     if (g_measure) vkCmdEndQuery(g_cb, g_occ, g_occ_used++);
+    if (route == LOGIC_INTERLOCK) end_interlock();
     return 1;
 }
 
@@ -2206,7 +2291,10 @@ int gxv_set_logicop(const char* mode)
         g_logic_mode = LOGIC_NATIVE;
     } else if (!strcmp(mode, "blend")) g_logic_mode = LOGIC_BLEND;
     else if (!strcmp(mode, "snapshot")) g_logic_mode = LOGIC_SNAPSHOT;
-    else return 0;
+    else if (!strcmp(mode, "interlock")) {
+        if (!g_has_interlock) { say("--logicop interlock: this device has no fragment-shader interlock"); return 0; }
+        g_logic_mode = LOGIC_INTERLOCK;
+    } else return 0;
     return 1;
 }
 const char* gxv_device_name(void) { return g_devname; }
@@ -2332,8 +2420,8 @@ void gxv_report(void)
     report_pipelines();
     report_frames();
     present_report();
-    say("logic ops: %llu draws, drawn %s", g_n_logic,
-        g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot");
+    say("logic ops: %llu draws: %llu native, %llu from a snapshot, %llu through the interlock, %llu as blends", g_n_logic,
+        g_logic_routes[LOGIC_NATIVE], g_logic_routes[LOGIC_SNAPSHOT], g_logic_routes[LOGIC_INTERLOCK], g_logic_routes[LOGIC_BLEND]);
     if (g_measure)
         say("largest draws (draw:samples) %llu:%llu %llu:%llu %llu:%llu %llu:%llu %llu:%llu%s", g_top_draw[0], g_top_samples[0],
             g_top_draw[1], g_top_samples[1], g_top_draw[2], g_top_samples[2], g_top_draw[3], g_top_samples[3], g_top_draw[4],
@@ -2397,14 +2485,22 @@ static int make_device(char* why, size_t cap)
     }
     memset(&feat, 0, sizeof feat); /* core features only (3.10), but for the one measuring needs */
     {
+        /* core: every optional feature as absent (3.10). nologicop: logicOp
+         * alone, the interlock kept -- V10's routing as a GPU with interlock
+         * and no logicOp would take it. */
+        const char* fs = getenv("SOA_GPU_FEATURES");
+        g_core = fs && !strcmp(fs, "core") ? 1 : fs && !strcmp(fs, "nologicop") ? 2 : 0;
+    }
+    {
         VkPhysicalDeviceFeatures have;
         PFN_vkGetPhysicalDeviceFeatures get = (PFN_vkGetPhysicalDeviceFeatures)vkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceFeatures");
         if (get) {
             get(g_phys, &have);
             feat.occlusionQueryPrecise = have.occlusionQueryPrecise;
             g_precise = have.occlusionQueryPrecise != 0;
-            feat.logicOp = have.logicOp; /* 3.5's first choice for logic ops */
-            g_has_logicop = have.logicOp != 0;
+            feat.logicOp = g_core ? VK_FALSE : have.logicOp; /* 3.5's first choice for logic ops */
+            g_has_logicop = feat.logicOp != 0;
+            feat.fragmentStoresAndAtomics = g_core == 1 ? VK_FALSE : have.fragmentStoresAndAtomics; /* V10's interlock route */
         }
     }
     qi.queueFamilyIndex = g_family;
@@ -2416,9 +2512,11 @@ static int make_device(char* why, size_t cap)
     {
         /* VK_EXT_pipeline_creation_feedback, where the device has it: only
          * for the report's count of pipelines the disk cache had (V7). */
-        static const char* names[2];
+        static const char* names[3];
+        static VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT ilf = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
         uint32_t n = 0, i, k = 0;
-        int has_swapchain = 0;
+        int has_swapchain = 0, has_il = 0;
         VkExtensionProperties* props;
         if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, NULL) == VK_SUCCESS && n &&
             (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
@@ -2426,10 +2524,30 @@ static int make_device(char* why, size_t cap)
                 for (i = 0; i < n; i++) {
                     if (!strcmp(props[i].extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME)) g_feedback = 1;
                     if (!strcmp(props[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) has_swapchain = 1;
+                    if (!strcmp(props[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME)) has_il = 1;
                 }
             free(props);
         }
+        if (g_core == 1) g_feedback = 0;
         if (g_feedback) names[k++] = VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
+        /* V10's interlock route, where the device has pixel interlock and
+         * stores from the fragment stage; not under SOA_GPU_FEATURES=core. */
+        if (has_il && feat.fragmentStoresAndAtomics) {
+            PFN_vkGetPhysicalDeviceFeatures2 feat2 =
+                (PFN_vkGetPhysicalDeviceFeatures2)vkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceFeatures2");
+            VkPhysicalDeviceFeatures2 f2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            f2.pNext = &ilf;
+            if (feat2) feat2(g_phys, &f2);
+            if (ilf.fragmentShaderPixelInterlock) {
+                ilf.pNext = NULL;
+                ilf.fragmentShaderSampleInterlock = VK_FALSE;
+                ilf.fragmentShaderShadingRateInterlock = VK_FALSE;
+                di.pNext = &ilf;
+                names[k++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME;
+                g_has_interlock = 1;
+            }
+        }
+        if (!g_has_interlock) feat.fragmentStoresAndAtomics = VK_FALSE;
         /* The window's swap chain (V8), where the instance has a surface. */
         if (g_inst_surface && has_swapchain) {
             names[k++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -2488,12 +2606,28 @@ static int make_pass(void)
     fi.height = EFB_H;
     fi.layers = 1;
     VKCHECK(vkCreateFramebuffer(g_dev, &fi, NULL, &g_fb));
+    if (g_has_interlock) {
+        /* V10's interlock route: a subpass of no attachments, 640 x 528. */
+        VkSubpassDescription none;
+        memset(&none, 0, sizeof none);
+        none.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        ri.attachmentCount = 0;
+        ri.pAttachments = NULL;
+        ri.pSubpasses = &none;
+        VKCHECK(vkCreateRenderPass(g_dev, &ri, NULL, &g_pass_il));
+        fi.renderPass = g_pass_il;
+        fi.attachmentCount = 0;
+        fi.pAttachments = NULL;
+        VKCHECK(vkCreateFramebuffer(g_dev, &fi, NULL, &g_fb_il));
+    }
     return 1;
 }
 
 static int make_layout(void)
 {
-    VkDescriptorSetLayoutBinding b[5];
+    VkDescriptorSetLayoutBinding b[6];
+    VkDescriptorPoolSize psi[2];
+    VkDescriptorImageInfo ii = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     VkPushConstantRange pr = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushDraw)};
     VkPipelineLayoutCreateInfo pi = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -2520,6 +2654,15 @@ static int make_layout(void)
         b[i].pImmutableSamplers = NULL;
     }
     li.bindingCount = 5;
+    if (g_has_interlock) {
+        /* 5: the EFB itself, for V10's interlock route. */
+        b[5].binding = 5;
+        b[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[5].descriptorCount = 1;
+        b[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        b[5].pImmutableSamplers = NULL;
+        li.bindingCount = 6;
+    }
     li.pBindings = b;
     VKCHECK(vkCreateDescriptorSetLayout(g_dev, &li, NULL, &g_dsl));
     pi.setLayoutCount = 1;
@@ -2528,13 +2671,26 @@ static int make_layout(void)
     pi.pPushConstantRanges = &pr;
     VKCHECK(vkCreatePipelineLayout(g_dev, &pi, NULL, &g_layout));
     dpi.maxSets = 1;
-    dpi.poolSizeCount = 1;
-    dpi.pPoolSizes = &ps;
+    psi[0] = ps;
+    psi[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    psi[1].descriptorCount = 1;
+    dpi.poolSizeCount = g_has_interlock ? 2 : 1;
+    dpi.pPoolSizes = psi;
     VKCHECK(vkCreateDescriptorPool(g_dev, &dpi, NULL, &g_dpool));
     ai.descriptorPool = g_dpool;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &g_dsl;
     VKCHECK(vkAllocateDescriptorSets(g_dev, &ai, &g_dset));
+    if (g_has_interlock) {
+        VkWriteDescriptorSet wi = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        ii.imageView = g_color_view;
+        wi.dstSet = g_dset;
+        wi.dstBinding = 5;
+        wi.descriptorCount = 1;
+        wi.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        wi.pImageInfo = &ii;
+        vkUpdateDescriptorSets(g_dev, 1, &wi, 0, NULL);
+    }
     for (i = 0; i < 5; i++) {
         bi[i].buffer = bufs[i];
         bi[i].offset = 0;
@@ -2662,7 +2818,8 @@ int gxv_init(char* why, size_t cap)
     r = vkCreateInstance(&ii, NULL, &g_inst);
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateInstance failed: VkResult %d (no Vulkan 1.1 driver?)", (int)r); return 0; }
     if (!load_instance(why, cap) || !pick_device(why, cap) || !make_device(why, cap)) return 0;
-    if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+    if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                                  (g_has_interlock ? VK_IMAGE_USAGE_STORAGE_BIT : 0),
                     VK_IMAGE_ASPECT_COLOR_BIT, &g_color, &g_color_view) ||
         !make_image(VK_FORMAT_D32_SFLOAT,
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -2689,16 +2846,24 @@ int gxv_init(char* why, size_t cap)
     }
     if (g_logic_mode < 0) {
         const char* forced = getenv("SOA_GPU_LOGICOP");
-        if (forced && *forced && !gxv_set_logicop(forced)) say("SOA_GPU_LOGICOP=%s is not native, blend or snapshot here; ignored", forced);
+        if (forced && *forced && !gxv_set_logicop(forced))
+            say("SOA_GPU_LOGICOP=%s is not native, blend, snapshot or interlock here; ignored", forced);
     }
-    if (g_logic_mode < 0) g_logic_mode = g_has_logicop ? LOGIC_NATIVE : LOGIC_SNAPSHOT;
     compiler_start();
     /* The start line (3.11), which a live run's log is judged by. */
-    say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s",
+    say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s; "
+        "interlock %s%s",
         VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
         VK_API_VERSION_PATCH(g_props.apiVersion), g_devname, g_props.driverVersion, g_has_logicop ? "yes" : "no", EFB_W,
-        EFB_H, g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot",
-        g_timestamps ? "on" : "unavailable");
+        EFB_H,
+        g_logic_mode == LOGIC_NATIVE ? "native"
+        : g_logic_mode == LOGIC_BLEND ? "as blends"
+        : g_logic_mode == LOGIC_SNAPSHOT ? "from a snapshot"
+        : g_logic_mode == LOGIC_INTERLOCK ? "through the interlock"
+        : g_has_logicop ? "native"
+                        : "routed by draw",
+        g_timestamps ? "on" : "unavailable", g_has_interlock ? "yes" : "no",
+        g_core == 1 ? "; SOA_GPU_FEATURES=core" : g_core == 2 ? "; SOA_GPU_FEATURES=nologicop" : "");
     return 1;
 }
 
@@ -2732,6 +2897,9 @@ void gxv_shutdown(void)
     vkDestroyCommandPool(g_dev, g_cpool, NULL);
     if (g_vs) vkDestroyShaderModule(g_dev, g_vs, NULL);
     if (g_fs) vkDestroyShaderModule(g_dev, g_fs, NULL);
+    if (g_fs_il) vkDestroyShaderModule(g_dev, g_fs_il, NULL);
+    if (g_fb_il) vkDestroyFramebuffer(g_dev, g_fb_il, NULL);
+    if (g_pass_il) vkDestroyRenderPass(g_dev, g_pass_il, NULL);
     vkDestroyDescriptorPool(g_dev, g_dpool, NULL);
     vkDestroyPipelineLayout(g_dev, g_layout, NULL);
     vkDestroyDescriptorSetLayout(g_dev, g_dsl, NULL);

@@ -367,9 +367,10 @@ def test_the_captures_pass_v0_on_the_gpu():
     assert "[gpuspike] oracle: 33 of 35 pass V0, 2 fail by design" in out
 
 
-def test_the_three_logic_op_paths_draw_the_same_frames():
-    """V4b: the mask effect's 14 captures through native logic ops, the
-    blend approximation and the EFB snapshot: byte-identical frames."""
+def test_every_logic_op_path_draws_the_same_frames():
+    """V4b and V10: the mask effect's 14 captures and V1's two that draw logic
+    ops, through native logic ops, the blend approximation, the EFB snapshot
+    and (where the device has it) the interlock: byte-identical frames."""
     if not ORACLE_DATA:
         reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
         print(f"skip: {reason}")
@@ -377,8 +378,8 @@ def test_the_three_logic_op_paths_draw_the_same_frames():
     proc = run_spike("logicop")
     out = proc.stdout
     assert proc.returncode == 0, out + proc.stderr
-    assert "[gpuspike] logicop over 14 captures: the three paths give byte-identical images" in out
-    assert out.count("logic draws 3;") == 14
+    assert "[gpuspike] logicop over 16 captures: every path gives byte-identical images" in out
+    assert out.count("logic draws 3;") == 16
 
 
 def test_specialised_pipelines_draw_what_the_interpreter_draws():

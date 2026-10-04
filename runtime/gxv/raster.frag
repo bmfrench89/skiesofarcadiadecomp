@@ -12,7 +12,10 @@
 //   99       texmap_of: the map each texcoord slot feeds, three bits a slot
 //   100      fog: type | proj << 3 | b_shift << 8
 //   101-104  fog: a, c (float bits), b_mag, colour (r | g << 8 | b << 16)
-//   105      a logic op drawn from the EFB's snapshot: 1 | lop << 1, or 0
+//   105      a logic op the shader draws: 1 | lop << 1 | mask << 5, or 0. Against
+//            the EFB's snapshot; or, built with GXV_LOGIC_INTERLOCK (V10), against
+//            the EFB itself, read and written in primitive order, the write
+//            masks (colour 1, alpha 2) applied here, there being no attachment
 //   106-107  unused
 //   108-     twelve words for each of the eight maps:
 //     0  the texture's record in the texture table, or ~0 for none
@@ -23,11 +26,18 @@
 // then its width, then its height, eleven each.
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#ifdef GXV_LOGIC_INTERLOCK
+#extension GL_ARB_fragment_shader_interlock : require
+layout(pixel_interlock_ordered) in;
+#endif
 
 layout(std430, set = 0, binding = 1) readonly buffer Draws { uint dw[]; };
 layout(std430, set = 0, binding = 2) readonly buffer Pool { uint pool[]; };
 layout(std430, set = 0, binding = 3) readonly buffer TexRecs { uint texrec[]; };
 layout(std430, set = 0, binding = 4) readonly buffer Snapshot { uint snap[]; }; // the EFB before this draw, 640x528
+#ifdef GXV_LOGIC_INTERLOCK
+layout(set = 0, binding = 5, rgba8) uniform coherent image2D efb_image; // the EFB itself (V10)
+#endif
 
 layout(push_constant) uniform Draw {
     float wd, ht, xorig, yorig, zrange, farz;
@@ -229,10 +239,27 @@ void main()
     uint zs = uint(clamp(i_depth, 0.0, 1.0) * 16777215.0);
     outc.rgb = fogged(outc.rgb, zs);
     uint logic = tev_word(DRAW_LOGIC);
+#ifdef GXV_LOGIC_INTERLOCK
+    // V10: a logic op on a draw that may overlap itself. The EFB pixel is read
+    // and written inside the interlock, so each fragment sees the ones before
+    // it in primitive order, as the CPU's rows do. The pass has no attachments
+    // (and no depth test: the route is taken only with it off).
+    ivec2 at = ivec2(gl_FragCoord.xy);
+    uint masks = (logic >> 5) & 3u;
+    beginInvocationInterlockARB();
+    uvec4 d = uvec4(imageLoad(efb_image, at) * 255.0 + 0.5);
+    uvec4 o = d;
+    if ((masks & 1u) != 0u) o.rgb = logic_op((logic >> 1) & 15u, uvec3(outc.rgb), d.rgb) & 255u;
+    if ((masks & 2u) != 0u) o.a = uint(outc.a);
+    imageStore(efb_image, at, vec4(o) / 255.0);
+    endInvocationInterlockARB();
+    o_color = vec4(o) / 255.0;
+#else
     if ((logic & 1u) != 0u) {
         uvec4 d = uvec4(unpack_rgba(snap[uint(gl_FragCoord.y) * 640u + uint(gl_FragCoord.x)]));
-        outc.rgb = ivec3(logic_op(logic >> 1, uvec3(outc.rgb), d.rgb) & 255u);
+        outc.rgb = ivec3(logic_op((logic >> 1) & 15u, uvec3(outc.rgb), d.rgb) & 255u);
     }
     o_color = vec4(outc) / 255.0;
+#endif
     gl_FragDepth = float(zs) / 16777216.0;
 }
