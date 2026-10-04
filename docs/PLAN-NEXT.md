@@ -678,7 +678,7 @@ than that spec suggested. D-10 offers moving M5 up: it needs only L2a, L2 and H1
 
 | G1's answer | Next |
 |---|---|
-| **A. Vulkan** | V5 (**done** 2026-10-03, FINDINGS "V5": `SOA_GPU=vulkan` in `soa.exe`), V6a, V6b, V7: about 4 to 6 weeks to a live GPU renderer at native resolution. Then V8 (present from the GPU), V9 (2×/3×, widescreen), V10 (logic ops without `logicOp`) and V12 (H17 on the GPU), about 4 to 6 more, as D-26 allows. L10-L12 per G2, G3 and Android |
+| **A. Vulkan** | V5 (**done** 2026-10-03, FINDINGS "V5": `SOA_GPU=vulkan` in `soa.exe`), V6a (**done** 2026-10-03, FINDINGS "V6a": the GPU on its own thread, 1.1 cores against 4.8), V6b, V7: about 4 to 6 weeks to a live GPU renderer at native resolution. Then V8 (present from the GPU), V9 (2×/3×, widescreen), V10 (logic ops without `logicOp`) and V12 (H17 on the GPU), about 4 to 6 more, as D-26 allows. L10-L12 per G2, G3 and Android |
 | **B. Direct3D 11** | The same on D3D11 (porting the spike first, week-plus, if it was built on Vulkan); no Android |
 | **C. Not now** | H15d resumes at its next step, then H16 (A3). The oracle and the seam stay |
 | **D. Not ever** | As C, and PLAN.md says so |

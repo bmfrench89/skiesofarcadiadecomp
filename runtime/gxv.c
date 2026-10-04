@@ -152,7 +152,7 @@ static GxvUploadHook g_hook;
  * rounding and intensity variants. */
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
-static int g_mut_noinvariant, g_mut_lodmin;
+static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace;
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -679,6 +679,17 @@ static uint32_t upload_texture(const TexCfg* C)
     int l;
     if (!C->level[0] || C->nlevels < 1 || C->w <= 0 || C->h <= 0 || id >= 1024) return NO_TEXTURE;
     if (g_resident[id].epoch == g_epoch && g_resident[id].gen == C->tex_gen) return g_resident[id].rec;
+    if (g_mut_pool_inplace && g_resident[id].epoch == g_epoch) {
+        /* --mutate pool-in-place (test_gxv_queue.py): the slot's new contents
+         * over its old allocation, which draws already recorded in this
+         * submission still sample -- what 3.2's append-only rule forbids. */
+        const uint32_t* old = (const uint32_t*)g_texrec_map + g_resident[id].rec;
+        if (old[11] == (uint32_t)C->lw[0] && old[22] == (uint32_t)C->lh[0]) {
+            memcpy(g_pool_map + (size_t)old[0] * 4, C->level[0], (size_t)C->lw[0] * C->lh[0] * 4);
+            g_resident[id].gen = C->tex_gen;
+            return g_resident[id].rec;
+        }
+    }
     if (g_pool_used + n > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) return NO_TEXTURE - 1; /* full */
     rec = (uint32_t*)g_texrec_map + g_texrec_used;
     memset(rec, 0, TEXREC_WORDS * 4);
@@ -706,9 +717,13 @@ static uint32_t float_bits(float f)
 
 /* The draw's record, as raster.frag's header lays it out; each map a stage
  * samples uploaded first. 0 when the pool cannot take them, and nothing was
- * written: the caller submits, which frees the pool, and asks again. */
-static int draw_record(const DrawCmd* D, uint32_t* r)
+ * written: the caller submits, which frees the pool, and asks again. Built
+ * here and copied out whole: dst is mapped device memory, uncached, where
+ * every |= below would be a read across the bus (V6a's profile put
+ * gxv_pack_tev, writing there, first among the consumer's own work). */
+static int draw_record(const DrawCmd* D, uint32_t* dst)
 {
+    uint32_t r[GXV_DRAW_WORDS];
     uint32_t recs[8];
     unsigned st, m, i, needed = 0, maps = 0;
     for (m = 0; m < 8; m++) recs[m] = NO_TEXTURE;
@@ -719,7 +734,7 @@ static int draw_record(const DrawCmd* D, uint32_t* r)
     if (g_pool_used + needed > g_pool_cap || (g_texrec_used + 8 * TEXREC_WORDS) * 4 > TEXREC_BYTES) return 0;
     for (m = 0; m < 8; m++)
         if ((maps >> m) & 1) recs[m] = upload_texture(&D->tev.tex[m]);
-    memset(r, 0, GXV_DRAW_WORDS * 4);
+    memset(r, 0, sizeof r);
     gxv_pack_tev(&D->tev, r);
     r[98] = (D->ntex & 255) | (D->nchan & 3) << 8 | (D->miptex & 255) << 16;
     for (i = 0; i < 8; i++) r[99] |= (uint32_t)(D->texmap_of[i] & 7) << (3 * i);
@@ -749,6 +764,7 @@ static int draw_record(const DrawCmd* D, uint32_t* r)
         w[10] = (uint32_t)C->w;
         w[11] = (uint32_t)C->h;
     }
+    memcpy(dst, r, sizeof r);
     return 1;
 }
 
@@ -1539,11 +1555,32 @@ static int timed_draw(const DrawCmd* D)
     return r;
 }
 
+/* A frame's cost, each screen copy ending one (V6a's budget, 3.11): the
+ * consumer's own time and the GPU's since the last, kept for the report's
+ * p50, p95 and p99. The first FRAME_STATS frames are kept; the count goes on. */
+#define FRAME_STATS 65536
+static float g_frame_consumer_ms[FRAME_STATS], g_frame_gpu_ms[FRAME_STATS];
+static unsigned g_frames_seen;
+static uint64_t g_frame_consumer0;
+static double g_frame_gpu0;
+
+static void frame_mark(void)
+{
+    if (g_frames_seen < FRAME_STATS) {
+        g_frame_consumer_ms[g_frames_seen] = (float)((double)(g_consumer_ns - g_frame_consumer0) / 1e6);
+        g_frame_gpu_ms[g_frames_seen] = (float)(g_gpu_ms - g_frame_gpu0);
+    }
+    g_frames_seen++;
+    g_frame_consumer0 = g_consumer_ns;
+    g_frame_gpu0 = g_gpu_ms;
+}
+
 static int timed_copy(const DrawCmd* D)
 {
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_copy(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
+    if (r && (D->cp_v & 0x4000u)) frame_mark();
     return r;
 }
 
@@ -1569,7 +1606,10 @@ static void timed_finish(void)
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
 }
 
-static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report};
+/* Its own thread (V6a): the renderer runs every command on it, and the
+ * producer calls nothing here but reset_efb, after a drain, when that thread
+ * is idle. */
+static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
 
@@ -1599,6 +1639,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "nofilter")) g_mut_nofilter = 1;
     else if (!strcmp(name, "noinvariant")) g_mut_noinvariant = 1;
     else if (!strcmp(name, "lodmin")) g_mut_lodmin = 1;
+    else if (!strcmp(name, "pool-in-place")) g_mut_pool_inplace = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -1611,6 +1652,41 @@ int gxv_set_mutation(const char* name)
     return 1;
 }
 
+static int cmp_float(const void* a, const void* b)
+{
+    float x = *(const float*)a, y = *(const float*)b;
+    return x < y ? -1 : x > y;
+}
+
+/* The per-frame line: p50, p95 and p99 of the consumer's and the GPU's
+ * milliseconds a frame, over sorted copies (the report may run while the
+ * consumer is still writing the lists, from the watchdog). */
+static void report_frames(void)
+{
+    unsigned n = g_frames_seen < FRAME_STATS ? g_frames_seen : FRAME_STATS, k;
+    float *c, *g;
+    if (!n) return;
+    c = (float*)malloc(sizeof(float) * n);
+    g = (float*)malloc(sizeof(float) * n);
+    if (!c || !g) {
+        free(c);
+        free(g);
+        return;
+    }
+    memcpy(c, g_frame_consumer_ms, sizeof(float) * n);
+    memcpy(g, g_frame_gpu_ms, sizeof(float) * n);
+    qsort(c, n, sizeof(float), cmp_float);
+    qsort(g, n, sizeof(float), cmp_float);
+#define PCT(a, p) (a)[(size_t)((double)(n - 1) * (p))]
+    k = g_frames_seen;
+    say("a frame, over %u frame%s: consumer ms p50 %.2f p95 %.2f p99 %.2f; GPU ms p50 %.2f p95 %.2f p99 %.2f%s", k,
+        k == 1 ? "" : "s", PCT(c, 0.50), PCT(c, 0.95), PCT(c, 0.99), PCT(g, 0.50), PCT(g, 0.95), PCT(g, 0.99),
+        g_timestamps ? "" : " (no timestamps: GPU ms read 0)");
+#undef PCT
+    free(c);
+    free(g);
+}
+
 void gxv_report(void)
 {
     say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu copies to a "
@@ -1618,6 +1694,7 @@ void gxv_report(void)
         g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused, g_n_pipes, g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
+    report_frames();
     say("logic ops: %llu draws, drawn %s", g_n_logic,
         g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot");
     if (g_measure)

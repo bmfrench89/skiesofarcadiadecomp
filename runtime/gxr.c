@@ -1405,6 +1405,7 @@ static void emit_triangle(const DrawCmd* D, const Vertex* a, const Vertex* b, co
 static void run_copy(const DrawCmd* D);
 static void run_copy_clear(const DrawCmd* D);
 static void run_here(DrawCmd* D);
+static void run_backend(const DrawCmd* D);
 static void filter_sample(const DrawCmd* D, int sx, int sy, int ytop, int ybot, uint8_t* o);
 static void workers_start(void);
 void gxr_flush(void);
@@ -1623,7 +1624,7 @@ static void wait_ran(long long c, int why)
     unsigned spins = 0;
     int i, prev;
     uint64_t t0, t1;
-    if (g_backend && g_backend->finish) g_backend->finish();
+    if (g_backend && g_backend->finish && !g_workers) g_backend->finish(); /* the producer's backend only: V6a's thread finishes its own */
     if (c >= g_published) { /* own count */
         WARN_ONCE("[gxr] a wait for command %lld, which is not published yet (%lld are): nothing to wait for, so no wait\n", c, (long long)g_published); /* own count */
         return;
@@ -1785,9 +1786,20 @@ static void worker(void* arg)
             WARN_ONCE("[gxr] queue slot %lld holds command %lld, not command %lld, which is the one this worker is on: the producer got %d commands ahead of it without draining and built over it, so the command is skipped and this frame is wrong\n",
                       mine & QMASK, D->seq, mine, QUEUE_CAP);
         else {
+#ifdef GXR_MUTATE_COUNT_EARLY
+            /* test_gxv_queue.py's mutation, built only into a variant of the GPU
+             * spike: the command counted before it runs, so the producer may
+             * recycle its vertices while a stalled consumer has yet to read them. */
+            plat_xchg64(&g_ran[id], mine + 1);
+#endif
             if ((D->fence > 0 || D->fence_near > 0) && g_workers > 1) fence_wait(W, id, D->fence, D->fence_near);
             if (g_stall_n) stall(id, D->kind);
-            draw_command(D);
+            /* With a backend of its own thread this is that thread, the
+             * ring's one consumer (V6a, 3.7): the command is done, its
+             * vertices and textures uploaded and a copy's bytes in guest
+             * RAM, before the count below says so. */
+            if (g_backend) run_backend(D);
+            else draw_command(D);
         }
         /* The two readings bracketing the command are inside what they
          * measure, so a command this worker owns no rows of is charged their
@@ -2008,9 +2020,10 @@ static void workers_start(void)
         else fprintf(stderr, "[gxr] SOA_GXR_BACKEND=%s is not a backend this build has; the worker pool draws\n", be);
     }
     /* Zero workers: every command runs on the producer as it is built --
-     * through the backend when there is one, and implied by one. The path
-     * V2 made reachable and SOA_GXR_INLINE=1 proves. */
-    inline_only = g_backend || (inl && atoi(inl));
+     * through a backend without a thread of its own, when there is one. The
+     * path V2 made reachable and SOA_GXR_INLINE=1 proves, and which
+     * SOA_GXR_INLINE=1 forces on a backend that has one too (V5's way). */
+    inline_only = (g_backend && !g_backend->own_thread) || (inl && atoi(inl));
     /* Before the threads, so every one of them starts its busy/idle clock at
      * the same reading the report measures the pool's span from. */
     if (g_gxr_tsc < 0) gxr_timing_init();
@@ -2018,6 +2031,7 @@ static void workers_start(void)
     g_queue = (DrawCmd*)malloc(sizeof(DrawCmd) * QUEUE_CAP);
     g_arena = (uint8_t*)malloc(ARENA_BYTES);
     if (inline_only) n = 0;
+    else if (g_backend) n = 1; /* the backend's own thread: the ring's one consumer (V6a, 3.7) */
     else if (n <= 0) {
         /* Three quarters of the logical CPUs (FINDINGS "H15c"). On the
          * 16-thread machine this was measured on, 12 workers ran the Dangral
@@ -2039,7 +2053,9 @@ static void workers_start(void)
     g_workers = n;
     g_nthreads = n > 0 ? n : 1;
     fprintf(stderr, "[gxr] rasterizing on %d worker thread%s\n", n, n == 1 ? "" : "s");
-    if (g_backend) fprintf(stderr, "[gxr] the %s backend draws every command, on the producer\n", g_backend->name);
+    if (g_backend)
+        fprintf(stderr, "[gxr] the %s backend draws every command, %s\n", g_backend->name,
+                n ? "on a thread of its own" : "on the producer");
 }
 
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
@@ -2064,7 +2080,7 @@ static void drain(int why)
     int i, prev;
     uint64_t t0;
     if (!g_queue) return;
-    if (g_backend && g_backend->finish) g_backend->finish();
+    if (g_backend && g_backend->finish && !g_workers) g_backend->finish(); /* the producer's backend only, as in wait_ran */
     /* Read once: this thread is the only writer, so the target cannot move. */
     target = g_published; /* own count */
     /* The wait is the producer's idle, and it used to be charged to whichever
@@ -2716,24 +2732,33 @@ static void run_copy_clear(const DrawCmd* D)
     efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
 }
 
+/* A command through the backend, on the producer (run_here) or on the
+ * backend's own thread (worker, V6a): a failure stops the run, and the
+ * counts the backend cannot keep are kept here -- what it was handed, for
+ * gxr_report, and the screen copies it presented, which it cannot reach.
+ * Only one thread ever runs it, so g_be_sent has one writer. */
+static unsigned long long g_be_sent[3];
+static void run_backend(const DrawCmd* D)
+{
+    int ok = D->kind == 0 ? g_backend->draw(D) : D->kind == 1 ? g_backend->copy(D) : g_backend->clear(D);
+    if (!ok) {
+        fprintf(stderr, "[gxr] the %s backend failed command %lld (kind %d); stopping the run\n", g_backend->name, D->seq, D->kind);
+        exit(8);
+    }
+    g_be_sent[D->kind < 3 ? D->kind : 2]++;
+    if (D->kind == 1 && (D->cp_v & 0x4000u)) plat_inc32(&g_frames_presented);
+}
+
 /* A command run on the producer, as it is built: through the backend when
- * one is set (V2), or by the CPU path, which then needs a time bucket of its
- * own or would be booked as vertex setup. Run here and finished here, so
- * the numbering still advances and the arena is free again. The backend
- * cannot reach g_frames_presented, so the hook counts its screen copies. */
-static unsigned long long g_be_sent[3]; /* what a backend was handed, by kind, for gxr_report */
+ * one is set that has no thread of its own (V2), or by the CPU path, which
+ * then needs a time bucket of its own or would be booked as vertex setup.
+ * Run here and finished here, so the numbering still advances and the arena
+ * is free again. */
 static void run_here(DrawCmd* D)
 {
     t_tid = 1;
     if (g_backend) {
-        int ok = 0;
-        TIMED(T_RASTER, ok = D->kind == 0 ? g_backend->draw(D) : D->kind == 1 ? g_backend->copy(D) : g_backend->clear(D));
-        if (!ok) {
-            fprintf(stderr, "[gxr] the %s backend failed command %lld (kind %d); stopping the run\n", g_backend->name, D->seq, D->kind);
-            exit(8);
-        }
-        g_be_sent[D->kind < 3 ? D->kind : 2]++;
-        if (D->kind == 1 && (D->cp_v & 0x4000u)) plat_inc32(&g_frames_presented);
+        TIMED(T_RASTER, run_backend(D));
     } else {
         TIMED(T_RASTER, draw_command(D));
     }

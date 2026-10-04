@@ -822,6 +822,96 @@ static int tevdiff(CpuState* s, unsigned n, uint32_t seed)
     return bad || low;
 }
 
+/* ---- V6a's queue frame ------------------------------------------------------
+ *
+ * test_gxv_queue.py's stream (specs/gpu-backend.md V6a), one frame through the
+ * real parser and producer and whichever backend: 64 quads 32 pixels square,
+ * each drawn after the one 8x4 I8 texture's bytes were rewritten and the game's
+ * invalidate sent -- one cache slot, a new generation each, all 64 recorded in
+ * one GPU submission -- then 164 draws of 1,000 one-pixel quads, 656,000
+ * vertices, which fill the producer's 48 MB vertex arena twice (a draw is
+ * kept under the parser's 64 KB pipe buffer, as the game's are). Each
+ * textured quad's centre must be its own texture's value. The recipe is
+ * tools/tests/test_gxr_backend.py's. */
+#define QUEUE_TEX 0x00100000u
+
+static void queue_recipe(CpuState* s, int textured)
+{
+    static const float viewport[6] = {320.0f, -240.0f, 16777215.0f, 662.0f, 582.0f, 16777215.0f};
+    static const float ortho[6] = {0.003125f, -0.0f, 0.004167f, -0.0f, -0.01f, -1.0f};
+    static const float view[12] = {1, 0, 0, -320, 0, -1, 0, 240, 0, 0, 1, -100};
+    static const float ident[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    static const uint32_t one = 1, matidx = 0x3CF3CF00u, chan = 0x441u, zero = 0, texgen = 5u << 7;
+    bp_w(s, 0x59, 0x02ACABu); bp_w(s, 0x20, 0x156156u); bp_w(s, 0x21, 0x3D5335u);
+    xf_f(s, 0x101A, 6, viewport);
+    xf_f(s, 0x1020, 6, ortho); xf_w(s, 0x1026, 1, &one);
+    xf_f(s, 0x0000, 12, view);
+    cp_w(s, 0x30, matidx); xf_w(s, 0x1018, 1, &matidx);
+    xf_w(s, 0x1009, 1, &one); xf_w(s, 0x100E, 1, &chan); xf_w(s, 0x1010, 1, &chan);
+    xf_w(s, 0x1008, 1, &one);
+    bp_w(s, 0xC1, 0x08BFF0u); bp_w(s, 0x00, textured ? 0x11 : 0x10);
+    bp_w(s, 0xF6, 0x018064u); bp_w(s, 0xF7, 0x01806Eu); bp_w(s, 0xF8, 0x018060u); bp_w(s, 0xF9, 0x01806Cu);
+    bp_w(s, 0xFA, 0x018065u); bp_w(s, 0xFB, 0x01806Du); bp_w(s, 0xFC, 0x01806Au); bp_w(s, 0xFD, 0x01806Eu);
+    bp_w(s, 0x40, 0x17); bp_w(s, 0x41, 0x18); bp_w(s, 0xF3, 0x3F0000u); bp_w(s, 0x43, 0x40);
+    cp_w(s, 0x50, 0x2200); cp_w(s, 0x70, 0x41377009u); cp_w(s, 0x80, 0xC8241209u); cp_w(s, 0x90, 0x04824120u);
+    if (textured) {
+        cp_w(s, 0x60, 1);
+        xf_w(s, 0x103F, 1, &one); xf_w(s, 0x1040, 1, &texgen); xf_f(s, 4 * 60, 12, ident);
+        bp_w(s, 0x28, 0x40); bp_w(s, 0xC0, 0x08F8AFu);
+        bp_w(s, 0x30, 7); bp_w(s, 0x31, 3); bp_w(s, 0x80, 0); bp_w(s, 0x84, 0);
+        bp_w(s, 0x88, 0x100C07u); bp_w(s, 0x94, QUEUE_TEX >> 5);
+    } else {
+        cp_w(s, 0x60, 0); xf_w(s, 0x103F, 1, &zero);
+        bp_w(s, 0x28, 0); bp_w(s, 0xC0, 0x08AFFFu);
+    }
+}
+
+static int scene_queue(CpuState* s)
+{
+    char path[512];
+    const uint8_t* screen;
+    int w = 0, h = 0, k, d, q, right = 0;
+    gxr_reset_efb();
+    queue_recipe(s, 1);
+    for (k = 0; k < 64; k++) {
+        static const float corner[4][2] = {{0, 0}, {32, 0}, {32, 32}, {0, 32}};
+        float x0 = (float)(k % 8 * 32), y0 = (float)(k / 8 * 32);
+        int i;
+        memset(s->mem + QUEUE_TEX, k * 4 + 3, 32);
+        bp_w(s, 0x66, 0); /* the game's texture invalidate: hashed again at its next use */
+        gp8(s, 0x80); gp16(s, 4);
+        for (i = 0; i < 4; i++) {
+            gpf(s, x0 + corner[i][0]); gpf(s, y0 + corner[i][1]); gpf(s, 50); gp32(s, 0xFFFFFFFFu);
+            gpf(s, corner[i][0] / 32.0f); gpf(s, corner[i][1] / 32.0f);
+        }
+    }
+    queue_recipe(s, 0);
+    for (d = 0; d < 164; d++) {
+        gp8(s, 0x80); gp16(s, 1000 * 4);
+        for (q = 0; q < 1000; q++) {
+            unsigned n = (unsigned)(d * 1000 + q);
+            float x = 256.0f + (float)(n % 384), y = (float)(n / 384);
+            uint32_t c = (n * 2654435761u) | 0xFFu;
+            vertex(s, x, y, 50, c); vertex(s, x + 1, y, 50, c); vertex(s, x + 1, y + 1, 50, c); vertex(s, x, y + 1, 50, c);
+        }
+    }
+    present(s);
+    screen = gxr_screen(&w, &h);
+    for (k = 0; k < 64; k++) {
+        const uint8_t* p = screen + ((size_t)(k / 8 * 32 + 16) * EFB_W + (size_t)(k % 8 * 32 + 16)) * 4;
+        int v = k * 4 + 3;
+        if (p[0] == v && p[1] == v && p[2] == v) right++;
+    }
+    snprintf(path, sizeof path, "%s/queue.png", g_out);
+    if (!png_write_rgba(path, screen, w, h, EFB_W * 4)) {
+        fprintf(stderr, "[gpuspike] cannot write %s\n", path);
+        return 1;
+    }
+    printf("queue textured quads right %d of 64; frame hash %016llx\n", right, (unsigned long long)gxr_screen_hash());
+    gxr_report();
+    return right != 64;
+}
+
 /* loddiff (V5): the level of detail, which V0 cannot hold to a level -- LOD
  * +1 passes it on three distinct frames (FINDINGS "V4"). Two kinds of case,
  * n of each:
@@ -1171,7 +1261,7 @@ int main(int argc, char** argv)
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
-    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0;
+    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0;
     uint32_t seed = 1;
     int failures, i;
 
@@ -1182,6 +1272,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--tevdiff")) tev_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--copydiff")) copy_rects = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--loddiff")) lod_cases = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--queue")) queue = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
@@ -1282,6 +1373,14 @@ int main(int argc, char** argv)
             gxv_report();
             gxv_shutdown();
         }
+        free(s.mem);
+        return failures ? 1 : 0;
+    }
+    if (queue) {
+        /* V6a's queue frame alone; gxr_report prints the backend's report. */
+        render_env();
+        failures = scene_queue(&s);
+        if (g_gpu) gxv_shutdown();
         free(s.mem);
         return failures ? 1 : 0;
     }

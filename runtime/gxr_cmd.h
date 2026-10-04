@@ -88,6 +88,10 @@ typedef struct GxrBackend {
     void (*reset_efb)(const uint32_t* bp); /* gxr_reset_efb's fill, on the backend's EFB; may be NULL */
     void (*finish)(void); /* every command so far has run and its RAM writes have landed; may be NULL */
     void (*report)(void); /* its own lines, printed after gxr_report's; may be NULL */
+    /* 1: the backend is the ring's one consumer, on a thread of its own (V6a,
+     * 3.7); finish is then never called, since a command it has counted is
+     * done. 0: every command runs on the producer, as built (V2). */
+    int own_thread;
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */

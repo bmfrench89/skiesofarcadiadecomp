@@ -12,6 +12,7 @@
     python tools/gpuspike.py chain battle_4421 ...        # copies carried into the next frames
     python tools/gpuspike.py contrast [--mutate M]        # the spike and soa.exe --replay, the same pixels
     python tools/gpuspike.py live title [--range A-B]     # a scenario on CPU and GPU, seeded, V0 each frame
+    python tools/gpuspike.py queue [--mutate M]           # V6a's queue frame: the thread, inline, stalled
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -78,6 +79,16 @@ SOA_GPU=vulkan, from one scratch copy of it, and holds the two pictures to the
 same pixels, with both runs' start lines naming the same device and driver.
 --mutate hands one of gxv's mutations to soa.exe alone (SOA_GPU_MUTATE), and
 the pictures must then differ, failing it.
+
+`queue` (V6a) draws one synthetic frame through the producer and the GPU on
+its own thread: 64 quads each sampling the same texture slot at a new
+generation, then 656,000 vertices that fill the producer's vertex arena
+twice. On the GPU, three times on the thread, once inline (V5's path) and
+once with the consumer stalled, it must give the CPU's frame hash, every
+quad its own texture, and two arena drains on the thread. --mutate
+pool-in-place (a slot's allocation rewritten under recorded draws) or
+count-early (a variant build counting a command before it runs, stalled)
+must fail it.
 
 `live` (after V5) runs a scenario through scenario.py three times -- on the
 CPU twice and with SOA_GPU=vulkan once -- and holds each GPU snapshot to the
@@ -158,14 +169,20 @@ SCENES: dict[str, tuple] = {
 }
 
 
-def build_dir(prof: toolchain.Profile) -> Path:
+# Builds of the spike with a mutation compiled in, which no runtime knob can
+# reach: the name, and the defines every source gets (V6a's queue test).
+VARIANTS = {"count-early": ("GXR_MUTATE_COUNT_EARLY",)}
+
+
+def build_dir(prof: toolchain.Profile, variant: str = "") -> Path:
     """Each compiler's objects and binary apart: msvc and clang-cl both write
-    .obj and .exe, and one must never be taken for the other's."""
-    return OUT / prof.name
+    .obj and .exe, and one must never be taken for the other's; a variant's
+    apart again."""
+    return OUT / (f"{prof.name}-{variant}" if variant else prof.name)
 
 
-def exe_path(prof: toolchain.Profile) -> Path:
-    return build_dir(prof) / f"gpuspike{prof.exeext}"
+def exe_path(prof: toolchain.Profile, variant: str = "") -> Path:
+    return build_dir(prof, variant) / f"gpuspike{prof.exeext}"
 
 
 def inputs() -> list[Path]:
@@ -183,31 +200,32 @@ def inputs() -> list[Path]:
     ]
 
 
-def up_to_date(prof: toolchain.Profile) -> bool:
-    exe = exe_path(prof)
+def up_to_date(prof: toolchain.Profile, variant: str = "") -> bool:
+    exe = exe_path(prof, variant)
     return exe.exists() and exe.stat().st_mtime > max(p.stat().st_mtime for p in inputs())
 
 
-def build(prof: toolchain.Profile) -> tuple[bool, str]:
+def build(prof: toolchain.Profile, variant: str = "") -> tuple[bool, str]:
     """(built, why not). A missing compiler or vendor/ is a reason, not a
     crash. Nothing is rebuilt when the binary is newer than every input, and
     then no compiler is looked for: finding MSVC's environment takes 2 s."""
     bad = fetch_gpu.verify(VENDOR)
     if bad:
         return False, f"vendor/ is not as recorded ({bad[0]}); run python tools/fetch_gpu.py"
-    if up_to_date(prof):
+    if up_to_date(prof, variant):
         return True, ""
     if toolchain.compiler_path(prof) is None:
         return False, f"no {prof.name} compiler (tools/soa/toolchain.py compiler_path)"
-    out = build_dir(prof)
+    out = build_dir(prof, variant)
     out.mkdir(parents=True, exist_ok=True)
-    exe_path(prof).unlink(missing_ok=True)
+    exe_path(prof, variant).unlink(missing_ok=True)
     built, why = shaders.build(out)
     if not built:
         return False, why
     inc = [f"/I{RUNTIME}", f"/I{out}", f"/I{shaders.HEADERS}"]
+    defines = ["/DSOA_GXV=1", *(f"/D{d}" for d in VARIANTS.get(variant, ()))]
     proc = toolchain.cc(
-        [*prof.cflags, "/c", "/DSOA_GXV=1", *inc, f"/Fo{out}/", *map(str, SOURCES)], ROOT, prof
+        [*prof.cflags, "/c", *defines, *inc, f"/Fo{out}/", *map(str, SOURCES)], ROOT, prof
     )
     text = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
@@ -220,7 +238,7 @@ def build(prof: toolchain.Profile) -> tuple[bool, str]:
     objs = [str(out / (s.stem + prof.objext)) for s in SOURCES]
     libs = ["-ldl"] if prof.style == "gnu" else []
     proc = toolchain.cc(
-        [*prof.cflags, *objs, f"/Fe:{exe_path(prof)}", *prof.linker, *libs], ROOT, prof
+        [*prof.cflags, *objs, f"/Fe:{exe_path(prof, variant)}", *prof.linker, *libs], ROOT, prof
     )
     if proc.returncode != 0:
         print((proc.stdout or "") + (proc.stderr or ""))
@@ -379,9 +397,9 @@ def judge(name: str, how: tuple, cpu: Path, gpu: Path) -> tuple[bool, str]:
     )
 
 
-def ready(prof: toolchain.Profile) -> int | None:
+def ready(prof: toolchain.Profile, variant: str = "") -> int | None:
     """None when the binary is built; otherwise the exit code, the reason printed."""
-    built, why = build(prof)
+    built, why = build(prof, variant)
     if built:
         return None
     skip = "compiler" in why or "vendor" in why
@@ -1302,6 +1320,78 @@ def live(
     return 0 if ok else 1
 
 
+RE_QUEUE = re.compile(r"^queue textured quads right (\d+) of 64; frame hash ([0-9a-f]{16})$", re.M)
+RE_ARENA = re.compile(r"^\[gxr\] waits:.*?arena [0-9.]+s \((\d+)\)", re.M)
+
+
+def queue_run(prof: toolchain.Profile, backend: str, env: dict, variant: str = "", mutate=None):
+    """One queue frame: (textured quads right, frame hash, arena drains), or
+    None with the output printed when the driver said nothing of the kind."""
+    out = build_dir(prof) / "queue" / backend
+    out.mkdir(parents=True, exist_ok=True)
+    args = [str(exe_path(prof, variant)), "--backend", backend, "--out", str(out), "--queue", "1"]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(
+        args, cwd=ROOT, env={**clean_env(), **env}, capture_output=True, text=True, check=False
+    )
+    text = proc.stdout + proc.stderr
+    m = RE_QUEUE.search(text)
+    if skipped(proc):
+        return "skip"
+    if not m:
+        print(text[-1500:])
+        return None
+    arena = RE_ARENA.search(text)
+    return int(m.group(1)), m.group(2), int(arena.group(1)) if arena else 0
+
+
+def queue(prof: toolchain.Profile, mutate: str | None) -> int:
+    """V6a's queue frame on the CPU, then on the GPU: on its thread three
+    times, inline (SOA_GXR_INLINE=1, V5's path) and stalled (SOA_GXR_STALL,
+    2 ms before every draw on the consumer). Every GPU run must give the CPU's
+    hash and all 64 quads; the runs on the thread, two arena drains each.
+    count-early runs the variant build, stalled; pool-in-place is gxv's."""
+    variant = mutate if mutate in VARIANTS else ""
+    for v in {"", variant}:
+        code = ready(prof, v)
+        if code is not None:
+            return code
+    cpu = queue_run(prof, "cpu", {})
+    if cpu in (None, "skip"):
+        return 1
+    print(f"cpu: {cpu[0]} of 64 quads right, hash {cpu[1]}, {cpu[2]} arena drains")
+    runs = [("thread", {}), ("thread", {}), ("thread", {}), ("inline", {"SOA_GXR_INLINE": "1"})]
+    runs.append(("stalled", {"SOA_GXR_STALL": "1:0:2000"}))
+    if mutate:
+        runs = [("stalled", {"SOA_GXR_STALL": "1:0:2000"})]
+    problems = []
+    for name, env in runs:
+        got = queue_run(prof, "gpu", env, variant, None if variant else mutate)
+        if got == "skip":
+            return SKIP
+        if got is None:
+            problems.append(f"gpu {name}: no result")
+            continue
+        right, frame, drains = got
+        print(f"gpu {name}: {right} of 64 quads right, hash {frame}, {drains} arena drains")
+        if right != 64 or frame != cpu[1]:
+            problems.append(f"gpu {name}: {right} of 64, hash {frame} where the CPU's is {cpu[1]}")
+        if name != "inline" and drains < 2:
+            problems.append(
+                f"gpu {name}: {drains} arena drains, not the two the frame is built for"
+            )
+    if cpu[0] != 64 or cpu[2] < 2:
+        problems.append(
+            f"the CPU's frame is not the one intended: {cpu[0]} of 64, {cpu[2]} arena drains"
+        )
+    for p in problems:
+        print(f"PROBLEM {p}")
+    ok = not problems
+    print(f"[gpuspike] queue {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
     """V4b: the mask effect's captures through the three ways of drawing a
     logic op, poisoned; byte-identical images (a same-replay contrast). With
@@ -1522,6 +1612,7 @@ def main(argv: list[str] | None = None) -> int:
             "chain",
             "contrast",
             "live",
+            "queue",
         ),
     )
     ap.add_argument(
@@ -1564,6 +1655,8 @@ def main(argv: list[str] | None = None) -> int:
         return ramdiff(prof, args.set.split(","), args.mutate)
     if args.command == "chain":
         return chain(prof, args.frames)
+    if args.command == "queue":
+        return queue(prof, args.mutate)
     if args.command == "live":
         if len(args.frames) != 1:
             ap.error("live takes one scenario, e.g. title")

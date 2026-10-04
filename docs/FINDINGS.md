@@ -5766,3 +5766,87 @@ moves that to a thread.
 - **Tests:** one, GPU-free. Identical snapshots pass, a frame painted over
   fails, only the reproduced frames are judged, and a missing frame or an
   empty folder is a problem.
+
+**V6a: the GPU on a thread of its own.** 2026-10-03. With `SOA_GPU=vulkan`
+the backend is now the render queue's one consumer, on its own thread (3.7):
+`[gxr] the vulkan backend draws every command, on a thread of its own`. The
+producer, which is the game's thread, publishes each command and goes on.
+
+- **How it is built.**
+  - **The flag:** `GxrBackend` gains `own_thread`, which gxv sets.
+  - **One worker:** `workers_start` starts a single worker for such a
+    backend, and its loop calls the backend where a CPU worker calls
+    `draw_command`. That is `run_backend`, shared with the inline path; it
+    counts what the backend was sent and the frames it presented.
+  - **The queue's machinery is unchanged:** `g_ran[1]`, `drain`,
+    `wait_ran`, the H11 sleep and `SOA_GXR_STALL` all keep their meaning.
+  - **`finish` is the producer's only** for an inline backend. gxv's copies
+    finish before the consumer counts them, which is 3.7's rule.
+  - **`reset_efb`** follows a drain, so the consumer is idle when the
+    producer calls it.
+  - **V5's path stays:** `SOA_GXR_INLINE=1` keeps the backend on the
+    producer. The passthrough and test backends leave the flag 0 and stay
+    inline.
+- **Nothing drawn changed** [V].
+  - **The spike's checks:** every one passes on the thread, with the
+    oracle's 67 GPU images byte-identical to V5's.
+  - **The contrast:** spike against `soa.exe`, 67 of 67 the same pixels.
+  - **The contract:** `replay` 23/23 at 1, 2, 3 and 8 threads, and the self
+    test.
+  - **One effect checked rather than assumed:** with a worker present, the
+    producer now gives copies to a texture CPU copy images, which inline V5
+    never did, and gxv fills them. The unchanged images cover it.
+- **The live run.** `title --check --env SOA_GPU=vulkan` passes 5 of 5 in
+  70 s. Submissions fell from 4,156 to 2,153, the producer no longer
+  submitting at every drain.
+- **The budget, `partl`** (new: H1's Part L run, a copy of
+  `card-partL.raw` by `--env SOA_CARD=`). The `[gxv]` report now gives each
+  frame's consumer and GPU milliseconds, p50, p95 and p99, each screen copy
+  ending a frame.
+  - **The first runs:** the consumer's p99 was 7.8 ms against its 5 ms
+    limit.
+  - **The profile** (`SOA_HOSTPROF`): the consumer thread idle 78% of the
+    time and waiting for the GPU 10%. Of its own work, `gxv_pack_tev` came
+    first, 3.6% of samples.
+  - **The cause:** `draw_record` built each record in mapped, uncached device
+    memory, where every `|=` is a read across the bus. Built locally and
+    copied out once, it gives the same bytes: the oracle's images are
+    unchanged.
+  - **Since the fix**, six runs of 3,000 frames:
+
+    | | p99, each run (ms) | The limit | Met |
+    |---|---|---|---|
+    | consumer | 3.69, 3.76, 4.36, 3.51, 3.31, 3.46 | 5 | every run |
+    | GPU | 6.93, 6.82, 9.79, 7.02, 6.74, 6.72 | 8 | five of six |
+
+    - **The one GPU run over** had a lower median (2.25 ms against 2.7 to
+      2.8), which looks like the GPU's own clocks. The median p99 is 6.9 ms.
+- **Against the CPU renderer**, measured interleaved, not a gate. Part L,
+  3,000 frames, every frame drawn, two runs each:
+
+  | Renderer | Frames a second | Process CPU | Cores |
+  |---|---|---|---|
+  | CPU | 28.9 | 487-507 s | 4.7-4.9 |
+  | GPU | 28.9 | 114-117 s | 1.1 |
+
+  - **Every run loaded `a126a`.** Both renderers hold the game's 30 fps
+    cap; the GPU takes 4.3 times less CPU, the figure that matters on a
+    handheld's battery and a Deck's four cores.
+- **`gpuspike.py queue` and `test_gxv_queue.py`.**
+  - **The frame:** the spike driver's `--queue 1` draws one synthetic frame
+    through the real parser and producer. It has 64 quads, each drawn after
+    the one texture's bytes were rewritten and invalidated: one cache slot,
+    a new generation each, all in one GPU submission. Then 656,000
+    vertices, in draws kept under the parser's 64 KB pipe buffer, fill the
+    producer's 48 MB arena twice.
+  - **The result** [V]: on the GPU, three times on the thread, once inline
+    and once stalled 2 ms before every draw, the frame is the CPU's to the
+    hash (`dd8b42488c9a0d3c`), all 64 quads right and the arena drained
+    twice.
+  - **pool-in-place** (gxv rewriting a slot's allocation under recorded
+    draws) leaves 1 quad of 64 right.
+  - **count-early** is a variant build, `GXR_MUTATE_COUNT_EARLY`: the
+    consumer counts a command before running it. Stalled, it crashes. The
+    producer drains, frees the textures and ends the frame while the
+    consumer still needs them, which is the hazard 3.7's rule exists for.
+  - **Both fail the test**; the three tests skip nothing here.

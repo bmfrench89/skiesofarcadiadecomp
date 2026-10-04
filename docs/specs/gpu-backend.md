@@ -1471,6 +1471,13 @@ switch), `tools/gpuspike/loddiff.comp` and `tools/gpuspike.py` (`loddiff`, first
 
 ### V6a. The consumer thread: draws
 
+*Landed 2026-10-03 (FINDINGS "V6a"): `GxrBackend.own_thread`, one worker that runs the backend
+(`run_backend`), `finish` the producer's only for an inline backend; nothing drawn changed. The
+budget on `partl`: consumer p99 3.3-4.4 ms in six runs, GPU p99 6.7-7.0 ms in five and 9.8 ms in
+one, after `draw_record` stopped reading mapped memory. `test_gxv_queue.py` is `gpuspike.py queue`;
+its count-early mutation is a variant build (`GXR_MUTATE_COUNT_EARLY`) and fails by a crash. The
+CPU renderer takes 4.8 cores on Part L, the GPU 1.1, both at 28.9 fps.*
+
 *Several days to week-plus. `--link`. Prerequisites: V5. Files: `runtime/gxr.c` (starting the
 consumer instead of the pool, `g_workers = 1`, `finish` retired), `runtime/gxv.c`,
 `config/scenarios/partl.scn` (new: H1's Part L run, PLAN-60FPS-MODS.md:157, card by `--env

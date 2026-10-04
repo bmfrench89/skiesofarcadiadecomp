@@ -1,0 +1,28 @@
+# H1's Part L run (PLAN-60FPS-MODS H1): a save in Part L Continued from the
+# title into its field, 126a, with every frame drawn. The card is the run's
+# to name, a copy of build/savetest/card-partL.raw by --env SOA_CARD=..., since
+# a card is game data that lives on one machine (CLAUDE.md, build/cards/).
+name: partl
+summary: Continue a Part L save from the title into its field (126a), every frame drawn, headless.
+frames: 3000
+pad: 1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2240:a,2440:a,2640:a
+env: SOA_RENDER=1
+env: SOA_TRACE=1
+
+shows: the field the port spends most of its time in, drawn every frame: H1's
+shows:   cost of a drawn frame, and with --env SOA_GPU=vulkan, V6a's budget
+shows:   (specs/gpu-backend.md V6a): the [gxv] report's consumer and GPU
+shows:   milliseconds a frame, p50, p95 and p99.
+shows: the Continue from the title: the card read, /field/a299a.mld (the
+shows:   title's backdrop) and then /field/a126a.mld, which SOA_TRACE=1 names.
+
+evidence: build/c5-cap-field.log: the same preamble and card, 5100 frames,
+evidence:   LoadStart of /field/a126a.mld after /field/a299a.mld.
+evidence: V6a's runs, FINDINGS "V6a": 3000 frames at 28.9 a second on either
+evidence:   renderer, each loading a126a; on the GPU, consumer p99 3.7 ms and
+evidence:   GPU p99 6.9 ms a frame, and 1.1 CPU cores against the CPU
+evidence:   renderer's 4.8.
+
+note: Without SOA_CARD the run reads build/cards/slotA.raw, which holds no
+note:   Part L save, and the Continue loads nothing. Give it a copy, never the
+note:   original: a run may write the card.
