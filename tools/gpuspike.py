@@ -13,6 +13,7 @@
     python tools/gpuspike.py contrast [--mutate M]        # the spike and soa.exe --replay, the same pixels
     python tools/gpuspike.py live title [--range A-B]     # a scenario on CPU and GPU, seeded, V0 each frame
     python tools/gpuspike.py queue [--mutate M]           # V6a's queue frame: the thread, inline, stalled
+    python tools/gpuspike.py overlap [--mutate M]         # V6b: the copy hazards with the GPU as consumer
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -89,6 +90,14 @@ quad its own texture, and two arena drains on the thread. --mutate
 pool-in-place (a slot's allocation rewritten under recorded draws) or
 count-early (a variant build counting a command before it runs, stalled)
 must fail it.
+
+`overlap` (V6b) runs tools/citest/queue_check.py's overlap stream -- textures,
+palettes and indexed vertex colours read from copy destinations, a copy
+written twice, tokens, GXDrawDone, a hook's poke -- with the GPU as the
+queue's consumer, unstalled, stalled before its draws, copies or clears, and
+with SOA_GXR_TOKENWAIT=1. Every final hash the one-worker CPU run prints
+must come out the same, but the EFB's, which is on the GPU. --mutate
+late-readback (a copy's bytes landing after it is counted) must fail it.
 
 `live` (after V5) runs a scenario through scenario.py three times -- on the
 CPU twice and with SOA_GPU=vulkan once -- and holds each GPU snapshot to the
@@ -1392,6 +1401,114 @@ def queue(prof: toolchain.Profile, mutate: str | None) -> int:
     return 0 if ok else 1
 
 
+# The GPU runs of overlap: (SOA_GXR_STALL, other environment). The consumer
+# is worker 1, so the stalls hold it before every draw, copy or clear.
+GPU_OVERLAP_RUNS = [
+    ("", ""),
+    ("1:0:300", ""),
+    ("1:1:20000", ""),
+    ("1:2:20000", ""),
+    ("", "SOA_GXR_TOKENWAIT=1"),
+    ("1:1:20000", "SOA_GXR_TOKENWAIT=1"),
+]
+
+
+# The copies of overlap's stream that no textured draw touches: these the
+# GPU must make byte for byte as the CPU does.
+UNTEXTURED_FINALS = ("first copies", "second copies", "third copies")
+
+
+def overlap(prof: toolchain.Profile, mutate: str | None) -> int:
+    """V6b: the overlap stream with the GPU as the consumer, held to the
+    GPU's own synchronous run (SOA_GXR_INLINE=1, V5's path, where no command
+    can overlap another) on every final hash. Not to the CPU's: the stream's
+    textured quads sample at half size, putting pixel centres on texel
+    boundaries, where a coordinate's last bit picks the texel -- 3.4's
+    sampling difference, by design (FINDINGS "V6b"). The CPU's one-worker run
+    anchors the three copies no textured draw touches. The GPU build is the
+    same driver with OVERLAP_GPU, gxv.c and plat.c, and the spike's SPIR-V."""
+    sys.path.insert(0, str(ROOT / "tools" / "citest"))
+    import queue_check
+
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "overlap"
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        cpu_exe = queue_check.build(
+            "overlap-cpu", queue_check.OVERLAP_DRIVER, queue_check.OVERLAP_SOURCES, out, prof
+        )
+        gpu_exe = queue_check.build(
+            "overlap-gpu",
+            queue_check.OVERLAP_DRIVER,
+            [*queue_check.OVERLAP_SOURCES, "gxv.c", "plat.c"],
+            out,
+            prof,
+            ("/DSOA_GXV=1", "/DOVERLAP_GPU", f"/I{build_dir(prof)}", f"/I{shaders.HEADERS}"),
+        )
+    except queue_check.BuildError as e:
+        print(f"FAIL: {e}")
+        return 1
+    code, text = queue_check.run(cpu_exe, queue_check.overlap_env(("1", "", "1", "")), out)
+    cpu = queue_check.overlap_finals(text)
+    if code or None in cpu.values():
+        print(f"FAIL: the one-worker CPU run: exit {code}\n{text[-2000:]}")
+        return 1
+    code, text = queue_check.run(gpu_exe, {"SOA_THREADS": "1", "SOA_GXR_INLINE": "1"}, out)
+    if code == SKIP and "skip: " in text:
+        print(next(ln for ln in text.splitlines() if ln.startswith("skip: ")))
+        return SKIP
+    oracle = queue_check.overlap_finals(text)
+    if code or None in oracle.values() or "on the producer" not in text:
+        print(f"FAIL: the GPU's synchronous run: exit {code}\n{text[-2000:]}")
+        return 1
+    judged = list(queue_check.OVERLAP_FINAL)
+    problems = [
+        f"inline: {k} differs from the CPU's" for k in UNTEXTURED_FINALS if oracle[k] != cpu[k]
+    ]
+    print(
+        f"{'FAIL' if problems else 'ok  '} gpu SOA_GXR_INLINE=1, the oracle: the untextured copies the CPU's"
+    )
+    for stall, other in GPU_OVERLAP_RUNS:
+        env = queue_check.overlap_env(("1", stall, "", other))
+        if mutate:
+            env["SOA_GPU_MUTATE"] = mutate
+        code, text = queue_check.run(gpu_exe, env, out)
+        if code == SKIP and "skip: " in text:
+            print(next(ln for ln in text.splitlines() if ln.startswith("skip: ")))
+            return SKIP
+        label = (
+            "gpu" + (f" SOA_GXR_STALL={stall}" if stall else "") + (f" {other}" if other else "")
+        )
+        finals = queue_check.overlap_finals(text)
+        why = (
+            f"exit {code}"
+            if code
+            else "it did not run on the consumer thread"
+            if "on a thread of its own" not in text
+            else "the stall was not in force"
+            if stall and "SOA_GXR_STALL: 1 stall in force" not in text
+            else f"missing {[k for k in judged if finals[k] is None]}"
+            if any(finals[k] is None for k in judged)
+            else ""
+        )
+        if not why:
+            differ = [k for k in judged if finals[k] != oracle[k]]
+            if differ:
+                why = f"{', '.join(differ)} differ from the GPU's synchronous run"
+        if why:
+            problems.append(f"{label}: {why}")
+        print(f"{'FAIL' if why else 'ok  '} {label}")
+    for p in problems:
+        print(f"PROBLEM {p}")
+    ok = not problems
+    print(
+        f"[gpuspike] overlap {'passes' if ok else 'FAILS'}: {len(GPU_OVERLAP_RUNS)} GPU runs, {len(judged)} hashes each"
+    )
+    return 0 if ok else 1
+
+
 def logicop(prof: toolchain.Profile, mutate: str | None) -> int:
     """V4b: the mask effect's captures through the three ways of drawing a
     logic op, poisoned; byte-identical images (a same-replay contrast). With
@@ -1613,6 +1730,7 @@ def main(argv: list[str] | None = None) -> int:
             "contrast",
             "live",
             "queue",
+            "overlap",
         ),
     )
     ap.add_argument(
@@ -1655,6 +1773,8 @@ def main(argv: list[str] | None = None) -> int:
         return ramdiff(prof, args.set.split(","), args.mutate)
     if args.command == "chain":
         return chain(prof, args.frames)
+    if args.command == "overlap":
+        return overlap(prof, args.mutate)
     if args.command == "queue":
         return queue(prof, args.mutate)
     if args.command == "live":

@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1213 passed, 2 skipped in 311.65s
+1215 passed, 2 skipped in 341.46s
 ```
 
-1215 tests in 67 files, none of which reads the disc. The two FMA probes of
+1217 tests in 67 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -56,7 +56,7 @@ its own and run it, some of the C as well:
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
 | `test_settings.py` | 27 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them; and M5b's root: relative paths in soa.ini under the port root, its defaults only with a file, the root found beside `runtime` from `gen` and `gen\clang`, and the console handed to a log only when it is the run's own; `coop` recorded only as party slots mods/coop takes; and README's list of soa.ini keys holding every key settings.c reads |
 | `test_emit.py` | 22 | the emitter; the last cases compile the emitted C with MSVC and run it |
-| `test_gxr_overlap.py` | 21 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red |
+| `test_gxr_overlap.py` | 23 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red; and (GPU spec V6b) the same stream with the GPU as the consumer, unstalled, stalled and token-waited, leaves every hash its synchronous run leaves, the untextured copies the CPU's, and late-readback fails it (MSVC, `vendor/`, a Vulkan device) |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
 | `test_crossval_capstone.py` | 19 | our decoder against capstone's PowerPC backend — **needs `capstone`, which CI does not install** |
 | `test_profile.py` | 19 | `tools/profile.py` against the report the port prints, and the wording of those lines as an interface to `runtime/` |
@@ -122,10 +122,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1213 passed, 2 skipped` |
-| no capstone | `1194 passed, 3 skipped` |
-| no MSVC | `818 passed, 397 skipped` |
-| neither | `799 passed, 398 skipped` |
+| everything (MSVC + capstone) | `1215 passed, 2 skipped` |
+| no capstone | `1196 passed, 3 skipped` |
+| no MSVC | `820 passed, 397 skipped` |
+| neither | `801 passed, 398 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1170,6 +1170,7 @@ python tools/gpuspike.py loddiff     # lod.glsl against the sampler and span_lod
 python tools/gpuspike.py contrast --set corpus,perfset,gpuset   # the spike and soa.exe --replay on the GPU, the same pixels; 5 min
 python tools/gpuspike.py live title --range 1290-1400   # a running game on CPU (twice) and GPU, seeded, V0 per frame; 4 min
 python tools/gpuspike.py queue       # V6a's queue frame: the CPU's hash on the thread, inline and stalled; 10 s
+python tools/gpuspike.py overlap     # V6b: the copy hazards with the GPU as consumer, held to its synchronous run; 15 s
 python tools/gpuspike.py oracle      # corpus and benchmark set, CPU against GPU, V0's verdict; 40 s
 python tools/gpuspike.py oracle --set corpus,perfset,gpuset --mutations   # all 67 and eight mutations; 16 min
 python tools/gpuspike.py logicop     # the mask effect's 14 captures, logic ops three ways; 22 s
@@ -1375,7 +1376,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 397 of the 1215 skip without a C compiler: 395 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 397 of the 1217 skip without a C compiler: 395 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

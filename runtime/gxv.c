@@ -152,7 +152,17 @@ static GxvUploadHook g_hook;
  * rounding and intensity variants. */
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
-static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace;
+static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace, g_mut_late;
+/* --mutate late-readback (V6b): a copy's bytes put in guest RAM only when the
+ * next command comes, after the consumer has counted the copy -- what 3.7's
+ * "copies count only once their bytes are in guest RAM" forbids. */
+static uint8_t *g_late_ram, *g_late_bytes;
+static size_t g_late_n;
+static void late_land(void)
+{
+    if (g_late_ram) memcpy(g_late_ram, g_late_bytes, g_late_n);
+    g_late_ram = NULL;
+}
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -1351,7 +1361,17 @@ static int copy_texture(const DrawCmd* D)
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
     if (!submit_wait()) return 0;
-    memcpy(ram, g_dest_map, extent);
+    if (g_mut_late) {
+        uint8_t* keep = (uint8_t*)realloc(g_late_bytes, extent);
+        late_land();
+        if (!keep) return 0;
+        g_late_bytes = keep;
+        memcpy(g_late_bytes, g_dest_map, extent);
+        g_late_ram = ram;
+        g_late_n = extent;
+    } else {
+        memcpy(ram, g_dest_map, extent);
+    }
     /* For ramdiff: which bytes, and the EFB as of which draw. A frame makes
      * two or three; a live run makes one or two a frame, which the report
      * counts instead of listing. */
@@ -1549,6 +1569,7 @@ static void gxv_finish(void)
 
 static int timed_draw(const DrawCmd* D)
 {
+    late_land();
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_draw(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
@@ -1577,6 +1598,7 @@ static void frame_mark(void)
 
 static int timed_copy(const DrawCmd* D)
 {
+    late_land();
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_copy(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
@@ -1586,6 +1608,7 @@ static int timed_copy(const DrawCmd* D)
 
 static int timed_clear(const DrawCmd* D)
 {
+    late_land();
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_clear(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
@@ -1601,6 +1624,7 @@ static void timed_reset_efb(const uint32_t* bp)
 
 static void timed_finish(void)
 {
+    late_land();
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     gxv_finish();
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
@@ -1640,6 +1664,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "noinvariant")) g_mut_noinvariant = 1;
     else if (!strcmp(name, "lodmin")) g_mut_lodmin = 1;
     else if (!strcmp(name, "pool-in-place")) g_mut_pool_inplace = 1;
+    else if (!strcmp(name, "late-readback")) g_mut_late = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;

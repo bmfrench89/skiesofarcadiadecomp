@@ -198,3 +198,44 @@ def test_the_stalls_were_in_force(runs):
     for key, res in runs.items():
         if key[1]:
             assert "SOA_GXR_STALL: 1 stall in force" in res["text"], key
+
+
+# ---- the same stream with the GPU as the consumer (GPU spec V6b) ----------
+
+
+def run_gpu_overlap(*extra):
+    proc = subprocess.run(
+        [sys.executable, "tools/gpuspike.py", "overlap", *extra],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 3:
+        reason = next(
+            (ln[6:] for ln in proc.stdout.splitlines() if ln.startswith("skip: ")), "skipped"
+        )
+        pytest.skip(reason)
+    return proc
+
+
+def test_the_gpu_consumer_leaves_what_its_synchronous_run_leaves():
+    """Each hazard of the stream -- a texture, a palette and indexed vertex
+    colours read from copy destinations, a copy written twice, tokens,
+    GXDrawDone -- with the GPU on its own thread, unstalled, stalled before
+    draws, copies or clears, and with SOA_GXR_TOKENWAIT=1: every final hash
+    is the GPU's synchronous run's, and the copies no textured draw touches
+    are the CPU's. Needs MSVC, vendor/ and a Vulkan device."""
+    proc = run_gpu_overlap()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok   gpu SOA_GXR_INLINE=1, the oracle: the untextured copies the CPU's" in proc.stdout
+    assert sum(ln.startswith("ok   gpu") for ln in proc.stdout.splitlines()) == 7
+    assert "overlap passes: 6 GPU runs, 7 hashes each" in proc.stdout
+
+
+def test_a_copy_counted_before_its_bytes_land_fails_it():
+    """--mutate late-readback: gxv puts a copy's bytes in guest RAM only at the
+    next command, after the consumer has counted the copy."""
+    proc = run_gpu_overlap("--mutate", "late-readback")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "differ from the GPU's synchronous run" in proc.stdout

@@ -45,6 +45,9 @@ OVERLAP_SOURCES = ["gx.c", "gxr.c", "png.c"]  # gxr_tev.c comes in through the d
 OVERLAP_DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr_tev.c" /* the texture cache's statics, to hash its decodes */
+#ifdef OVERLAP_GPU
+#include "gxv.h"
+#endif
 
 uint32_t mmio_read32(CpuState* s, uint32_t ea) { (void)s; (void)ea; return 0; }
 void hle_report(void) {}
@@ -327,6 +330,18 @@ int main(int argc, char** argv)
     plat_setenv("SOA_RENDER", "1");
     plat_setenv("SOA_SNAP", NULL);
     if (!gxr_enabled()) return 3;
+#ifdef OVERLAP_GPU
+    {
+        /* GPU spec V6b (tools/gpuspike.py overlap): the same stream with the
+         * GPU backend as the queue's one consumer; a mutation of gxv's from
+         * SOA_GPU_MUTATE. Never built by this file. */
+        char why[256];
+        const char* m = getenv("SOA_GPU_MUTATE");
+        if (m && *m && !gxv_set_mutation(m)) { printf("no mutation %s\n", m); return 2; }
+        if (!gxv_init(why, sizeof why)) { printf("skip: %s\n", why); return 3; }
+        gxr_set_backend(gxv_backend());
+    }
+#endif
     for (cap = 0; cap < 2; cap++) {
         setup(&s); /* first: the reset clears to the clear colour it sets */
         gxr_reset_efb();
@@ -357,6 +372,18 @@ int main(int argc, char** argv)
         h = decoded(h, Q_BASE + (uint32_t)f * SLOT, 6, W, H);
     }
     printf("[overlap] decodes %016llx\n", (unsigned long long)h);
+    if (getenv("OVERLAP_DUMP")) {
+        /* the copy destinations, A_BASE to Q_BASE's last frame, then the
+         * screen: for telling two renderers' differences apart by size */
+        FILE* d = fopen(getenv("OVERLAP_DUMP"), "wb");
+        int w = 0, hh = 0;
+        const uint8_t* scr = gxr_screen(&w, &hh);
+        if (d) {
+            fwrite(s.mem + A_BASE, 1, Q_BASE + FRAMES * SLOT - A_BASE, d);
+            if (scr) fwrite(scr, 1, (size_t)EFB_W * 4 * hh, d);
+            fclose(d);
+        }
+    }
     gxr_report();
     fflush(stdout);
     return 0;

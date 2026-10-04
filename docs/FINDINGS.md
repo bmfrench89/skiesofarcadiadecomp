@@ -5850,3 +5850,47 @@ producer, which is the game's thread, publishes each command and goes on.
     producer drains, frees the textures and ends the frame while the
     consumer still needs them, which is the hazard 3.7's rule exists for.
   - **Both fail the test**; the three tests skip nothing here.
+
+**V6b: the copy hazards with the GPU as the consumer.** 2026-10-03.
+
+- **`gpuspike.py overlap`** runs `tools/citest/queue_check.py`'s overlap
+  stream with the GPU backend as the queue's consumer. The stream has
+  textures, a palette and indexed vertex colours read from copy
+  destinations, a copy written twice, tokens, GXDrawDone and a hook's poke.
+  - **The build:** the same driver, built with `OVERLAP_GPU`, `gxv.c` and
+    `plat.c`. CI's builds of it never define that.
+  - **The runs:** unstalled; the consumer stalled before its draws (300
+    µs), copies or clears (20 ms); and `SOA_GXR_TOKENWAIT=1`, with and
+    without a stall.
+- **The oracle is the GPU's own synchronous run, not the CPU's.**
+  - **The spec named the CPU:** V6b's Done holds the GPU runs to the
+    one-worker CPU run.
+  - **What the first run showed** [V]: three of the seven final hashes
+    differ from the CPU's, the drawdone reads, the screen and the texture
+    decodes. They differ identically on the GPU's thread, inline (V5's
+    path) and under every stall.
+  - **The size:** dumping the copy destinations, 16 to 365 bytes a copy
+    differ, at isolated pixels, by up to 227. The pixels sit where
+    textured quads drawn at half their texture's size put pixel centres on
+    texel boundaries. There a coordinate's last bit picks the texel: 3.4's
+    sampling difference, by design.
+  - **So the oracle is** `SOA_GXR_INLINE=1`, where no command can overlap
+    another. The three copies no textured draw touches are held to the CPU's
+    byte for byte, and are equal.
+- **Results** [V]:
+  - **Pass:** all six GPU runs give all seven hashes of the synchronous
+    run.
+  - **The mutation:** `--mutate late-readback` makes gxv put a copy's bytes
+    in guest RAM only at the next command, after the consumer has counted
+    it. The drawdone reads, the screen and the decodes then differ.
+  - **The tests:** `test_gxr_overlap.py` gains both.
+- **Live, on the GPU's thread:**
+  `title --check` and `battle --check` with `--env SOA_GPU=vulkan` each
+  hold 5 of 5 [V]. The battle drew 272,415 draws, 12,000 screen copies and
+  9,113 copies to a texture, every one as the renderer sent it, at 29.6
+  frames a second (its snapshot frames: consumer p99 1.8 ms, GPU p99
+  0.9 ms). As in V5, the check holds the GPU's counts to what the
+  renderer sent, not to the `[gx]` report's, which V6b's Done still
+  names.
+- **The owner's look**, fifteen minutes windowed from a part-select save, is
+  this slice's last Done line, and waits for the owner.

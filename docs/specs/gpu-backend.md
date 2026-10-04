@@ -1501,6 +1501,12 @@ SOA_CARD=`), `tools/tests/test_gxv_queue.py` (new), FINDINGS.*
 
 ### V6b. The consumer thread: copies, hazards and the frame gate
 
+*Landed 2026-10-03 but for the owner's session (FINDINGS "V6b"): `gpuspike.py overlap`, the overlap
+stream with the GPU as consumer, six runs equal on all seven hashes to the GPU's own synchronous
+run -- not the CPU's, which three hashes differ from by 3.4's texel choice at half-size sampling;
+the untextured copies are the CPU's -- and `--mutate late-readback` red. `title` and `battle` hold
+5 of 5 with `SOA_GPU=vulkan`.*
+
 *Several days. `--link`. Prerequisites: V6a. Files: as V6a, plus `tools/tests/test_gxr_overlap.py`
 cases run with the GPU.*
 
