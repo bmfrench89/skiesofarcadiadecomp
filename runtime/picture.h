@@ -67,4 +67,11 @@ void picture_filter_counts(const PicFilterState* s, unsigned long long* frames, 
  * neighbour, black round it: the present's scaler, and the replay's. */
 void picture_scale(const uint8_t* src, int w, int h, uint8_t* dst, int dw, int dh, int mode);
 
+/* The same for a frame drawn at k times its size (V9a): src is (k*w) x (k*h),
+ * laid out as a w x h frame is. Along a side where the source is larger than
+ * its rectangle each pixel is the mean of its footprint, every source pixel
+ * weighted by its exact overlap and the sum rounded; along any other, the
+ * nearest, as picture_scale. The GPU presenter's present.frag, in C. */
+void picture_scale_area(const uint8_t* src, int w, int h, int k, uint8_t* dst, int dw, int dh, int mode);
+
 #endif

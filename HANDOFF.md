@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1229 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1241 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1229 |
+| Python tests | 1241 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -611,8 +611,18 @@ C5c) is now done.
    (2x/3x now as V9a, the wide EFB after M10), the Vulkan SDK is installed
    (`SOA_GPU_VALIDATE=1` now prints the layer's messages; the whole GPU path
    is clean, FINDINGS "The validation layer, installed"), and the owner
-   will set 60 or 120 Hz for the windowed sessions. **Next: V9a.** The owner's windowed
-   session wants the display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
+   will set 60 or 120 Hz for the windowed sessions. **V9a is done but for
+   the owner's look** (FINDINGS "V9a"): `SOA_GPU_SCALE=2|3` draws into an
+   EFB two or three times the console's, each copy run once per sample
+   phase, so at 3x every native pixel's centre sample is held to V0
+   (`gpuspike.py oracle --scale 3`, 65 of 67 with the by-design pair the
+   same) and must equal `g_screen` exactly; `copydiff`, `copyimage` and
+   `present` take `--scale` too. A copy sampled after its own submission is
+   still the native image, and P5a's filters show the native picture.
+   **Next:** V8b, P5a's filters as shaders, now that the picture can be
+   larger than the CPU's copy; then the owner's windowed session (V6b's
+   fifteen minutes, V8's presenter, V9a's 2x and 3x), which wants the
+   display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

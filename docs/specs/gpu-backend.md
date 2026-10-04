@@ -720,7 +720,8 @@ the differentials and every Done line stay the same. For Vulkan:
 | `SOA_GPU_LOGICOP` | `native`, `blend`, `snapshot`, `fetch` | Force a logic-op path; how V10's fallbacks are tested on the Z1E's GPU |
 | `SOA_GPU_FEATURES` | `all` (default), `core` | Test knob: `core` treats every optional feature as absent |
 | `SOA_GPU_VALIDATE` | `1` | Enable the Khronos validation layer when installed; development only |
-| `SOA_GPU_SCALE` / `gpu_scale` | `1`, `2`, `3` | Internal resolution (V9) |
+| `SOA_GPU_SCALE` / `gpu_scale` | `1`, `2`, `3` | Internal resolution (V9; built as V9a) |
+| `SOA_GPU_SCALE_LOD` | `scale` (default), `native` | Test knob (V9a): `native` chooses mip levels as at scale 1, the oracle's setting at scale |
 | `SOA_GPU_LOADER` | a path | Test knob: the loader to open; a missing file exercises the fallback |
 | `SOA_GXR_INLINE` | `1` | Test knob (V2): no worker threads, every command run on the producer; implied by any backend |
 | `SOA_GXR_BACKEND` | `passthrough` | Test knob (V2): the passthrough backend, which runs `draw_command` through the seam |
@@ -1634,12 +1635,76 @@ landed), `runtime/gxv/filters.glsl` (if P5a landed), `tools/tests/test_gxv_prese
 
 ### V9. Internal resolution and a wide EFB
 
-*Split on 2026-10-04, at the owner's answer (PLAN-NEXT §0).*
+*Split on 2026-10-04, at the owner's answer (PLAN-NEXT §0). V9a landed the same day but for the
+owner's look (FINDINGS "V9a"); V9b waits for M10.*
 
 - *V9a: `SOA_GPU_SCALE` 2 and 3, everything below but the wide mode. Prerequisite V8; built now.*
 - *V9b: the wide EFB, 16:9 and 21:9. It waits for M10 as written.*
 - *The Done lines below divide the same way: the scale lines are V9a's, and the wide mode and the
   owner's look at it are V9b's.*
+
+*V9a's design, 2026-10-04, written before its code:*
+
+- **One switch.** `SOA_GPU_SCALE` (soa.ini `gpu_scale`) takes 1, 2 or 3 and is read once by
+  `gxv_init`; any other value is reported and 1 is used.
+  - The EFB's colour and depth images, both passes' framebuffers and the static viewport are
+    S·640 × S·528. Each scissor and clear rectangle is the game's, times S.
+  - `raster.vert` is unchanged: it maps to clip space, and the viewport does the rest.
+  - At S = 3, sample (3x+1, 3y+1) sits at native pixel (x, y)'s centre. Coverage, interpolation and
+    depth there are native's.
+- **A copy is the native copy run once per phase.** `copy.comp` reads the EFB through a phase
+  (jx, jy): native pixel (x, y) reads sample (S·x + jx, S·y + jy). So the filter's taps are S
+  samples apart, and the half-scale box takes four samples S apart. Every native formula is
+  unchanged.
+  - **The native picture is one phase.** This covers the RAM bytes, the producer's copy image and
+    `g_screen`. At S = 3 it is the centre phase. At S = 2, which has no centre, it is the rounded
+    mean of the four phases. `gxv_read_depth` takes phase (S/2, S/2).
+  - **The copy image in the pool holds all S×S phases,** interleaved into S·ow × S·oh texels.
+    - Its texture record carries S in a 34th word, and `raster.frag` multiplies level 0's texel
+      coordinates by it.
+    - So at S = 3, a draw that maps the copy one to one reads the native texel at each centre sample.
+    - It lives as long as V7's pool copy: a draw after the submission it was made in samples the
+      producer's native image. Sampling a copy at scale across frames needs a copy-image cache of
+      gxv's own, which is not built.
+  - **The screen copy** writes the presenter's slot at S·w × S·h. A second pass writes the native
+    picture into a sixth slot, and `g_screen` is taken from there.
+- **The level of detail follows the scale.** Derivatives are the scaled pixel's, so a mip level is
+  chosen for the finer grid, as hardware rendering at that size would.
+  - `SOA_GPU_SCALE_LOD=native` multiplies the derivatives by S and so chooses native's levels.
+  - It is the oracle's switch: it separates sharper textures, which are by design, from defects.
+- **The rest at scale.**
+  - Lines are S samples wide and points S samples square where the device has `wideLines` and
+    `largePoints`, so a native pixel's centre is covered where the CPU covers the pixel. Both
+    features are optional, and without one the start line says so. *Added while building: at one
+    sample the 3x self test's lines missed 1,108 of the CPU's 2,400 pixels and 51 of its 64 points.*
+  - The snapshot's stride is the draw record's word 106, and word 107 is the derivatives' factor.
+  - The interlock's image is the EFB itself.
+  - `gxv_load_efb` (the self test, copydiff) replicates each native pixel S×S.
+- **The presenter** lays a slot out by its native size, as now.
+  - When a scaled slot is larger than its rectangle, each target pixel is the mean of its footprint,
+    weighted by exact integer areas. Otherwise it takes the nearest sample.
+  - Scale 1 keeps `picture_scale`'s nearest neighbour byte for byte.
+  - `picture.c` gains the same filter in C (`picture_scale_area`), as the check's twin.
+- **P5a's filters** at S > 1 still run on the native picture (V8b's first step), so that picture is
+  shown native, and the log says so once. Their shaders (V8b) come next.
+- **Checks, each with a mutation that must fail it:**
+  - **Scale 1:** V5's contrast stays byte-identical.
+  - **`copydiff --scale 2` and `--scale 3`**, on the replicated EFB:
+    - the bytes, the native image and `g_screen` equal the CPU's;
+    - the pool's image and the full screen slot equal the native ones, replicated;
+    - mutation `taps`, the filter's taps one sample apart.
+  - **`copyimage --scale 2` and `--scale 3`:** 16 of 16 cells; mutation `copy-scale`, the record's
+    S ignored.
+  - **`oracle --scale 3`**, at native LOD:
+    - imgdiff `--sample centre` of the full screen passes V0's thresholds;
+    - the centre sample equals `g_screen` exactly;
+    - mutation `phase`, the native picture taken from phase (0, 0).
+    - Under the scale's own LOD, MAE and bias are reported, not judged.
+  - **`oracle --scale 2`:** MAE and bias only, on the box of the full screen. That box is
+    `g_screen` within one step, not exactly: the copy filter truncates after the mean in one and
+    before it in the other.
+  - **`present --scale 2` and `--scale 3`:** the area filter against its twin; the `present`
+    mutation, one column over.
 
 *Week-plus. `--link`. Prerequisites: V8; M10 landed (the wide mode is M10 on the GPU). Files:
 `runtime/gxv.c`, `runtime/gxv/*.glsl`, `runtime/settings.c` (`gpu_scale`), `tools/gpuspike.py`

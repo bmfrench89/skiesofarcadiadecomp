@@ -34,6 +34,7 @@
 #include "raster_frag_lod.h"
 #include "raster_frag_fog.h"
 #include "raster_frag_interlock.h"
+#include "raster_frag_copyscale.h"
 #include "tevdiff_comp.h"
 #include "tevdiff_comp_clamp.h"
 #include "loddiff_comp.h"
@@ -42,6 +43,8 @@
 #include "copy_comp.h"
 #include "copy_comp_rounding.h"
 #include "copy_comp_intensity.h"
+#include "copy_comp_taps.h"
+#include "copy_comp_phase.h"
 #include "present_vert.h"
 #include "present_frag.h"
 #include "present_frag_offset.h"
@@ -86,7 +89,16 @@ GXV_DEVICE(GXV_DECLARE)
 /* ---- state ---------------------------------------------------------------- */
 
 #define RING_BYTES (32u << 20)     /* the vertex ring: about 215k vertices */
-#define READBACK_BYTES (EFB_W * EFB_H * 4)
+/* The EFB at the scale SOA_GPU_SCALE sets (V9a): S*640 x S*528 samples. */
+static int g_scale = 1;
+static int g_lod_native; /* SOA_GPU_SCALE_LOD=native: mip levels chosen as at scale 1 */
+/* A line's width and a point's size in samples: S where the device has
+ * wideLines and largePoints, so a native pixel's centre is covered where the
+ * CPU covers the pixel; 1 otherwise, and the start line says so. */
+static int g_line_w = 1, g_point_sz = 1;
+#define EFB_SW (EFB_W * g_scale)
+#define EFB_SH (EFB_H * g_scale)
+#define READBACK_BYTES ((size_t)EFB_SW * EFB_SH * 4)
 #define MAX_QUADS 16384            /* a draw's count is 16 bits: 65535 vertices */
 #define ARENA_BYTES (64u << 20)    /* the bump allocator's blocks, eight at most a memory type */
 #define ARENA_BLOCKS 8
@@ -96,7 +108,7 @@ GXV_DEVICE(GXV_DECLARE)
 #define GXV_DRAW_WORDS 208        /* a draw's record (raster.frag describes it) */
 #define DRAWREC_BYTES (16u << 20) /* the draw records: about 20,000 of them */
 #define POOL_BYTES (128u << 20)   /* the texel pool, or the device's storage-buffer limit */
-#define TEXREC_WORDS 33           /* a texture's record: eleven offsets, widths and heights */
+#define TEXREC_WORDS 34           /* a texture's record: eleven offsets, widths and heights, and its scale (V9a) */
 #define TEXREC_BYTES (1u << 20)
 #define NO_TEXTURE 0xFFFFFFFFu
 
@@ -179,8 +191,8 @@ static uint32_t g_ring_used;     /* bytes, a multiple of sizeof(Vertex) */
 static Vertex* g_tmp;            /* a rebuilt draw, before it goes into the ring */
 static unsigned g_tmp_cap;
 static GxvUploadHook g_hook;
-/* The mutations (gxv_set_mutation); 1 and 2 of g_mut_copy pick copy.comp's
- * rounding and intensity variants. */
+/* The mutations (gxv_set_mutation); 1 to 4 of g_mut_copy pick copy.comp's
+ * rounding, intensity, taps and phase variants (the last two V9a's). */
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
 static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace, g_mut_late;
@@ -441,8 +453,8 @@ static int make_image(VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags 
     VkDeviceSize off;
     ii.imageType = VK_IMAGE_TYPE_2D;
     ii.format = fmt;
-    ii.extent.width = EFB_W;
-    ii.extent.height = EFB_H;
+    ii.extent.width = (uint32_t)EFB_SW;
+    ii.extent.height = (uint32_t)EFB_SH;
     ii.extent.depth = 1;
     ii.mipLevels = 1;
     ii.arrayLayers = 1;
@@ -516,8 +528,8 @@ static int begin_pass(void)
     if (g_inpass) return 1;
     rb.renderPass = g_pass;
     rb.framebuffer = g_fb;
-    rb.renderArea.extent.width = EFB_W;
-    rb.renderArea.extent.height = EFB_H;
+    rb.renderArea.extent.width = (uint32_t)EFB_SW;
+    rb.renderArea.extent.height = (uint32_t)EFB_SH;
     vkCmdBeginRenderPass(g_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_layout, 0, 1, &g_dset, 0, NULL);
     vkCmdBindIndexBuffer(g_cb, g_quad_idx, 0, VK_INDEX_TYPE_UINT32);
@@ -545,8 +557,8 @@ static int begin_interlock(void)
                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     rb.renderPass = g_pass_il;
     rb.framebuffer = g_fb_il;
-    rb.renderArea.extent.width = EFB_W;
-    rb.renderArea.extent.height = EFB_H;
+    rb.renderArea.extent.width = (uint32_t)EFB_SW;
+    rb.renderArea.extent.height = (uint32_t)EFB_SH;
     vkCmdBeginRenderPass(g_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_layout, 0, 1, &g_dset, 0, NULL);
     vkCmdBindIndexBuffer(g_cb, g_quad_idx, 0, VK_INDEX_TYPE_UINT32);
@@ -730,9 +742,10 @@ static int fragment_module(void)
     }
     if (g_fs) return 1;
     si.codeSize = g_mut_frag == 1 ? sizeof raster_frag_alpha : g_mut_frag == 2 ? sizeof raster_frag_lod
-                : g_mut_frag == 3 ? sizeof raster_frag_fog : sizeof raster_frag;
+                : g_mut_frag == 3 ? sizeof raster_frag_fog : g_mut_frag == 4 ? sizeof raster_frag_copyscale
+                : sizeof raster_frag;
     si.pCode = g_mut_frag == 1 ? raster_frag_alpha : g_mut_frag == 2 ? raster_frag_lod
-             : g_mut_frag == 3 ? raster_frag_fog : raster_frag;
+             : g_mut_frag == 3 ? raster_frag_fog : g_mut_frag == 4 ? raster_frag_copyscale : raster_frag;
     VKCHECK(vkCreateShaderModule(g_dev, &si, NULL, &g_fs));
     if (g_has_interlock && !g_fs_il) {
         si.codeSize = sizeof raster_frag_interlock;
@@ -821,8 +834,8 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
                                              {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
     VkPipelineVertexInputStateCreateInfo vin = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     VkPipelineInputAssemblyStateCreateInfo ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    VkViewport vp = {0.0f, 0.0f, (float)EFB_W, (float)EFB_H, 0.0f, 1.0f};
-    VkRect2D sc = {{0, 0}, {EFB_W, EFB_H}};
+    VkViewport vp = {0.0f, 0.0f, (float)EFB_SW, (float)EFB_SH, 0.0f, 1.0f};
+    VkRect2D sc = {{0, 0}, {(uint32_t)EFB_SW, (uint32_t)EFB_SH}};
     VkPipelineViewportStateCreateInfo vps = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     VkPipelineRasterizationStateCreateInfo rs = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     VkPipelineMultisampleStateCreateInfo ms = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -838,6 +851,9 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     VkPipelineDynamicStateCreateInfo dys = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     VkGraphicsPipelineCreateInfo pi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     VkPipelineCreationFeedbackEXT fb = {0};
+    float point_size = (float)g_point_sz;
+    VkSpecializationMapEntry psz_map = {0, 0, sizeof(float)};
+    VkSpecializationInfo psz = {1, &psz_map, sizeof(float), &point_size};
     VkPipelineCreationFeedbackCreateInfoEXT fci = {VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT};
     uint64_t t0;
     VkResult r;
@@ -848,6 +864,7 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     st[1].module = g_fs;
     st[1].pName = "main";
+    if (g_point_sz > 1) st[0].pSpecializationInfo = &psz; /* raster.vert's point size, S samples (V9a) */
     if (shape) {
         for (i = 0; i < TEV_SHAPE_WORDS; i++) {
             spec_map[i].constantID = i;
@@ -868,7 +885,7 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     rs.cullMode = k_cull[S->cull];
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
+    rs.lineWidth = (float)g_line_w;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     ds.depthTestEnable = (VkBool32)S->z_en;
     ds.depthWriteEnable = (VkBool32)S->z_upd;
@@ -1275,6 +1292,10 @@ static int draw_record(const DrawCmd* D, uint32_t* dst, uint32_t* tev)
         if (route == LOGIC_SNAPSHOT) r[105] = 1u | (uint32_t)lop << 1;
         if (route == LOGIC_INTERLOCK) r[105] = 1u | (uint32_t)lop << 1 | masks << 5;
     }
+    /* V9a: the snapshot's stride, and the derivatives' factor -- 1, their
+     * own pixel's, or S for SOA_GPU_SCALE_LOD=native, native's levels. */
+    r[106] = (uint32_t)EFB_SW;
+    r[107] = float_bits(g_lod_native ? (float)g_scale : 1.0f);
     for (m = 0; m < 8; m++) {
         const TexCfg* C = &D->tev.tex[m];
         uint32_t* w = r + 108 + 12 * m;
@@ -1482,15 +1503,16 @@ static int gxv_draw(const DrawCmd* D)
     if (n == 0) return 1;
     if (quads && n / 4 > MAX_QUADS) { say("draw refused: %u quads, more than the index buffer's %u", n / 4, MAX_QUADS); return 0; }
     if ((size_t)n * sizeof(Vertex) > RING_BYTES) { say("draw refused: %u vertices do not fit the vertex ring", n); return 0; }
-    /* The scissor, inclusive, on the EFB; an empty one draws nothing. */
+    /* The scissor, inclusive, on the EFB; an empty one draws nothing. Each
+     * native pixel is S x S samples at scale (V9a). */
     {
         int x0 = s->x0 < 0 ? 0 : s->x0, y0 = s->y0 < 0 ? 0 : s->y0;
         int x1 = s->x1 > EFB_W - 1 ? EFB_W - 1 : s->x1, y1 = s->y1 > EFB_H - 1 ? EFB_H - 1 : s->y1;
         if (x1 < x0 || y1 < y0) return 1;
-        sc.offset.x = x0;
-        sc.offset.y = y0;
-        sc.extent.width = (uint32_t)(x1 - x0 + 1);
-        sc.extent.height = (uint32_t)(y1 - y0 + 1);
+        sc.offset.x = x0 * g_scale;
+        sc.offset.y = y0 * g_scale;
+        sc.extent.width = (uint32_t)((x1 - x0 + 1) * g_scale);
+        sc.extent.height = (uint32_t)((y1 - y0 + 1) * g_scale);
     }
     if (g_ring_used + (size_t)n * sizeof(Vertex) > RING_BYTES && !submit_wait()) return 0;
     if ((g_draw_used + GXV_DRAW_WORDS) * 4 > DRAWREC_BYTES && !submit_wait()) return 0;
@@ -1577,10 +1599,10 @@ static int clear_rect(int x0, int y0, int w, int h, uint32_t ar, uint32_t gb, ui
     ca[0].clearValue.color.float32[3] = (float)((ar >> 8) & 0xFF) / 255.0f;
     ca[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     ca[1].clearValue.depthStencil.depth = (float)(z & 0xFFFFFFu) / 16777216.0f;
-    cr.rect.offset.x = x0;
-    cr.rect.offset.y = y0;
-    cr.rect.extent.width = (uint32_t)(x1 - x0);
-    cr.rect.extent.height = (uint32_t)(y1 - y0);
+    cr.rect.offset.x = x0 * g_scale;
+    cr.rect.offset.y = y0 * g_scale;
+    cr.rect.extent.width = (uint32_t)((x1 - x0) * g_scale);
+    cr.rect.extent.height = (uint32_t)((y1 - y0) * g_scale);
     cr.baseArrayLayer = 0;
     cr.layerCount = 1;
     vkCmdClearAttachments(g_cb, 2, ca, 1, &cr);
@@ -1720,6 +1742,7 @@ typedef struct {
     uint32_t mode, texfmt, flags, chans, taps, row_bytes, ow, oh, count;
     uint32_t dest_at, image_at, pool_at; /* the copy's regions, in words (V7) */
     uint32_t screen_at;                  /* a screen copy's slot, in words (V8) */
+    uint32_t scale;                      /* the EFB's, S (V9a) */
 } CopyPush;
 
 /* gxr.c's copy_texfmt, copy_row_stride and copy_extent, and copy_to_texture's
@@ -1760,6 +1783,7 @@ static void tile_shape(unsigned texfmt, unsigned* tw, unsigned* th, unsigned* bp
 }
 
 static unsigned g_img_w, g_img_h, g_img_at; /* the last copy's image, for the self test and copydiff */
+static uint32_t g_pool_at;                  /* and where its image in the pool starts (V9a's copydiff) */
 static unsigned long long g_n_tex_copies, g_n_refused;
 
 /* The EFB's colour into the readback buffer, where the copy shader reads it. */
@@ -1781,8 +1805,8 @@ static int efb_to_buffer(VkPipelineStageFlags reader)
     memset(&rg, 0, sizeof rg);
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.imageSubresource.layerCount = 1;
-    rg.imageExtent.width = EFB_W;
-    rg.imageExtent.height = EFB_H;
+    rg.imageExtent.width = (uint32_t)EFB_SW;
+    rg.imageExtent.height = (uint32_t)EFB_SH;
     rg.imageExtent.depth = 1;
     vkCmdCopyImageToBuffer(g_cb, g_color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_readback, 1, &rg);
     barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1806,6 +1830,8 @@ static int copy_pipeline(void)
     if (g_copy_cs.pipe) return 1;
     if (g_mut_copy == 1) { code = copy_comp_rounding; bytes = sizeof copy_comp_rounding; }
     if (g_mut_copy == 2) { code = copy_comp_intensity; bytes = sizeof copy_comp_intensity; }
+    if (g_mut_copy == 3) { code = copy_comp_taps; bytes = sizeof copy_comp_taps; }
+    if (g_mut_copy == 4) { code = copy_comp_phase; bytes = sizeof copy_comp_phase; }
     if (!compute_make(&g_copy_cs, code, bytes, 5, sizeof(CopyPush))) return 0;
     bufs[0] = g_readback;
     bufs[1] = g_destbuf;
@@ -1825,43 +1851,61 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
     p->h = (int32_t)((D->cp_wh >> 10) & 0x3FF) + 1;
     p->taps = D->cp_f_up | (uint32_t)D->cp_f_mid << 8 | (uint32_t)D->cp_f_dn << 16;
     if (!(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64)) p->flags |= 4u;
+    p->scale = (uint32_t)g_scale;
 }
 
-/* The screen buffer's slots (V8): three for the presenter's triple buffer;
- * a fourth, SCREEN_SCRATCH, for gxv_read_depth and the presenter's check;
- * and a fifth, SCREEN_HOST, the window's own frame (V8b: P5a's filters,
- * which run on the CPU, then presented by the GPU). The consumer writes g_scr_back; g_scr_middle is the newest it has
- * finished, with SCREEN_FRESH set until the presenter takes it, which it
- * does by swapping its own g_scr_front in; so neither ever writes or reads
- * a slot the other holds. A slot's size is written before it is published. */
-#define SCREEN_SLOTS 5
+/* The screen buffer's slots (V8), each the EFB's size at its scale: three
+ * for the presenter's triple buffer; a fourth, SCREEN_SCRATCH, for
+ * gxv_read_depth and the presenter's check; a fifth, SCREEN_HOST, the
+ * window's own frame (V8b: P5a's filters, which run on the CPU, then
+ * presented by the GPU); and a sixth, SCREEN_NATIVE, a screen copy's native
+ * picture at scale, for g_screen (V9a). The consumer writes g_scr_back;
+ * g_scr_middle is the newest it has finished, with SCREEN_FRESH set until
+ * the presenter takes it, which it does by swapping its own g_scr_front in;
+ * so neither ever writes or reads a slot the other holds. A slot's size --
+ * the picture's, native -- and the scale it is drawn at are written before
+ * it is published. */
+#define SCREEN_SLOTS 6
 #define SCREEN_SCRATCH 3
 #define SCREEN_HOST 4
+#define SCREEN_NATIVE 5
 #define SCREEN_FRESH 4
-static unsigned g_scr_back = 0, g_scr_front = 2;
+static unsigned g_scr_back = 0, g_scr_front = 2, g_scr_last;
 static plat_a64 g_scr_middle = 1;
-static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS];
+static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS], g_scr_k[SCREEN_SLOTS];
 
 /* A copy to the screen, as copy_to_screen makes it: min(w, 640) by
- * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. */
+ * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. At
+ * scale (V9a) the presenter's slot holds it S times the size, and the
+ * native picture g_screen takes is a second pass into SCREEN_NATIVE. */
 static int copy_screen(const DrawCmd* D)
 {
     CopyPush p;
     int sw, sh;
+    unsigned native = g_scale > 1 ? SCREEN_NATIVE : g_scr_back;
     copy_rect(D, &p);
     if (g_mut_nofilter) p.flags &= ~4u;
     sw = p.w > EFB_W ? EFB_W : p.w;
     sh = p.h > EFB_H ? EFB_H : p.h;
-    p.mode = 2;
-    p.count = (uint32_t)(sw * sh);
-    p.screen_at = g_scr_back * (READBACK_BYTES / 4);
     if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) return 0;
+    p.mode = 2;
+    if (g_scale > 1) {
+        CopyPush q = p;
+        q.flags |= 16u;
+        q.count = (uint32_t)(sw * sh * g_scale * g_scale);
+        q.screen_at = (uint32_t)(g_scr_back * (READBACK_BYTES / 4));
+        run_compute(&g_copy_cs, &q, sizeof q, q.count);
+    }
+    p.count = (uint32_t)(sw * sh);
+    p.screen_at = (uint32_t)(native * (READBACK_BYTES / 4));
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
     if (!submit_wait()) return 0;
-    gxr_backend_screen(g_screen_map + (size_t)g_scr_back * READBACK_BYTES, sw, sh);
+    gxr_backend_screen(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
     g_scr_w[g_scr_back] = sw;
     g_scr_h[g_scr_back] = sh;
+    g_scr_k[g_scr_back] = g_scale;
+    g_scr_last = g_scr_back;
     g_scr_back = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)(g_scr_back | SCREEN_FRESH)) & 3);
     g_n_copies++;
     return 1;
@@ -1893,7 +1937,7 @@ static int copy_texture(const DrawCmd* D)
 {
     CopyPush p;
     unsigned chan_a, chan_b, texfmt = copy_texfmt(D->cp_v, &chan_a, &chan_b), tw, th, bpt;
-    uint32_t dest = (D->cp_dest & 0x1FFFFFu) << 5, natural, row_bytes, rows, cols, extent, texels;
+    uint32_t dest = (D->cp_dest & 0x1FFFFFu) << 5, natural, row_bytes, rows, cols, extent, texels, scaled;
     int half = (D->cp_v >> 9) & 1;
     uint8_t* ram;
     if (texfmt == 99) { g_n_refused++; return 1; }
@@ -1916,17 +1960,18 @@ static int copy_texture(const DrawCmd* D)
     }
     if (!extent) return 1;
     texels = p.ow * p.oh;
+    scaled = texels * (uint32_t)(g_scale * g_scale); /* the pool's image, S x S texels each (V9a) */
     /* Regions of its own in this submission, and no copy still to land under
      * its bytes, whose seed must hold what that copy wrote. */
     if (g_land_n == LAND_MAX || g_dest_used + extent > DEST_BYTES || g_image_used + texels > IMAGE_BYTES / 4 ||
         land_overlaps(dest & MEM_MASK, extent)) {
         if (!land_wait()) return 0;
     }
-    if (g_pool_used + texels > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) {
+    if (g_pool_used + scaled > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) {
         if (!submit_wait()) return 0;
     }
     p.texfmt = texfmt;
-    p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1 | 8u;
+    p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1 | (g_scale == 1 ? 8u : 0u);
     p.chans = chan_a | chan_b << 2;
     p.row_bytes = row_bytes;
     p.dest_at = g_dest_used / 4;
@@ -1943,6 +1988,12 @@ static int copy_texture(const DrawCmd* D)
     p.mode = 1;
     p.count = texels;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    if (g_scale > 1) {
+        /* The image at the EFB's scale, into the pool only (V9a). */
+        p.mode = 3;
+        p.count = scaled;
+        run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    }
     compute_to_host();
     {
         /* The image in the pool, for the draws after it in this submission. */
@@ -1954,15 +2005,17 @@ static int copy_texture(const DrawCmd* D)
                              NULL);
         memset(rec, 0, TEXREC_WORDS * 4);
         rec[0] = g_pool_used;
-        rec[11] = p.ow;
-        rec[22] = p.oh;
+        rec[11] = p.ow * (uint32_t)g_scale;
+        rec[22] = p.oh * (uint32_t)g_scale;
+        rec[33] = (uint32_t)g_scale;
+        g_pool_at = g_pool_used;
         if (D->cp_image) {
             g_cimg[g_cimg_n].cpu = D->cp_image;
             g_cimg[g_cimg_n].rec = g_texrec_used;
             g_cimg_n++;
         }
         g_texrec_used += TEXREC_WORDS;
-        g_pool_used += texels;
+        g_pool_used += scaled;
     }
     g_land[g_land_n].ram = ram;
     g_land[g_land_n].guest = dest & MEM_MASK;
@@ -1996,7 +2049,8 @@ static int gxv_copy(const DrawCmd* D)
 }
 
 /* The depth buffer as 24-bit values, 640x528, for a bisection to compare
- * with the CPU's g_efb_z: what each pixel's depth test was against. */
+ * with the CPU's g_efb_z: what each pixel's depth test was against. At
+ * scale, each pixel's sample (S/2, S/2): its centre at S = 3 (V9a). */
 int gxv_read_depth(uint32_t* out)
 {
     VkBufferImageCopy rg;
@@ -2011,8 +2065,8 @@ int gxv_read_depth(uint32_t* out)
     rg.bufferOffset = (VkDeviceSize)SCREEN_SCRATCH * READBACK_BYTES; /* not a slot the presenter may hold */
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     rg.imageSubresource.layerCount = 1;
-    rg.imageExtent.width = EFB_W;
-    rg.imageExtent.height = EFB_H;
+    rg.imageExtent.width = (uint32_t)EFB_SW;
+    rg.imageExtent.height = (uint32_t)EFB_SH;
     rg.imageExtent.depth = 1;
     vkCmdCopyImageToBuffer(g_cb, g_depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_screenbuf, 1, &rg);
     barrier_image(g_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -2028,7 +2082,8 @@ int gxv_read_depth(uint32_t* out)
     if (!submit_wait()) return 0;
     for (i = 0; i < (unsigned)(EFB_W * EFB_H); i++) {
         float f;
-        memcpy(&f, g_screen_map + (size_t)SCREEN_SCRATCH * READBACK_BYTES + 4 * (size_t)i, 4);
+        size_t at = ((size_t)(i / EFB_W * g_scale + g_scale / 2) * EFB_SW + (size_t)(i % EFB_W * g_scale + g_scale / 2)) * 4;
+        memcpy(&f, g_screen_map + (size_t)SCREEN_SCRATCH * READBACK_BYTES + at, 4);
         out[i] = (uint32_t)(f * 16777216.0f); /* zq * 2^-24 exactly, as written */
     }
     return 1;
@@ -2041,22 +2096,56 @@ const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h)
     return g_image_map + (size_t)g_img_at * 4;
 }
 
+/* The last copy's image in the pool, S times its size (V9a's copydiff), and
+ * the scale. Valid until the next draw or copy; the pool is uncached, so a
+ * check's read is slow. */
+const uint8_t* gxv_last_copy_pool(unsigned* w, unsigned* h, int* scale)
+{
+    *w = g_img_w * (unsigned)g_scale;
+    *h = g_img_h * (unsigned)g_scale;
+    *scale = g_scale;
+    return g_pool_map + (size_t)g_pool_at * 4;
+}
+
+/* The last screen copy at the EFB's scale (V9a): for the spike, which opens
+ * no presenter, so the slot is still the one written. The picture's native
+ * size and the scale. */
+const uint8_t* gxv_screen_full(int* w, int* h, int* scale)
+{
+    *w = g_scr_w[g_scr_last];
+    *h = g_scr_h[g_scr_last];
+    *scale = g_scr_k[g_scr_last] ? g_scr_k[g_scr_last] : 1;
+    return g_screen_map + (size_t)g_scr_last * READBACK_BYTES;
+}
+
+int gxv_scale(void) { return g_scale; }
+
 /* The self test's EFB, uploaded: the GPU's own copy of what the CPU path
- * holds in g_efb. */
+ * holds in g_efb, each pixel S x S samples at scale (V9a). */
 int gxv_load_efb(const uint8_t* rgba)
 {
     VkBufferImageCopy rg;
     if (!begin_cb()) return 0;
     end_pass();
-    memcpy(g_readback_map, rgba, READBACK_BYTES);
+    if (g_scale == 1) {
+        memcpy(g_readback_map, rgba, READBACK_BYTES);
+    } else {
+        int x, y, j;
+        for (y = 0; y < EFB_SH; y++) {
+            const uint32_t* src = (const uint32_t*)(rgba + (size_t)(y / g_scale) * EFB_W * 4);
+            uint32_t* dst = (uint32_t*)(g_readback_map + (size_t)y * EFB_SW * 4);
+            for (x = 0; x < EFB_W; x++)
+                for (j = 0; j < g_scale; j++) dst[x * g_scale + j] = src[x];
+        }
+    }
     barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     memset(&rg, 0, sizeof rg);
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.imageSubresource.layerCount = 1;
-    rg.imageExtent.width = EFB_W;
-    rg.imageExtent.height = EFB_H;
+    rg.imageExtent.width = (uint32_t)EFB_SW;
+    rg.imageExtent.height = (uint32_t)EFB_SH;
     rg.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(g_cb, g_readback, g_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
     barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -2347,6 +2436,9 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "unseeded")) g_mut_unseeded = 1;
     else if (!strcmp(name, "rounding")) g_mut_copy = 1;
     else if (!strcmp(name, "intensity")) g_mut_copy = 2;
+    else if (!strcmp(name, "taps")) g_mut_copy = 3;
+    else if (!strcmp(name, "phase")) g_mut_copy = 4;
+    else if (!strcmp(name, "copy-scale")) g_mut_frag = 4;
     else if (!strcmp(name, "clamp")) g_mut_tev = 1;
     else if (!strcmp(name, "alpha")) g_mut_frag = 1;
     else if (!strcmp(name, "lod")) g_mut_frag = 2;
@@ -2542,6 +2634,18 @@ static int make_device(char* why, size_t cap)
             feat.logicOp = g_core ? VK_FALSE : have.logicOp; /* 3.5's first choice for logic ops */
             g_has_logicop = feat.logicOp != 0;
             feat.fragmentStoresAndAtomics = g_core == 1 ? VK_FALSE : have.fragmentStoresAndAtomics; /* V10's interlock route */
+            /* V9a: lines and points S samples across, where they can be. */
+            g_line_w = g_point_sz = 1;
+            if (g_scale > 1 && g_core != 1) {
+                if (have.wideLines && g_props.limits.lineWidthRange[1] >= (float)g_scale) {
+                    feat.wideLines = VK_TRUE;
+                    g_line_w = g_scale;
+                }
+                if (have.largePoints && g_props.limits.pointSizeRange[1] >= (float)g_scale) {
+                    feat.largePoints = VK_TRUE;
+                    g_point_sz = g_scale;
+                }
+            }
         }
     }
     qi.queueFamilyIndex = g_family;
@@ -2671,12 +2775,12 @@ static int make_pass(void)
     fi.renderPass = g_pass;
     fi.attachmentCount = 2;
     fi.pAttachments = views;
-    fi.width = EFB_W;
-    fi.height = EFB_H;
+    fi.width = (uint32_t)EFB_SW;
+    fi.height = (uint32_t)EFB_SH;
     fi.layers = 1;
     VKCHECK(vkCreateFramebuffer(g_dev, &fi, NULL, &g_fb));
     if (g_has_interlock) {
-        /* V10's interlock route: a subpass of no attachments, 640 x 528. */
+        /* V10's interlock route: a subpass of no attachments, the EFB's size. */
         VkSubpassDescription none;
         memset(&none, 0, sizeof none);
         none.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -2857,6 +2961,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_print(VkDebugUtilsMessageSeverityFla
     return VK_FALSE;
 }
 
+static char g_scale_note[128];
+
 int gxv_init(char* why, size_t cap)
 {
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -2866,6 +2972,23 @@ int gxv_init(char* why, size_t cap)
     VkResult r;
     unsigned i;
     why[0] = 0;
+    /* SOA_GPU_SCALE (V9a): the EFB at 1, 2 or 3 times the console's, read
+     * before anything is sized by it. SOA_GPU_SCALE_LOD=native chooses mip
+     * levels as at scale 1, the oracle's switch. */
+    {
+        const char* sc = getenv("SOA_GPU_SCALE");
+        const char* lod = getenv("SOA_GPU_SCALE_LOD");
+        g_scale = 1;
+        if (sc && *sc) {
+            if (!strcmp(sc, "1") || !strcmp(sc, "2") || !strcmp(sc, "3")) g_scale = atoi(sc);
+            else say("SOA_GPU_SCALE=%s is not 1, 2 or 3; the EFB is the console's size", sc);
+        }
+        g_lod_native = 0;
+        if (lod && *lod) {
+            if (!strcmp(lod, "native")) g_lod_native = 1;
+            else if (strcmp(lod, "scale")) say("SOA_GPU_SCALE_LOD=%s is not native or scale; levels follow the scale", lod);
+        }
+    }
     if (!load_loader(why, cap)) return 0;
     app.pApplicationName = "soa-gpuspike";
     app.apiVersion = VK_API_VERSION_1_1;
@@ -2961,12 +3084,20 @@ int gxv_init(char* why, size_t cap)
             say("SOA_GPU_LOGICOP=%s is not native, blend, snapshot or interlock here; ignored", forced);
     }
     compiler_start();
+    {
+        /* V9a's part of the start line: the scale, and what follows it. */
+        if (g_scale == 1) g_scale_note[0] = 0;
+        else
+            snprintf(g_scale_note, sizeof g_scale_note, " (scale %d; mip levels %s; lines %d and points %d samples across%s)",
+                     g_scale, g_lod_native ? "native" : "for the scale", g_line_w, g_point_sz,
+                     g_line_w < g_scale || g_point_sz < g_scale ? ", the device's limit" : "");
+    }
     /* The start line (3.11), which a live run's log is judged by. */
-    say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s; "
+    say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F%s; logic ops %s; timestamps %s; "
         "interlock %s%s%s",
         VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
-        VK_API_VERSION_PATCH(g_props.apiVersion), g_devname, g_props.driverVersion, g_has_logicop ? "yes" : "no", EFB_W,
-        EFB_H,
+        VK_API_VERSION_PATCH(g_props.apiVersion), g_devname, g_props.driverVersion, g_has_logicop ? "yes" : "no", EFB_SW,
+        EFB_SH, g_scale_note,
         g_logic_mode == LOGIC_NATIVE ? "native"
         : g_logic_mode == LOGIC_BLEND ? "as blends"
         : g_logic_mode == LOGIC_SNAPSHOT ? "from a snapshot"
@@ -3173,7 +3304,7 @@ static int present_pipeline(VkRenderPass pass)
 {
     VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
     VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 7 * 4};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 * 4};
     VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -3293,17 +3424,21 @@ static void present_record(VkRenderPass pass, VkFramebuffer fb, int w, int h, un
     VkViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
     VkRect2D sc = {{0, 0}, {(uint32_t)w, (uint32_t)h}};
     PicRect r = picture_layout(g_scr_w[slot], g_scr_h[slot], w, h, mode);
+    int k = g_scr_k[slot] > 1 ? g_scr_k[slot] : 1;
     struct {
         int32_t rx, ry, rw, rh;
-        uint32_t w, h, at;
+        uint32_t w, h, at, area;
     } pc;
     pc.rx = r.x;
     pc.ry = r.y;
     pc.rw = r.w;
     pc.rh = r.h;
-    pc.w = (uint32_t)g_scr_w[slot];
-    pc.h = (uint32_t)g_scr_h[slot];
-    pc.at = slot * (READBACK_BYTES / 4);
+    /* Laid out by the picture's size; read at the scale it was drawn at,
+     * averaged where that is larger than the rectangle (V9a). */
+    pc.w = (uint32_t)(g_scr_w[slot] * k);
+    pc.h = (uint32_t)(g_scr_h[slot] * k);
+    pc.at = (uint32_t)(slot * (READBACK_BYTES / 4));
+    pc.area = k > 1;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(g_pres_cb, &bi);
     /* The screen copy was written by an earlier submission's compute pass,
@@ -3531,11 +3666,12 @@ static int present_once(unsigned slot, int mode)
 
 /* A frame of the host's, BGRA as window.c keeps it, into slot `slot` as the
  * RGBA words present.frag reads; the presenter's last read of the slot is
- * waited for first. */
-static void upload_bgra(unsigned slot, const uint8_t* bgra, int w, int h)
+ * waited for first. k > 1 (the check, V9a): the frame is (k*w) x (k*h), a
+ * w x h picture drawn at scale k. */
+static void upload_bgra(unsigned slot, const uint8_t* bgra, int w, int h, int k)
 {
     uint8_t* d = g_screen_map + (size_t)slot * READBACK_BYTES;
-    size_t i, n = (size_t)w * h;
+    size_t i, n = (size_t)w * h * k * k;
     if (g_pres_fence) vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
     for (i = 0; i < n; i++, d += 4, bgra += 4) {
         d[0] = bgra[2];
@@ -3545,6 +3681,7 @@ static void upload_bgra(unsigned slot, const uint8_t* bgra, int w, int h)
     }
     g_scr_w[slot] = w;
     g_scr_h[slot] = h;
+    g_scr_k[slot] = k;
 }
 
 /* Slot `slot` presented `interval` times, the swap chain remade where it
@@ -3584,7 +3721,11 @@ int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int 
         plat_unlock(&g_present_lock);
         return 0;
     }
-    upload_bgra(SCREEN_HOST, bgra, w, h);
+    if (g_scale > 1 && !g_n_present_images)
+        say("P5a's filters run on the native picture, so at scale %d the window shows it native (V8b's shaders "
+            "are not built)",
+            g_scale);
+    upload_bgra(SCREEN_HOST, bgra, w, h, 1);
     g_n_present_images++;
     ok = present_slot(SCREEN_HOST, interval, mode);
     plat_unlock(&g_present_lock);
@@ -3619,8 +3760,10 @@ int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown
 /* The presenter's check (test_gxv_present.py): bgra (w x h), as window.c
  * keeps a frame, through upload_bgra and the present pass into a dw x dh
  * image of the swap chain's usual format, B8G8R8A8_UNORM, read back into
- * out, row by row. Not with a window open. */
-int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, uint8_t* out)
+ * out, row by row. With k > 1, bgra is a w x h picture drawn at scale k,
+ * (k*w) x (k*h), as a screen copy at scale is (V9a). Not with a window
+ * open. */
+int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, uint8_t* out)
 {
     VkImage img;
     VkImageView view;
@@ -3635,7 +3778,8 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mod
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
 
-    if (!g_dev || w < 1 || h < 1 || w * h * 4 > (int)READBACK_BYTES || dw < 1 || dh < 1 || (size_t)dw * dh * 4 > CHECK_BYTES)
+    if (!g_dev || w < 1 || h < 1 || k < 1 || (size_t)w * h * k * k * 4 > READBACK_BYTES || dw < 1 || dh < 1 ||
+        (size_t)dw * dh * 4 > CHECK_BYTES)
         return 0;
     if (!g_chk && !make_buffer(CHECK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1, &g_chk, &g_chk_map)) return 0;
     if (!g_pres_check_pass && !(g_pres_check_pass = present_pass(VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)))
@@ -3671,7 +3815,7 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mod
     fi.layers = 1;
     if (vkCreateFramebuffer(g_dev, &fi, NULL, &fb) != VK_SUCCESS) return 0;
     /* The image into the scratch slot as the window's own frame goes. */
-    upload_bgra(SCREEN_SCRATCH, bgra, w, h);
+    upload_bgra(SCREEN_SCRATCH, bgra, w, h, k);
     vkResetFences(g_dev, 1, &g_pres_fence);
     present_record(g_pres_check_pass, fb, dw, dh, SCREEN_SCRATCH, mode);
     memset(&rg, 0, sizeof rg);

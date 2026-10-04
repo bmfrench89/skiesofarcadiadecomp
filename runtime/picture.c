@@ -62,6 +62,62 @@ void picture_scale(const uint8_t* src, int w, int h, uint8_t* dst, int dw, int d
     }
 }
 
+/* Target column x's source columns along a side of s into r: the first and
+ * last, and whether they are weighted by overlap (else the nearest). */
+static void footprint(unsigned x, unsigned s, unsigned r, unsigned* first, unsigned* last, int* weighted)
+{
+    if (s <= r) {
+        unsigned n = (unsigned)((unsigned long long)x * s / r);
+        if (n >= s) n = s - 1;
+        *first = *last = n;
+        *weighted = 0;
+        return;
+    }
+    *first = x * s / r;
+    *last = ((x + 1) * s - 1) / r;
+    *weighted = 1;
+}
+
+static unsigned overlap(unsigned c, unsigned x, unsigned s, unsigned r, int weighted)
+{
+    unsigned hi, lo;
+    if (!weighted) return 1;
+    hi = (c + 1) * r < (x + 1) * s ? (c + 1) * r : (x + 1) * s;
+    lo = c * r > x * s ? c * r : x * s;
+    return hi - lo;
+}
+
+void picture_scale_area(const uint8_t* src, int w, int h, int k, uint8_t* dst, int dw, int dh, int mode)
+{
+    PicRect r = picture_layout(w, h, dw, dh, mode);
+    unsigned sw = (unsigned)(w * k), sh = (unsigned)(h * k);
+    int x, y;
+    if (dw < 1 || dh < 1) return;
+    memset(dst, 0, (size_t)dw * dh * 4);
+    for (y = 0; y < r.h; y++) {
+        unsigned fy0, fy1, row, col;
+        int wty;
+        uint8_t* d = dst + ((size_t)(r.y + y) * dw + r.x) * 4;
+        footprint((unsigned)y, sh, (unsigned)r.h, &fy0, &fy1, &wty);
+        for (x = 0; x < r.w; x++, d += 4) {
+            unsigned fx0, fx1, sum[3] = {0, 0, 0}, total = 0, i;
+            int wtx;
+            footprint((unsigned)x, sw, (unsigned)r.w, &fx0, &fx1, &wtx);
+            for (row = fy0; row <= fy1; row++) {
+                unsigned wy = overlap(row, (unsigned)y, sh, (unsigned)r.h, wty);
+                for (col = fx0; col <= fx1; col++) {
+                    const uint8_t* s = src + ((size_t)row * sw + col) * 4;
+                    unsigned wgt = wy * overlap(col, (unsigned)x, sw, (unsigned)r.w, wtx);
+                    for (i = 0; i < 3; i++) sum[i] += wgt * s[i];
+                    total += wgt;
+                }
+            }
+            for (i = 0; i < 3; i++) d[i] = (uint8_t)((sum[i] + total / 2) / total);
+            d[3] = 255;
+        }
+    }
+}
+
 /* ---- P5a: the filters (comfort-pack spec 3.13) ---------------------------- */
 
 #define ENC_N 65536 /* the encode table's steps over linear 0-1: 20 to the darkest sRGB step */

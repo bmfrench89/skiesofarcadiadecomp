@@ -1,6 +1,6 @@
 """The frame oracle: is a candidate frame close enough to its reference?
 
-    python tools/imgdiff.py REF.png CAND.png [--heat out.png]
+    python tools/imgdiff.py REF.png CAND.png [--heat out.png] [--sample centre|box --scale K]
     python tools/imgdiff.py refs [--set corpus|perfset|gpuset] [--exe gen/soa.exe]
     python tools/imgdiff.py mutate [--set corpus|perfset]
 
@@ -24,6 +24,11 @@ For the corpus it requires the frame's FNV-1a to be config/fifo_manifest.tsv's.
 `mutate` runs MUTATIONS over those references: the noise-like ones must pass
 on every frame, the defect-like ones fail on every frame but a listed blind
 spot -- the proof that the thresholds can fail, made before they are used.
+
+`--sample` (V9a) takes a candidate drawn at K times the reference's size
+down to it first: `centre`, each KxK block's centre sample (K odd: the one
+co-located with the native pixel's centre), or `box`, the block's mean,
+rounded as gxv's copy shader rounds it.
 """
 
 from __future__ import annotations
@@ -261,6 +266,42 @@ def heat(w: int, h: int, ref: bytes, cand: bytes, far: bytearray, blob: bytearra
                 255,
             )
     return bytes(out)
+
+
+def downsample(w: int, h: int, rgba: bytes, k: int, how: str) -> tuple[int, int, bytes]:
+    """A picture drawn at k times its size, back to it (V9a): each k x k
+    block's centre sample, or its mean rounded, (sum + k*k/2) / (k*k) per
+    channel, as copy.comp's efb_px takes the mean."""
+    if how not in ("centre", "box") or (how == "centre" and k % 2 == 0):
+        raise ValueError(f"no {how} sample at scale {k}")
+    sw, sh = w // k, h // k
+    out = bytearray(sw * sh * 4)
+    if how == "centre":
+        c = k // 2
+        for y in range(sh):
+            row = memoryview(rgba)[((y * k + c) * w) * 4 : ((y * k + c) * w + w) * 4].cast("I")
+            out[y * sw * 4 : (y + 1) * sw * 4] = row[c : c + sw * k : k].tobytes()
+        return sw, sh, bytes(out)
+    n, half = k * k, k * k // 2
+    for y in range(sh):
+        rows = [rgba[((y * k + j) * w) * 4 : ((y * k + j) * w + sw * k) * 4] for j in range(k)]
+        o = y * sw * 4
+        for ch in range(4):
+            # Each of the block's k * k samples of this channel, a row of the
+            # output at a time: strided slices, summed column by column.
+            parts = [r[i * 4 + ch :: 4 * k] for r in rows for i in range(k)]
+            out[o + ch : o + sw * 4 : 4] = bytes(
+                (sum(t) + half) // n for t in zip(*parts, strict=True)
+            )
+    return sw, sh, bytes(out)
+
+
+def largest_step(a: bytes, b: bytes) -> int:
+    """The largest difference between two pictures of one size in any channel
+    but alpha."""
+    if a == b:
+        return 0
+    return max(max(abs(x - y) for x, y in zip(a[c::4], b[c::4], strict=True)) for c in range(3))
 
 
 def compare(ref: Path, cand: Path, heat_out: Path | None = None) -> Metrics:
@@ -596,8 +637,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("ref", type=Path)
     ap.add_argument("cand", type=Path)
     ap.add_argument("--heat", type=Path, default=None, help="write a difference heat map")
+    ap.add_argument(
+        "--sample",
+        choices=("centre", "box"),
+        default=None,
+        help="the candidate is drawn at --scale times the size: take it down first",
+    )
+    ap.add_argument("--scale", type=int, default=1, help="with --sample: how much larger")
     args = ap.parse_args(argv)
-    m = compare(args.ref, args.cand, args.heat)
+    cand = args.cand
+    if args.sample:
+        w, h, px = png.read_rgba(cand)
+        sw, sh, small = downsample(w, h, px, args.scale, args.sample)
+        cand = Path(tempfile.mkdtemp()) / "sampled.png"
+        png.write_rgba(cand, sw, sh, small)
+    m = compare(args.ref, cand, args.heat)
     fails = m.failures()
     print(f"[imgdiff] {m.line()}")
     print(f"[imgdiff] {'pass' if not fails else 'FAIL: ' + '; '.join(fails)}")

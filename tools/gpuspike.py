@@ -18,6 +18,7 @@
     python tools/gpuspike.py copyimage [--mutate M]       # V7: a copy sampled in its frame, from the pool
     python tools/gpuspike.py present [--mutate M]         # V8: the GPU's presenter against picture_scale
     python tools/gpuspike.py logictest                    # V10: logic ops routed without logicOp
+    python tools/gpuspike.py oracle --scale 3             # V9a: the EFB at 3x, its centre samples judged
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -107,6 +108,14 @@ to picture_scale's picture, the CPU presenter's, every pixel's colour exact.
 specialised on the TEV's shape (SOA_GPU_SPECIALIZE=wait) and the interpreter
 alone (0), and holds the two to the same bytes. --mutate spec-stages (a
 stage dropped from the specialised shape) must fail it.
+
+--scale 2|3 (V9a) draws every GPU run with the EFB at that many times the
+console's size (SOA_GPU_SCALE). copydiff then also holds the pool's image and
+the full screen to the native ones replicated (--mutate taps fails it),
+copyimage the scaled copy's frame (copy-scale), present the averaging
+presenter (present), and oracle, through oracle_scaled, each capture's centre
+samples at 3 (V0, mip levels as at 1) or 2x2 boxes at 2 (MAE and bias), with
+the native picture gxv takes cross-checked against them (phase fails that).
 
 --specialize (V7) gives every run a command makes SOA_GPU_SPECIALIZE: wait
 draws every draw with its pipeline specialised on the TEV's shape, made on
@@ -606,6 +615,13 @@ def compare_copies(cpu: list[str], gpu: list[str]) -> tuple[list[str], Counter]:
     return problems, mismatches
 
 
+RE_COPY_SCALE = re.compile(
+    r"^copydiff at scale (\d+): the pool's image is the native one replicated in (\d+) of (\d+) "
+    r"copies, the full screen g_screen replicated in (\d+) of (\d+)$",
+    re.M,
+)
+
+
 def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None) -> int:
     code = ready(prof)
     if code is not None:
@@ -628,10 +644,11 @@ def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None)
         args += ["--out", str(out)]
         if mutate and backend == "gpu":
             args += ["--mutate", mutate]
+        env = {**os.environ, "SOA_GPU_SCALE": str(SCALE)} if SCALE > 1 else None
         # The two sides are independent processes with their own output, so
         # they run at once: each takes about 18 s at 200 rectangles.
         procs[backend] = subprocess.Popen(
-            args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
         )
     done = {}
     for backend, proc in procs.items():
@@ -657,6 +674,17 @@ def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None)
             f"{what} {sum(n for k, n in mismatches.items() if k[0] == what)}" for what in HASHED
         )
     )
+    if SCALE > 1:
+        # V9a: on the replicated EFB, the pool's image and the full screen are
+        # the native ones replicated, every copy.
+        m = RE_COPY_SCALE.search(done["gpu"].stdout)
+        if not m or int(m.group(1)) != SCALE:
+            problems.append(f"no line for the copies at scale {SCALE}")
+        elif m.group(2) != m.group(3) or m.group(4) != m.group(5) or m.group(3) == "0":
+            problems.append(
+                f"at scale {SCALE}: the pool's image replicated in {m.group(2)} of {m.group(3)} copies, "
+                f"the full screen in {m.group(4)} of {m.group(5)}"
+            )
     for line in problems[:5]:
         print(f"FAIL {line}")
     for (what, tpf, intensity, half, filtered), n in sorted(mismatches.items())[:12]:
@@ -680,18 +708,23 @@ SPECIALIZE: str | None = None
 # optional feature treated as absent -- logicOp, the interlock -- which is how
 # an Android GPU's capability set is tried on this one.
 FEATURES: str | None = None
+# --scale (V9a): SOA_GPU_SCALE for every GPU run.
+SCALE = 1
 
 
 def clean_env() -> dict[str, str]:
     """The parent's environment with every SOA_* taken out, and SOA_SETTINGS=0:
     nothing set for another run may reach a replay (3.12's rule, and imgdiff's
-    for its references). --specialize alone is put back."""
+    for its references). --specialize, --features and --scale alone are put
+    back."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env["SOA_SETTINGS"] = "0"
     if SPECIALIZE is not None:
         env["SOA_GPU_SPECIALIZE"] = SPECIALIZE
     if FEATURES is not None:
         env["SOA_GPU_FEATURES"] = FEATURES
+    if SCALE > 1:
+        env["SOA_GPU_SCALE"] = str(SCALE)
     return env
 
 
@@ -725,6 +758,7 @@ def replay(
     logicop: str | None = None,
     dump_ram: Path | None = None,
     env: dict[str, str] | None = None,
+    png_full: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess, str | None]:
     """One capture through the spike: the run, and the frame's hash."""
     args = [str(exe_path(prof)), "--backend", backend, "--replay", str(base), "--png", str(png_out)]
@@ -734,6 +768,8 @@ def replay(
         args += ["--logicop", logicop]
     if dump_ram:
         args += ["--dump-ram", str(dump_ram)]
+    if png_full and backend == "gpu":
+        args += ["--png-full", str(png_full)]
     proc = subprocess.run(
         args,
         cwd=ROOT,
@@ -814,6 +850,20 @@ BY_DESIGN: dict[str, str] = {
 # (3.12) wants five; the corpus and the benchmark set have no more to give,
 # and with V1's captures (--set corpus,perfset,gpuset) the alpha test applies
 # on five.
+# Captures whose 2x picture -- the box of each 2x2 -- is beyond V0's MAE for
+# a cause V9a calls by design: averaging four samples is supersampling, which
+# blends text edges and fine texture that the CPU's single sample keeps, and
+# shifts these frames' level a little. Each was checked against the 3x frame's
+# box, which is the same supersampling from other samples (FINDINGS "V9a").
+BY_DESIGN_SCALE2: dict[str, str] = {
+    "4800": "the dialogue's text edges and the hall's metal averaged: MAE 1.652, bias -0.62; the 3x frame's "
+    "box is darker by the same (-0.57) and within MAE 0.527 of the 2x box, while its centre samples are the "
+    "CPU's level to 0.005",
+    "ship_6000": "the hold's rivets and planks averaged: MAE 1.549, bias -0.36; the 3x box within MAE 0.382 "
+    "of it, its centre samples the CPU's level",
+    "ship_6001": "the frame after ship_6000, the same",
+}
+
 SHORT_OF_FIVE: dict[str, str] = {
     "alpha": "only 8000 and the ship pair have alpha-tested pixels that show once drawn (0.9%, 3.8%); "
     "sky's come to 0.49% and 12100's to 0.23%",
@@ -901,6 +951,108 @@ def oracle(prof: toolchain.Profile, sets: list[str], mutations: bool) -> int:
         # A frame that already fails V0 cannot show a mutation failing it.
         judged = [(cap.setname, cap.capture) for cap in caps if cap.capture.name not in BY_DESIGN]
         failures += oracle_mutations(prof, judged, out, largest, bases)
+    return 1 if failures else 0
+
+
+def oracle_scaled(prof: toolchain.Profile, sets: list[str], scale: int, mutate: str | None) -> int:
+    """V9a's Done: every capture of the sets, poisoned where it copies to a
+    texture, replayed on the CPU (the reference, checked as oracle checks it)
+    and on the GPU with the EFB at `scale`, the full-size screen written.
+
+    At scale 3 the GPU picks mip levels as at scale 1 (SOA_GPU_SCALE_LOD=
+    native), each 3x3 block's centre sample -- co-located with the native
+    pixel's centre -- is taken (imgdiff's --sample centre), and V0 judges it
+    against the CPU with its thresholds. At scale 2, which has no co-located
+    sample, the box of each 2x2 is judged on MAE and bias alone. Either way
+    the downsampled picture must be g_screen, the native picture gxv itself
+    takes (exactly at 3; within one step at 2, where the copy filter's
+    truncation comes before the mean in one and after it in the other): the
+    check that --mutate phase fails. Then the same replay with mip levels
+    chosen for the scale, as a player sees it: MAE and bias, reported."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / f"oracle{scale}"
+    out.mkdir(parents=True, exist_ok=True)
+    caps = captures(sets)
+    how = "centre" if scale % 2 else "box"
+    print(f"{len(caps)} captures from {', '.join(sets)} at scale {scale}, judged on the {how}")
+    failures = 0
+    rows = []
+    for cap in caps:
+        c = cap.capture
+        base = replay_base(cap, out / "poisoned")
+        ref = out / f"{c.name}_cpu.png"
+        proc, h = replay(prof, "cpu", base, ref)
+        if proc.returncode != 0 or h is None:
+            print(f"FAIL {c.name}: the CPU replay exited {proc.returncode}")
+            failures += 1
+            continue
+        if c.frame_hash is not None and h != c.frame_hash:
+            print(f"FAIL {c.name}: reference {h} is NOT the manifest's")
+            failures += 1
+            continue
+        verdicts = {}
+        for lod in ("native", "scale"):
+            native, full = (
+                out / f"{c.name}_gpu_{lod}_native.png",
+                out / f"{c.name}_gpu_{lod}_full.png",
+            )
+            gpu = out / f"{c.name}_gpu_{lod}.png"
+            env = {"SOA_GPU_SCALE_LOD": lod}
+            proc, _ = replay(prof, "gpu", base, native, mutate, env=env, png_full=full)
+            if skipped(proc):
+                return SKIP
+            if proc.returncode != 0 or not full.exists():
+                print(f"FAIL {c.name}: the GPU replay at scale {scale} exited {proc.returncode}")
+                failures += 1
+                break
+            fw, fh, fpx = png.read_rgba(full)
+            w, h_, small = imgdiff.downsample(fw, fh, fpx, scale, how)
+            png.write_rgba(gpu, w, h_, small)
+            nw, nh, npx = png.read_rgba(native)
+            off = imgdiff.largest_step(small, npx) if (nw, nh) == (w, h_) else 256
+            allowed = 0 if scale % 2 else 1
+            if off > allowed:
+                print(
+                    f"FAIL {c.name}: the {how} of the full screen is not g_screen "
+                    f"({'size' if off == 256 else f'off by up to {off}'}; {allowed} allowed)"
+                )
+                failures += 1
+            verdicts[lod] = imgdiff.compare(ref, gpu, out / f"{c.name}_heat_{lod}.png")
+        if len(verdicts) < 2:
+            continue
+        m = verdicts["native"]
+        bad = m.failures()
+        listing = BY_DESIGN
+        if scale % 2 == 0:
+            bad = [b for b in bad if b.startswith(("MAE", "bias"))]
+            listing = BY_DESIGN_SCALE2
+        listed = bool(bad) and c.name in listing
+        failures += bool(bad) and not listed
+        rows.append((c.name, not bad, listed))
+        verdict = "pass" if not bad else "by design" if listed else "FAIL"
+        print(f"{verdict} {cap.setname:7} {c.name:14} {m.line()}")
+        for line in bad:
+            print(f"     {line}")
+        if listed:
+            print(f"     by design: {listing[c.name]}")
+        ms = verdicts["scale"]
+        print(
+            f"     mip levels for the scale: MAE {ms.mae:.3f}, bias "
+            f"{ms.bias[0]:+.3f} {ms.bias[1]:+.3f} {ms.bias[2]:+.3f}"
+        )
+    passed = sum(ok for _, ok, _ in rows)
+    by_design = sum(listed for _, _, listed in rows)
+    if by_design > 3:
+        print(
+            f"FAIL {by_design} by-design failures: more than three is the threshold question (3.12)"
+        )
+        failures += 1
+    print(
+        f"[gpuspike] oracle at scale {scale}: {passed} of {len(caps)} pass "
+        f"{'V0' if scale % 2 else 'MAE and bias'}, {by_design} fail by design"
+    )
     return 1 if failures else 0
 
 
@@ -1383,6 +1535,10 @@ def live(
             args += ["--frames", str(int(last) + 1)]
         if side == "gpu":
             env.append("SOA_GPU=vulkan")
+            if SCALE > 1:
+                # V9a: the native picture, its centre samples at 3, under V0
+                # with mip levels chosen as at scale 1.
+                env += [f"SOA_GPU_SCALE={SCALE}", "SOA_GPU_SCALE_LOD=native"]
             if mutate:
                 env.append(f"SOA_GPU_MUTATE={mutate}")
         cmd = [
@@ -1597,7 +1753,7 @@ def logictest(prof: toolchain.Profile) -> int:
     return 0 if not problems else 1
 
 
-RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact$", re.M)
+RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact, at scale (\d+)$", re.M)
 
 
 def present(prof: toolchain.Profile, mutate: str | None) -> int:
@@ -1620,7 +1776,7 @@ def present(prof: toolchain.Profile, mutate: str | None) -> int:
         return SKIP
     print(proc.stdout.strip())
     m = RE_PRESENT.search(proc.stdout)
-    ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2)
+    ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2) and int(m.group(3)) == SCALE
     print(f"[gpuspike] present {'passes' if ok else 'FAILS'}")
     return 0 if ok else 1
 
@@ -1661,7 +1817,12 @@ def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
     count above zero), and land the copy with the frame's own submission
     rather than a wait of its own. A mutation goes to the GPU run: cimg-cpu
     (the producer's image, not yet landed, sampled instead) and land-at-copy
-    (V6's wait at every copy) must each fail it."""
+    (V6's wait at every copy) must each fail it.
+
+    At --scale 3 (V9a) the copy's image in the pool is three times its size,
+    and the frame -- its centre samples -- must still be the CPU's, hash and
+    all; copy-scale (the image sampled as if native) must fail it. At
+    --scale 2, which has no centre sample, the cells alone are judged."""
     code = ready(prof)
     if code is not None:
         return code
@@ -1683,7 +1844,7 @@ def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
             f"gpu: {right} of 16 cells right, hash {frame}; {copies} copies to a texture, "
             f"{waits} readback waits, {served} samplers served by a copy image"
         )
-        if right != 16 or frame != cpu[1]:
+        if right != 16 or (frame != cpu[1] and SCALE % 2):
             problems.append(f"gpu: {right} of 16, hash {frame} where the CPU's is {cpu[1]}")
         if not served:
             problems.append("gpu: no sampler served by a copy image from the pool")
@@ -2073,10 +2234,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="SOA_GPU_FEATURES for every run: core treats every optional feature as absent",
     )
+    ap.add_argument(
+        "--scale",
+        type=int,
+        choices=(1, 2, 3),
+        default=1,
+        help="SOA_GPU_SCALE for every GPU run (V9a): copydiff, copyimage, present and oracle judge it",
+    )
     args = ap.parse_args(argv)
-    global SPECIALIZE, FEATURES
+    global SPECIALIZE, FEATURES, SCALE
     SPECIALIZE = args.specialize
     FEATURES = args.features
+    SCALE = args.scale
     prof = toolchain.profile(args.cc)
     if args.command == "build":
         built, why = build(prof)
@@ -2089,6 +2258,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "loddiff":
         return loddiff(prof, args.cases, args.seed, args.mutate)
     if args.command == "oracle":
+        if SCALE > 1:
+            return oracle_scaled(prof, args.set.split(","), SCALE, args.mutate)
         return oracle(prof, args.set.split(","), args.mutations)
     if args.command == "logicop":
         return logicop(prof, args.mutate)

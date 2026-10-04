@@ -4,7 +4,7 @@
 // would decode from those bytes; and copy_to_screen. V3b's copydiff holds
 // all three byte for byte against the C.
 //
-// Three modes, one invocation each per:
+// Four modes, one invocation each per:
 //   0  word of the copy's bytes, from its first tile to the end of its last.
 //      The buffer arrives seeded from guest RAM, so whatever the copy does
 //      not write -- padding past the rectangle in a partial tile, the other
@@ -13,15 +13,27 @@
 //   1  texel of the copy, ow x oh: its decoded RGBA -- and, with flags 8,
 //      the same into the texel pool, where a draw later in the submission
 //      samples it (V7's copy image).
-//   2  pixel of a copy to the screen: RGBA, alpha 255.
+//   2  pixel of a copy to the screen: RGBA, alpha 255; with flags 16, of
+//      the screen at the EFB's scale, S*w x S*h (V9a).
+//   3  texel of the copy at the EFB's scale, S*ow x S*oh, into the pool
+//      only (V9a): what mode 1 puts there at scale 1.
 //
 // A submission holds several copies (V7), each in regions of its own:
 // dest_at and image_at are where its bytes and its image start, in words.
+//
+// At scale S (V9a, specs/gpu-backend.md V9) the EFB holds S x S samples a
+// pixel, and every formula below still works on native pixels: it reads the
+// EFB through a phase (jx, jy), native pixel (x, y) being sample
+// (S*x + jx, S*y + jy), so the filter's taps are S samples apart and the
+// half-scale box's four samples are too. A pass at scale (mode 3, and mode 2
+// with flags 16) runs each phase in its own place; the native picture --
+// the RAM bytes, the image, a native screen -- is the centre phase at odd S
+// and the mean of the phases at even S, which has no centre.
 #version 450
 
 layout(local_size_x = 64) in;
 
-layout(std430, binding = 0) readonly buffer Efb { uint efb[]; };        // 640x528 RGBA, red the low byte
+layout(std430, binding = 0) readonly buffer Efb { uint efb[]; };        // S*640 x S*528 RGBA, red the low byte
 layout(std430, binding = 1) buffer Dest { uint dest[]; };               // the copy's bytes, guest order
 layout(std430, binding = 2) writeonly buffer Image { uint image[]; };   // ow x oh RGBA
 layout(std430, binding = 3) writeonly buffer Screen { uint screen[]; }; // w x h RGBA
@@ -31,7 +43,8 @@ layout(push_constant) uniform Copy {
     int x0, y0, w, h; // the source rectangle, as BP 0x49/0x4A give it
     uint mode;
     uint texfmt;      // 0-6, copy_texfmt's
-    uint flags;       // 1 intensity, 2 half scale, 4 filtered, 8 the image into the pool too
+    uint flags;       // 1 intensity, 2 half scale, 4 filtered, 8 the image into the pool too,
+                      // 16 a screen copy at the EFB's scale
     uint chans;       // chan_a | chan_b << 2
     uint taps;        // up | mid << 8 | dn << 16: the filter collapsed onto three rows
     uint row_bytes;   // from one row of tiles to the next
@@ -39,14 +52,45 @@ layout(push_constant) uniform Copy {
     uint count;       // invocations wanted
     uint dest_at, image_at, pool_at; // the copy's regions, in words
     uint screen_at;   // a screen copy's slot in the screen buffer, in words (V8)
+    uint scale;       // the EFB's scale, S: 1, 2 or 3 (V9a)
 } pc;
 
 const int EFB_W = 640, EFB_H = 528;
 
+// The phase this invocation reads (V9a): one sample of each pixel's S x S,
+// or with g_mean their mean, rounded.
+ivec2 g_phase = ivec2(0);
+bool g_mean = false;
+
+ivec4 efb_sample(int x, int y)
+{
+    uint v = efb[y * (EFB_W * int(pc.scale)) + x];
+    return ivec4(v & 255u, (v >> 8) & 255u, (v >> 16) & 255u, v >> 24);
+}
+
 ivec4 efb_px(int x, int y)
 {
-    uint v = efb[y * EFB_W + x];
-    return ivec4(v & 255u, (v >> 8) & 255u, (v >> 16) & 255u, v >> 24);
+    int S = int(pc.scale);
+    if (S == 1) return efb_sample(x, y);
+    if (!g_mean) return efb_sample(S * x + g_phase.x, S * y + g_phase.y);
+    ivec4 sum = ivec4(0);
+    for (int jy = 0; jy < S; jy++)
+        for (int jx = 0; jx < S; jx++) sum += efb_sample(S * x + jx, S * y + jy);
+    return (sum + S * S / 2) / (S * S);
+}
+
+// The native picture's phase: the centre at odd S, the mean at even S.
+void native_phase()
+{
+    int S = int(pc.scale);
+#ifdef GXV_MUTATE_PHASE
+    // --mutate phase (V9a): the first sample of each pixel, not its centre
+    g_mean = false;
+    g_phase = ivec2(0);
+#else
+    g_mean = (S & 1) == 0;
+    g_phase = ivec2(S / 2);
+#endif
 }
 
 // filter_sample: the three rows the filter reads, each tap clamped to the
@@ -56,6 +100,15 @@ ivec3 filtered(int sx, int sy)
     int ytop = max(pc.y0, 0), ybot = min(pc.y0 + pc.h - 1, EFB_H - 1);
     int ya = max(sy - 1, ytop), yb = min(sy + 1, ybot);
     uvec3 a = uvec3(efb_px(sx, ya).rgb), c = uvec3(efb_px(sx, sy).rgb), b = uvec3(efb_px(sx, yb).rgb);
+#ifdef GXV_MUTATE_TAPS
+    // --mutate taps (V9a): at scale, the outer rows one sample from the
+    // centre's instead of S
+    if (pc.scale > 1u && !g_mean) {
+        int S = int(pc.scale), cy = S * sy + g_phase.y, cx = S * sx + g_phase.x;
+        a = uvec3(efb_sample(cx, max(cy - (sy - ya), 0)).rgb);
+        b = uvec3(efb_sample(cx, min(cy + (yb - sy), EFB_H * S - 1)).rgb);
+    }
+#endif
     uvec3 v = (pc.taps & 255u) * a + ((pc.taps >> 8) & 255u) * c + ((pc.taps >> 16) & 255u) * b;
 #ifdef GXV_MUTATE_ROUNDING
     v = (v + 32u) >> 6;
@@ -197,10 +250,40 @@ uvec4 decoded(int x, int y)
 
 uint pack_rgba(uvec4 c) { return c.r | c.g << 8 | c.b << 16 | c.a << 24; }
 
+// copy_to_screen's pixel (x, y): the filter (never half scale), alpha 255,
+// black outside the EFB.
+uint screen_px(int x, int y)
+{
+    int sx = pc.x0 + x, sy = pc.y0 + y;
+    uvec4 o = uvec4(0u, 0u, 0u, 255u);
+    if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
+        ivec4 px = efb_px(sx, sy);
+        o.rgb = uvec3((pc.flags & 4u) != 0u ? filtered(sx, sy) : px.rgb);
+    }
+    return pack_rgba(o);
+}
+
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.count) return;
+    uint S = pc.scale;
+    if (pc.mode == 3u) {
+        // The copy at scale: texel (X, Y) is native texel (X / S, Y / S)
+        // read through phase (X % S, Y % S).
+        uint X = i % (pc.ow * S), Y = i / (pc.ow * S);
+        g_phase = ivec2(X % S, Y % S);
+        pool[pc.pool_at + i] = pack_rgba(decoded(int(X / S), int(Y / S)));
+        return;
+    }
+    if (pc.mode == 2u && (pc.flags & 16u) != 0u) {
+        // The screen at scale, S*min(w, 640) wide, each sample its phase.
+        uint sw = uint(min(pc.w, EFB_W)) * S, X = i % sw, Y = i / sw;
+        g_phase = ivec2(X % S, Y % S);
+        screen[pc.screen_at + i] = screen_px(int(X / S), int(Y / S));
+        return;
+    }
+    native_phase();
     if (pc.mode == 0u) {
         uint word = 0u, mask = 0u, k;
         for (k = 0u; k < 4u; k++) {
@@ -214,15 +297,8 @@ void main()
         image[pc.image_at + i] = v;
         if ((pc.flags & 8u) != 0u) pool[pc.pool_at + i] = v;
     } else {
-        // copy_to_screen: the filter (never half scale), alpha 255, black
-        // outside the EFB. The screen is min(w, 640) wide.
+        // The screen is min(w, 640) wide.
         uint sw = uint(min(pc.w, EFB_W));
-        int x = int(i % sw), y = int(i / sw), sx = pc.x0 + x, sy = pc.y0 + y;
-        uvec4 o = uvec4(0u, 0u, 0u, 255u);
-        if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
-            ivec4 px = efb_px(sx, sy);
-            o.rgb = uvec3((pc.flags & 4u) != 0u ? filtered(sx, sy) : px.rgb);
-        }
-        screen[pc.screen_at + i] = pack_rgba(o);
+        screen[pc.screen_at + i] = screen_px(int(i % sw), int(i / sw));
     }
 }

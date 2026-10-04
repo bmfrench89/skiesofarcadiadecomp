@@ -54,9 +54,10 @@ void gxv_present_resize(int w, int h);
 /* A frame of the window's own, BGRA (V8b: P5a's filters done on the CPU),
  * presented as gxv_present presents a screen copy. */
 int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode);
-/* The presenter's check (test_gxv_present.py): bgra, w x h, through the
- * upload and the present pass into a dw x dh B8G8R8A8 image, read back. */
-int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, uint8_t* out);
+/* The presenter's check (test_gxv_present.py): bgra, a w x h picture drawn
+ * at scale k ((k*w) x (k*h), V9a), through the upload and the present pass
+ * into a dw x dh B8G8R8A8 image, read back. */
+int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */
 void gxv_report(void);
@@ -76,10 +77,16 @@ int gxv_tev_run(const uint32_t* setups, const uint32_t* inputs, uint32_t* result
 #define GXV_LOD_WORDS 35
 int gxv_lod_run(unsigned kind, const uint32_t* inputs, uint32_t* results, unsigned n);
 
-/* For copydiff: the GPU's EFB set to these 640x528 RGBA pixels, and the
- * decoded image of the last copy to a texture. */
+/* For copydiff: the GPU's EFB set to these 640x528 RGBA pixels (each S x S
+ * samples at scale), and the decoded image of the last copy to a texture. */
 int gxv_load_efb(const uint8_t* rgba);
 const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h);
+/* V9a: the EFB's scale (SOA_GPU_SCALE); the last copy's image in the pool,
+ * at that scale; and the last screen copy at it -- its picture's native size
+ * and its scale -- for the spike, which opens no presenter. */
+int gxv_scale(void);
+const uint8_t* gxv_last_copy_pool(unsigned* w, unsigned* h, int* scale);
+const uint8_t* gxv_screen_full(int* w, int* h, int* scale);
 /* The depth buffer as 24-bit values, 640x528, row by row. */
 int gxv_read_depth(uint32_t* out);
 

@@ -6490,3 +6490,87 @@ the driver's.** 2026-10-04.
   - **The last first-launch stall** in play ("V7, fifth") has other ways
     out: the blend as dynamic state (`VK_EXT_extended_dynamic_state3`), or
     the next driver.
+
+**V9a: the EFB at two and three times the console's size.** 2026-10-04.
+
+- **What it does.** `SOA_GPU_SCALE=2|3` (soa.ini `gpu_scale`) draws on the GPU into an EFB of
+  S·640 × S·528 samples. The window shows that picture, sharper.
+  - The scissors, clears, viewport and framebuffers are scaled; `raster.vert` is not changed.
+  - Lines are S samples wide and points S samples square, through `wideLines` and `largePoints`.
+- **The copies, one phase at a time.** A copy is the native copy run once per phase: native pixel
+  (x, y) reads sample (S·x + jx, S·y + jy). So the filter's taps are S samples apart, and every
+  native formula is unchanged.
+  - **The native picture is one phase:** the centre at S = 3, the mean of four at S = 2. That
+    covers the RAM bytes, the producer's copy image and `g_screen`.
+  - **The pool's image holds every phase,** sampled by `raster.frag` with the game's texel
+    coordinates times S. So the mask effect's copies are drawn at 3x too.
+  - **The presenter's slot holds the screen at scale,** and the window averages each pixel's
+    footprint where the picture shrinks (`picture_scale_area` is its C twin).
+- **Mip levels follow the scale** (derivatives in the scaled pixel). `SOA_GPU_SCALE_LOD=native`
+  picks native's levels instead, for the oracle.
+- **Found while building** [V]: at one sample, lines and points vanish from the centre samples.
+  - The 3x self test's lines missed 1,108 of the CPU's 2,400 pixels, and 13 of its 64 points
+    were drawn.
+  - At S samples across, every scene passes at 3x as it does at 1x.
+- **Checked** [V]:
+  - **Scale 1 is unchanged.**
+    - The oracle's 67 GPU frames are byte for byte the ones drawn before V9a.
+    - V5's contrast gives 67 of 67 captures the same pixels from the spike and `soa.exe`.
+    - The oracle's verdict is as before (65 pass, the field pair by design), and the self test,
+      `scenario.py replay` and `SOA_SELFTEST` pass.
+  - **`copydiff --scale 3` and `--scale 2`,** on an EFB whose samples are alike within each pixel:
+    - 25,600 copies, with ram 0, image 0 and screen 0 differences from the CPU;
+    - the pool's image is the native one replicated in 13,458 of 13,458 copies, and the full screen
+      `g_screen` replicated in 25,600 of 25,600.
+    - **`--mutate taps`** (the filter's taps one sample apart): ram 3,708, image 3,708 and screen
+      12,009 differences; the pool's image replicated in 9,750 of 13,458 copies.
+  - **`copyimage --scale 2` and `--scale 3`:** 16 of 16 cells and the CPU's frame hash.
+    `--mutate copy-scale` (the scaled image sampled as if native) gives 1 of 16.
+  - **`present --scale 2` and `--scale 3`:** 32 of 32 layouts exact against
+    `picture_scale_area`, and `--mutate present` gives 0 of 32. The C twin is held to its
+    definition by exact fractions in `test_picture.py`, and two mutations fail that.
+  - **`oracle --scale 3`,** all 67 captures, each frame's centre samples, native mip levels:
+    - 65 pass V0, the mask capture `mask_3200` among them;
+    - `field_5000` and `field_5001` fail as at scale 1, the by-design pair: blob 156 against 1x's
+      172, largest 58 against 59. `field_5000`'s 3x frame against the GPU's own 1x frame passes V0.
+    - The centre samples equal `g_screen` exactly on all 67.
+    - **`--mutate phase`** (`g_screen` taken from the first sample, not the centre) fails that on
+      23 of 23 corpus captures, by 22 to 255, while V0 alone passes all 23.
+  - **With mip levels for the scale,** as a player sees it: MAE 0.001 to 5.16 against the CPU's
+    frame, largest on `battle_4000` and `battle_4001`, whose floor resolves a finer level.
+  - **`oracle --scale 2`,** all 67, the box of each 2x2, native mip levels: MAE 0.027 to 1.652,
+    bias within 0.651.
+    - 64 pass V0's MAE and bias, and the oracle passes with the other three listed by design
+      (`BY_DESIGN_SCALE2`, with the evidence below).
+    - `4800` (MAE 1.652) and the ship pair (1.549) exceed V0's MAE limit of 1.5, and are listed by
+      design. Averaging four samples is supersampling: it blends the text edges and fine texture
+      that the CPU's single sample keeps, and lowers these frames' level (bias -0.62 on `4800`).
+    - **Why that is the averaging, not the 2x path:** the 3x frame's box lowers it by the same
+      (-0.57) and is within MAE 0.527 of the 2x box, while the 3x centre samples hold the CPU's
+      level to 0.005.
+    - The box is `g_screen` within one step on all 67.
+    - Mip levels for the scale: MAE up to 4.417.
+  - **Looked at:** the full-size 3x frames of `battle_4000`, `mask_3200` (the beam and Vyse) and
+    `sky_4000`, and 2x's `4800`, each beside the CPU's 1x frame.
+    - All are sharper, with smooth edges. The beam has no seam, and the minimap is right.
+    - The dialogue text is a little softer at 2x: the font is a low-resolution texture, now filtered
+      at finer positions.
+  - **The game, live:** `gpuspike.py live title --range 1290-1400 --scale 3` passes. All 111
+    reproducible frames pass V0 against the CPU's, and the GPU run holds 5 of 5 invariants at
+    1920x1584 (GPU p50 1.71 ms, p99 5.88 ms).
+  - **The cost** on this machine's GPU (the Ally X's Z1 Extreme), for one frame of each of the
+    benchmark set's 12 captures (median of five, interleaved):
+    - **Every pipeline specialised** (`SOA_GPU_SPECIALIZE=wait`, as a live run settles): 1x 1.48 to
+      3.04 ms, 2x 5.61 to 9.88, 3x 10.87 to 17.34 (`field_5000`).
+    - **So** 3x fits a 30 fps frame with half of it spare, and 2x fits even 60 fps.
+    - **Cold**, with the interpreter drawing, 3x reached 37.40 ms on `field_5000`. A new scene's
+      first moments at 3x may drop frames until its pipelines are made.
+- **What it does not do yet:**
+  - **A copy sampled after its own submission** reads the producer's native image. A copy made
+    in one frame and drawn in the next is native-sharp, not scaled.
+  - **P5a's filters** run on the native picture, so with one set the window shows the native
+    picture, said once. Their shaders (V8b) are next.
+  - **The 2x self test** fails on edges by design: the mean blends them (cull0-2, points).
+  - **The presenter reads its slot from host-visible memory,** 12 MB a frame at 3x. That is shared
+    memory on the Ally X, but would cross the bus on a discrete GPU.
+- **Owner:** to judge 2x and 3x in a window (the Done's last line), at 60 or 120 Hz.

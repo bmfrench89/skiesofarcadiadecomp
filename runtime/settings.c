@@ -66,6 +66,8 @@ static const Setting k_settings[] = {
     {"render", "SOA_RENDER", "1 draws the game"},
     {"gpu", "SOA_GPU", "off (the default) or vulkan: the GPU draws the picture, where this build has the backend (python tools/fetch_gpu.py, then --link) and there is a Vulkan driver; anything short of one is said and the CPU draws",
      0, NULL, "off|vulkan"},
+    {"gpu_scale", "SOA_GPU_SCALE", "1 (the default), 2 or 3: with gpu = vulkan, the picture drawn at that many times the console's 640x528, and shown sharper",
+     0, NULL, "1|2|3"},
     {"window", "SOA_WINDOW", "0 or 1: force the window off or on"},
     {"scale", "SOA_SCALE", "the window's starting size in multiples of 640x480; by default the largest that fits"},
     {"threads", "SOA_THREADS", "rasterizer threads"},

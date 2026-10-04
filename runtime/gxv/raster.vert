@@ -25,6 +25,10 @@ layout(push_constant) uniform Draw {
 invariant gl_Position;
 #endif
 
+// A point's size in samples: S at the EFB's scale (V9a), where the device
+// has largePoints, so a native pixel's centre is covered as the CPU covers it.
+layout(constant_id = 0) const float POINT_SIZE = 1.0;
+
 layout(location = 0) noperspective out float o_depth;
 layout(location = 1) out vec4 o_col0;
 layout(location = 2) out vec4 o_col1;
@@ -49,5 +53,5 @@ void main()
     o_col0 = vec4(v[o + 7u], v[o + 8u], v[o + 9u], v[o + 10u]);
     o_col1 = vec4(v[o + 11u], v[o + 12u], v[o + 13u], v[o + 14u]);
     for (uint k = 0u; k < 8u; k++) o_tex[k] = vec4(v[o + 15u + 3u * k], v[o + 16u + 3u * k], v[o + 17u + 3u * k], 0.0);
-    gl_PointSize = 1.0;
+    gl_PointSize = POINT_SIZE;
 }

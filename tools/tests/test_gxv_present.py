@@ -41,10 +41,10 @@ def run_present(*extra):
 def test_the_gpu_presents_what_picture_scale_draws():
     proc = run_present()
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "present 32 of 32 layouts exact" in proc.stdout
+    assert "present 32 of 32 layouts exact, at scale 1" in proc.stdout
 
 
 def test_a_presenter_one_column_over_fails_it():
     proc = run_present("--mutate", "present")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "present 0 of 32 layouts exact" in proc.stdout
+    assert "present 0 of 32 layouts exact, at scale 1" in proc.stdout

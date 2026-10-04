@@ -155,6 +155,23 @@ int main(void)
             printf("\n");
             free(src);
             free(dst);
+        } else if (!strcmp(cmd, "area") && scanf("%d %d %d %d %d %15s", &a, &b, &n, &c, &d, mode) == 6) {
+            /* an a x b frame drawn at n times its size (V9a), each pixel i's
+             * bytes i*7+1, i*13+5, i*29+3, into c x d: each pixel out as
+             * b0 | b1 << 8 | b2 << 16 */
+            unsigned char* src = (unsigned char*)malloc((size_t)a * b * n * n * 4);
+            unsigned char* dst = (unsigned char*)malloc((size_t)c * d * 4);
+            for (i = 0; i < a * b * n * n; i++) {
+                src[4 * i] = (unsigned char)(i * 7 + 1);
+                src[4 * i + 1] = (unsigned char)(i * 13 + 5);
+                src[4 * i + 2] = (unsigned char)(i * 29 + 3);
+                src[4 * i + 3] = 255;
+            }
+            picture_scale_area(src, a, b, n, dst, c, d, strcmp(mode, "fit") ? PICTURE_INTEGER : PICTURE_FIT);
+            for (i = 0; i < c * d; i++) printf("%u ", dst[4 * i] | dst[4 * i + 1] << 8 | dst[4 * i + 2] << 16);
+            printf("\n");
+            free(src);
+            free(dst);
         }
     }
     return 0;
@@ -686,6 +703,81 @@ def test_the_scaler_is_the_layout(driver):
     ):
         got = [int(v) for v in ask(driver, [f"scale {w} {h} {dw} {dh} {mode}"])[0].split()]
         assert got == scale_twin(w, h, dw, dh, mode), (w, h, dw, dh, mode)
+
+
+def area_twin(w: int, h: int, k: int, dw: int, dh: int, mode: str) -> list[int]:
+    """picture_scale_area's twin, from its definition rather than its
+    arithmetic: along a side the frame (drawn at k times) shrinks on, each
+    pixel is the mean of the source columns its footprint overlaps, each
+    weighted by the overlap as an exact fraction, rounded half up; along any
+    other, picture_scale's nearest."""
+    from fractions import Fraction
+
+    x0, y0, rw, rh = layout(w, h, dw, dh, mode)
+    sw, sh = w * k, h * k
+
+    def src(i: int) -> tuple[int, int, int]:
+        return ((i * 7 + 1) & 255, (i * 13 + 5) & 255, (i * 29 + 3) & 255)
+
+    def weights(x: int, s: int, r: int) -> list[tuple[int, Fraction]]:
+        if s <= r:
+            return [(min(x * s // r, s - 1), Fraction(1))]
+        lo, hi = Fraction(x * s, r), Fraction((x + 1) * s, r)
+        return [
+            (c, min(Fraction(c + 1), hi) - max(Fraction(c), lo))
+            for c in range(int(lo), -(-hi.numerator // hi.denominator))
+        ]
+
+    out = [0] * (dw * dh)
+    for y in range(rh):
+        wy = weights(y, sh, rh)
+        for x in range(rw):
+            wx = weights(x, sw, rw)
+            total = sum(a for _, a in wx) * sum(b for _, b in wy)
+            v = 0
+            for ch in range(3):
+                acc = sum(a * b * src(r * sw + c)[ch] for c, a in wx for r, b in wy)
+                v |= int(acc / total + Fraction(1, 2)) << (8 * ch)
+            out[(y0 + y) * dw + x0 + x] = v
+    return out
+
+
+@needs_msvc
+def test_the_area_scaler_is_its_definition(driver):
+    """picture_scale_area (V9a), the twin of the GPU presenter's averaging
+    for a picture drawn at scale: shrinking on both sides, on one, and on
+    neither (where it is picture_scale), at both layouts."""
+    for w, h, k, dw, dh, mode in (
+        (4, 3, 3, 5, 4, "integer"),
+        (4, 3, 3, 7, 5, "fit"),
+        (4, 3, 2, 13, 7, "fit"),
+        (6, 4, 3, 7, 30, "fit"),
+        (5, 4, 2, 3, 2, "integer"),
+        (6, 5, 3, 11, 9, "fit"),
+        (4, 3, 3, 12, 9, "integer"),
+    ):
+        got = [int(v) for v in ask(driver, [f"area {w} {h} {k} {dw} {dh} {mode}"])[0].split()]
+        assert got == area_twin(w, h, k, dw, dh, mode), (w, h, k, dw, dh, mode)
+
+
+@needs_msvc
+def test_the_area_scaler_s_mutations_fail(tmp_path):
+    """The mean truncated instead of rounded, and the last overlapping
+    column left out, each move a pixel of the first case."""
+    src = (ROOT / "runtime" / "picture.c").read_text(encoding="utf-8")
+    want = area_twin(4, 3, 3, 7, 5, "fit")
+    for name, a, b in (
+        (
+            "truncated",
+            "d[i] = (uint8_t)((sum[i] + total / 2) / total);",
+            "d[i] = (uint8_t)(sum[i] / total);",
+        ),
+        ("short", "*last = ((x + 1) * s - 1) / r;", "*last = ((x + 1) * s - 1) / r - 1;"),
+    ):
+        assert src.count(a) == 1, name
+        exe = build(tmp_path / name, src.replace(a, b))
+        got = [int(v) for v in ask(exe, ["area 4 3 3 7 5 fit"])[0].split()]
+        assert got != want, name
 
 
 def test_the_png_decoder_reads_every_filter(tmp_path):

@@ -27,7 +27,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 460 s | nothing (397 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 545 s | nothing (399 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -320,18 +320,18 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1227 passed, 2 skipped in 459.69s
+1239 passed, 2 skipped in 543.47s
 ```
 
-1229 tests in 70 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1208 passed, 3 skipped` without
+1241 tests in 71 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1220 passed, 3 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `830 passed, 399 skipped` without MSVC. The two
+into one module-level skip), `840 passed, 401 skipped` without MSVC. The two
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 397 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 399 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

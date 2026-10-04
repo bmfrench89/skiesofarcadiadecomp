@@ -32,7 +32,8 @@
  * --replay BASE runs a capture (BASE.fifo, .regs, .ram) on either backend and
  * prints the frame's hash; --png writes the frame, --dump-ram the RAM it left
  * and --dump-depth the depth buffer, as 24-bit values. --logicop picks how
- * gxv draws logic ops.
+ * gxv draws logic ops. --png-full (V9a, gpu only) writes the last screen
+ * copy as drawn at SOA_GPU_SCALE, S times the frame's size.
  *
  * Exit status: 0 when every check here passed, 1 when one failed, 3 when gpu
  * mode found no Vulkan device (a skip, which the caller reports as one).
@@ -1030,21 +1031,27 @@ static int scene_logictest(CpuState* s, int which)
  * what the CPU presenter draws). Every pixel's colour must be the CPU's: the
  * scaler is nearest neighbour by integer arithmetic, so there is nothing to
  * round. Alpha is not compared: the black bars are opaque on the GPU and
- * zero on the CPU, and the swap chain ignores alpha. */
+ * zero on the CPU, and the swap chain ignores alpha.
+ *
+ * With SOA_GPU_SCALE at 2 or 3 (V9a), each copy is drawn at that scale,
+ * (k*w) x (k*h), and the reference is picture_scale_area: the presenter's
+ * averaging where the picture shrinks, by the same integer arithmetic. */
 static int present_check(void)
 {
     static const int targets[][2] = {{640, 480}, {1280, 960}, {2560, 1440}, {1920, 1080}, {1000, 700},
                                      {641, 481}, {300, 200}, {1024, 1600}};
     static const int sources[][2] = {{640, 480}, {640, 448}};
-    uint8_t* src = (uint8_t*)malloc(640u * 480u * 4u);
-    uint8_t* bgra = (uint8_t*)malloc(640u * 480u * 4u);
+    int k = gxv_scale();
+    size_t most = 640u * 480u * 4u * (size_t)(k * k);
+    uint8_t* src = (uint8_t*)malloc(most);
+    uint8_t* bgra = (uint8_t*)malloc(most);
     uint8_t* ref = (uint8_t*)malloc(2560u * 1600u * 4u);
     uint8_t* got = (uint8_t*)malloc(2560u * 1600u * 4u);
     unsigned si, ti, mode, i, exact = 0, total = 0, shown = 0;
     if (!src || !bgra || !ref || !got) return 1;
     for (si = 0; si < 2; si++) {
         int w = sources[si][0], h = sources[si][1];
-        for (i = 0; i < (unsigned)(w * h); i++) {
+        for (i = 0; i < (unsigned)(w * h * k * k); i++) {
             uint32_t v = i * 2654435761u ^ (si * 0x9E3779B9u);
             src[i * 4 + 0] = (uint8_t)v;
             src[i * 4 + 1] = (uint8_t)(v >> 8);
@@ -1061,11 +1068,12 @@ static int present_check(void)
                 unsigned bad = 0, px;
                 PicRect r = picture_layout(w, h, dw, dh, (int)mode);
                 total++;
-                if (!gxv_present_check(bgra, w, h, dw, dh, (int)mode, got)) {
+                if (!gxv_present_check(bgra, w, h, k, dw, dh, (int)mode, got)) {
                     printf("present %dx%d into %dx%d (%s): the check could not run\n", w, h, dw, dh, mode ? "fit" : "integer");
                     continue;
                 }
-                picture_scale(bgra, w, h, ref, dw, dh, (int)mode);
+                if (k > 1) picture_scale_area(bgra, w, h, k, ref, dw, dh, (int)mode);
+                else picture_scale(bgra, w, h, ref, dw, dh, (int)mode);
                 for (px = 0; px < (unsigned)(dw * dh); px++)
                     if (memcmp(got + px * 4, ref + px * 4, 3)) bad++;
                 if (!bad) exact++;
@@ -1074,7 +1082,7 @@ static int present_check(void)
                            mode ? "fit" : "integer", r.x, r.y, r.w, r.h, bad);
             }
     }
-    printf("present %u of %u layouts exact\n", exact, total);
+    printf("present %u of %u layouts exact, at scale %d\n", exact, total, k);
     free(src);
     free(bgra);
     free(ref);
@@ -1323,6 +1331,21 @@ static unsigned harness_texfmt(uint32_t v)
     }
 }
 
+/* V9a: whether a picture at scale k, (k*w) x (k*h) at stride k*w, is the
+ * native one (w x h at `stride` bytes) with each pixel replicated k x k --
+ * what a copy at scale is when every sample of a pixel is the same. */
+static int replicated(const uint8_t* big, const uint8_t* small, unsigned w, unsigned h, size_t stride, unsigned k)
+{
+    unsigned x, y;
+    for (y = 0; y < h * k; y++) {
+        const uint32_t* b = (const uint32_t*)(big + (size_t)y * w * k * 4);
+        const uint32_t* n = (const uint32_t*)(small + (size_t)(y / k) * stride);
+        for (x = 0; x < w * k; x++)
+            if (b[x] != n[x / k]) return 0;
+    }
+    return 1;
+}
+
 static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
 {
     char path[512];
@@ -1330,6 +1353,7 @@ static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
     uint8_t* efb = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
     uint8_t* img = (uint8_t*)malloc(1024u * 1024u * 4u);
     unsigned combo, r, k;
+    unsigned long long pool_n = 0, pool_bad = 0, full_n = 0, full_bad = 0;
     snprintf(path, sizeof path, "%s/copydiff.txt", g_out);
     f = fopen(path, "w");
     if (!f || !efb || !img) { fprintf(stderr, "[copydiff] cannot write %s\n", path); return 1; }
@@ -1395,9 +1419,18 @@ static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
             if (extent && dest + extent <= MEM1_SIZE) {
                 uint32_t natural = (ow + tw - 1) / tw * bpt, row = stride * 32 > natural ? stride * 32 : natural, y;
                 if (g_gpu) {
-                    unsigned gw, gh;
+                    unsigned gw, gh, pw, ph;
+                    int sc;
                     const uint8_t* gi = gxv_last_copy_image(&gw, &gh);
                     h_img = gw == ow && gh == oh ? fnv(FNV0, gi, (size_t)ow * oh * 4) : 0;
+                    if (gxv_scale() > 1) {
+                        /* The pool's image (V9a): on this EFB, the native one replicated. */
+                        const uint8_t* pi = gxv_last_copy_pool(&pw, &ph, &sc);
+                        pool_n++;
+                        if (gw != ow || gh != oh || pw != ow * (unsigned)sc || ph != oh * (unsigned)sc ||
+                            !replicated(pi, gi, ow, oh, (size_t)ow * 4, (unsigned)sc))
+                            pool_bad++;
+                    }
                 } else {
                     for (y = 0; y < oh; y++)
                         tex_decode_row(img, s->mem + dest + (y / th) * (row - natural), texfmt, ow, y);
@@ -1407,6 +1440,15 @@ static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
             bp_w(s, 0x52, 0x4003u); /* the same rectangle to the screen */
             gxr_flush();
             h_scr = gxr_screen_hash();
+            if (g_gpu && gxv_scale() > 1) {
+                /* The screen at scale (V9a): on this EFB, g_screen replicated. */
+                int fw, fh, sc, nw, nh;
+                const uint8_t* full = gxv_screen_full(&fw, &fh, &sc);
+                const uint8_t* nat = gxr_screen(&nw, &nh);
+                full_n++;
+                if (fw != nw || fh != nh || !replicated(full, nat, (unsigned)nw, (unsigned)nh, (size_t)EFB_W * 4, (unsigned)sc))
+                    full_bad++;
+            }
             fprintf(f, "%u %u %u %u %u %u %u %u %u %u %u %08x %u %u %016llx %016llx %016llx %016llx\n", combo, r, tpf, intensity,
                     half, filt, x0, y0, w, h, stride, dest, texfmt, extent, (unsigned long long)h_seed,
                     (unsigned long long)h_ram, (unsigned long long)h_img, (unsigned long long)h_scr);
@@ -1418,6 +1460,10 @@ static int copydiff(CpuState* s, unsigned rects, uint32_t seed)
     free(efb);
     free(img);
     printf("copydiff %u combinations x %u rectangles, seed %u: %s\n", 128u, rects, seed, path);
+    if (g_gpu && gxv_scale() > 1)
+        printf("copydiff at scale %d: the pool's image is the native one replicated in %llu of %llu copies, the "
+               "full screen g_screen replicated in %llu of %llu\n",
+               gxv_scale(), pool_n - pool_bad, pool_n, full_n - full_bad, full_n);
     return 0;
 }
 
@@ -1428,6 +1474,7 @@ int main(int argc, char** argv)
     const char* mutate = NULL;
     const char* replay = NULL;
     const char* png = NULL;
+    const char* png_full = NULL;
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
@@ -1449,6 +1496,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
+        else if (!strcmp(argv[i], "--png-full")) png_full = argv[++i];
         else if (!strcmp(argv[i], "--logicop")) logicop = argv[++i];
         else if (!strcmp(argv[i], "--dump-ram")) dump_ram = argv[++i];
         else if (!strcmp(argv[i], "--dump-depth")) dump_depth = argv[++i];
@@ -1509,6 +1557,15 @@ int main(int argc, char** argv)
         if (png && !png_write_rgba(png, screen, w, h, EFB_W * 4)) {
             fprintf(stderr, "[gpuspike] cannot write %s\n", png);
             r = 1;
+        }
+        if (png_full && g_gpu) {
+            int fw, fh, k;
+            const uint8_t* full = gxv_screen_full(&fw, &fh, &k);
+            printf("full frame %dx%d at scale %d\n", fw * k, fh * k, k);
+            if (!png_write_rgba(png_full, full, fw * k, fh * k, fw * k * 4)) {
+                fprintf(stderr, "[gpuspike] cannot write %s\n", png_full);
+                r = 1;
+            }
         }
         /* MEM1 as the frame left it, for chain and ramdiff: what each copy to
          * a texture wrote is in it. */

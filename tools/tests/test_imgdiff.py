@@ -146,3 +146,49 @@ def test_the_replay_sees_no_soa_variable_but_the_tools(tmp_path, monkeypatch):
     assert seen["env"]["SOA_SETTINGS"] == "0"
     # the replay runs on a scratch copy, never on the capture itself
     assert Path(seen["cmd"][2]).parent.parent == tmp_path / "scratch"
+
+
+# ---- V9a: a frame drawn at scale, taken back down -------------------------
+
+
+def scaled(w: int, h: int, k: int) -> bytes:
+    """A w x h frame drawn at k times its size, every sample its own colour:
+    sample (X, Y) holds X, Y and X + Y."""
+    out = bytearray(w * k * h * k * 4)
+    for y in range(h * k):
+        for x in range(w * k):
+            o = (y * w * k + x) * 4
+            out[o : o + 4] = bytes((x & 255, y & 255, (x + y) & 255, 255))
+    return bytes(out)
+
+
+def test_the_centre_sample_is_each_blocks_middle():
+    w, h, px = imgdiff.downsample(4 * 3, 2 * 3, scaled(4, 2, 3), 3, "centre")
+    assert (w, h) == (4, 2)
+    for y in range(2):
+        for x in range(4):
+            assert px[(y * 4 + x) * 4 : (y * 4 + x) * 4 + 3] == bytes(
+                (3 * x + 1, 3 * y + 1, 3 * x + 3 * y + 2)
+            )
+
+
+def test_the_box_is_the_blocks_mean_rounded_as_the_copy_shader_rounds_it():
+    """(sum + 2) / 4 at scale 2: samples 2x and 2x + 1 average to 2x + 0.5,
+    which rounds up."""
+    w, h, px = imgdiff.downsample(3 * 2, 2 * 2, scaled(3, 2, 2), 2, "box")
+    assert (w, h) == (3, 2)
+    for y in range(2):
+        for x in range(3):
+            o = (y * 3 + x) * 4
+            assert px[o : o + 4] == bytes((2 * x + 1, 2 * y + 1, 2 * x + 2 * y + 1, 255))
+
+
+def test_an_even_scale_has_no_centre_sample():
+    with pytest.raises(ValueError):
+        imgdiff.downsample(4, 4, scaled(2, 2, 2), 2, "centre")
+
+
+def test_the_largest_step_ignores_alpha():
+    a = bytes((10, 20, 30, 255, 0, 0, 0, 255))
+    assert imgdiff.largest_step(a, bytes((10, 20, 30, 0, 0, 0, 0, 255))) == 0
+    assert imgdiff.largest_step(a, bytes((10, 23, 30, 255, 0, 0, 1, 255))) == 3

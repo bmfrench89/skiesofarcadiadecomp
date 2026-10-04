@@ -136,8 +136,9 @@ The owner answered four questions, with the research behind them summarised in t
 - **The owner's answers of 2026-10-04:**
   - **Q-D1, the bundled compiler: yes.** llvm-mingw may be fetched at a pinned release into
     `vendor/`, never installed. Distribution R1 may start (specs/distribution.md).
-  - **V9 is split.** V9a, 2x and 3x internal resolution, is built now, after V8. V9b, the wide EFB
-    (16:9 and 21:9), waits for M10 as written. D-26 asked for both; D-27 put the gameplay milestone
+  - **V9 is split.** V9a, 2x and 3x internal resolution, is built now, after V8 (landed the same
+    day but for the owner's look, FINDINGS "V9a"). V9b, the wide EFB (16:9 and 21:9), waits for M10
+    as written. D-26 asked for both; D-27 put the gameplay milestone
     that holds M10 after the GPU build.
   - **The Vulkan SDK may be installed** on this PC (winget). Its validation layer is wanted for the
     pipeline-library failure (FINDINGS "V7, fourth") and for every GPU check after it.
@@ -697,7 +698,7 @@ than that spec suggested. D-10 offers moving M5 up: it needs only L2a, L2 and H1
 
 | G1's answer | Next |
 |---|---|
-| **A. Vulkan** | V5 (**done** 2026-10-03, FINDINGS "V5": `SOA_GPU=vulkan` in `soa.exe`), V6a (**done** 2026-10-03, FINDINGS "V6a": the GPU on its own thread, 1.1 cores against 4.8), V6b (**done** 2026-10-03 but the owner's fifteen windowed minutes, FINDINGS "V6b"), V7 (**done** 2026-10-04 but the budget on a first launch, FINDINGS "V7, first" to "V7, fourth": the pipeline cache on disk, pipelines specialised by TEV shape, copy images and the landed count; the soak's second launch takes every pipeline from the cache, its first stalled 26-30 ms four times on states the driver never compiled; with cull, topology and depth as dynamic state, FINDINGS "V7, fifth", once), V8 (under way: the GPU presents to the window, FINDINGS "V8, first"; the filters as shaders and the owner's session at 60 or 120 Hz next), V10 (**done** 2026-10-04, FINDINGS "V10": logic ops routed by draw where the device lacks `logicOp`, the interlock for a draw that may overlap itself): about 4 to 6 weeks to a live GPU renderer at native resolution. Then V8 (present from the GPU), V9 (2×/3×, widescreen), V10 (logic ops without `logicOp`) and V12 (H17 on the GPU), about 4 to 6 more, as D-26 allows. L10-L12 per G2, G3 and Android |
+| **A. Vulkan** | V5 (**done** 2026-10-03, FINDINGS "V5": `SOA_GPU=vulkan` in `soa.exe`), V6a (**done** 2026-10-03, FINDINGS "V6a": the GPU on its own thread, 1.1 cores against 4.8), V6b (**done** 2026-10-03 but the owner's fifteen windowed minutes, FINDINGS "V6b"), V7 (**done** 2026-10-04 but the budget on a first launch, FINDINGS "V7, first" to "V7, fourth": the pipeline cache on disk, pipelines specialised by TEV shape, copy images and the landed count; the soak's second launch takes every pipeline from the cache, its first stalled 26-30 ms four times on states the driver never compiled; with cull, topology and depth as dynamic state, FINDINGS "V7, fifth", once), V8 (under way: the GPU presents to the window, FINDINGS "V8, first"; the filters as shaders and the owner's session at 60 or 120 Hz next), V10 (**done** 2026-10-04, FINDINGS "V10": logic ops routed by draw where the device lacks `logicOp`, the interlock for a draw that may overlap itself), V9a (**done** 2026-10-04 but the owner's look, FINDINGS "V9a": `SOA_GPU_SCALE` 2 and 3, each 3x centre sample held to V0 on 65 of 67 captures with the by-design pair the same; V9b, the wide EFB, waits for M10): about 4 to 6 weeks to a live GPU renderer at native resolution. Then V8 (present from the GPU), V9 (2×/3×, widescreen), V10 (logic ops without `logicOp`) and V12 (H17 on the GPU), about 4 to 6 more, as D-26 allows. L10-L12 per G2, G3 and Android |
 | **B. Direct3D 11** | The same on D3D11 (porting the spike first, week-plus, if it was built on Vulkan); no Android |
 | **C. Not now** | H15d resumes at its next step, then H16 (A3). The oracle and the seam stay |
 | **D. Not ever** | As C, and PLAN.md says so |

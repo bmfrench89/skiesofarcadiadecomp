@@ -16,14 +16,18 @@
 //            the EFB's snapshot; or, built with GXV_LOGIC_INTERLOCK (V10), against
 //            the EFB itself, read and written in primitive order, the write
 //            masks (colour 1, alpha 2) applied here, there being no attachment
-//   106-107  unused
+//   106      the EFB's width in samples, S*640, the snapshot's stride (V9a)
+//   107      the factor on the texture coordinates' derivatives (float bits):
+//            1, or S for SOA_GPU_SCALE_LOD=native (V9a)
 //   108-     twelve words for each of the eight maps:
 //     0  the texture's record in the texture table, or ~0 for none
 //     1  wrap_s | wrap_t << 2 | linear << 4 | mip << 5
 //     2-8  lod_bias, min_lod, max_lod, scale_s, scale_t, su0, sv0 (float bits)
 //     9-11 nlevels, w, h
-// A texture's record, 33 words: each level's offset in the pool (in texels),
-// then its width, then its height, eleven each.
+// A texture's record, 34 words: each level's offset in the pool (in texels),
+// then its width, then its height, eleven each; then the scale its texels are
+// at, 0 or 1 for the game's own, S for a copy image at the EFB's scale (V9a),
+// whose level 0 is S times the size its draw declares.
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #ifdef GXV_LOGIC_INTERLOCK
@@ -34,7 +38,7 @@ layout(pixel_interlock_ordered) in;
 layout(std430, set = 0, binding = 1) readonly buffer Draws { uint dw[]; };
 layout(std430, set = 0, binding = 2) readonly buffer Pool { uint pool[]; };
 layout(std430, set = 0, binding = 3) readonly buffer TexRecs { uint texrec[]; };
-layout(std430, set = 0, binding = 4) readonly buffer Snapshot { uint snap[]; }; // the EFB before this draw, 640x528
+layout(std430, set = 0, binding = 4) readonly buffer Snapshot { uint snap[]; }; // the EFB before this draw, S*640 x S*528
 #ifdef GXV_LOGIC_INTERLOCK
 layout(set = 0, binding = 5, rgba8) uniform coherent image2D efb_image; // the EFB itself (V10)
 #endif
@@ -54,7 +58,8 @@ layout(location = 3) in vec4 i_tex[8];
 layout(location = 0) out vec4 o_color; // none for the interlock: its pass has no attachment
 #endif
 
-const uint DRAW_CHANNELS = 98u, DRAW_TEXMAP_OF = 99u, DRAW_FOG = 100u, DRAW_LOGIC = 105u, DRAW_MAPS = 108u, MAP_WORDS = 12u;
+const uint DRAW_CHANNELS = 98u, DRAW_TEXMAP_OF = 99u, DRAW_FOG = 100u, DRAW_LOGIC = 105u, DRAW_STRIDE = 106u,
+           DRAW_DERIV = 107u, DRAW_MAPS = 108u, MAP_WORDS = 12u, TEXREC_SCALE = 33u;
 const uint NO_TEXTURE = 0xFFFFFFFFu;
 
 vec3 g_tc[8];   // each texcoord slot's s, t, q at this pixel
@@ -129,6 +134,12 @@ ivec4 tex_sample(uint map, float s, float t, float lod)
     int l = gx_level(lod, rec_float(m + 2u), rec_float(m + 3u), rec_float(m + 4u), nlevels, (flags & 32u) != 0u);
     vec2 uv = gx_level_uv(s, t, l, rec_float(m + 7u), rec_float(m + 8u), rec_float(m + 5u), rec_float(m + 6u),
                           int(texrec[rec + 11u + uint(l)]), int(texrec[rec + 22u + uint(l)]), w, h);
+    // A copy image at the EFB's scale (V9a): the game's texel coordinates,
+    // in the S x S texels each of its own became.
+    uint k = texrec[rec + TEXREC_SCALE];
+#ifndef GXV_MUTATE_COPY_SCALE
+    if (k > 1u) uv *= float(k);
+#endif
     return sample_level(rec, flags, l, uv.x, uv.y);
 }
 
@@ -215,12 +226,18 @@ void main()
     uint ch = tev_word(DRAW_CHANNELS), texmap_of = tev_word(DRAW_TEXMAP_OF);
     uint ntex = ch & 255u, nchan = (ch >> 8) & 3u, miptex = (ch >> 16) & 255u;
     uint i;
+    float deriv = rec_float(DRAW_DERIV);
     // Every slot's derivatives, in uniform control flow; span_lod's formula on
     // them where the slot's map has mipmaps. The CPU evaluates it at a span's
-    // two ends and interpolates; that difference is by design (3.4).
+    // two ends and interpolates; that difference is by design (3.4). At scale
+    // they are the scaled pixel's, unless word 107 puts them back (V9a).
     for (i = 0u; i < 8u; i++) {
         vec4 tc = i_tex[i];
         vec2 dx = dFdxFine(tc.xy), dy = dFdyFine(tc.xy);
+        if (deriv != 1.0) {
+            dx *= deriv;
+            dy *= deriv;
+        }
         bool interpolated = ((ntex >> i) & 1u) != 0u;
         g_tc[i] = interpolated ? tc.xyz : vec3(0.0, 0.0, 1.0);
         g_lod[i] = 0.0;
@@ -257,7 +274,7 @@ void main()
     endInvocationInterlockARB();
 #else
     if ((logic & 1u) != 0u) {
-        uvec4 d = uvec4(unpack_rgba(snap[uint(gl_FragCoord.y) * 640u + uint(gl_FragCoord.x)]));
+        uvec4 d = uvec4(unpack_rgba(snap[uint(gl_FragCoord.y) * tev_word(DRAW_STRIDE) + uint(gl_FragCoord.x)]));
         outc.rgb = ivec3(logic_op((logic >> 1) & 15u, uvec3(outc.rgb), d.rgb) & 255u);
     }
     o_color = vec4(outc) / 255.0;
