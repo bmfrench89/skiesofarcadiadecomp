@@ -188,6 +188,38 @@ static void late_land(void)
     if (g_late_ram) memcpy(g_late_ram, g_late_bytes, g_late_n);
     g_late_ram = NULL;
 }
+
+/* Copies to a texture land late (V7, 3.6). Each is recorded into regions of
+ * its own -- its bytes in g_destbuf, seeded from guest RAM; its decoded image
+ * in g_imagebuf and in the texel pool -- and is counted as soon as it is
+ * recorded. It lands, its bytes into guest RAM and its image into the
+ * producer's copy image, when the submission it is in is done (land_all),
+ * and gxr is told (gxr_backend_landed); every producer wait for what a copy
+ * wrote waits for that. A draw later in the same submission that samples
+ * the copy's image samples the pool's (g_cimg) with no wait at all. */
+#define LAND_MAX 64
+static struct {
+    uint8_t* ram;      /* where its bytes go in guest RAM */
+    uint32_t guest;    /* the same, as a masked guest address, for overlaps */
+    uint32_t dest_at;  /* byte offset of its bytes in g_destbuf */
+    uint32_t extent;   /* how many */
+    uint8_t* image;    /* the producer's copy image, or NULL */
+    uint32_t image_at; /* texel offset of its image in g_imagebuf */
+    uint32_t texels;
+} g_land[LAND_MAX];
+static unsigned g_land_n;
+static uint32_t g_dest_used, g_image_used; /* bytes and texels this submission's copies hold */
+static struct {
+    const uint8_t* cpu; /* the producer's copy image, which a draw's TexCfg names */
+    uint32_t rec;       /* the pool's, in g_texrecbuf */
+} g_cimg[LAND_MAX];
+static unsigned g_cimg_n;
+static long long g_seq_cur; /* every command below it has been run here */
+static unsigned long long g_n_land_waits, g_n_cimg_served;
+/* --mutate land-at-copy: every copy waited for and landed at the copy, as V6
+ * did; --mutate cimg-cpu: a draw samples the producer's copy image, not yet
+ * landed, instead of the pool's. */
+static int g_mut_land_at_copy, g_mut_cimg_cpu;
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -466,6 +498,37 @@ static void end_pass(void)
     g_inpass = 0;
 }
 
+/* What the submission just done held for guest RAM (V7): each copy's bytes
+ * into RAM and its image into the producer's copy image, the pool's copy of
+ * it gone with the submission, and gxr told. --mutate late-readback (V6b)
+ * tells gxr first and puts the bytes in RAM only at the next command. */
+static void land_all(void)
+{
+    unsigned i;
+    if (!g_land_n) return;
+    for (i = 0; i < g_land_n; i++) {
+        const uint8_t* bytes = g_dest_map + g_land[i].dest_at;
+        if (g_mut_late) {
+            uint8_t* keep = (uint8_t*)realloc(g_late_bytes, g_land[i].extent);
+            late_land();
+            if (keep) {
+                g_late_bytes = keep;
+                memcpy(g_late_bytes, bytes, g_land[i].extent);
+                g_late_ram = g_land[i].ram;
+                g_late_n = g_land[i].extent;
+            }
+        } else {
+            memcpy(g_land[i].ram, bytes, g_land[i].extent);
+        }
+        if (g_land[i].image) memcpy(g_land[i].image, g_image_map + (size_t)g_land[i].image_at * 4, (size_t)g_land[i].texels * 4);
+    }
+    g_land_n = 0;
+    g_cimg_n = 0;
+    g_dest_used = 0;
+    g_image_used = 0;
+    gxr_backend_landed(g_seq_cur);
+}
+
 /* Submit what is recorded and wait for it. The vertex ring is free again. */
 static int submit_wait(void)
 {
@@ -490,6 +553,7 @@ static int submit_wait(void)
     g_texrec_used = 0;
     g_epoch++;
     g_n_submits++;
+    land_all();
     if (g_timestamps) {
         uint64_t ts[2];
         if (vkGetQueryPoolResults(g_dev, g_qpool, 0, 2, sizeof ts, ts, sizeof ts[0], VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
@@ -998,6 +1062,17 @@ static uint32_t upload_texture(const TexCfg* C)
     unsigned id = (unsigned)C->tex_id, n = tex_texels(C);
     int l;
     if (!C->level[0] || C->nlevels < 1 || C->w <= 0 || C->h <= 0 || id >= 1024) return NO_TEXTURE;
+    /* A copy's image from this submission: the pool's, which the copy wrote
+     * there; the producer's is filled only when the copy lands (V7). From an
+     * earlier submission it has landed, and is uploaded as any texture. */
+    if (C->copy_image && !g_mut_cimg_cpu) {
+        unsigned i;
+        for (i = 0; i < g_cimg_n; i++)
+            if (g_cimg[i].cpu == C->level[0]) {
+                g_n_cimg_served++;
+                return g_cimg[i].rec;
+            }
+    }
     if (g_resident[id].epoch == g_epoch && g_resident[id].gen == C->tex_gen) return g_resident[id].rec;
     if (g_mut_pool_inplace && g_resident[id].epoch == g_epoch) {
         /* --mutate pool-in-place (test_gxv_queue.py): the slot's new contents
@@ -1401,11 +1476,11 @@ static Compute g_copy_cs, g_tev_cs, g_lod_cs;
 
 static int compute_make(Compute* c, const uint32_t* code, size_t bytes, unsigned nbuf, uint32_t push_bytes)
 {
-    VkDescriptorSetLayoutBinding b[4];
+    VkDescriptorSetLayoutBinding b[5];
     VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     VkPushConstantRange pr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, push_bytes};
     VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -1448,8 +1523,8 @@ static int compute_make(Compute* c, const uint32_t* code, size_t bytes, unsigned
 
 static void compute_bind(Compute* c, const VkBuffer* bufs, unsigned n)
 {
-    VkDescriptorBufferInfo bi[4];
-    VkWriteDescriptorSet w[4];
+    VkDescriptorBufferInfo bi[5];
+    VkWriteDescriptorSet w[5];
     unsigned i;
     for (i = 0; i < n; i++) {
         bi[i].buffer = bufs[i];
@@ -1499,6 +1574,7 @@ static void compute_to_host(void)
 typedef struct {
     int32_t x0, y0, w, h;
     uint32_t mode, texfmt, flags, chans, taps, row_bytes, ow, oh, count;
+    uint32_t dest_at, image_at, pool_at; /* the copy's regions, in words (V7) */
 } CopyPush;
 
 /* gxr.c's copy_texfmt, copy_row_stride and copy_extent, and copy_to_texture's
@@ -1538,7 +1614,7 @@ static void tile_shape(unsigned texfmt, unsigned* tw, unsigned* th, unsigned* bp
     }
 }
 
-static unsigned g_img_w, g_img_h;
+static unsigned g_img_w, g_img_h, g_img_at; /* the last copy's image, for the self test and copydiff */
 static unsigned long long g_n_tex_copies, g_n_refused;
 
 /* The EFB's colour into the readback buffer, where the copy shader reads it. */
@@ -1579,18 +1655,19 @@ static int efb_to_buffer(VkPipelineStageFlags reader)
 
 static int copy_pipeline(void)
 {
-    VkBuffer bufs[4];
+    VkBuffer bufs[5];
     const uint32_t* code = copy_comp;
     size_t bytes = sizeof copy_comp;
     if (g_copy_cs.pipe) return 1;
     if (g_mut_copy == 1) { code = copy_comp_rounding; bytes = sizeof copy_comp_rounding; }
     if (g_mut_copy == 2) { code = copy_comp_intensity; bytes = sizeof copy_comp_intensity; }
-    if (!compute_make(&g_copy_cs, code, bytes, 4, sizeof(CopyPush))) return 0;
+    if (!compute_make(&g_copy_cs, code, bytes, 5, sizeof(CopyPush))) return 0;
     bufs[0] = g_readback;
     bufs[1] = g_destbuf;
     bufs[2] = g_imagebuf;
     bufs[3] = g_screenbuf;
-    compute_bind(&g_copy_cs, bufs, 4);
+    bufs[4] = g_poolbuf;
+    compute_bind(&g_copy_cs, bufs, 5);
     return 1;
 }
 
@@ -1626,15 +1703,33 @@ static int copy_screen(const DrawCmd* D)
     return 1;
 }
 
+/* A copy still to land whose bytes overlap [guest, guest + bytes). */
+static int land_overlaps(uint32_t guest, uint32_t bytes)
+{
+    unsigned i;
+    for (i = 0; i < g_land_n; i++)
+        if (guest < g_land[i].guest + g_land[i].extent && guest + bytes > g_land[i].guest) return 1;
+    return 0;
+}
+
+/* A submission made to land copies -- the report's readback waits, which
+ * the copies to a texture must outnumber (V7's Done). */
+static int land_wait(void)
+{
+    if (g_land_n) g_n_land_waits++;
+    return submit_wait();
+}
+
 /* A copy to a texture, as copy_to_texture makes it: the bytes into guest
- * RAM over the copy's span, and its decoded image (V7's copy image; kept for
- * the self test). A format the CPU refuses, or a span past the end of
- * memory, leaves RAM untouched, as there. */
+ * RAM over the copy's span, and its decoded image -- into the pool for the
+ * draws after it in this submission (V7's copy image), and into the
+ * producer's image when it lands. A format the CPU refuses, or a span past
+ * the end of memory, leaves RAM untouched, as there. */
 static int copy_texture(const DrawCmd* D)
 {
     CopyPush p;
     unsigned chan_a, chan_b, texfmt = copy_texfmt(D->cp_v, &chan_a, &chan_b), tw, th, bpt;
-    uint32_t dest = (D->cp_dest & 0x1FFFFFu) << 5, natural, row_bytes, rows, cols, extent;
+    uint32_t dest = (D->cp_dest & 0x1FFFFFu) << 5, natural, row_bytes, rows, cols, extent, texels;
     int half = (D->cp_v >> 9) & 1;
     uint8_t* ram;
     if (texfmt == 99) { g_n_refused++; return 1; }
@@ -1656,34 +1751,66 @@ static int copy_texture(const DrawCmd* D)
         return 0;
     }
     if (!extent) return 1;
+    texels = p.ow * p.oh;
+    /* Regions of its own in this submission, and no copy still to land under
+     * its bytes, whose seed must hold what that copy wrote. */
+    if (g_land_n == LAND_MAX || g_dest_used + extent > DEST_BYTES || g_image_used + texels > IMAGE_BYTES / 4 ||
+        land_overlaps(dest & MEM_MASK, extent)) {
+        if (!land_wait()) return 0;
+    }
+    if (g_pool_used + texels > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) {
+        if (!submit_wait()) return 0;
+    }
     p.texfmt = texfmt;
-    p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1;
+    p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1 | 8u;
     p.chans = chan_a | chan_b << 2;
     p.row_bytes = row_bytes;
+    p.dest_at = g_dest_used / 4;
+    p.image_at = g_image_used;
+    p.pool_at = g_pool_used;
     ram = mem_ptr(D->s, dest | 0x80000000u);
     /* Seeded from RAM: what the copy does not write keeps its bytes.
      * --mutate unseeded writes back whatever the buffer held instead. */
-    if (!g_mut_unseeded) memcpy(g_dest_map, ram, extent);
+    if (!g_mut_unseeded) memcpy(g_dest_map + g_dest_used, ram, extent);
     if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) return 0;
     p.mode = 0;
     p.count = extent / 4;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     p.mode = 1;
-    p.count = p.ow * p.oh;
+    p.count = texels;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
-    if (!submit_wait()) return 0;
-    if (g_mut_late) {
-        uint8_t* keep = (uint8_t*)realloc(g_late_bytes, extent);
-        late_land();
-        if (!keep) return 0;
-        g_late_bytes = keep;
-        memcpy(g_late_bytes, g_dest_map, extent);
-        g_late_ram = ram;
-        g_late_n = extent;
-    } else {
-        memcpy(ram, g_dest_map, extent);
+    {
+        /* The image in the pool, for the draws after it in this submission. */
+        VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        uint32_t* rec = (uint32_t*)g_texrec_map + g_texrec_used;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0,
+                             NULL);
+        memset(rec, 0, TEXREC_WORDS * 4);
+        rec[0] = g_pool_used;
+        rec[11] = p.ow;
+        rec[22] = p.oh;
+        if (D->cp_image) {
+            g_cimg[g_cimg_n].cpu = D->cp_image;
+            g_cimg[g_cimg_n].rec = g_texrec_used;
+            g_cimg_n++;
+        }
+        g_texrec_used += TEXREC_WORDS;
+        g_pool_used += texels;
     }
+    g_land[g_land_n].ram = ram;
+    g_land[g_land_n].guest = dest & MEM_MASK;
+    g_land[g_land_n].dest_at = g_dest_used;
+    g_land[g_land_n].extent = extent;
+    g_land[g_land_n].image = D->cp_image;
+    g_land[g_land_n].image_at = g_image_used;
+    g_land[g_land_n].texels = texels;
+    g_land_n++;
+    g_img_at = g_image_used;
+    g_dest_used += extent;
+    g_image_used += texels;
     /* For ramdiff: which bytes, and the EFB as of which draw. A frame makes
      * two or three; a live run makes one or two a frame, which the report
      * counts instead of listing. */
@@ -1693,8 +1820,9 @@ static int copy_texture(const DrawCmd* D)
         say("copies to a texture after the eighth are counted in the report, not listed");
     g_img_w = p.ow;
     g_img_h = p.oh;
-    if (D->cp_image) memcpy(D->cp_image, g_image_map, (size_t)p.ow * p.oh * 4);
     g_n_tex_copies++;
+    /* V6's protocol, a mutation now, and late-readback's base. */
+    if ((g_mut_land_at_copy || g_mut_late) && !land_wait()) return 0;
     return 1;
 }
 
@@ -1745,7 +1873,7 @@ const uint8_t* gxv_last_copy_image(unsigned* w, unsigned* h)
 {
     *w = g_img_w;
     *h = g_img_h;
-    return g_image_map;
+    return g_image_map + (size_t)g_img_at * 4;
 }
 
 /* The self test's EFB, uploaded: the GPU's own copy of what the CPU path
@@ -1876,15 +2004,31 @@ int gxv_lod_run(unsigned kind, const uint32_t* inputs, uint32_t* results, unsign
 
 static void gxv_finish(void)
 {
-    if (!submit_wait()) say("a submission failed");
+    if (!land_wait()) say("a submission failed");
+}
+
+/* The consumer has nothing to run (V7): land what it holds, since a producer
+ * waiting for that publishes nothing more. Nothing to land, nothing done --
+ * the producer may be in reset_efb, after a drain, as this is called. */
+static void timed_idle(void)
+{
+    uint64_t t0, w0;
+    if (!g_land_n) return;
+    late_land();
+    t0 = plat_mono_ns();
+    w0 = g_wait_ns;
+    if (!land_wait()) say("a submission failed");
+    g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
 }
 
 static int timed_draw(const DrawCmd* D)
 {
     late_land();
+    g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_draw(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
+    g_seq_cur = D->seq + 1;
     return r;
 }
 
@@ -1971,19 +2115,25 @@ static void frame_mark(void)
 static int timed_copy(const DrawCmd* D)
 {
     late_land();
+    g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_copy(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
     if (r && (D->cp_v & 0x4000u)) frame_mark();
+    g_seq_cur = D->seq + 1;
+    /* Nothing of this copy's, or before it, still to land: say so now. */
+    if (!g_land_n) gxr_backend_landed(g_seq_cur);
     return r;
 }
 
 static int timed_clear(const DrawCmd* D)
 {
     late_land();
+    g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
     int r = gxv_clear(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
+    g_seq_cur = D->seq + 1;
     return r;
 }
 
@@ -2005,7 +2155,8 @@ static void timed_finish(void)
 /* Its own thread (V6a): the renderer runs every command on it, and the
  * producer calls nothing here but reset_efb, after a drain, when that thread
  * is idle. */
-static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1};
+static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1, 1,
+                                  timed_idle};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
 
@@ -2039,6 +2190,8 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "late-readback")) g_mut_late = 1;
     else if (!strcmp(name, "spec-stages")) g_mut_spec_stages = 1;
     else if (!strcmp(name, "compile-wait")) g_mut_compile_wait = 1;
+    else if (!strcmp(name, "land-at-copy")) g_mut_land_at_copy = 1;
+    else if (!strcmp(name, "cimg-cpu")) g_mut_cimg_cpu = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -2129,6 +2282,9 @@ void gxv_report(void)
         g_n_pipes + (unsigned long long)plat_load64(&g_bg_made), g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
+    say("copies to a texture: %llu, landed with the submissions they were in but for %llu readback waits of their own; "
+        "%llu samplers served by a copy image from the pool",
+        g_n_tex_copies, g_n_land_waits, g_n_cimg_served);
     report_pipelines();
     report_frames();
     say("logic ops: %llu draws, drawn %s", g_n_logic,

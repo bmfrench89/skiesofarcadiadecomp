@@ -912,6 +912,60 @@ static int scene_queue(CpuState* s)
     return right != 64;
 }
 
+/* ---- V7's copy image ----------------------------------------------------
+ *
+ * test_gxv_copyimage.py's frame (specs/gpu-backend.md V7): sixteen quads of
+ * sixteen colours drawn into the EFB's top-left 64x64, copied to an RGBA8
+ * texture, and a 64x64 quad at (128, 128) sampling that texture, nearest and
+ * one texel a pixel, in the same frame. The GPU samples the image the copy
+ * wrote into its texel pool, the CPU the copy image its workers decode as
+ * they copy (FINDINGS "Copy images"). Each of the quad's sixteen cells must
+ * be the colour its source cell was drawn in. */
+#define COPY_TEX 0x00200000u
+
+static int scene_copyimage(CpuState* s)
+{
+    static const float corner[4][2] = {{0, 0}, {64, 0}, {64, 64}, {0, 64}};
+    char path[512];
+    const uint8_t* screen;
+    int w = 0, h = 0, k, i, right = 0;
+    gxr_reset_efb();
+    queue_recipe(s, 0);
+    for (k = 0; k < 16; k++) {
+        float x = (float)(k % 4 * 16), y = (float)(k / 4 * 16);
+        uint32_t c = (uint32_t)(k * 16 + 8) << 24 | (uint32_t)(255 - k * 16) << 16 | (uint32_t)(k * 37 & 255) << 8 | 0xFFu;
+        gp8(s, 0x80); gp16(s, 4);
+        vertex(s, x, y, 50, c); vertex(s, x + 16, y, 50, c); vertex(s, x + 16, y + 16, 50, c); vertex(s, x, y + 16, 50, c);
+    }
+    /* The copy: (0, 0), 64x64, to an RGBA8 texture at COPY_TEX, no clear. */
+    bp_w(s, 0x49, 0); bp_w(s, 0x4A, 63u << 10 | 63u); bp_w(s, 0x4D, 0); bp_w(s, 0x4B, COPY_TEX >> 5);
+    bp_w(s, 0x52, 12u << 3 | 3u);
+    queue_recipe(s, 1);
+    bp_w(s, 0x88, 63u | 63u << 10 | 6u << 20); bp_w(s, 0x94, COPY_TEX >> 5);
+    bp_w(s, 0x30, 63); bp_w(s, 0x31, 63); /* the coordinates' scale: 64 texels each way */
+    gp8(s, 0x80); gp16(s, 4);
+    for (i = 0; i < 4; i++) {
+        gpf(s, 128 + corner[i][0]); gpf(s, 128 + corner[i][1]); gpf(s, 50); gp32(s, 0xFFFFFFFFu);
+        gpf(s, corner[i][0] / 64.0f); gpf(s, corner[i][1] / 64.0f);
+    }
+    present(s);
+    screen = gxr_screen(&w, &h);
+    for (k = 0; k < 16; k++) {
+        size_t sx = (size_t)(k % 4 * 16 + 8), sy = (size_t)(k / 4 * 16 + 8);
+        const uint8_t* a = screen + (sy * EFB_W + sx) * 4;
+        const uint8_t* b = screen + ((sy + 128) * EFB_W + sx + 128) * 4;
+        if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2]) right++;
+    }
+    snprintf(path, sizeof path, "%s/copyimage.png", g_out);
+    if (!png_write_rgba(path, screen, w, h, EFB_W * 4)) {
+        fprintf(stderr, "[gpuspike] cannot write %s\n", path);
+        return 1;
+    }
+    printf("copyimage cells right %d of 16; frame hash %016llx\n", right, (unsigned long long)gxr_screen_hash());
+    gxr_report();
+    return right != 16;
+}
+
 /* loddiff (V5): the level of detail, which V0 cannot hold to a level -- LOD
  * +1 passes it on three distinct frames (FINDINGS "V4"). Two kinds of case,
  * n of each:
@@ -1261,7 +1315,7 @@ int main(int argc, char** argv)
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
-    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0;
+    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0, copyimage = 0;
     uint32_t seed = 1;
     int failures, i;
 
@@ -1273,6 +1327,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--copydiff")) copy_rects = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--loddiff")) lod_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--queue")) queue = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--copyimage")) copyimage = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
@@ -1373,10 +1428,11 @@ int main(int argc, char** argv)
         free(s.mem);
         return failures ? 1 : 0;
     }
-    if (queue) {
-        /* V6a's queue frame alone; gxr_report prints the backend's report. */
+    if (queue || copyimage) {
+        /* V6a's queue frame, or V7's copy image, alone; gxr_report prints the
+         * backend's report. */
         render_env();
-        failures = scene_queue(&s);
+        failures = queue ? scene_queue(&s) : scene_copyimage(&s);
         if (g_gpu) gxv_shutdown();
         free(s.mem);
         return failures ? 1 : 0;

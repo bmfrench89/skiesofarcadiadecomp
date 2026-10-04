@@ -10,8 +10,13 @@
 //      not write -- padding past the rectangle in a partial tile, the other
 //      nibble of an R4 byte, the gap a wide stride leaves between rows of
 //      tiles -- keeps the bytes it had, as on the CPU.
-//   1  texel of the copy, ow x oh: its decoded RGBA.
+//   1  texel of the copy, ow x oh: its decoded RGBA -- and, with flags 8,
+//      the same into the texel pool, where a draw later in the submission
+//      samples it (V7's copy image).
 //   2  pixel of a copy to the screen: RGBA, alpha 255.
+//
+// A submission holds several copies (V7), each in regions of its own:
+// dest_at and image_at are where its bytes and its image start, in words.
 #version 450
 
 layout(local_size_x = 64) in;
@@ -20,17 +25,19 @@ layout(std430, binding = 0) readonly buffer Efb { uint efb[]; };        // 640x5
 layout(std430, binding = 1) buffer Dest { uint dest[]; };               // the copy's bytes, guest order
 layout(std430, binding = 2) writeonly buffer Image { uint image[]; };   // ow x oh RGBA
 layout(std430, binding = 3) writeonly buffer Screen { uint screen[]; }; // w x h RGBA
+layout(std430, binding = 4) writeonly buffer Pool { uint pool[]; };     // the texel pool (raster.frag's)
 
 layout(push_constant) uniform Copy {
     int x0, y0, w, h; // the source rectangle, as BP 0x49/0x4A give it
     uint mode;
     uint texfmt;      // 0-6, copy_texfmt's
-    uint flags;       // 1 intensity, 2 half scale, 4 filtered
+    uint flags;       // 1 intensity, 2 half scale, 4 filtered, 8 the image into the pool too
     uint chans;       // chan_a | chan_b << 2
     uint taps;        // up | mid << 8 | dn << 16: the filter collapsed onto three rows
     uint row_bytes;   // from one row of tiles to the next
     uint ow, oh;      // the texture's size
     uint count;       // invocations wanted
+    uint dest_at, image_at, pool_at; // the copy's regions, in words
 } pc;
 
 const int EFB_W = 640, EFB_H = 528;
@@ -200,9 +207,11 @@ void main()
             word |= r.x << (8u * k);
             mask |= r.y << (8u * k);
         }
-        if (mask != 0u) dest[i] = (dest[i] & ~mask) | (word & mask);
+        if (mask != 0u) dest[pc.dest_at + i] = (dest[pc.dest_at + i] & ~mask) | (word & mask);
     } else if (pc.mode == 1u) {
-        image[i] = pack_rgba(decoded(int(i % pc.ow), int(i / pc.ow)));
+        uint v = pack_rgba(decoded(int(i % pc.ow), int(i / pc.ow)));
+        image[pc.image_at + i] = v;
+        if ((pc.flags & 8u) != 0u) pool[pc.pool_at + i] = v;
     } else {
         // copy_to_screen: the filter (never half scale), alpha 255, black
         // outside the EFB. The screen is min(w, 640) wide.

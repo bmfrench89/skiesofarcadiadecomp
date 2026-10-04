@@ -14,6 +14,8 @@
     python tools/gpuspike.py live title [--range A-B]     # a scenario on CPU and GPU, seeded, V0 each frame
     python tools/gpuspike.py queue [--mutate M]           # V6a's queue frame: the thread, inline, stalled
     python tools/gpuspike.py overlap [--mutate M]         # V6b: the copy hazards with the GPU as consumer
+    python tools/gpuspike.py specdiff [--mutate M]        # V7: specialised and interpreted, the same bytes
+    python tools/gpuspike.py copyimage [--mutate M]       # V7: a copy sampled in its frame, from the pool
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -80,6 +82,13 @@ SOA_GPU=vulkan, from one scratch copy of it, and holds the two pictures to the
 same pixels, with both runs' start lines naming the same device and driver.
 --mutate hands one of gxv's mutations to soa.exe alone (SOA_GPU_MUTATE), and
 the pictures must then differ, failing it.
+
+`copyimage` (V7) draws a frame that copies to an RGBA8 texture and samples
+the copy in the same frame, on the CPU and the GPU: the GPU must give the
+CPU's hash and all 16 cells, serve the sampler from the copy's image in its
+pool, and land the copy with the frame's submission rather than a wait of
+its own. --mutate cimg-cpu (the producer's image, not yet landed, sampled)
+and land-at-copy (V6's wait at each copy) must fail it.
 
 `specdiff` (V7) replays every capture of --set on the GPU twice, every draw
 specialised on the TEV's shape (SOA_GPU_SPECIALIZE=wait) and the interpreter
@@ -1469,6 +1478,77 @@ def queue(prof: toolchain.Profile, mutate: str | None) -> int:
     return 0 if ok else 1
 
 
+RE_COPYIMAGE = re.compile(r"^copyimage cells right (\d+) of 16; frame hash ([0-9a-f]{16})$", re.M)
+RE_LANDING = re.compile(
+    r"copies to a texture: (\d+), landed with the submissions they were in but for (\d+) readback "
+    r"waits of their own; (\d+) samplers served by a copy image"
+)
+
+
+def copyimage_run(prof: toolchain.Profile, backend: str, mutate: str | None = None):
+    """V7's copy image frame: (cells right, frame hash, the landing figures or
+    None), "skip", or None with the output printed."""
+    out = build_dir(prof) / "copyimage" / backend
+    out.mkdir(parents=True, exist_ok=True)
+    args = [str(exe_path(prof)), "--backend", backend, "--out", str(out), "--copyimage", "1"]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(
+        args, cwd=ROOT, env=clean_env(), capture_output=True, text=True, check=False
+    )
+    if skipped(proc):
+        return "skip"
+    text = proc.stdout + proc.stderr
+    m = RE_COPYIMAGE.search(text)
+    if not m:
+        print(text[-3000:])
+        return None
+    land = RE_LANDING.search(text)
+    return int(m.group(1)), m.group(2), tuple(map(int, land.groups())) if land else None
+
+
+def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
+    """V7's copy image: a frame that copies to a texture and samples the copy
+    in the same frame, on the CPU and on the GPU. The GPU must give the CPU's
+    frame hash and all 16 cells, sample the copy's image from its pool (the
+    count above zero), and land the copy with the frame's own submission
+    rather than a wait of its own. A mutation goes to the GPU run: cimg-cpu
+    (the producer's image, not yet landed, sampled instead) and land-at-copy
+    (V6's wait at every copy) must each fail it."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    cpu = copyimage_run(prof, "cpu")
+    if cpu in (None, "skip"):
+        return 1
+    print(f"cpu: {cpu[0]} of 16 cells right, hash {cpu[1]}")
+    gpu = copyimage_run(prof, "gpu", mutate)
+    if gpu == "skip":
+        return SKIP
+    problems = []
+    if cpu[0] != 16:
+        problems.append(f"the CPU's frame is not the one intended: {cpu[0]} of 16 cells")
+    if gpu is None or gpu[2] is None:
+        problems.append("gpu: no result, or no landing figures")
+    else:
+        right, frame, (copies, waits, served) = gpu
+        print(
+            f"gpu: {right} of 16 cells right, hash {frame}; {copies} copies to a texture, "
+            f"{waits} readback waits, {served} samplers served by a copy image"
+        )
+        if right != 16 or frame != cpu[1]:
+            problems.append(f"gpu: {right} of 16, hash {frame} where the CPU's is {cpu[1]}")
+        if not served:
+            problems.append("gpu: no sampler served by a copy image from the pool")
+        if not copies or waits >= copies:
+            problems.append(f"gpu: {waits} readback waits for {copies} copies, not fewer")
+    for p in problems:
+        print(f"PROBLEM {p}")
+    ok = not problems
+    print(f"[gpuspike] copyimage {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 # The GPU runs of overlap: (SOA_GXR_STALL, other environment). The consumer
 # is worker 1, so the stalls hold it before every draw, copy or clear.
 GPU_OVERLAP_RUNS = [
@@ -1800,6 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
             "queue",
             "overlap",
             "specdiff",
+            "copyimage",
         ),
     )
     ap.add_argument(
@@ -1862,6 +1943,8 @@ def main(argv: list[str] | None = None) -> int:
         return contrast(prof, args.set.split(","), args.mutate)
     if args.command == "specdiff":
         return specdiff(prof, args.set.split(","), args.mutate)
+    if args.command == "copyimage":
+        return copyimage(prof, args.mutate)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)

@@ -15,7 +15,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GXR = ROOT / "runtime" / "gxr.c"
 
-SHARED = ("g_ran", "g_published", "g_sleepers", "g_fence_sleepers", "g_frames_presented")
+SHARED = (
+    "g_ran",
+    "g_published",
+    "g_sleepers",
+    "g_fence_sleepers",
+    "g_frames_presented",
+    "g_landed",
+)
 NAME = re.compile(r"\b(" + "|".join(SHARED) + r")\b")
 OWN = "/* own count */"
 DECL = re.compile(r"^\s*static\s+plat_a(?:32|64)\s+(\w+)")

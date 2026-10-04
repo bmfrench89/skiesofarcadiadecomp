@@ -624,7 +624,8 @@ c8274db applied rules 1 and 2 with acquire loads. L2 completes rules 3 and 4, an
    - The producer's reads of its own `g_published` stay plain, as c8274db decided. Each carries the marker
      comment `/* own count */`.
    - **Enforcement is a grep test, not wrapper types.** `tools/tests/test_gxr_atomics.py` checks every
-     occurrence of `g_ran[`, `g_published`, `g_sleepers`, `g_fence_sleepers` and `g_frames_presented` in
+     occurrence of `g_ran[`, `g_published`, `g_sleepers`, `g_fence_sleepers`, `g_frames_presented` and
+     (since GPU spec V7) `g_landed` in
      `runtime/gxr.c` outside comments. Each must be:
      - an argument of a `plat_*` call;
      - its declaration; or
@@ -632,6 +633,10 @@ c8274db applied rules 1 and 2 with acquire loads. L2 completes rules 3 and 4, an
    - The test also asserts that each name appears inside at least one `plat_*` call, so it cannot pass
      vacuously after a rename.
    - Wrapper types would force the producer's own reads through helpers for no change in machine code.
+5. **Landing** (GPU spec V7, for a backend that lands copies late). The backend writes a copy's guest
+   memory, then `plat_xchg64(&g_landed, ...)`. The producer reads that memory only after
+   `plat_load64(&g_landed)` is past the copy (`wait_landed`, `drain`). `g_ran` then says only that a
+   command has run.
 
 The compiler barriers at :1661, :1744 and :1795 become `plat_compiler_barrier()` and **stay**. They cost
 nothing. Deleting them would need its own codegen proof, and would buy nothing. `_ReadWriteBarrier` itself does

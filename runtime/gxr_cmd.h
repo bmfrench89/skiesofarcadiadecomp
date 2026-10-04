@@ -92,10 +92,22 @@ typedef struct GxrBackend {
      * 3.7); finish is then never called, since a command it has counted is
      * done. 0: every command runs on the producer, as built (V2). */
     int own_thread;
+    /* 1: a copy's bytes may reach guest RAM after the copy is counted (V7,
+     * 3.6). The backend says when with gxr_backend_landed, and every wait for
+     * what a copy wrote -- the hazards, a token, a drain -- waits for that as
+     * well. own_thread only. */
+    int lands_late;
+    /* Called on the backend's own thread when it has nothing to run, before
+     * it sleeps: where a backend that lands late lands what it holds, since a
+     * producer waiting for a landing publishes nothing more. May be NULL. */
+    void (*idle)(void);
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */
 void gxr_backend_screen(const uint8_t* rgba, int w, int h); /* a screen copy's pixels, exactly g_screen's size */
+/* lands_late: every command below `through` has its guest RAM writes in
+ * place. Raised only, by whichever thread runs the backend. */
+void gxr_backend_landed(long long through);
 /* The CPU renderer's own clipping and its command runner, for a consumer that
  * clips before upload (3.3) and for the passthrough backend. */
 int gxr_vertex_unclipped(const Vertex* v);

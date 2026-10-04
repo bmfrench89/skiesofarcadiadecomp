@@ -650,7 +650,9 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
   into GPU buffers before it counts the command, so the drain's recycling of the arena and the
   texture graveyard (gxr.c:2057-2094) stays correct unchanged. The GPU-side buffers follow 3.2's
   append-only rule and reset only after the frame's fence.
-- **Copies to texture** count only once their bytes are in guest RAM (V6); every existing wait then
+- **Copies to texture** count only once their bytes are in guest RAM (V6). Since V7 they count when
+  recorded, and their landing has a count of its own (`g_landed`, `GxrBackend.lands_late`), which
+  every wait for what a copy wrote waits for as well; every existing wait then
   means what it meant.
 - **Screen copies** count once `g_screen` holds the frame, so `gxr_presented()` and `SOA_HASH` keep
   their meaning.
@@ -1545,7 +1547,16 @@ median and 2.7 at p99. Two Done lines are read as follows:*
   driver's own cache cold, made one interpreter pipeline in 37.5 ms; FINDINGS gives what the soak
   may do about it.*
 
-*Copy images and the landed count follow.*
+*Copy images and the landed count landed third, 2026-10-04 (FINDINGS "V7, third"). A copy is counted
+when recorded and lands, bytes into guest RAM and image into the producer's copy image, when its
+submission is done. gxr keeps `g_landed`, and every wait for what a copy wrote waits for it. A draw
+later in the submission samples the copy's image from the pool; `gxv.c`'s `upload_texture` honours
+`copy_image`, and `gxr_tev.c` needed no change.*
+
+- *`partl`: 670 copies to a texture, 281-286 readback waits; `land-at-copy`, 670.*
+- *The mask effect's 14 captures serve 3 samplers each from the pool.*
+- *`gpuspike.py copyimage` and `test_gxv_copyimage.py` hold the same-frame sample to the CPU's hash.*
+- *The soak is what remains.*
 
 *Several days to week-plus. `--link`. Prerequisites: V6b. Files: `runtime/gxv.c`,
 `runtime/gxv/*.glsl`, `runtime/gxr_tev.c` (the `copy_image` flag honoured), `runtime/gxr.c` (the

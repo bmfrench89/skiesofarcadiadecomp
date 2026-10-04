@@ -6069,3 +6069,99 @@ producer, which is the game's thread, publishes each command and goes on.
     that; `wait` and `0` report as they should.
   - `test_gpuspike.py` gains two (34 to 36): specdiff over the 35 captures
     of the corpus and benchmark set, and its `spec-stages` mutation.
+
+**V7, third: copy images on the GPU, and copies landing late.** 2026-10-04.
+
+- **What changed.** Until now gxv waited for the GPU at every copy to a
+  texture. It read the copy back, put it in guest RAM, filled the
+  producer's copy image, and only then counted the copy (V6's protocol).
+  Now a copy is counted as soon as it is recorded, and lands later.
+- **The copy, in gxv:**
+  - **Recorded into regions of its own:** its bytes in the copy buffer,
+    seeded from guest RAM as before, and its decoded image in the image
+    buffer and in the texel pool. `copy.comp` takes the regions' offsets
+    and, with flag 8, writes the image into the pool too.
+  - **Lands when its submission is done** (`land_all`, at the end of every
+    submission): its bytes go into guest RAM, its image into the producer's
+    copy image, and gxr is told.
+  - **Lands early in two cases:** when a copy still to land overlaps its
+    bytes, whose seed must hold what that copy wrote, or when the regions
+    are full.
+- **The draw that samples it.** A draw later in the same submission that
+  samples the copy's image samples the pool's.
+  - `upload_texture` finds it by the producer's image pointer, which the
+    draw's `TexCfg` carries with `copy_image` set.
+  - From an earlier submission the producer's image has landed, and it is
+    uploaded as any texture is.
+  - So the CPU's copy images (H14 step 6) now have their GPU half. The spec
+    named `gxr_tev.c` for this; it needed no change.
+- **The landed count, in gxr.**
+  - **Two new backend fields:** `lands_late`, and an `idle` hook, which the
+    consumer calls before it sleeps.
+  - **The count:** `g_landed`, raised by `gxr_backend_landed`.
+  - **Rule 5 of the queue's ordering (portability 3.4):** the backend writes
+    guest memory, then `plat_xchg64(&g_landed)`. The producer reads that
+    memory only after `plat_load64(&g_landed)` is past the copy.
+    `test_gxr_atomics.py` now checks `g_landed` too.
+  - **Every wait for what a copy wrote also waits for its landing:**
+    - the hazards: texture, palette, vertex sources and a hook;
+    - a token, and whether the token may forget the pending copies;
+    - every drain: the frame gate, `GXDrawDone` and a flush.
+  - **The report:** time waited for a landing goes to its own reason,
+    `landed`.
+  - **What answers such a wait:** the consumer lands what it holds when it
+    runs out of commands, which a waiting producer guarantees.
+- **The report** gains a line: `copies to a texture: N, landed with the
+  submissions they were in but for M readback waits of their own; K
+  samplers served by a copy image from the pool`.
+- **Measured on `partl`, interleaved,** against V6's protocol kept as a
+  mutation (`land-at-copy`, a wait at every copy) [V]:
+
+  | Run | Copies | Readback waits | Served from the pool | Consumer ms p50 / p99 | GPU ms p50 / p99 |
+  |---|---|---|---|---|---|
+  | landing late | 670 | 286 | 919 | 0.96 / 3.63 | 0.83 / 2.53 |
+  | at the copy (V6) | 670 | 670 | 0 | 0.97 / 3.72 | 0.76 / 2.56 |
+  | landing late | 670 | 281 | 951 | 0.95 / 3.39 | 0.76 / 2.38 |
+  | at the copy (V6) | 670 | 670 | 0 | 0.95 / 3.37 | 0.77 / 2.45 |
+
+  - **The waits that remain** are the consumer landing when it runs out of
+    commands. That happens at a frame's end, when the frame's last copies
+    come after its screen copy.
+  - **The producer never waited for a landing:** there is no `landed` in
+    `[gxr] waits`.
+  - **The times do not move at this load.** At 30 fps the GPU is idle most
+    of each frame, and a wait at a copy costs about the copy's own GPU time.
+    What V7 removes is the round trip at each copy. On this machine that is
+    too short to show, and the spec does not make it a gate.
+- **The mask effect's 14 captures** each make two copies and serve three
+  samplers from the pool, 42 in all [V].
+- **Checks** [V]:
+  - **`gpuspike.py copyimage` (new):** a frame draws sixteen cells, copies
+    them to an RGBA8 texture, and samples the copy in the same frame. The
+    CPU's and the GPU's frames are the same hash, all 16 cells are right,
+    one sampler is served from the pool, and no readback wait is made.
+    - The frame was looked at: the pattern at the top left, and its copy at
+      (128, 128), cell for cell.
+    - `--mutate cimg-cpu` (the producer's image sampled before it has
+      landed) gives 0 of 16 and another hash.
+    - `--mutate land-at-copy` gives one wait for one copy and nothing served.
+  - **V6b's copy hazards with the GPU as consumer still hold:** `overlap`,
+    6 runs of 7 hashes. `late-readback`, now telling gxr a copy has landed
+    before its bytes reach RAM, still fails it.
+  - **The pictures:** the oracle's 67 GPU images are byte-identical to
+    V6a's, and the contrast gives 67 of 67.
+  - **The other spike checks pass:** ramdiff, logicop, chain, copydiff,
+    queue, selftest, tevdiff and loddiff.
+  - **The CPU renderer:** `replay` 23/23 at 1, 2, 3 and 8 threads, and
+    `queue_check.py`.
+  - **Live runs:** `title` and `battle` 5 of 5 with `SOA_GPU=vulkan`, and
+    `live title --range 1290-1400` 111 of 111.
+- **Tests:** `test_gxv_copyimage.py` (new, 3): the frame, and each mutation
+  red.
+- **V6a's `count-early` had stopped failing, and is fixed.** It counts a
+  command before running it. The queue frame's last drain now also waits
+  for the screen copy's landing, which gxv reports only after it has run
+  the copy, so the stalled frame came out right: 3 runs of 3. The
+  mutation now reports the landing early too, which is what counting a
+  command before it runs means once copies land late. It fails again: 0
+  of 64 quads, 3 runs of 3. The full test run caught it.

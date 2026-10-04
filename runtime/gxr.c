@@ -1535,16 +1535,18 @@ enum {
     W_SRC,         /* wait: vertex arrays, a display list or an indexed XF load read from one */
     W_HOOK,        /* wait: SOA_PEEK, SOA_POKE or a mod touching one */
     W_TOKEN,       /* wait: a draw token, which says the copies before it are done */
+    W_LANDED,      /* wait: any of the above, for a copy run but not yet in guest RAM (lands_late, V7) */
     W_COUNT
 };
 static const char* const g_wait_name[W_COUNT] = {
     "external", "arena", "graveyard", "copy list", "gate", "copy-first", "copy-before", "copy-after",
-    "drawdone", "hash/png", "ring", "hazard", "tlut", "source", "hook", "token"};
+    "drawdone", "hash/png", "ring", "hazard", "tlut", "source", "hook", "token", "landed"};
 static uint64_t g_wait_n[W_COUNT], g_wait_ticks[W_COUNT]; /* producer only; read by the report */
 
 static DrawCmd* g_queue;
 static plat_a64 g_published;            /* commands published, ever */
 static plat_a64 g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever */
+static plat_a64 g_landed;               /* lands_late: every command below it has its RAM writes in place (V7) */
 
 /* The queue's four ordering rules (docs/specs/portability.md 3.4; c8274db
  * applied the first two, L2 the rest). Every helper named is seq_cst, from
@@ -1568,7 +1570,11 @@ static plat_a64 g_ran[MAX_THREADS + 1]; /* per worker: commands finished, ever *
  *     other's write; the 50 ms bound on a wait is the backstop.
  *  4. Every cross-thread read goes through plat_load*. The producer's reads
  *     of its own g_published stay plain -- it is the only writer -- and each
- *     carries the marker own count; test_gxr_atomics.py checks every use. */
+ *     carries the marker own count; test_gxr_atomics.py checks every use.
+ *  5. Landing (V7), for a backend that lands copies late: it writes a copy's
+ *     guest memory, then plat_xchg64(&g_landed, ...); the producer reads that
+ *     memory only after plat_load64(&g_landed) is past the copy (wait_landed,
+ *     drain). g_ran then says only that a command has run. */
 static uint64_t g_flushes;                       /* producer only: drains, so a nested one can be seen */
 static uint8_t* g_arena;
 static size_t g_arena_used;
@@ -1639,6 +1645,55 @@ static void wait_ran(long long c, int why)
     if (t1 > t0) g_wait_ticks[why] += t1 - t0;
     gxr_phase(prev);
     plat_compiler_barrier(); /* what the command wrote is read after the wait, not hoisted above it */
+}
+
+/* For a backend that lands copies late (V7, 3.6): after command c has run,
+ * wait until what it wrote is in guest RAM as well. The consumer lands what it
+ * holds when it runs out of commands, which it does while the producer waits
+ * here, publishing nothing. Counted under W_LANDED, whatever the wait was
+ * for, so the report says how often a landing was waited on. */
+static int lands_late(void)
+{
+    return g_backend && g_backend->lands_late;
+}
+
+static void wait_landed_only(long long c)
+{
+    unsigned spins = 0;
+    int prev;
+    uint64_t t0, t1;
+    if (!lands_late() || plat_load64(&g_landed) > c) return;
+    prev = gxr_phase(T_WAIT);
+    t0 = gxr_ticks();
+    while (plat_load64(&g_landed) <= c) { if (++spins > 4000) { plat_yield(); spins = 0; } else plat_relax(); }
+    t1 = gxr_ticks();
+    g_wait_n[W_LANDED]++;
+    if (t1 > t0) g_wait_ticks[W_LANDED] += t1 - t0;
+    gxr_phase(prev);
+    plat_compiler_barrier(); /* what the copy wrote is read after the wait, not hoisted above it */
+}
+
+static void wait_landed(long long c, int why)
+{
+    wait_ran(c, why);
+    if (c < g_published) wait_landed_only(c); /* own count */
+}
+
+/* The oldest command whose RAM writes may not all be in place: ran_min, or
+ * below it for a backend that lands late. */
+static long long done_min(void)
+{
+    long long m = ran_min();
+    if (lands_late()) {
+        long long l = plat_load64(&g_landed);
+        if (l < m) m = l;
+    }
+    return m;
+}
+
+void gxr_backend_landed(long long through)
+{
+    plat_xchg64(&g_landed, through);
 }
 
 /* The one place a slot is taken. Command n goes in slot n & QMASK, which held
@@ -1764,6 +1819,15 @@ static void worker(void* arg)
              * up to the span the report divides by. */
             if (++spins > 4000) {
                 int64_t seen = mine;
+                /* A backend that lands late lands here (V7): a producer
+                 * waiting for a landing publishes nothing, so this is where
+                 * the wait is answered. */
+                if (g_backend && g_backend->idle) {
+                    charge(W, &W->idle);
+                    g_backend->idle();
+                    charge(W, &W->busy);
+                    if (mine < plat_load64(&g_published)) { spins = 0; continue; }
+                }
                 charge(W, &W->idle);
                 plat_inc32(&g_sleepers);
                 if (plat_load64(&g_published) == seen) plat_wait64(&g_published, seen, 50);
@@ -1789,8 +1853,11 @@ static void worker(void* arg)
 #ifdef GXR_MUTATE_COUNT_EARLY
             /* test_gxv_queue.py's mutation, built only into a variant of the GPU
              * spike: the command counted before it runs, so the producer may
-             * recycle its vertices while a stalled consumer has yet to read them. */
+             * recycle its vertices while a stalled consumer has yet to read them
+             * -- and, for a backend that lands late (V7), its landing too, which
+             * the drains now also wait for. */
             plat_xchg64(&g_ran[id], mine + 1);
+            if (g_backend && g_backend->lands_late) plat_xchg64(&g_landed, mine + 1);
 #endif
             if ((D->fence > 0 || D->fence_near > 0) && g_workers > 1) fence_wait(W, id, D->fence, D->fence_near);
             if (g_stall_n) stall(id, D->kind);
@@ -2105,6 +2172,9 @@ static void drain(int why)
         if (t1 > t0) g_wait_ticks[why] += t1 - t0;
     }
     gxr_phase(prev);
+    /* Every copy's bytes in guest RAM too, for a backend that lands late:
+     * what a drain hands out again, and what the CPU may read after one. */
+    if (g_last_copy >= 0) wait_landed_only(g_last_copy);
     g_flushes++;
     g_frame_gate = 0;
     g_ran_floor = target;
@@ -2864,7 +2934,7 @@ void gxr_ram_hazard(uint32_t addr, uint32_t bytes, int why)
     if (c < 0) return;
     if (why == W_HAZARD) g_hazard_hits++;
     if (g_legacy && why == W_HAZARD) { drain(W_HAZARD); return; }
-    wait_ran(c, why);
+    wait_landed(c, why);
 }
 
 void gxr_texture_hazard(uint32_t addr, uint32_t bytes)
@@ -3240,9 +3310,9 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
      * how a game waits before reading what was drawn, still drains. These are
      * counted either way. */
     if ((reg == 0x47 || reg == 0x48) && gxr_enabled() && !g_legacy && g_last_copy >= 0) {
-        if (ran_min() <= g_last_copy) {
+        if (done_min() <= g_last_copy) {
             g_tokens_waited++;
-            if (g_token_wait) wait_ran(g_last_copy, W_TOKEN);
+            if (g_token_wait) wait_landed(g_last_copy, W_TOKEN);
         }
         /* Every copy is over, and the game has been told so: it may write a
          * copy's destination now. Forget them as a drain would, recycling
@@ -3251,7 +3321,7 @@ void gxr_bp_written(CpuState* s, uint32_t reg, uint32_t v)
          * SOA_GXR_TOKENWAIT only when the copies happen to be done: a game that
          * wrote a destination while its copy was still running raced it
          * before, and still does. */
-        if (g_token_wait || ran_min() > g_last_copy) g_pending_n = 0;
+        if (g_token_wait || done_min() > g_last_copy) g_pending_n = 0;
     }
     if (reg == 0x52 && gxr_enabled()) { /* EFB copy (GXCopyTex / GXCopyDisp) */
         TIMED(T_COPY, enqueue_copy(s, bp, v));
