@@ -510,7 +510,7 @@ static void present(int fresh)
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);
     g_pw_t0 = t0.QuadPart;
-    if (g_vk) {
+    if (g_vk && !g_filters) {
         /* The GPU's own picture (V8): no copy to the CPU, no scale here. */
         int w = 0, h = 0;
         if (gxv_present(fresh, g_interval, g_scaler, &w, &h)) {
@@ -541,7 +541,13 @@ static void present(int fresh)
         }
         g_shown_w = w; g_shown_h = h;
     }
-    if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
+    if (g_vk) {
+        /* P5a's filters ran on the CPU above; the GPU presents the result (V8b). */
+        if (gxv_present_image(g_bgra, g_shown_w, g_shown_h, g_interval, g_scaler)) {
+            note_present_work();
+            note_present();
+        }
+    } else if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
     else {
         InvalidateRect(g_hwnd, NULL, FALSE);
         UpdateWindow(g_hwnd); /* the paint -- its scale -- inside the time taken, as DXGI's is */
@@ -698,12 +704,11 @@ static unsigned __stdcall ui_thread(void* arg)
             }
         }
         /* With the GPU drawing, the GPU presents (V8), unless SOA_PRESENTER
-         * names another; P5a's filters are the CPU's until V8b. */
+         * names another; P5a's filters run on the CPU's copy and the GPU
+         * presents what they make (V8b). */
         if (gxv_running() && !(p && (!strcmp(p, "gdi") || !strcmp(p, "dxgi")))) {
             char why[256];
-            if (g_filters)
-                fprintf(stderr, "[window] the GPU presenter has no picture filters yet (V8b); presenting the CPU's copy\n");
-            else if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
+            if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
                 g_vk = 1;
             else
                 fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);

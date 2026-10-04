@@ -23,7 +23,7 @@
 
 /* 1 when this build has the backend; 0 when gxv.c was compiled without
  * SOA_GXV, because vendor/ had no glslang or Vulkan-Headers at the link, and
- * then only gxv_built, gxv_start and the presenter's four functions below
+ * then only gxv_built, gxv_start and the presenter's five functions below
  * exist, each saying no. */
 int gxv_built(void);
 /* SOA_GPU=vulkan (main.c): gxv_init, then gxv as the renderer's backend, so
@@ -51,9 +51,12 @@ int gxv_running(void);
 int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* why, size_t cap);
 int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h);
 void gxv_present_resize(int w, int h);
-/* The presenter's check (test_gxv_present.py): rgba, w x h, through the
- * present pass into a dw x dh B8G8R8A8 image, read back into out. */
-int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mode, uint8_t* out);
+/* A frame of the window's own, BGRA (V8b: P5a's filters done on the CPU),
+ * presented as gxv_present presents a screen copy. */
+int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode);
+/* The presenter's check (test_gxv_present.py): bgra, w x h, through the
+ * upload and the present pass into a dw x dh B8G8R8A8 image, read back. */
+int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */
 void gxv_report(void);

@@ -604,8 +604,9 @@ C5c) is now done.
    interlock where it may overlap itself -- and `SOA_GPU_FEATURES=core`
    gives the oracle's verdicts unchanged. V7's first-launch stalls in play
    fell from five to one with cull, topology and depth as dynamic state
-   (FINDINGS "V7, fifth"). Next: V8b, P5a's filters as
-   shaders, which V9 needs; V9 itself waits for M10. The owner's windowed
+   (FINDINGS "V7, fifth"). P5a's filters now run on the CPU's copy and the
+   GPU presents what they make (FINDINGS "V8b, first step"); their shaders
+   wait for V9, and V9 waits for M10. The owner's windowed
    session wants the display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

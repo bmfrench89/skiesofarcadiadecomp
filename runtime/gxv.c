@@ -1827,14 +1827,16 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
     if (!(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64)) p->flags |= 4u;
 }
 
-/* The screen buffer's slots (V8): three for the presenter's triple buffer,
- * and a fourth, SCREEN_SCRATCH, for gxv_read_depth and the presenter's
- * check. The consumer writes g_scr_back; g_scr_middle is the newest it has
+/* The screen buffer's slots (V8): three for the presenter's triple buffer;
+ * a fourth, SCREEN_SCRATCH, for gxv_read_depth and the presenter's check;
+ * and a fifth, SCREEN_HOST, the window's own frame (V8b: P5a's filters,
+ * which run on the CPU, then presented by the GPU). The consumer writes g_scr_back; g_scr_middle is the newest it has
  * finished, with SCREEN_FRESH set until the presenter takes it, which it
  * does by swapping its own g_scr_front in; so neither ever writes or reads
  * a slot the other holds. A slot's size is written before it is published. */
-#define SCREEN_SLOTS 4
+#define SCREEN_SLOTS 5
 #define SCREEN_SCRATCH 3
+#define SCREEN_HOST 4
 #define SCREEN_FRESH 4
 static unsigned g_scr_back = 0, g_scr_front = 2;
 static plat_a64 g_scr_middle = 1;
@@ -3058,7 +3060,7 @@ static VkDescriptorSet g_pres_set;
 static VkCommandPool g_pres_cpool;
 static VkCommandBuffer g_pres_cb;
 static VkFence g_pres_fence;
-static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
+static unsigned long long g_n_presents, g_n_present_frames, g_n_present_images, g_n_swap_made;
 static PFN_vkDestroySurfaceKHR p_vkDestroySurfaceKHR;
 static PFN_vkGetPhysicalDeviceSurfaceSupportKHR p_vkGetPhysicalDeviceSurfaceSupportKHR;
 static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
@@ -3476,10 +3478,71 @@ static int present_once(unsigned slot, int mode)
     return 1;
 }
 
-int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+/* A frame of the host's, BGRA as window.c keeps it, into slot `slot` as the
+ * RGBA words present.frag reads; the presenter's last read of the slot is
+ * waited for first. */
+static void upload_bgra(unsigned slot, const uint8_t* bgra, int w, int h)
+{
+    uint8_t* d = g_screen_map + (size_t)slot * READBACK_BYTES;
+    size_t i, n = (size_t)w * h;
+    if (g_pres_fence) vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+    for (i = 0; i < n; i++, d += 4, bgra += 4) {
+        d[0] = bgra[2];
+        d[1] = bgra[1];
+        d[2] = bgra[0];
+        d[3] = bgra[3];
+    }
+    g_scr_w[slot] = w;
+    g_scr_h[slot] = h;
+}
+
+/* Slot `slot` presented `interval` times, the swap chain remade where it
+ * must be; under g_present_lock. */
+static int present_slot(unsigned slot, unsigned interval, int mode)
 {
     unsigned n, tries;
     int ok = 1;
+    if (interval < 1) interval = 1;
+    for (n = 0; n < interval && ok; n++)
+        for (tries = 0; tries < 2; tries++) {
+            int r;
+            if (g_swap_stale) {
+                queue_idle();
+                if (!swap_make(g_swap_want_w, g_swap_want_h)) {
+                    ok = 0; /* minimised, or no swap chain: try again at the next frame */
+                    break;
+                }
+            }
+            r = present_once(slot, mode);
+            if (r > 0) break;
+            if (r == 0) {
+                ok = 0;
+                break;
+            }
+            g_swap_stale = 1;
+        }
+    return ok;
+}
+
+int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode)
+{
+    int ok;
+    if (!bgra || w < 1 || h < 1 || (size_t)w * h * 4 > READBACK_BYTES) return 0;
+    plat_lock(&g_present_lock);
+    if (g_present_dead || !g_swap) {
+        plat_unlock(&g_present_lock);
+        return 0;
+    }
+    upload_bgra(SCREEN_HOST, bgra, w, h);
+    g_n_present_images++;
+    ok = present_slot(SCREEN_HOST, interval, mode);
+    plat_unlock(&g_present_lock);
+    return ok;
+}
+
+int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+{
+    int ok;
     plat_lock(&g_present_lock);
     if (g_present_dead || !g_swap) {
         plat_unlock(&g_present_lock);
@@ -3495,35 +3558,18 @@ int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown
         plat_unlock(&g_present_lock);
         return 0;
     }
-    if (interval < 1) interval = 1;
-    for (n = 0; n < interval && ok; n++)
-        for (tries = 0; tries < 2; tries++) {
-            int r;
-            if (g_swap_stale) {
-                queue_idle();
-                if (!swap_make(g_swap_want_w, g_swap_want_h)) {
-                    ok = 0; /* minimised, or no swap chain: try again at the next frame */
-                    break;
-                }
-            }
-            r = present_once(g_scr_front, mode);
-            if (r > 0) break;
-            if (r == 0) {
-                ok = 0;
-                break;
-            }
-            g_swap_stale = 1;
-        }
+    ok = present_slot(g_scr_front, interval, mode);
     if (shown_w) *shown_w = g_scr_w[g_scr_front];
     if (shown_h) *shown_h = g_scr_h[g_scr_front];
     plat_unlock(&g_present_lock);
     return ok;
 }
 
-/* The presenter's check (test_gxv_present.py): rgba (w x h) through the
- * present pass into a dw x dh image of the swap chain's usual format,
- * B8G8R8A8_UNORM, read back into out, row by row. Not with a window open. */
-int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mode, uint8_t* out)
+/* The presenter's check (test_gxv_present.py): bgra (w x h), as window.c
+ * keeps a frame, through upload_bgra and the present pass into a dw x dh
+ * image of the swap chain's usual format, B8G8R8A8_UNORM, read back into
+ * out, row by row. Not with a window open. */
+int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, uint8_t* out)
 {
     VkImage img;
     VkImageView view;
@@ -3537,7 +3583,6 @@ int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mod
     VkBufferImageCopy rg;
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-    int y;
     static VkBuffer chk;
     static uint8_t* chk_map;
     if (!g_dev || w < 1 || h < 1 || w * h * 4 > (int)READBACK_BYTES || dw < 1 || dh < 1 || (size_t)dw * dh * 4 > CHECK_BYTES)
@@ -3575,12 +3620,8 @@ int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mod
     fi.height = (uint32_t)dh;
     fi.layers = 1;
     if (vkCreateFramebuffer(g_dev, &fi, NULL, &fb) != VK_SUCCESS) return 0;
-    /* The image into the scratch slot, and its size, as a screen copy would. */
-    for (y = 0; y < h; y++)
-        memcpy(g_screen_map + (size_t)SCREEN_SCRATCH * READBACK_BYTES + (size_t)y * w * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
-    g_scr_w[SCREEN_SCRATCH] = w;
-    g_scr_h[SCREEN_SCRATCH] = h;
-    vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+    /* The image into the scratch slot as the window's own frame goes. */
+    upload_bgra(SCREEN_SCRATCH, bgra, w, h);
     vkResetFences(g_dev, 1, &g_pres_fence);
     present_record(g_pres_check_pass, fb, dw, dh, SCREEN_SCRATCH, mode);
     memset(&rg, 0, sizeof rg);
@@ -3615,8 +3656,9 @@ int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mod
 static void present_report(void)
 {
     if (g_swap || g_n_presents)
-        say("presented from the GPU: %llu frames, %llu presents, %llu swap chains made", g_n_present_frames, g_n_presents,
-            g_n_swap_made);
+        say("presented from the GPU: %llu screen copies taken, %llu images of the window's own (P5a's filters, V8b), %llu "
+            "presents, %llu swap chains made",
+            g_n_present_frames, g_n_present_images, g_n_presents, g_n_swap_made);
 }
 
 static void present_shutdown(void)
@@ -3667,6 +3709,16 @@ int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* w
     (void)w;
     (void)h;
     snprintf(why, cap, "this build has no GPU backend");
+    return 0;
+}
+
+int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode)
+{
+    (void)bgra;
+    (void)w;
+    (void)h;
+    (void)interval;
+    (void)mode;
     return 0;
 }
 

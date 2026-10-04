@@ -6417,3 +6417,34 @@ producer, which is the game's thread, publishes each command and goes on.
     tevdiff, loddiff, copydiff and the self tests;
   - `replay` 23/23, `title` 5/5 on the GPU, and `live title --range
     1290-1400`.
+
+**V8b, first step: P5a's filters presented by the GPU.** 2026-10-04.
+
+- **What it does.** With a picture filter set (`SOA_GAMMA`,
+  `SOA_COLORBLIND`, `SOA_FLASH_LIMIT`), the window no longer falls back to
+  DXGI.
+  - It runs `picture_filter` on the CPU's copy of the frame, as it always
+    has.
+  - The GPU presents the result (`gxv_present_image`): a fifth slot in the
+    screen buffer, written by the window's thread through `upload_bgra`
+    once the presenter's last read of it is done, then the same present
+    pass.
+  - So the filters are their own reference, byte for byte.
+- **Why not shaders yet.** The spec's V8 asks for the filters as shaders.
+  - **Gamma and colour-blind** are per-pixel tables and would port
+    directly.
+  - **The flash limiter** keeps per-pixel history across frames, and its
+    whole-frame search for how far to blend has no cheap exact GPU form.
+  - **When it matters:** only once V9 renders above native size, where the
+    CPU's copy is native and the picture is not. They wait for V9.
+- **Checked** [V]:
+  - **`gpuspike.py present`** now feeds the check through `upload_bgra`,
+    so the BGRA-to-RGBA swizzle is checked too: 32 of 32 layouts, and the
+    mutation 0 of 32.
+  - **A windowed run** with `SOA_GAMMA=1.2` and `SOA_GPU=vulkan`: the
+    window presents from the GPU, `picture_filter` ran on 1,494 frames,
+    1,494 presents and none failed.
+  - **The report** now counts the window's own images apart from the
+    screen copies taken.
+  - **Unchanged:** `title` 5/5 on the GPU, the spike's self test, `queue`
+    and `copyimage`.

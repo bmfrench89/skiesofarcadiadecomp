@@ -1061,7 +1061,7 @@ static int present_check(void)
                 unsigned bad = 0, px;
                 PicRect r = picture_layout(w, h, dw, dh, (int)mode);
                 total++;
-                if (!gxv_present_check(src, w, h, dw, dh, (int)mode, got)) {
+                if (!gxv_present_check(bgra, w, h, dw, dh, (int)mode, got)) {
                     printf("present %dx%d into %dx%d (%s): the check could not run\n", w, h, dw, dh, mode ? "fit" : "integer");
                     continue;
                 }

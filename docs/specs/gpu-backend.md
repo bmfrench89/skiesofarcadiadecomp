@@ -679,7 +679,7 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
 | M3c texture provider, M9 packs, P8 | Through the CPU cache: the replaced image is what is uploaded |
 | X6 injected draws | They are `DrawCmd`s (beyond-gamecube.md §7): drawn like the game's |
 | H17 interpolation | `DrawCmd.efb` = 1 selects the second target (V12). The in-between pass samples F+1's copy images, which the real pass made first |
-| M8 overlay, H8 presenter | Since V8: with a window, the GPU presents its own screen copy (`SOA_PRESENTER=dxgi` or `gdi`, or a P5a filter, keeps the CPU's); H8's pacing and its histogram are kept |
+| M8 overlay, H8 presenter | Since V8: with a window, the GPU presents its own screen copy (`SOA_PRESENTER=dxgi` or `gdi` keeps the CPU's presenter); with a P5a filter set, the filters run on the CPU's copy and the GPU presents the result (V8b); H8's pacing and its histogram are kept |
 | Frame hook, pokes, peeks, mods | Unchanged; a hook's hazard wait also waits for the readback |
 
 ### 3.10 API, shader toolchain and build
@@ -1608,7 +1608,9 @@ later in the submission samples the copy's image from the pool; `gxv.c`'s `uploa
     queue is shared under `plat_lock`.*
 - *Its shader is `present.frag` and `present.vert`, not the `present.glsl` named below.*
 - *Still owed:*
-  - *V8b, P5a's filters as shaders;*
+  - *V8b, P5a's filters as shaders. Their first step landed the same day (FINDINGS "V8b, first step"):
+    the filters run on the CPU's copy and the GPU presents the result, so a filter no longer falls back
+    to DXGI. The shaders wait for V9, the first time the picture is larger than the CPU's copy;*
   - *M8's overlay, when M8 lands;*
   - *the pacing target and the owner's session at 60 or 120 Hz (the display here is at 85).*
 
