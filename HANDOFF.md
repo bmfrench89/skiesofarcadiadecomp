@@ -594,9 +594,9 @@ C5c) is now done.
    once enabled and were backed out; a validation layer is what would say
    why. `gpuspike.py specdiff` checks that specialised and interpreted
    draw the same bytes, `copyimage` a copy sampled in its frame;
-   `overlap` is the one to run after touching the landing. Next: the
-   distribution route's spec, which G3's answer put "after V7" (PLAN-NEXT
-   §0), then V8. Still open for the owner, and not blocking: whether a
+   `overlap` is the one to run after touching the landing. The
+   distribution route is specified (specs/distribution.md, R1-R5; its
+   Q-D1, the bundled compiler, waits for the owner before R1). Next is V8. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

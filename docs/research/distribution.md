@@ -108,6 +108,8 @@ exactly that (section 3).
 
 ## 8. What it changes
 
+*Specified as R1-R5 in [specs/distribution.md](../specs/distribution.md), 2026-10-04.*
+
 - **SPEC §2 rule 2 stands as written:** the translated code is still made on the player's machine from
   their own dump. SPEC §2 gains a rule that a release holds only what this repository's original
   sources and third-party toolchains build, and that `gen/` and `src/` (decompiled game code, which the

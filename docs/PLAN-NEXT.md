@@ -125,6 +125,14 @@ The owner answered four questions, with the research behind them summarised in t
     - **When:** specified after V7 and built before L12, whose APK needs it. Until then players
       build from source. Two questions return before the first public release: registering the APK
       under the owner's ID, and signing the runtime.
+    - **Specified 2026-10-04** in [specs/distribution.md](specs/distribution.md), as R1 to R5:
+      - R1, `soa.exe` built by a fetched llvm-mingw with no Microsoft compiler, which may go
+        early as a gap filler;
+      - R2, one command from disc image to install folder;
+      - R3, the package and a release workflow that drafts it;
+      - R4, the setup window;
+      - R5, Android's runtime-only APK, recorded for L12.
+      Its Q-D1 (the bundled compiler) is asked before R1 starts.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec).
@@ -317,6 +325,7 @@ changed since 24d9235).
 | [specs/disc-layer.md](specs/disc-layer.md) | I1 to I8; T1 is I6-I8 | Reviewed twice, then checked with this file |
 | [specs/portability.md](specs/portability.md) | L0 (done) to L12 | Reviewed twice, then checked with this file |
 | [specs/gpu-backend.md](specs/gpu-backend.md) | C5a-C5c (proposed for PLAN.md Track C), V0 to V12, and the gate | Reviewed twice, then checked with this file |
+| [specs/distribution.md](specs/distribution.md) | R1 to R5: the runtime package that builds the game on the player's machine (G3's route) | Written 2026-10-04, reviewed once against the code the same day |
 | [specs/now.md](specs/now.md) | The first rows after the pivot | **Superseded**: every row has landed or is replaced (B3) |
 | `docs/ROADMAP.md`, `HANDOFF.md`, `docs/FINDINGS.md` | What is done, what is known, what was tried | Unchanged in role |
 
