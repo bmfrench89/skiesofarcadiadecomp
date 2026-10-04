@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1223 passed, 2 skipped in 431.11s
+1224 passed, 2 skipped in 408.25s
 ```
 
-1225 tests in 68 files, none of which reads the disc. The two FMA probes of
+1226 tests in 68 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -51,7 +51,7 @@ its own and run it, some of the C as well:
 | `test_scenario.py` | 100 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; a sweep refuses a replay the GPU drew, and a replay cannot see `SOA_GPU` or a `soa.ini` (V5); and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
 | `test_guard.py` | 76 | the game-data guard: its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
-| `test_soak.py` | 40 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, and a field that comes back black after a battle is a question |
+| `test_soak.py` | 41 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, a field that comes back black after a battle is a question, and (GPU spec V7) gxv's pipelines are counted by where they were made, the longest of each and how many came after the landing map loaded |
 | `test_padrec.py` | 33 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing; the host buttons (`lb`, `view`, `ls`, `rs`) and their chords, which never reach the report, fire once a frame, and are comments in a recording; and a card under the port root named relative to it; `SOA_PAD2`, port 2 for mods, in the same grammar, apart from port 1, and never answering the game; 600 bytes of recorded settings and mods reach the `# config` line whole, and 800 are cut with a line that says so |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
 | `test_settings.py` | 27 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them; and M5b's root: relative paths in soa.ini under the port root, its defaults only with a file, the root found beside `runtime` from `gen` and `gen\clang`, and the console handed to a log only when it is the run's own; `coop` recorded only as party slots mods/coop takes; and README's list of soa.ini keys holding every key settings.c reads |
@@ -123,10 +123,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1223 passed, 2 skipped` |
-| no capstone | `1204 passed, 3 skipped` |
-| no MSVC | `826 passed, 399 skipped` |
-| neither | `807 passed, 400 skipped` |
+| everything (MSVC + capstone) | `1224 passed, 2 skipped` |
+| no capstone | `1205 passed, 3 skipped` |
+| no MSVC | `827 passed, 399 skipped` |
+| neither | `808 passed, 400 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1379,7 +1379,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 399 of the 1225 skip without a C compiler: 397 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 399 of the 1226 skip without a C compiler: 397 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

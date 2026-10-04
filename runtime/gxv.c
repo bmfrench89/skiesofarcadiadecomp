@@ -872,6 +872,7 @@ static void compiler_main(void* arg)
             if ((int64_t)ns > plat_load64(&g_bg_ns_max)) plat_store64_relaxed(&g_bg_ns_max, (int64_t)ns);
             plat_store64_relaxed(&g_bg_ns_total, plat_load64(&g_bg_ns_total) + (int64_t)ns);
             plat_cas32(&g_pipes[slot].ready, 0, 1); /* after pipe: the draw path reads pipe once it sees 1 */
+            say("pipeline made on the compiler thread in %.2f ms%s", (double)ns / 1e6, hit ? ", from the cache" : "");
         } else {
             say("a specialised pipeline failed on the compiler thread; the interpreter draws its state");
             plat_store64_relaxed(&g_bg_failed, plat_load64(&g_bg_failed) + 1);
@@ -960,6 +961,10 @@ static VkPipeline pipe_put(unsigned slot, uint32_t key, const PipeState* S, cons
         g_pipe_ns_total += ns;
         if (g_n_pipes < PIPE_FRAMES) g_pipe_frame[g_n_pipes] = g_n_copies;
         g_n_pipes++;
+        /* One line each, which soak.py check counts against the map loads
+         * around it (V7's budget). */
+        say("pipeline made on the draw path at frame %llu in %.2f ms%s", g_n_copies, (double)ns / 1e6,
+            hit ? ", from the cache" : "");
     }
     memcpy(g_pipes[slot].shape, shape ? shape : interp, sizeof interp);
     g_pipes[slot].pipe = p;

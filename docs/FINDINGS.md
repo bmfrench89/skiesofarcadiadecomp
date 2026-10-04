@@ -6165,3 +6165,66 @@ producer, which is the game's thread, publishes each command and goes on.
   mutation now reports the landing early too, which is what counting a
   command before it runs means once copies land late. It fails again: 0
   of 64 quads, 3 runs of 3. The full test run caught it.
+
+**V7, fourth: the soak, and a first launch that still stalls.** 2026-10-04.
+
+- **How it was run.** The spec asks for a soak from `soak.py --seed 7
+  --warp <map>` crossing at least 20 map loads. Random play crosses about
+  two a battle; part G's accelerated soak fought five in 33,500 frames. So
+  this run takes the censuses' route instead:
+  - **The run:** `partl` with `--frames 18400`, `SOA_GPU=vulkan`, a fresh
+    pipeline-cache file, and an `SOA_POKE` of 25 warps by name, one every
+    600 frames from 3300.
+  - **The maps:** those the first census found drawing a full scene.
+  - **It took** 10 min 25 s.
+  - **The second launch:** the same run against the same cache file.
+- **New, to judge it.** gxv logs a line for each pipeline it makes:
+  `pipeline made on the draw path at frame F in X ms`, or `... on the
+  compiler thread ...`. `soak.py check` counts them against the field map
+  loads around them, and prints each side's count, longest, and how many
+  came after the landing map loaded, then the map loads. Its test is
+  `test_soak.py`'s new one.
+- **Measured** [V]:
+
+  | Launch | Field map loads | Draw path: made, longest, after landing | Compiler thread: made, longest, after landing | From the cache | Consumer ms p99 |
+  |---|---|---|---|---|---|
+  | first | 27 | 42, **30.10 ms**, 12 | 123, 161.64 ms, 74 | 1 of 42 | 5.93 |
+  | second | 27 | 42, 0.26 ms, 12 | 123, 0.29 ms, 74 | 42 of 42 and 123 of 123 | 5.60 |
+
+- **The verdict on V7's budget:** met on the second launch, not on the
+  first.
+  - **Four creations broke the 20 ms limit on the first launch:** 30.10 ms
+    at frame 3367 (the first warp), then 27.36, 26.93 and 26.12 ms at
+    frames 17751-17779 (`a260a`).
+  - **What they were:** each is the interpreter's pipeline for a
+    fixed-function state the driver had not compiled since the interpreter's
+    SPIR-V changed. The other 38 took about 0.3 ms, from AMD's own shader
+    cache.
+  - **Why the thread cannot take them:** the specialised pipelines' cost is
+    already off the draw path (161 ms at the most), but something has to
+    draw while a pipeline is made.
+- **Values are still not keyed,** but the ratio grows with the maps: 123
+  specialised pipelines for 25 shapes across 27 maps is 4.9 a shape. The
+  spec's limit of four was set for `partl` alone, where it is 3.6. The
+  states a shape is drawn with multiply with the maps.
+- **Tried and backed out: pipeline libraries**
+  (`VK_EXT_graphics_pipeline_library`, which this device has, with fast
+  linking).
+  - **The design:** the interpreter's parts made once on the compiler thread
+    at the first draw (vertex input by topology, the vertex stage by cull,
+    the fragment stage by depth state: 27 libraries). Each new state then
+    costs a fragment output and a fast link, and compiles nothing.
+  - **What happened on driver 0x800184:** enabling the extension makes
+    ordinary pipelines draw nothing or lose the device. The self test's
+    first full-screen quad drew 0 of 307,200 red. This happens even with
+    the feature left off and no library used, while
+    `VK_KHR_pipeline_library` alone is fine, as is everything with
+    `SOA_GPU_GPL=0`.
+  - **Not explained:** this machine has no validation layer to say whether
+    the fault is this code or the driver.
+  - **The ways on:**
+    - the validation layer (the Vulkan SDK), to find which;
+    - dynamic state (`VK_EXT_extended_dynamic_state`), for fewer
+      interpreter pipelines;
+    - making the last run's states at start, which helps only the launches
+      the disk cache already serves.

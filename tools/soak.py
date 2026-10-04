@@ -289,6 +289,10 @@ RE_BUTTONS = re.compile(r"^\[si\] frame \d+ \(retrace \d+\): buttons ([0-9A-Fa-f
 RE_FIELD_MAP = re.compile(r'"/field/(a\d{3}[a-z])\.mld"')
 RE_BATTLE_HUD = re.compile(r'"/battle/(?:"\s*")?stsicon\.mld"')
 RE_MEM = re.compile(r"^\[mem\] ")
+# gxv's line for each pipeline it makes (GPU spec V7's budget).
+RE_PIPELINE = re.compile(
+    r"^\[gxv\] pipeline made (on the draw path|on the compiler thread)(?: at frame \d+)? in ([\d.]+) ms"
+)
 RE_BP_MASK = re.compile(r"^\[gxr\] BP_MASK ")
 # The [gxr] lines every rendering run prints: its report, its snapshots, the
 # worker count, SOA_HASH's frame hashes. Every other [gxr] line is a
@@ -331,6 +335,8 @@ class Seen:
     bp_mask: list[tuple[str, int | None, str | None]] = field(default_factory=list)
     gxr_warnings: list[tuple[str, int | None, str | None]] = field(default_factory=list)
     mem_lines: list[str] = field(default_factory=list)
+    # Each pipeline gxv made: (on the draw path, ms, field maps loaded before it).
+    pipelines: list[tuple[bool, float, int]] = field(default_factory=list)
     card_path: str | None = None
     card_read: int | None = None
     card_written: int | None = None
@@ -385,6 +391,8 @@ def read_seen(text: str) -> Seen:
             continue
         if RE_MEM.match(line):
             s.mem_lines.append(line)
+        elif m := RE_PIPELINE.match(line):
+            s.pipelines.append((m.group(1) == "on the draw path", float(m.group(2)), len(s.maps)))
         elif line.startswith("[gxr] "):
             last_map = s.maps[-1][0] if s.maps else None
             if RE_BP_MASK.match(line):
@@ -702,7 +710,29 @@ def judge(
         "frames": s.frames,
         "wall_seconds": s.wall_seconds,
         "pad_events": r.scripted_events,
+        "pipelines": pipeline_summary(s, landing),
     }
+
+
+def pipeline_summary(s: Seen, landing: tuple[str, int | None] | None) -> dict | None:
+    """The pipelines gxv made, from its line for each (GPU spec V7's budget):
+    on the draw path, where a creation holds up a frame, and on the compiler
+    thread; each count, the longest, and how many came after the landing
+    map's load. None when the run made none, as a CPU run does."""
+    if not s.pipelines:
+        return None
+    landed_at = next((i for i, (m, _) in enumerate(s.maps) if m not in ATTRACT), None)
+    out = {"field_map_loads": len(s.maps)}
+    for key, draw in (("draw_path", True), ("compiler_thread", False)):
+        made = [(ms, before) for d, ms, before in s.pipelines if d == draw]
+        out[key] = {
+            "made": len(made),
+            "longest_ms": max((ms for ms, _ in made), default=0.0),
+            "after_landing": None
+            if landed_at is None
+            else sum(1 for _, before in made if before > landed_at),
+        }
+    return out
 
 
 def missing(log: str) -> dict:
@@ -732,6 +762,20 @@ def print_result(res: dict) -> None:
         print("[seen] maps " + (" > ".join(m["map"] for m in res["maps"]) or "none"))
     else:
         print("[seen] battles and maps not available: this log has no [trace] lines")
+    pipes = res.get("pipelines")
+    if pipes:
+        where = f"after {res['landing_map']} loaded" if res["landing_map"] else "after a landing"
+        for key, name in (
+            ("draw_path", "on the draw path"),
+            ("compiler_thread", "on the compiler thread"),
+        ):
+            p = pipes[key]
+            after = "?" if p["after_landing"] is None else p["after_landing"]
+            print(
+                f"[seen] pipelines made {name}: {p['made']}, the longest {p['longest_ms']:.2f} ms; "
+                f"{after} of them {where}"
+            )
+        print(f"[seen] {pipes['field_map_loads']} field map loads")
     for q in res["questions"]:
         print(f"[question] {q}")
     tail = []

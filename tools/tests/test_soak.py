@@ -149,6 +149,40 @@ def test_a_clean_log_passes_and_says_what_it_saw():
     assert res["game_over_frame"] is None and res["questions"] == []
 
 
+def pipeline(where: str, ms: float, frame: int | None = None) -> str:
+    at = f" at frame {frame}" if frame is not None else ""
+    return f"[gxv] pipeline made {where}{at} in {ms:.2f} ms"
+
+
+def test_the_gpus_pipelines_are_counted_against_the_landing(capsys):
+    """GPU spec V7's budget: gxv's line for each pipeline it made, by where
+    it was made, the longest of each, and how many came after the landing
+    map loaded. A CPU run, which makes none, has nothing to count."""
+    before = [pipeline("on the draw path", 0.3, 1), pipeline("on the compiler thread", 140.0)]
+    after = [
+        pipeline("on the draw path", 37.5, 400),
+        pipeline("on the compiler thread", 1.0),
+        pipeline("on the draw path", 0.2, 900),
+    ]
+    landing = si(2640, "0100") + "\n"
+    log = soak_log(play=after + ONE_BATTLE).replace(landing, landing + "\n".join(before) + "\n")
+    res = soak.judge(log, "gpu.log", expect_map="a116a")
+    assert res["verdict"] == "pass", res["checks"]
+    assert res["pipelines"] == {
+        "field_map_loads": 2,
+        "draw_path": {"made": 3, "longest_ms": 37.5, "after_landing": 2},
+        "compiler_thread": {"made": 2, "longest_ms": 140.0, "after_landing": 1},
+    }
+    soak.print_result(res)
+    out = capsys.readouterr().out
+    assert (
+        "[seen] pipelines made on the draw path: 3, the longest 37.50 ms; 2 of them after a116a loaded"
+        in out
+    )
+    assert "[seen] 2 field map loads" in out
+    assert soak.judge(soak_log(), "cpu.log")["pipelines"] is None
+
+
 @pytest.mark.parametrize(
     "mutate, expect_map, broken",
     [

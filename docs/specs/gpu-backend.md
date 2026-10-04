@@ -1556,7 +1556,16 @@ later in the submission samples the copy's image from the pool; `gxv.c`'s `uploa
 - *`partl`: 670 copies to a texture, 281-286 readback waits; `land-at-copy`, 670.*
 - *The mask effect's 14 captures serve 3 samplers each from the pool.*
 - *`gpuspike.py copyimage` and `test_gxv_copyimage.py` hold the same-frame sample to the CPU's hash.*
-- *The soak is what remains.*
+
+*The soak ran fourth, 2026-10-04 (FINDINGS "V7, fourth"). It took the censuses' route, 25 warps on
+`partl`, because random play crosses few maps. 27 field map loads.*
+
+- *Second launch: every pipeline from the cache, the longest 0.26 ms.*
+- *First launch: four of the interpreter's pipelines took 26-30 ms on the draw path, over the
+  20 ms limit. They were states the driver had not compiled.*
+- *Pipeline libraries, the usual fix, made this driver draw nothing once enabled, and were backed
+  out.*
+- *V7 is done but for that line.*
 
 *Several days to week-plus. `--link`. Prerequisites: V6b. Files: `runtime/gxv.c`,
 `runtime/gxv/*.glsl`, `runtime/gxr_tev.c` (the `copy_image` flag honoured), `runtime/gxr.c` (the

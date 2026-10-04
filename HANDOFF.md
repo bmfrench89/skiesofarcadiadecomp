@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1225 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1226 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1225 |
+| Python tests | 1226 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -587,11 +587,16 @@ C5c) is now done.
    the GPU's time on Part L down 3.6 times at the median), then copy
    images in the GPU's pool and copies landing behind gxr's `g_landed`
    (FINDINGS "V7, third": Part L's 670 copies take 281-286 waits, not
-   670). Next is the soak, whose 20 ms limit a first launch's interpreter
-   pipelines can break (37.5 ms here, cold; FINDINGS "V7, second" names
-   two ways out). `gpuspike.py specdiff` checks that specialised and
-   interpreted draw the same bytes, `copyimage` a copy sampled in its
-   frame; `overlap` is the one to run after touching the landing. Still open for the owner, and not blocking: whether a
+   670). **V7 is done but for one line** (FINDINGS "V7, fourth"): the
+   soak's second launch meets the 20 ms budget; the first stalls 26-30 ms
+   four times, on interpreter pipelines the driver had never compiled.
+   Pipeline libraries, the usual cure, made this AMD driver draw nothing
+   once enabled and were backed out; a validation layer is what would say
+   why. `gpuspike.py specdiff` checks that specialised and interpreted
+   draw the same bytes, `copyimage` a copy sampled in its frame;
+   `overlap` is the one to run after touching the landing. Next: the
+   distribution route's spec, which G3's answer put "after V7" (PLAN-NEXT
+   §0), then V8. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
