@@ -679,7 +679,7 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
 | M3c texture provider, M9 packs, P8 | Through the CPU cache: the replaced image is what is uploaded |
 | X6 injected draws | They are `DrawCmd`s (beyond-gamecube.md §7): drawn like the game's |
 | H17 interpolation | `DrawCmd.efb` = 1 selects the second target (V12). The in-between pass samples F+1's copy images, which the real pass made first |
-| M8 overlay, H8 presenter | Unchanged until V8 moves presentation to the GPU |
+| M8 overlay, H8 presenter | Since V8: with a window, the GPU presents its own screen copy (`SOA_PRESENTER=dxgi` or `gdi`, or a P5a filter, keeps the CPU's); H8's pacing and its histogram are kept |
 | Frame hook, pokes, peeks, mods | Unchanged; a hook's hazard wait also waits for the readback |
 
 ### 3.10 API, shader toolchain and build
@@ -1594,6 +1594,20 @@ later in the submission samples the copy's image from the pool; `gxv.c`'s `uploa
   cache (above zero).
 
 ### V8. Present from the GPU
+
+*The presenter landed first, 2026-10-04 (FINDINGS "V8, first").*
+
+- *With `SOA_GPU=vulkan` the window presents the GPU's screen copy through a Vulkan swap chain:*
+  - *`present.frag` is `picture_scale` exactly, held to it by `gpuspike.py present` (32 of 32
+    layouts);*
+  - *FIFO, each frame presented `g_interval` times;*
+  - *the screen buffer is a triple buffer between the consumer and the window's thread, and the
+    queue is shared under `plat_lock`.*
+- *Its shader is `present.frag` and `present.vert`, not the `present.glsl` named below.*
+- *Still owed:*
+  - *V8b, P5a's filters as shaders;*
+  - *M8's overlay, when M8 lands;*
+  - *the pacing target and the owner's session at 60 or 120 Hz (the display here is at 85).*
 
 *Several days to week-plus. `--link`. Prerequisites: V7; H19a landed (the window it presents into);
 M8 and P5a, or whichever of them have landed, each with its CPU function as the reference. Files:

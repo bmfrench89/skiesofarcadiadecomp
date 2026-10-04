@@ -6228,3 +6228,67 @@ producer, which is the game's thread, publishes each command and goes on.
       interpreter pipelines;
     - making the last run's states at start, which helps only the launches
       the disk cache already serves.
+
+**V8, first: the GPU presents to the window.** 2026-10-04.
+
+- **What it does.** With `SOA_GPU=vulkan` and a window, the picture no
+  longer goes through the CPU on its way to the screen.
+  - The window's thread presents the newest screen copy from the GPU through
+    a Vulkan swap chain on the window, in place of DXGI.
+  - `present.frag` is `picture_scale` as a shader: the rectangle
+    `picture_layout` chose, nearest neighbour by the same integer arithmetic,
+    black outside it.
+  - Each frame is presented `g_interval` times in FIFO order, a refresh each.
+    That is what DXGI's sync interval did (H8).
+  - `SOA_PRESENTER=dxgi` or `gdi` keeps the CPU presenter. So do P5a's
+    picture filters, until V8b makes them shaders, and the window says so.
+- **How the two threads share it:**
+  - **The screen buffer** now holds three slots and a scratch region. The
+    consumer writes one slot and publishes it. The presenter takes the newest
+    by swapping its own slot in, so neither thread writes or reads a slot the
+    other holds. The presenter keeps a slot until its own fence says the GPU
+    has read it.
+  - **The one Vulkan queue** is shared under a new `plat_lock`, a spinning
+    lock held only around a submit or a present.
+  - **The readback into `g_screen` is unchanged,** so `SOA_HASH`,
+    snapshots, PNGs and the frame hook see what they saw.
+- **A fix the first windowed run found:** `main.c` started the window before
+  the GPU, so the window's thread saw no GPU and opened DXGI, without saying
+  so. The GPU now starts first.
+- **The check** [V]: `gpuspike.py present` (new). Two synthetic screen
+  copies, 640x480 and 640x448, every pixel its own colour, go through the
+  presenter's own pass into an offscreen image.
+  - **Eight targets at both layouts:** 1x to 4x, 16:9, 21:9, odd sizes, and
+    one smaller than the picture.
+  - **The result:** 32 of 32 equal `picture_scale`'s picture in every pixel's
+    colour.
+  - **The mutation** (`present`, one column over) leaves 0 of 32.
+- **The window** [V], `scenario.py run window --env SOA_GPU=vulkan`, on this
+  machine's 85 Hz display:
+
+  | Presenter | Frames | 1 / 2 / 3 / 4+ refreshes | Interval p50 / p99 | A present's own work p50 / p99 |
+  |---|---|---|---|---|
+  | DXGI (the CPU's copy) | 7,491 | 62 / 373 / 6,034 / 1,022 | 31.7 / 48.6 ms | 2.91 / 3.88 ms |
+  | Vulkan (the GPU's) | 7,493 | 55 / 343 / 6,125 / 970 | 31.6 / 48.4 ms | 0.74 / 1.49 ms |
+
+  - **The same pacing:** at 85 Hz no presenter can hold a 30-a-second frame
+    evenly, which H8 found.
+  - **A quarter of the work,** since the CPU no longer converts and scales
+    each frame.
+  - **No failed present** in any run.
+  - **Window changes:** with `SOA_WINDOW_TEST=fs@300,win@600,size:1000x700@900`,
+    fullscreen on the 3440x1440 monitor, back to the window and a
+    1000x700 client each remade the swap chain (5 in all), with no failed
+    present. The longest present then was 48 ms, the remake's wait for the
+    queue.
+  - **Looked at:** a screenshot of the window, mid-run, shows the opening's
+    narration at 2x, crisp and placed as the CPU presenter places it.
+- **Unchanged:** contrast 67/67, `replay` 23/23, `title` 5/5 on the GPU,
+  the self tests, and the copy checks: `copydiff`, `queue`, `overlap`,
+  `copyimage`.
+- **What V8 still owes:**
+  - **V8b:** P5a's filters as shaders, each held to its CPU function within
+    1 a channel.
+  - **M8's overlay,** when M8 lands.
+  - **The pacing target and the owner's windowed session** at 60 or 120 Hz.
+    The display here is set to 85.

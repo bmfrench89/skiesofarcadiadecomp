@@ -1,8 +1,9 @@
 /*
  * gxv: the Vulkan backend (specs/gpu-backend.md V3a-V5). A GxrBackend
  * (runtime/gxr_cmd.h) that draws the renderer's commands into an EFB of its
- * own, headless: no window, no swapchain, a screen copy read back and handed
- * to gxr_backend_screen, which is what the window presents.
+ * own. A screen copy is read back and handed to gxr_backend_screen, as the
+ * CPU renderer's is; since V8 the window presents the GPU's own copy too,
+ * through a swap chain of gxv's (gxv_present).
  *
  * It draws (V3a, V4a): the vertex stage of 3.3 (the CPU's own clipping, the
  * depth varying, invariant positions), the CPU's culling, scissor, depth test
@@ -22,7 +23,8 @@
 
 /* 1 when this build has the backend; 0 when gxv.c was compiled without
  * SOA_GXV, because vendor/ had no glslang or Vulkan-Headers at the link, and
- * then gxv_built is the only function here that exists. */
+ * then only gxv_built, gxv_start and the presenter's four functions below
+ * exist, each saying no. */
 int gxv_built(void);
 /* SOA_GPU=vulkan (main.c): gxv_init, then gxv as the renderer's backend, so
  * every command from the first is drawn on the GPU. 0 with the reason in why
@@ -37,6 +39,21 @@ int gxv_start(char* why, size_t cap);
 int gxv_init(char* why, size_t cap);
 const GxrBackend* gxv_backend(void);
 const char* gxv_device_name(void);
+
+/* The window's picture from the GPU (V8). gxv_running: gxv_start succeeded.
+ * gxv_present_open makes a swap chain on the window (Windows: its HINSTANCE
+ * and HWND) for a w x h client; 0 with the reason in why. gxv_present, on the
+ * window's thread, draws the newest screen copy (fresh) or the last again,
+ * laid out by picture_layout(mode), and presents it `interval` times, FIFO, a
+ * refresh each; the frame's size comes back. gxv_present_resize asks for the
+ * swap chain at a new client size at the next present. */
+int gxv_running(void);
+int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* why, size_t cap);
+int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h);
+void gxv_present_resize(int w, int h);
+/* The presenter's check (test_gxv_present.py): rgba, w x h, through the
+ * present pass into a dw x dh B8G8R8A8 image, read back into out. */
+int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mode, uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */
 void gxv_report(void);

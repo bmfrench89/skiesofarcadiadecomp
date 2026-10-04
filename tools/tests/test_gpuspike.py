@@ -414,7 +414,7 @@ def test_the_shader_list_is_what_gxv_c_includes_and_each_stub_declares_its_array
     build that fails, or a variant nobody builds. A stub is one word under the
     same name, so compile_runtime.py compiles all of gxv.c without glslang."""
     gxv = (ROOT / "runtime" / "gxv.c").read_text(encoding="utf-8")
-    included = set(re.findall(r'^#include "(\w+)\.h"$', gxv, re.M)) - {"gxv", "plat"}
+    included = set(re.findall(r'^#include "(\w+)\.h"$', gxv, re.M)) - {"gxv", "plat", "picture"}
     assert included == {var for _, var, _ in shaders.SHADERS}
     shaders.stub(tmp_path)
     for _, var, _ in shaders.SHADERS:

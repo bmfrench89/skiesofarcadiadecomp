@@ -41,13 +41,17 @@
 #include "copy_comp.h"
 #include "copy_comp_rounding.h"
 #include "copy_comp_intensity.h"
+#include "present_vert.h"
+#include "present_frag.h"
+#include "present_frag_offset.h"
+#include "picture.h"
 
 /* The shader reads a Vertex as 39 floats; gxr.h's layout is what it reads. */
 typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : -1];
 
 /* ---- the entry points, resolved at run time --------------------------- */
 
-#define GXV_GLOBAL(X) X(vkCreateInstance) X(vkEnumerateInstanceLayerProperties)
+#define GXV_GLOBAL(X) X(vkCreateInstance) X(vkEnumerateInstanceLayerProperties) X(vkEnumerateInstanceExtensionProperties)
 #define GXV_INSTANCE(X)                                                                                  \
     X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties)                  \
     X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties)                   \
@@ -66,7 +70,7 @@ typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : 
     X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) X(vkQueueSubmit)              \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool)           \
     X(vkCmdWriteTimestamp) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline)            \
-    X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdPushConstants) X(vkCmdSetScissor)          \
+    X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdPushConstants) X(vkCmdSetScissor) X(vkCmdSetViewport)          \
     X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdClearAttachments) X(vkCmdPipelineBarrier)                    \
     X(vkCmdCopyImageToBuffer) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)                    \
     X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage) X(vkCmdBeginQuery) X(vkCmdEndQuery)    \
@@ -144,7 +148,10 @@ static struct {
  * 0, the interpreter alone. */
 enum { SPEC_OFF, SPEC_BACKGROUND, SPEC_WAIT };
 static int g_specialize = -1;
-static unsigned long long g_n_spec, g_n_interim; /* specialised pipelines asked for; draws the interpreter drew meanwhile */
+static unsigned long long g_n_spec, g_n_interim;
+static PlatLock g_queue_lock; /* the queue's submissions and presents (V8): the consumer's and the window's */
+static int g_inst_surface, g_dev_swapchain; /* the surface extensions on the instance, the swap chain's on the device */
+static int g_started; /* gxv_start succeeded: the renderer's backend */ /* specialised pipelines asked for; draws the interpreter drew meanwhile */
 /* The distinct shapes seen, for the report: the pipelines should number a
  * few for each (V7's Done), not one for each draw. */
 #define SHAPE_SLOTS 1024
@@ -220,6 +227,7 @@ static unsigned long long g_n_land_waits, g_n_cimg_served;
  * did; --mutate cimg-cpu: a draw samples the producer's copy image, not yet
  * landed, instead of the pool's. */
 static int g_mut_land_at_copy, g_mut_cimg_cpu;
+static int g_mut_present; /* --mutate present (V8): present.frag one column over */
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -533,13 +541,20 @@ static void land_all(void)
 static int submit_wait(void)
 {
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkResult r;
     if (!g_rec) return 1;
     end_pass();
     if (g_timestamps) vkCmdWriteTimestamp(g_cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, 1);
     VKCHECK(vkEndCommandBuffer(g_cb));
     si.commandBufferCount = 1;
     si.pCommandBuffers = &g_cb;
-    VKCHECK(vkQueueSubmit(g_queue, 1, &si, g_fence));
+    plat_lock(&g_queue_lock); /* the presenter submits and presents on this queue too (V8) */
+    r = vkQueueSubmit(g_queue, 1, &si, g_fence);
+    plat_unlock(&g_queue_lock);
+    if (r != VK_SUCCESS) {
+        say("vkQueueSubmit failed: VkResult %d", (int)r);
+        return 0;
+    }
     {
         uint64_t t0 = plat_mono_ns();
         VKCHECK(vkWaitForFences(g_dev, 1, &g_fence, VK_TRUE, UINT64_MAX));
@@ -1580,6 +1595,7 @@ typedef struct {
     int32_t x0, y0, w, h;
     uint32_t mode, texfmt, flags, chans, taps, row_bytes, ow, oh, count;
     uint32_t dest_at, image_at, pool_at; /* the copy's regions, in words (V7) */
+    uint32_t screen_at;                  /* a screen copy's slot, in words (V8) */
 } CopyPush;
 
 /* gxr.c's copy_texfmt, copy_row_stride and copy_extent, and copy_to_texture's
@@ -1687,6 +1703,19 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
     if (!(D->cp_f_up == 0 && D->cp_f_dn == 0 && D->cp_f_mid == 64)) p->flags |= 4u;
 }
 
+/* The screen buffer's slots (V8): three for the presenter's triple buffer,
+ * and a fourth, SCREEN_SCRATCH, for gxv_read_depth and the presenter's
+ * check. The consumer writes g_scr_back; g_scr_middle is the newest it has
+ * finished, with SCREEN_FRESH set until the presenter takes it, which it
+ * does by swapping its own g_scr_front in; so neither ever writes or reads
+ * a slot the other holds. A slot's size is written before it is published. */
+#define SCREEN_SLOTS 4
+#define SCREEN_SCRATCH 3
+#define SCREEN_FRESH 4
+static unsigned g_scr_back = 0, g_scr_front = 2;
+static plat_a64 g_scr_middle = 1;
+static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS];
+
 /* A copy to the screen, as copy_to_screen makes it: min(w, 640) by
  * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. */
 static int copy_screen(const DrawCmd* D)
@@ -1699,11 +1728,15 @@ static int copy_screen(const DrawCmd* D)
     sh = p.h > EFB_H ? EFB_H : p.h;
     p.mode = 2;
     p.count = (uint32_t)(sw * sh);
+    p.screen_at = g_scr_back * (READBACK_BYTES / 4);
     if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) return 0;
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
     if (!submit_wait()) return 0;
-    gxr_backend_screen(g_screen_map, sw, sh);
+    gxr_backend_screen(g_screen_map + (size_t)g_scr_back * READBACK_BYTES, sw, sh);
+    g_scr_w[g_scr_back] = sw;
+    g_scr_h[g_scr_back] = sh;
+    g_scr_back = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)(g_scr_back | SCREEN_FRESH)) & 3);
     g_n_copies++;
     return 1;
 }
@@ -1849,6 +1882,7 @@ int gxv_read_depth(uint32_t* out)
                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     memset(&rg, 0, sizeof rg);
+    rg.bufferOffset = (VkDeviceSize)SCREEN_SCRATCH * READBACK_BYTES; /* not a slot the presenter may hold */
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     rg.imageSubresource.layerCount = 1;
     rg.imageExtent.width = EFB_W;
@@ -1868,7 +1902,7 @@ int gxv_read_depth(uint32_t* out)
     if (!submit_wait()) return 0;
     for (i = 0; i < (unsigned)(EFB_W * EFB_H); i++) {
         float f;
-        memcpy(&f, g_screen_map + 4 * (size_t)i, 4);
+        memcpy(&f, g_screen_map + (size_t)SCREEN_SCRATCH * READBACK_BYTES + 4 * (size_t)i, 4);
         out[i] = (uint32_t)(f * 16777216.0f); /* zq * 2^-24 exactly, as written */
     }
     return 1;
@@ -2197,6 +2231,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "compile-wait")) g_mut_compile_wait = 1;
     else if (!strcmp(name, "land-at-copy")) g_mut_land_at_copy = 1;
     else if (!strcmp(name, "cimg-cpu")) g_mut_cimg_cpu = 1;
+    else if (!strcmp(name, "present")) g_mut_present = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -2243,6 +2278,10 @@ static void report_frames(void)
     free(c);
     free(g);
 }
+
+static void present_report(void);
+static void present_shutdown(void);
+static void queue_idle(void);
 
 /* The pipelines made on the draw path, where a creation stalls the frame:
  * how many, how many the cache already had, the longest and total creation,
@@ -2292,6 +2331,7 @@ void gxv_report(void)
         g_n_tex_copies, g_n_land_waits, g_n_cimg_served);
     report_pipelines();
     report_frames();
+    present_report();
     say("logic ops: %llu draws, drawn %s", g_n_logic,
         g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot");
     if (g_measure)
@@ -2376,20 +2416,27 @@ static int make_device(char* why, size_t cap)
     {
         /* VK_EXT_pipeline_creation_feedback, where the device has it: only
          * for the report's count of pipelines the disk cache had (V7). */
-        static const char* feedback = VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
-        uint32_t n = 0, i;
+        static const char* names[2];
+        uint32_t n = 0, i, k = 0;
+        int has_swapchain = 0;
         VkExtensionProperties* props;
         if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, NULL) == VK_SUCCESS && n &&
             (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
             if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, props) == VK_SUCCESS)
-                for (i = 0; i < n; i++)
-                    if (!strcmp(props[i].extensionName, feedback)) g_feedback = 1;
+                for (i = 0; i < n; i++) {
+                    if (!strcmp(props[i].extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME)) g_feedback = 1;
+                    if (!strcmp(props[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) has_swapchain = 1;
+                }
             free(props);
         }
-        if (g_feedback) {
-            di.enabledExtensionCount = 1;
-            di.ppEnabledExtensionNames = &feedback;
+        if (g_feedback) names[k++] = VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
+        /* The window's swap chain (V8), where the instance has a surface. */
+        if (g_inst_surface && has_swapchain) {
+            names[k++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+            g_dev_swapchain = 1;
         }
+        di.enabledExtensionCount = k;
+        di.ppEnabledExtensionNames = k ? names : NULL;
     }
     r = vkCreateDevice(g_phys, &di, NULL, &g_dev);
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateDevice on %s failed: VkResult %d", g_devname, (int)r); return 0; }
@@ -2591,6 +2638,27 @@ int gxv_init(char* why, size_t cap)
         if (have) { ii.enabledLayerCount = 1; ii.ppEnabledLayerNames = &layer; }
         say("SOA_GPU_VALIDATE: %s", have ? "the validation layer is on" : "no validation layer is installed; running without it");
     }
+    {
+        /* The window's surface (V8), where the loader has it; nothing else
+         * needs it, and a run with no window never uses it. */
+#ifdef _WIN32
+        static const char* surf[2] = {VK_KHR_SURFACE_EXTENSION_NAME, "VK_KHR_win32_surface"};
+        uint32_t n = 0, k, found = 0;
+        VkExtensionProperties* props;
+        if (vkEnumerateInstanceExtensionProperties && vkEnumerateInstanceExtensionProperties(NULL, &n, NULL) == VK_SUCCESS &&
+            n && (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
+            if (vkEnumerateInstanceExtensionProperties(NULL, &n, props) == VK_SUCCESS)
+                for (k = 0; k < n; k++)
+                    if (!strcmp(props[k].extensionName, surf[0]) || !strcmp(props[k].extensionName, surf[1])) found++;
+            free(props);
+        }
+        if (found == 2) {
+            ii.enabledExtensionCount = 2;
+            ii.ppEnabledExtensionNames = surf;
+            g_inst_surface = 1;
+        }
+#endif
+    }
     r = vkCreateInstance(&ii, NULL, &g_inst);
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateInstance failed: VkResult %d (no Vulkan 1.1 driver?)", (int)r); return 0; }
     if (!load_instance(why, cap) || !pick_device(why, cap) || !make_device(why, cap)) return 0;
@@ -2605,7 +2673,8 @@ int gxv_init(char* why, size_t cap)
                      0, &g_readback, &g_readback_map) ||
         !make_buffer(DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) ||
         !make_buffer(IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
-        !make_buffer(READBACK_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_screenbuf, &g_screen_map) ||
+        !make_buffer((VkDeviceSize)READBACK_BYTES * SCREEN_SLOTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1,
+                     &g_screenbuf, &g_screen_map) ||
         !make_buffer(DRAWREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_drawbuf, &g_draw_map) ||
         !make_buffer(pool_bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_poolbuf, &g_pool_map) ||
         !make_buffer(TEXREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_texrecbuf, &g_texrec_map) || !make_pass() ||
@@ -2644,6 +2713,7 @@ int gxv_start(char* why, size_t cap)
     }
     if (!gxv_init(why, cap)) return 0;
     gxr_set_backend(gxv_backend());
+    g_started = 1;
     return 1;
 }
 
@@ -2652,7 +2722,8 @@ void gxv_shutdown(void)
     unsigned i;
     if (!g_dev) return;
     compiler_stop();
-    vkDeviceWaitIdle(g_dev);
+    queue_idle();
+    present_shutdown();
     for (i = 0; i < PIPE_SLOTS; i++)
         if (g_pipes[i].key && g_pipes[i].pipe) vkDestroyPipeline(g_dev, g_pipes[i].pipe, NULL);
     if (g_qpool) vkDestroyQueryPool(g_dev, g_qpool, NULL);
@@ -2707,6 +2778,637 @@ void gxv_shutdown(void)
     g_lib = NULL;
 }
 
+/* ---- the presenter (V8) ---------------------------------------------------------
+ *
+ * The window's picture from the GPU: the newest screen copy, still in the
+ * screen buffer, drawn into a Vulkan swap chain on the window by present.frag
+ * -- picture_scale's layout and nearest neighbour, as a shader -- and
+ * presented. The window's own thread calls it, where the DXGI presenter ran;
+ * the consumer goes on drawing meanwhile. Each frame is presented `interval`
+ * times in FIFO order, a refresh each, which is what DXGI's sync interval did
+ * (H8): two at 60 Hz, four at 120. g_present_lock keeps shutdown off a
+ * present in progress; the queue itself is g_queue_lock's. */
+typedef struct {
+    VkStructureType sType;
+    const void* pNext;
+    VkFlags flags;
+    void* hinstance;
+    void* hwnd;
+} GxvWin32SurfaceInfo; /* VkWin32SurfaceCreateInfoKHR, without <windows.h> */
+typedef VkResult(VKAPI_PTR* GxvCreateWin32Surface)(VkInstance, const GxvWin32SurfaceInfo*, const VkAllocationCallbacks*,
+                                                   VkSurfaceKHR*);
+#define GXV_STYPE_WIN32_SURFACE ((VkStructureType)1000009000)
+
+#define SWAP_MAX 8
+#define CHECK_BYTES (2560u * 1600u * 4u) /* the presenter's check: its largest target */
+static PlatLock g_present_lock;
+static int g_present_dead;
+static VkSurfaceKHR g_surface;
+static VkSwapchainKHR g_swap;
+static VkFormat g_swap_format;
+static VkExtent2D g_swap_ext;
+static uint32_t g_swap_n;
+static VkImage g_swap_img[SWAP_MAX];
+static VkImageView g_swap_view[SWAP_MAX];
+static VkFramebuffer g_swap_fb[SWAP_MAX];
+static VkSemaphore g_swap_ready[SWAP_MAX], g_swap_done[SWAP_MAX];
+static unsigned g_swap_k;
+static int g_swap_stale, g_swap_want_w, g_swap_want_h;
+static VkRenderPass g_pres_pass, g_pres_check_pass;
+static VkPipeline g_pres_pipe;
+static VkPipelineLayout g_pres_layout;
+static VkDescriptorSetLayout g_pres_dsl;
+static VkDescriptorPool g_pres_dpool;
+static VkDescriptorSet g_pres_set;
+static VkCommandPool g_pres_cpool;
+static VkCommandBuffer g_pres_cb;
+static VkFence g_pres_fence;
+static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
+static PFN_vkDestroySurfaceKHR p_vkDestroySurfaceKHR;
+static PFN_vkGetPhysicalDeviceSurfaceSupportKHR p_vkGetPhysicalDeviceSurfaceSupportKHR;
+static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
+static PFN_vkGetPhysicalDeviceSurfaceFormatsKHR p_vkGetPhysicalDeviceSurfaceFormatsKHR;
+static PFN_vkCreateSwapchainKHR p_vkCreateSwapchainKHR;
+static PFN_vkDestroySwapchainKHR p_vkDestroySwapchainKHR;
+static PFN_vkGetSwapchainImagesKHR p_vkGetSwapchainImagesKHR;
+static PFN_vkAcquireNextImageKHR p_vkAcquireNextImageKHR;
+static PFN_vkQueuePresentKHR p_vkQueuePresentKHR;
+static PFN_vkCreateSemaphore p_vkCreateSemaphore;
+static PFN_vkDestroySemaphore p_vkDestroySemaphore;
+
+int gxv_running(void)
+{
+    return g_started;
+}
+
+/* A render pass of one colour attachment in fmt, written whole: to present,
+ * or (the check) to copy out. */
+static VkRenderPass present_pass(VkFormat fmt, VkImageLayout final)
+{
+    VkAttachmentDescription at = {0};
+    VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sp = {0};
+    VkSubpassDependency dep = {0};
+    VkRenderPassCreateInfo ri = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    VkRenderPass pass = VK_NULL_HANDLE;
+    at.format = fmt;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; /* every pixel is drawn: the picture or black */
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at.finalLayout = final;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &ref;
+    /* The acquire's semaphore waits at colour output; the image's layout
+     * change must wait there too. */
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    ri.attachmentCount = 1;
+    ri.pAttachments = &at;
+    ri.subpassCount = 1;
+    ri.pSubpasses = &sp;
+    ri.dependencyCount = 1;
+    ri.pDependencies = &dep;
+    if (vkCreateRenderPass(g_dev, &ri, NULL, &pass) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return pass;
+}
+
+/* The pipeline, its layout and its one descriptor (the screen buffer, whole),
+ * made once for the pass's format. */
+static int present_pipeline(VkRenderPass pass)
+{
+    VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 7 * 4};
+    VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+    VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    VkDescriptorBufferInfo bi = {0};
+    VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    VkPipelineShaderStageCreateInfo st[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    VkPipelineVertexInputStateCreateInfo vin = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    VkPipelineViewportStateCreateInfo vps = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    VkPipelineRasterizationStateCreateInfo rs = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    VkPipelineMultisampleStateCreateInfo ms = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    VkPipelineColorBlendAttachmentState ba = {0};
+    VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dys = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    VkGraphicsPipelineCreateInfo pi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    VkResult r;
+    if (g_pres_pipe) return 1;
+    li.bindingCount = 1;
+    li.pBindings = &b;
+    if (vkCreateDescriptorSetLayout(g_dev, &li, NULL, &g_pres_dsl) != VK_SUCCESS) return 0;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &g_pres_dsl;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pr;
+    if (vkCreatePipelineLayout(g_dev, &pli, NULL, &g_pres_layout) != VK_SUCCESS) return 0;
+    dpi.maxSets = 1;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes = &ps;
+    if (vkCreateDescriptorPool(g_dev, &dpi, NULL, &g_pres_dpool) != VK_SUCCESS) return 0;
+    ai.descriptorPool = g_pres_dpool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &g_pres_dsl;
+    if (vkAllocateDescriptorSets(g_dev, &ai, &g_pres_set) != VK_SUCCESS) return 0;
+    bi.buffer = g_screenbuf;
+    bi.range = VK_WHOLE_SIZE;
+    w.dstSet = g_pres_set;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(g_dev, 1, &w, 0, NULL);
+    si.codeSize = sizeof present_vert;
+    si.pCode = present_vert;
+    if (vkCreateShaderModule(g_dev, &si, NULL, &vs) != VK_SUCCESS) return 0;
+    si.codeSize = g_mut_present ? sizeof present_frag_offset : sizeof present_frag;
+    si.pCode = g_mut_present ? present_frag_offset : present_frag;
+    if (vkCreateShaderModule(g_dev, &si, NULL, &fs) != VK_SUCCESS) {
+        vkDestroyShaderModule(g_dev, vs, NULL);
+        return 0;
+    }
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    st[0].module = vs;
+    st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    st[1].module = fs;
+    st[1].pName = "main";
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vps.viewportCount = 1;
+    vps.scissorCount = 1;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.lineWidth = 1.0f;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &ba;
+    dys.dynamicStateCount = 2;
+    dys.pDynamicStates = dyn;
+    pi.stageCount = 2;
+    pi.pStages = st;
+    pi.pVertexInputState = &vin;
+    pi.pInputAssemblyState = &ia;
+    pi.pViewportState = &vps;
+    pi.pRasterizationState = &rs;
+    pi.pMultisampleState = &ms;
+    pi.pColorBlendState = &cb;
+    pi.pDynamicState = &dys;
+    pi.layout = g_pres_layout;
+    pi.renderPass = pass;
+    r = vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, &g_pres_pipe);
+    vkDestroyShaderModule(g_dev, vs, NULL);
+    vkDestroyShaderModule(g_dev, fs, NULL);
+    return r == VK_SUCCESS;
+}
+
+/* The presenter's command buffer and fence, its own pool: the window's
+ * thread records it, never the consumer's. */
+static int present_commands(void)
+{
+    VkCommandPoolCreateInfo pi = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (g_pres_cpool) return 1;
+    pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pi.queueFamilyIndex = g_family;
+    if (vkCreateCommandPool(g_dev, &pi, NULL, &g_pres_cpool) != VK_SUCCESS) return 0;
+    ai.commandPool = g_pres_cpool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    if (vkAllocateCommandBuffers(g_dev, &ai, &g_pres_cb) != VK_SUCCESS) return 0;
+    fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    return vkCreateFence(g_dev, &fi, NULL, &g_pres_fence) == VK_SUCCESS;
+}
+
+/* The present pass into fb (w x h), from screen slot `slot` laid out by
+ * picture_layout(mode): recorded into the presenter's command buffer, whose
+ * previous use the caller has waited for. */
+static void present_record(VkRenderPass pass, VkFramebuffer fb, int w, int h, unsigned slot, int mode)
+{
+    VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkRenderPassBeginInfo rb = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    VkViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    VkRect2D sc = {{0, 0}, {(uint32_t)w, (uint32_t)h}};
+    PicRect r = picture_layout(g_scr_w[slot], g_scr_h[slot], w, h, mode);
+    struct {
+        int32_t rx, ry, rw, rh;
+        uint32_t w, h, at;
+    } pc;
+    pc.rx = r.x;
+    pc.ry = r.y;
+    pc.rw = r.w;
+    pc.rh = r.h;
+    pc.w = (uint32_t)g_scr_w[slot];
+    pc.h = (uint32_t)g_scr_h[slot];
+    pc.at = slot * (READBACK_BYTES / 4);
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(g_pres_cb, &bi);
+    /* The screen copy was written by an earlier submission's compute pass,
+     * or by the host for the check: visible to this pass's fragment reads. */
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(g_pres_cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    rb.renderPass = pass;
+    rb.framebuffer = fb;
+    rb.renderArea.extent.width = (uint32_t)w;
+    rb.renderArea.extent.height = (uint32_t)h;
+    vkCmdBeginRenderPass(g_pres_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(g_pres_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pres_pipe);
+    vkCmdBindDescriptorSets(g_pres_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pres_layout, 0, 1, &g_pres_set, 0, NULL);
+    vkCmdSetViewport(g_pres_cb, 0, 1, &vp);
+    vkCmdSetScissor(g_pres_cb, 0, 1, &sc);
+    vkCmdPushConstants(g_pres_cb, g_pres_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+    vkCmdDraw(g_pres_cb, 3, 1, 0, 0);
+    vkCmdEndRenderPass(g_pres_cb);
+}
+
+static void swap_free(void)
+{
+    uint32_t i;
+    for (i = 0; i < g_swap_n; i++) {
+        if (g_swap_fb[i]) vkDestroyFramebuffer(g_dev, g_swap_fb[i], NULL);
+        if (g_swap_view[i]) vkDestroyImageView(g_dev, g_swap_view[i], NULL);
+        g_swap_fb[i] = VK_NULL_HANDLE;
+        g_swap_view[i] = VK_NULL_HANDLE;
+    }
+}
+
+/* The swap chain for the window's client, w x h, FIFO (every device has it),
+ * an 8-bit UNORM format so each byte arrives as it was drawn. A swap chain
+ * that exists is passed as the old one and freed after. */
+static int swap_make(int w, int h)
+{
+    VkSurfaceCapabilitiesKHR caps;
+    VkSurfaceFormatKHR fmts[64];
+    uint32_t nf = 64, i, want;
+    VkSwapchainCreateInfoKHR ci = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    VkSwapchainKHR old = g_swap, made = VK_NULL_HANDLE;
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    if (p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_phys, g_surface, &caps) != VK_SUCCESS) return 0;
+    if (p_vkGetPhysicalDeviceSurfaceFormatsKHR(g_phys, g_surface, &nf, fmts) < 0 || !nf) return 0;
+    for (i = 0; i < nf && fmt == VK_FORMAT_UNDEFINED; i++)
+        if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM) fmt = fmts[i].format;
+    for (i = 0; i < nf && fmt == VK_FORMAT_UNDEFINED; i++)
+        if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) fmt = fmts[i].format;
+    if (fmt == VK_FORMAT_UNDEFINED) {
+        say("the window's surface offers no 8-bit UNORM format");
+        return 0;
+    }
+    if (g_swap_format && fmt != g_swap_format) return 0; /* the pipeline was made for the first */
+    g_swap_format = fmt;
+    if (caps.currentExtent.width != 0xFFFFFFFFu) {
+        g_swap_ext = caps.currentExtent;
+    } else {
+        g_swap_ext.width = (uint32_t)w;
+        g_swap_ext.height = (uint32_t)h;
+    }
+    if (!g_swap_ext.width || !g_swap_ext.height) return 0; /* minimised */
+    want = caps.minImageCount + 1 < 3 ? 3 : caps.minImageCount + 1;
+    if (caps.maxImageCount && want > caps.maxImageCount) want = caps.maxImageCount;
+    if (want > SWAP_MAX) want = SWAP_MAX;
+    ci.surface = g_surface;
+    ci.minImageCount = want;
+    ci.imageFormat = fmt;
+    ci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    ci.imageExtent = g_swap_ext;
+    ci.imageArrayLayers = 1;
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ci.preTransform = caps.currentTransform;
+    ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    ci.clipped = VK_TRUE;
+    ci.oldSwapchain = old;
+    if (p_vkCreateSwapchainKHR(g_dev, &ci, NULL, &made) != VK_SUCCESS) return 0;
+    swap_free();
+    if (old) p_vkDestroySwapchainKHR(g_dev, old, NULL);
+    g_swap = made;
+    g_swap_n = SWAP_MAX;
+    if (p_vkGetSwapchainImagesKHR(g_dev, g_swap, &g_swap_n, g_swap_img) < 0) return 0;
+    if (!g_pres_pass && !(g_pres_pass = present_pass(fmt, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR))) return 0;
+    if (!present_pipeline(g_pres_pass)) return 0;
+    for (i = 0; i < g_swap_n; i++) {
+        VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkFramebufferCreateInfo fi = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        vi.image = g_swap_img[i];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = fmt;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(g_dev, &vi, NULL, &g_swap_view[i]) != VK_SUCCESS) return 0;
+        fi.renderPass = g_pres_pass;
+        fi.attachmentCount = 1;
+        fi.pAttachments = &g_swap_view[i];
+        fi.width = g_swap_ext.width;
+        fi.height = g_swap_ext.height;
+        fi.layers = 1;
+        if (vkCreateFramebuffer(g_dev, &fi, NULL, &g_swap_fb[i]) != VK_SUCCESS) return 0;
+    }
+    g_n_swap_made++;
+    g_swap_stale = 0;
+    return 1;
+}
+
+/* Everything outstanding on the queue finished, under its lock: only for a
+ * swap chain remade, which is rare (a resize). */
+static void queue_idle(void)
+{
+    plat_lock(&g_queue_lock);
+    vkDeviceWaitIdle(g_dev);
+    plat_unlock(&g_queue_lock);
+}
+
+int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* why, size_t cap)
+{
+    GxvCreateWin32Surface create;
+    GxvWin32SurfaceInfo si;
+    VkBool32 ok = VK_FALSE;
+    VkSemaphoreCreateInfo sm = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    unsigned i;
+    if (!g_started) { snprintf(why, cap, "the GPU is not drawing"); return 0; }
+    if (!g_inst_surface || !g_dev_swapchain) {
+        snprintf(why, cap, "the Vulkan driver offers no window surface or swap chain");
+        return 0;
+    }
+    create = (GxvCreateWin32Surface)vkGetInstanceProcAddr(g_inst, "vkCreateWin32SurfaceKHR");
+#define GXV_PRES_I(name) p_##name = (PFN_##name)vkGetInstanceProcAddr(g_inst, #name);
+#define GXV_PRES_D(name) p_##name = (PFN_##name)vkGetDeviceProcAddr(g_dev, #name);
+    GXV_PRES_I(vkDestroySurfaceKHR)
+    GXV_PRES_I(vkGetPhysicalDeviceSurfaceSupportKHR)
+    GXV_PRES_I(vkGetPhysicalDeviceSurfaceCapabilitiesKHR)
+    GXV_PRES_I(vkGetPhysicalDeviceSurfaceFormatsKHR)
+    GXV_PRES_D(vkCreateSwapchainKHR)
+    GXV_PRES_D(vkDestroySwapchainKHR)
+    GXV_PRES_D(vkGetSwapchainImagesKHR)
+    GXV_PRES_D(vkAcquireNextImageKHR)
+    GXV_PRES_D(vkQueuePresentKHR)
+    GXV_PRES_D(vkCreateSemaphore)
+    GXV_PRES_D(vkDestroySemaphore)
+    if (!create || !p_vkDestroySurfaceKHR || !p_vkGetPhysicalDeviceSurfaceSupportKHR || !p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR ||
+        !p_vkGetPhysicalDeviceSurfaceFormatsKHR || !p_vkCreateSwapchainKHR || !p_vkDestroySwapchainKHR || !p_vkGetSwapchainImagesKHR ||
+        !p_vkAcquireNextImageKHR || !p_vkQueuePresentKHR || !p_vkCreateSemaphore || !p_vkDestroySemaphore) {
+        snprintf(why, cap, "the Vulkan driver lacks an entry point the swap chain needs");
+        return 0;
+    }
+    memset(&si, 0, sizeof si);
+    si.sType = GXV_STYPE_WIN32_SURFACE;
+    si.hinstance = hinstance;
+    si.hwnd = native_window;
+    if (create(g_inst, &si, NULL, &g_surface) != VK_SUCCESS) {
+        snprintf(why, cap, "vkCreateWin32SurfaceKHR failed");
+        return 0;
+    }
+    if (p_vkGetPhysicalDeviceSurfaceSupportKHR(g_phys, g_family, g_surface, &ok) != VK_SUCCESS || !ok) {
+        snprintf(why, cap, "the queue the GPU draws on cannot present to this window");
+        return 0;
+    }
+    for (i = 0; i < SWAP_MAX; i++)
+        if (p_vkCreateSemaphore(g_dev, &sm, NULL, &g_swap_ready[i]) != VK_SUCCESS ||
+            p_vkCreateSemaphore(g_dev, &sm, NULL, &g_swap_done[i]) != VK_SUCCESS) {
+            snprintf(why, cap, "vkCreateSemaphore failed");
+            return 0;
+        }
+    if (!present_commands() || !swap_make(w, h)) {
+        snprintf(why, cap, "the swap chain could not be made for a %dx%d client", w, h);
+        return 0;
+    }
+    say("presenting from the GPU: a %ux%u swap chain of %u images, FIFO, format %d (V8)", g_swap_ext.width,
+        g_swap_ext.height, g_swap_n, (int)g_swap_format);
+    return 1;
+}
+
+void gxv_present_resize(int w, int h)
+{
+    g_swap_want_w = w;
+    g_swap_want_h = h;
+    g_swap_stale = 1;
+}
+
+/* One present of slot `slot`: acquire, draw, submit, present. -1 when the
+ * swap chain must be remade first, 0 on failure. */
+static int present_once(unsigned slot, int mode)
+{
+    uint32_t img = 0;
+    unsigned k = g_swap_k;
+    VkResult r;
+    VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkPresentInfoKHR pi = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+    r = p_vkAcquireNextImageKHR(g_dev, g_swap, UINT64_MAX, g_swap_ready[k], VK_NULL_HANDLE, &img);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return 0;
+    g_swap_k = (k + 1) % g_swap_n;
+    vkResetFences(g_dev, 1, &g_pres_fence);
+    present_record(g_pres_pass, g_swap_fb[img], (int)g_swap_ext.width, (int)g_swap_ext.height, slot, mode);
+    vkEndCommandBuffer(g_pres_cb);
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores = &g_swap_ready[k];
+    si.pWaitDstStageMask = &wait;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &g_pres_cb;
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores = &g_swap_done[img];
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores = &g_swap_done[img];
+    pi.swapchainCount = 1;
+    pi.pSwapchains = &g_swap;
+    pi.pImageIndices = &img;
+    plat_lock(&g_queue_lock);
+    r = vkQueueSubmit(g_queue, 1, &si, g_pres_fence);
+    if (r == VK_SUCCESS) r = p_vkQueuePresentKHR(g_queue, &pi);
+    plat_unlock(&g_queue_lock);
+    g_n_presents++;
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) g_swap_stale = 1;
+    else if (r != VK_SUCCESS) return 0;
+    return 1;
+}
+
+int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+{
+    unsigned n, tries;
+    int ok = 1;
+    plat_lock(&g_present_lock);
+    if (g_present_dead || !g_swap) {
+        plat_unlock(&g_present_lock);
+        return 0;
+    }
+    if (fresh && (plat_load64(&g_scr_middle) & SCREEN_FRESH)) {
+        /* What the last present read of the slot it gives back is done. */
+        vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+        g_scr_front = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)g_scr_front) & 3);
+        g_n_present_frames++;
+    }
+    if (!g_scr_w[g_scr_front]) { /* nothing drawn yet */
+        plat_unlock(&g_present_lock);
+        return 0;
+    }
+    if (interval < 1) interval = 1;
+    for (n = 0; n < interval && ok; n++)
+        for (tries = 0; tries < 2; tries++) {
+            int r;
+            if (g_swap_stale) {
+                queue_idle();
+                if (!swap_make(g_swap_want_w, g_swap_want_h)) {
+                    ok = 0; /* minimised, or no swap chain: try again at the next frame */
+                    break;
+                }
+            }
+            r = present_once(g_scr_front, mode);
+            if (r > 0) break;
+            if (r == 0) {
+                ok = 0;
+                break;
+            }
+            g_swap_stale = 1;
+        }
+    if (shown_w) *shown_w = g_scr_w[g_scr_front];
+    if (shown_h) *shown_h = g_scr_h[g_scr_front];
+    plat_unlock(&g_present_lock);
+    return ok;
+}
+
+/* The presenter's check (test_gxv_present.py): rgba (w x h) through the
+ * present pass into a dw x dh image of the swap chain's usual format,
+ * B8G8R8A8_UNORM, read back into out, row by row. Not with a window open. */
+int gxv_present_check(const uint8_t* rgba, int w, int h, int dw, int dh, int mode, uint8_t* out)
+{
+    VkImage img;
+    VkImageView view;
+    VkFramebuffer fb;
+    VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    VkFramebufferCreateInfo fi = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    VkImageCreateInfo ii = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    VkMemoryRequirements req;
+    VkDeviceMemory mem;
+    VkDeviceSize off;
+    VkBufferImageCopy rg;
+    VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    int y;
+    static VkBuffer chk;
+    static uint8_t* chk_map;
+    if (!g_dev || w < 1 || h < 1 || w * h * 4 > (int)READBACK_BYTES || dw < 1 || dh < 1 || (size_t)dw * dh * 4 > CHECK_BYTES)
+        return 0;
+    if (!chk && !make_buffer(CHECK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1, &chk, &chk_map)) return 0;
+    if (!g_pres_check_pass && !(g_pres_check_pass = present_pass(VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)))
+        return 0;
+    if (!present_pipeline(g_pres_check_pass) || !present_commands()) return 0;
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = VK_FORMAT_B8G8R8A8_UNORM;
+    ii.extent.width = (uint32_t)dw;
+    ii.extent.height = (uint32_t)dh;
+    ii.extent.depth = 1;
+    ii.mipLevels = 1;
+    ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if (vkCreateImage(g_dev, &ii, NULL, &img) != VK_SUCCESS) return 0;
+    vkGetImageMemoryRequirements(g_dev, img, &req);
+    if (!bind_memory(&req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mem, &off, NULL) ||
+        vkBindImageMemory(g_dev, img, mem, off) != VK_SUCCESS)
+        return 0;
+    vi.image = img;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_B8G8R8A8_UNORM;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(g_dev, &vi, NULL, &view) != VK_SUCCESS) return 0;
+    fi.renderPass = g_pres_check_pass;
+    fi.attachmentCount = 1;
+    fi.pAttachments = &view;
+    fi.width = (uint32_t)dw;
+    fi.height = (uint32_t)dh;
+    fi.layers = 1;
+    if (vkCreateFramebuffer(g_dev, &fi, NULL, &fb) != VK_SUCCESS) return 0;
+    /* The image into the scratch slot, and its size, as a screen copy would. */
+    for (y = 0; y < h; y++)
+        memcpy(g_screen_map + (size_t)SCREEN_SCRATCH * READBACK_BYTES + (size_t)y * w * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
+    g_scr_w[SCREEN_SCRATCH] = w;
+    g_scr_h[SCREEN_SCRATCH] = h;
+    vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(g_dev, 1, &g_pres_fence);
+    present_record(g_pres_check_pass, fb, dw, dh, SCREEN_SCRATCH, mode);
+    memset(&rg, 0, sizeof rg);
+    rg.bufferOffset = 0;
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageExtent.width = (uint32_t)dw;
+    rg.imageExtent.height = (uint32_t)dh;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyImageToBuffer(g_pres_cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, chk, 1, &rg);
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = chk;
+    bb.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(g_pres_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
+    vkEndCommandBuffer(g_pres_cb);
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &g_pres_cb;
+    plat_lock(&g_queue_lock);
+    vkQueueSubmit(g_queue, 1, &si, g_pres_fence);
+    plat_unlock(&g_queue_lock);
+    vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
+    memcpy(out, chk_map, (size_t)dw * dh * 4);
+    vkDestroyFramebuffer(g_dev, fb, NULL);
+    vkDestroyImageView(g_dev, view, NULL);
+    vkDestroyImage(g_dev, img, NULL);
+    return 1;
+}
+
+static void present_report(void)
+{
+    if (g_swap || g_n_presents)
+        say("presented from the GPU: %llu frames, %llu presents, %llu swap chains made", g_n_present_frames, g_n_presents,
+            g_n_swap_made);
+}
+
+static void present_shutdown(void)
+{
+    unsigned i;
+    plat_lock(&g_present_lock);
+    g_present_dead = 1;
+    plat_unlock(&g_present_lock);
+    swap_free();
+    if (g_swap) p_vkDestroySwapchainKHR(g_dev, g_swap, NULL);
+    g_swap = VK_NULL_HANDLE;
+    for (i = 0; i < SWAP_MAX; i++) {
+        if (g_swap_ready[i]) p_vkDestroySemaphore(g_dev, g_swap_ready[i], NULL);
+        if (g_swap_done[i]) p_vkDestroySemaphore(g_dev, g_swap_done[i], NULL);
+    }
+    if (g_surface) p_vkDestroySurfaceKHR(g_inst, g_surface, NULL);
+    g_surface = VK_NULL_HANDLE;
+    if (g_pres_pipe) vkDestroyPipeline(g_dev, g_pres_pipe, NULL);
+    if (g_pres_layout) vkDestroyPipelineLayout(g_dev, g_pres_layout, NULL);
+    if (g_pres_dsl) vkDestroyDescriptorSetLayout(g_dev, g_pres_dsl, NULL);
+    if (g_pres_dpool) vkDestroyDescriptorPool(g_dev, g_pres_dpool, NULL);
+    if (g_pres_pass) vkDestroyRenderPass(g_dev, g_pres_pass, NULL);
+    if (g_pres_check_pass) vkDestroyRenderPass(g_dev, g_pres_check_pass, NULL);
+    if (g_pres_fence) vkDestroyFence(g_dev, g_pres_fence, NULL);
+    if (g_pres_cpool) vkDestroyCommandPool(g_dev, g_pres_cpool, NULL);
+}
+
 int gxv_built(void) { return 1; }
 
 #else /* SOA_GXV */
@@ -2719,6 +3421,34 @@ int gxv_start(char* why, size_t cap)
 {
     snprintf(why, cap, "this build has no GPU backend: run `python tools/fetch_gpu.py`, then `python tools/recompile.py --link`");
     return 0;
+}
+
+int gxv_running(void) { return 0; }
+
+int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* why, size_t cap)
+{
+    (void)hinstance;
+    (void)native_window;
+    (void)w;
+    (void)h;
+    snprintf(why, cap, "this build has no GPU backend");
+    return 0;
+}
+
+int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+{
+    (void)fresh;
+    (void)interval;
+    (void)mode;
+    (void)shown_w;
+    (void)shown_h;
+    return 0;
+}
+
+void gxv_present_resize(int w, int h)
+{
+    (void)w;
+    (void)h;
 }
 
 #endif

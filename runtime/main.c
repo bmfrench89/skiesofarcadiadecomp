@@ -1435,8 +1435,9 @@ int main(int argc, char** argv)
         secs = start_watchdog(&s, want);
         profile_start(&s);
         print_mode(want, rendering, scripted, frames, snap, secs);
-        if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
+        /* The GPU first: with it running, the window presents from it (V8). */
         gpu_start();
+        if (want) window_start(); /* after the line above: the UI thread prints from its own thread */
     }
     /* The ARAM census reads the head of every file on the disc, which took
      * 0.3-1.1 s at the first ARAM DMA under load; here, before the game's

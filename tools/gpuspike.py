@@ -16,6 +16,7 @@
     python tools/gpuspike.py overlap [--mutate M]         # V6b: the copy hazards with the GPU as consumer
     python tools/gpuspike.py specdiff [--mutate M]        # V7: specialised and interpreted, the same bytes
     python tools/gpuspike.py copyimage [--mutate M]       # V7: a copy sampled in its frame, from the pool
+    python tools/gpuspike.py present [--mutate M]         # V8: the GPU's presenter against picture_scale
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -89,6 +90,11 @@ CPU's hash and all 16 cells, serve the sampler from the copy's image in its
 pool, and land the copy with the frame's submission rather than a wait of
 its own. --mutate cimg-cpu (the producer's image, not yet landed, sampled)
 and land-at-copy (V6's wait at each copy) must fail it.
+
+`present` (V8) draws two synthetic screen copies through the GPU presenter's
+pass into eight target sizes at both layouts (integer and fit) and holds each
+to picture_scale's picture, the CPU presenter's, every pixel's colour exact.
+--mutate present (one column over) must fail it.
 
 `specdiff` (V7) replays every capture of --set on the GPU twice, every draw
 specialised on the TEV's shape (SOA_GPU_SPECIALIZE=wait) and the interpreter
@@ -169,7 +175,7 @@ VENDOR = ROOT / "vendor"
 # The renderer, the backend (runtime/gxv.c, built with SOA_GXV=1 and the
 # shaders tools/soa/shaders.py compiles) and plat.c, whose loader it opens
 # Vulkan with; the driver is the spike's own.
-SOURCES = [RUNTIME / n for n in ("gx.c", "gxr.c", "gxr_tev.c", "png.c", "gxv.c")]
+SOURCES = [RUNTIME / n for n in ("gx.c", "gxr.c", "gxr_tev.c", "png.c", "gxv.c", "picture.c")]
 SOURCES += [*toolchain.runtime_support_sources(), SPIKE / "driver.c"]
 SKIP = 3
 
@@ -1478,6 +1484,34 @@ def queue(prof: toolchain.Profile, mutate: str | None) -> int:
     return 0 if ok else 1
 
 
+RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact$", re.M)
+
+
+def present(prof: toolchain.Profile, mutate: str | None) -> int:
+    """V8's presenter: two synthetic screen copies through the GPU's present
+    pass into eight target sizes at both layouts, each held to picture_scale's
+    picture (the CPU presenter's), every pixel's colour exact. --mutate
+    present (one column over) must fail it."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "present"
+    out.mkdir(parents=True, exist_ok=True)
+    args = [str(exe_path(prof)), "--backend", "gpu", "--out", str(out), "--present", "1"]
+    if mutate:
+        args += ["--mutate", mutate]
+    proc = subprocess.run(
+        args, cwd=ROOT, env=clean_env(), capture_output=True, text=True, check=False
+    )
+    if skipped(proc):
+        return SKIP
+    print(proc.stdout.strip())
+    m = RE_PRESENT.search(proc.stdout)
+    ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2)
+    print(f"[gpuspike] present {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 RE_COPYIMAGE = re.compile(r"^copyimage cells right (\d+) of 16; frame hash ([0-9a-f]{16})$", re.M)
 RE_LANDING = re.compile(
     r"copies to a texture: (\d+), landed with the submissions they were in but for (\d+) readback "
@@ -1590,7 +1624,7 @@ def overlap(prof: toolchain.Profile, mutate: str | None) -> int:
         gpu_exe = queue_check.build(
             "overlap-gpu",
             queue_check.OVERLAP_DRIVER,
-            [*queue_check.OVERLAP_SOURCES, "gxv.c", "plat.c"],
+            [*queue_check.OVERLAP_SOURCES, "gxv.c", "picture.c", "plat.c"],
             out,
             prof,
             ("/DSOA_GXV=1", "/DOVERLAP_GPU", f"/I{build_dir(prof)}", f"/I{shaders.HEADERS}"),
@@ -1881,6 +1915,7 @@ def main(argv: list[str] | None = None) -> int:
             "overlap",
             "specdiff",
             "copyimage",
+            "present",
         ),
     )
     ap.add_argument(
@@ -1945,6 +1980,8 @@ def main(argv: list[str] | None = None) -> int:
         return specdiff(prof, args.set.split(","), args.mutate)
     if args.command == "copyimage":
         return copyimage(prof, args.mutate)
+    if args.command == "present":
+        return present(prof, args.mutate)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)

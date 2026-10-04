@@ -213,6 +213,27 @@ PLAT_INLINE void plat_sleep_ms(unsigned ms)
 #endif
 }
 
+/* ---- a lock for short sections (GPU spec V8) --------------------------------
+ * The one Vulkan queue is used by the GPU's consumer thread and the window's
+ * presenter, and Vulkan wants a queue's submissions serialised. Held only
+ * around a submit or a present call: spin, then give the core away. Zero is
+ * unlocked. The compare-exchange is seq_cst, so what was written before
+ * plat_unlock is seen after the next plat_lock. */
+typedef plat_a32 PlatLock;
+PLAT_INLINE void plat_lock(PlatLock* l)
+{
+    unsigned spins = 0;
+    while (plat_cas32(l, 0, 1) != 0) {
+        if (++spins > 64) {
+            plat_yield();
+            spins = 0;
+        } else {
+            plat_relax();
+        }
+    }
+}
+PLAT_INLINE void plat_unlock(PlatLock* l) { plat_cas32(l, 1, 0); }
+
 /* ---- waits (L2): spin, then sleep on a word (H11's pattern) ---------------
  * plat_wait64 sleeps while *p still equals seen, at most timeout_ms, and may
  * return early for no reason; plat_wake_all64 wakes every thread asleep on p.

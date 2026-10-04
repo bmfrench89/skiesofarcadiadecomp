@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1226 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1228 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1226 |
+| Python tests | 1228 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -596,7 +596,11 @@ C5c) is now done.
    draw the same bytes, `copyimage` a copy sampled in its frame;
    `overlap` is the one to run after touching the landing. The
    distribution route is specified (specs/distribution.md, R1-R5; its
-   Q-D1, the bundled compiler, waits for the owner before R1). Next is V8. Still open for the owner, and not blocking: whether a
+   Q-D1, the bundled compiler, waits for the owner before R1). **V8 is under
+   way:** the GPU presents to the window through a Vulkan swap chain
+   (FINDINGS "V8, first"; `gpuspike.py present` holds the shader to
+   `picture_scale`). Next is V8b, P5a's filters as shaders; the owner's
+   windowed session wants the display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

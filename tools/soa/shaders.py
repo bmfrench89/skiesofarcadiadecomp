@@ -39,6 +39,9 @@ SHADERS = [
     ("copy.comp", "copy_comp", ()),
     ("copy.comp", "copy_comp_rounding", ("GXV_MUTATE_ROUNDING",)),
     ("copy.comp", "copy_comp_intensity", ("GXV_MUTATE_INTENSITY",)),
+    ("present.vert", "present_vert", ()),
+    ("present.frag", "present_frag", ()),
+    ("present.frag", "present_frag_offset", ("GXV_MUTATE_PRESENT",)),
 ]
 
 

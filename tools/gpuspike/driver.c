@@ -42,6 +42,7 @@
 #include "gxr.h"
 #include "gxr_cmd.h"
 #include "gxv.h"
+#include "picture.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -966,6 +967,68 @@ static int scene_copyimage(CpuState* s)
     return right != 16;
 }
 
+/* ---- V8's presenter ----------------------------------------------------------
+ *
+ * test_gxv_present.py's check (specs/gpu-backend.md V8): two synthetic screen
+ * copies, 640x480 and 640x448, every pixel its own colour, through the
+ * presenter's pass into targets of eight sizes -- the window at 1x to 4x, a
+ * 16:9 and a 21:9 client, odd sizes and one smaller than the picture -- at
+ * both layouts, against picture_scale on the same image (runtime/picture.c,
+ * what the CPU presenter draws). Every pixel's colour must be the CPU's: the
+ * scaler is nearest neighbour by integer arithmetic, so there is nothing to
+ * round. Alpha is not compared: the black bars are opaque on the GPU and
+ * zero on the CPU, and the swap chain ignores alpha. */
+static int present_check(void)
+{
+    static const int targets[][2] = {{640, 480}, {1280, 960}, {2560, 1440}, {1920, 1080}, {1000, 700},
+                                     {641, 481}, {300, 200}, {1024, 1600}};
+    static const int sources[][2] = {{640, 480}, {640, 448}};
+    uint8_t* src = (uint8_t*)malloc(640u * 480u * 4u);
+    uint8_t* bgra = (uint8_t*)malloc(640u * 480u * 4u);
+    uint8_t* ref = (uint8_t*)malloc(2560u * 1600u * 4u);
+    uint8_t* got = (uint8_t*)malloc(2560u * 1600u * 4u);
+    unsigned si, ti, mode, i, exact = 0, total = 0, shown = 0;
+    if (!src || !bgra || !ref || !got) return 1;
+    for (si = 0; si < 2; si++) {
+        int w = sources[si][0], h = sources[si][1];
+        for (i = 0; i < (unsigned)(w * h); i++) {
+            uint32_t v = i * 2654435761u ^ (si * 0x9E3779B9u);
+            src[i * 4 + 0] = (uint8_t)v;
+            src[i * 4 + 1] = (uint8_t)(v >> 8);
+            src[i * 4 + 2] = (uint8_t)(v >> 16);
+            src[i * 4 + 3] = 255;
+            bgra[i * 4 + 0] = src[i * 4 + 2];
+            bgra[i * 4 + 1] = src[i * 4 + 1];
+            bgra[i * 4 + 2] = src[i * 4 + 0];
+            bgra[i * 4 + 3] = 255;
+        }
+        for (ti = 0; ti < sizeof targets / sizeof targets[0]; ti++)
+            for (mode = 0; mode < 2; mode++) {
+                int dw = targets[ti][0], dh = targets[ti][1];
+                unsigned bad = 0, px;
+                PicRect r = picture_layout(w, h, dw, dh, (int)mode);
+                total++;
+                if (!gxv_present_check(src, w, h, dw, dh, (int)mode, got)) {
+                    printf("present %dx%d into %dx%d (%s): the check could not run\n", w, h, dw, dh, mode ? "fit" : "integer");
+                    continue;
+                }
+                picture_scale(bgra, w, h, ref, dw, dh, (int)mode);
+                for (px = 0; px < (unsigned)(dw * dh); px++)
+                    if (memcmp(got + px * 4, ref + px * 4, 3)) bad++;
+                if (!bad) exact++;
+                else if (shown++ < 8)
+                    printf("present %dx%d into %dx%d (%s, rect %d,%d %dx%d): %u pixels differ\n", w, h, dw, dh,
+                           mode ? "fit" : "integer", r.x, r.y, r.w, r.h, bad);
+            }
+    }
+    printf("present %u of %u layouts exact\n", exact, total);
+    free(src);
+    free(bgra);
+    free(ref);
+    free(got);
+    return exact != total;
+}
+
 /* loddiff (V5): the level of detail, which V0 cannot hold to a level -- LOD
  * +1 passes it on three distinct frames (FINDINGS "V4"). Two kinds of case,
  * n of each:
@@ -1315,7 +1378,7 @@ int main(int argc, char** argv)
     const char* logicop = NULL;
     const char* dump_ram = NULL;
     const char* dump_depth = NULL;
-    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0, copyimage = 0;
+    unsigned tev_cases = 0, copy_rects = 0, lod_cases = 0, queue = 0, copyimage = 0, present = 0;
     uint32_t seed = 1;
     int failures, i;
 
@@ -1328,6 +1391,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--loddiff")) lod_cases = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--queue")) queue = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--copyimage")) copyimage = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--present")) present = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")) seed = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--replay")) replay = argv[++i];
         else if (!strcmp(argv[i], "--png")) png = argv[++i];
@@ -1357,6 +1421,16 @@ int main(int argc, char** argv)
         gxv_set_upload_hook(upload_hook);
         if (!tev_cases && !lod_cases) gxr_set_backend(gxv_backend());
         printf("device %s\n", gxv_device_name());
+    }
+    if (present) {
+        /* V8's presenter check alone: no renderer, no frame. */
+        if (!g_gpu) {
+            fprintf(stderr, "[gpuspike] --present wants --backend gpu\n");
+            return 2;
+        }
+        failures = present_check();
+        gxv_shutdown();
+        return failures ? 1 : 0;
     }
     memset(&s, 0, sizeof s);
     s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);

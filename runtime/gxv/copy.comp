@@ -38,6 +38,7 @@ layout(push_constant) uniform Copy {
     uint ow, oh;      // the texture's size
     uint count;       // invocations wanted
     uint dest_at, image_at, pool_at; // the copy's regions, in words
+    uint screen_at;   // a screen copy's slot in the screen buffer, in words (V8)
 } pc;
 
 const int EFB_W = 640, EFB_H = 528;
@@ -222,6 +223,6 @@ void main()
             ivec4 px = efb_px(sx, sy);
             o.rgb = uvec3((pc.flags & 4u) != 0u ? filtered(sx, sy) : px.rgb);
         }
-        screen[i] = pack_rgba(o);
+        screen[pc.screen_at + i] = pack_rgba(o);
     }
 }

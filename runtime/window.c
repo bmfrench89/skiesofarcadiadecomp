@@ -21,6 +21,7 @@
 #include "cpu.h"
 #include "gxr.h"
 #include "picture.h"
+#include "gxv.h"
 #include <windows.h>
 #include <xinput.h>
 #include <process.h>
@@ -67,6 +68,7 @@ static int g_shown_w, g_shown_h;
  * session, the drift H9 needs. Nothing here touches g_screen, so no frame
  * hash can move. */
 static int g_dxgi; /* 1 when the flip-model presenter is running */
+static int g_vk;   /* 1 when the GPU presents its own picture (V8: gxv's swap chain) */
 static ID3D11Device* g_dev;
 static ID3D11DeviceContext* g_ctx;
 static IDXGISwapChain1* g_sc;
@@ -202,7 +204,7 @@ static void present_report_locked(void)
     fprintf(stderr,
             "[present] %s: %zu intervals between presents at a %.2f ms refresh (%.1f Hz): under 1 refresh %u, 1: %u, "
             "2: %u, 3: %u, 4 or more: %u; p50 %.1f ms, p99 %.1f ms\n",
-            g_dxgi ? "dxgi flip model" : "gdi, 8 ms poll", n, period_ms, 1000.0 / period_ms, bins[0], bins[1],
+            g_vk ? "vulkan swap chain, from the GPU" : g_dxgi ? "dxgi flip model" : "gdi, 8 ms poll", n, period_ms, 1000.0 / period_ms, bins[0], bins[1],
             bins[2], bins[3], bins[4], 1000.0 * (double)d[n / 2] / (double)g_qpf.QuadPart,
             1000.0 * (double)d[(n * 99) / 100] / (double)g_qpf.QuadPart);
     free(d);
@@ -454,7 +456,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
-        if (g_dxgi) {
+        if (g_dxgi || g_vk) {
             /* the swap chain owns the client area; GDI must not draw over it */
         } else if (!(g_bgra && g_shown_w)) {
             /* Nothing rasterized yet (or SOA_RENDER unset, so nothing ever
@@ -508,6 +510,17 @@ static void present(int fresh)
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);
     g_pw_t0 = t0.QuadPart;
+    if (g_vk) {
+        /* The GPU's own picture (V8): no copy to the CPU, no scale here. */
+        int w = 0, h = 0;
+        if (gxv_present(fresh, g_interval, g_scaler, &w, &h)) {
+            g_shown_w = w;
+            g_shown_h = h;
+            note_present_work();
+            note_present();
+        }
+        return;
+    }
     if (fresh || !g_shown_w) {
         int w, h, x, y;
         const uint8_t* src = gxr_screen(&w, &h);
@@ -684,7 +697,18 @@ static unsigned __stdcall ui_thread(void* arg)
                 fprintf(stderr, "[picture] %s\n", why);
             }
         }
-        if (!(p && !strcmp(p, "gdi"))) {
+        /* With the GPU drawing, the GPU presents (V8), unless SOA_PRESENTER
+         * names another; P5a's filters are the CPU's until V8b. */
+        if (gxv_running() && !(p && (!strcmp(p, "gdi") || !strcmp(p, "dxgi")))) {
+            char why[256];
+            if (g_filters)
+                fprintf(stderr, "[window] the GPU presenter has no picture filters yet (V8b); presenting the CPU's copy\n");
+            else if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
+                g_vk = 1;
+            else
+                fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);
+        }
+        if (!g_vk && !(p && !strcmp(p, "gdi"))) {
             g_dxgi = dxgi_start(g_hwnd, cr.right, cr.bottom);
             if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
         }
@@ -698,7 +722,10 @@ static unsigned __stdcall ui_thread(void* arg)
     g_open = 1;
     si_set_motor_sink(motor);
     si_set_motor_window(1);
-    if (g_dxgi)
+    if (g_vk)
+        fprintf(stderr, "[window] open at %dx, presenting from the GPU with a Vulkan swap chain, each frame held %u "
+                        "refresh(es)\n", g_scale, g_interval);
+    else if (g_dxgi)
         fprintf(stderr, "[window] open at %dx, presenting with a DXGI flip-model swap chain, each frame held %u "
                         "refresh(es)\n", g_scale, g_interval);
     else
@@ -753,6 +780,7 @@ static unsigned __stdcall ui_thread(void* arg)
             g_resized = 0;
             if (g_client_w > 0 && g_client_h > 0) { /* minimised is 0x0: no resize, no present */
                 if (g_dxgi) dxgi_resize(g_client_w, g_client_h);
+                if (g_vk) gxv_present_resize(g_client_w, g_client_h);
                 if (g_shown_w) present(0); /* the last frame again, at the new size */
             }
         }
