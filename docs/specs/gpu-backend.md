@@ -1634,6 +1634,13 @@ landed), `runtime/gxv/filters.glsl` (if P5a landed), `tools/tests/test_gxv_prese
 
 ### V9. Internal resolution and a wide EFB
 
+*Split on 2026-10-04, at the owner's answer (PLAN-NEXT §0).*
+
+- *V9a: `SOA_GPU_SCALE` 2 and 3, everything below but the wide mode. Prerequisite V8; built now.*
+- *V9b: the wide EFB, 16:9 and 21:9. It waits for M10 as written.*
+- *The Done lines below divide the same way: the scale lines are V9a's, and the wide mode and the
+  owner's look at it are V9b's.*
+
 *Week-plus. `--link`. Prerequisites: V8; M10 landed (the wide mode is M10 on the GPU). Files:
 `runtime/gxv.c`, `runtime/gxv/*.glsl`, `runtime/settings.c` (`gpu_scale`), `tools/gpuspike.py`
 (`oracle --scale`), `tools/imgdiff.py` (`--sample centre`), FINDINGS entry "V9". **Owner:** judges it.*

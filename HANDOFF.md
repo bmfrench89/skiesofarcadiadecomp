@@ -606,7 +606,12 @@ C5c) is now done.
    fell from five to one with cull, topology and depth as dynamic state
    (FINDINGS "V7, fifth"). P5a's filters now run on the CPU's copy and the
    GPU presents what they make (FINDINGS "V8b, first step"); their shaders
-   wait for V9, and V9 waits for M10. The owner's windowed
+   wait for V9. **The owner answered four questions on 2026-10-04**
+   (PLAN-NEXT §0): llvm-mingw may be fetched (R1 may start), V9 is split
+   (2x/3x now as V9a, the wide EFB after M10), the Vulkan SDK is installed
+   (`SOA_GPU_VALIDATE=1` now prints the layer's messages; the whole GPU path
+   is clean, FINDINGS "The validation layer, installed"), and the owner
+   will set 60 or 120 Hz for the windowed sessions. **Next: V9a.** The owner's windowed
    session wants the display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

@@ -2838,6 +2838,25 @@ static VkDeviceSize pool_bytes(void)
     return b;
 }
 
+/* SOA_GPU_VALIDATE=1: each of the validation layer's warnings and errors
+ * into the log, one line each, the first 200 of them and then a count. */
+static int g_debug_utils;
+static VkDebugUtilsMessengerEXT g_messenger;
+static plat_a32 g_n_validation;
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_print(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlagsEXT type,
+                                                  const VkDebugUtilsMessengerCallbackDataEXT* data, void* user)
+{
+    int32_t n = plat_inc32(&g_n_validation);
+    (void)type;
+    (void)user;
+    if (n <= 200)
+        say("validation %s: %s", sev & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT ? "error" : "warning",
+            data && data->pMessage ? data->pMessage : "(no message)");
+    else if (n == 201)
+        say("validation: more than 200 messages; the rest are not printed");
+    return VK_FALSE;
+}
+
 int gxv_init(char* why, size_t cap)
 {
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -2865,26 +2884,49 @@ int gxv_init(char* why, size_t cap)
     }
     {
         /* The window's surface (V8), where the loader has it; nothing else
-         * needs it, and a run with no window never uses it. */
-#ifdef _WIN32
-        static const char* surf[2] = {VK_KHR_SURFACE_EXTENSION_NAME, "VK_KHR_win32_surface"};
-        uint32_t n = 0, k, found = 0;
+         * needs it, and a run with no window never uses it. And, with the
+         * validation layer on, VK_EXT_debug_utils, so its messages reach the
+         * log (debug_print). */
+        static const char* names[3];
+        uint32_t n = 0, k, found = 0, m = 0;
+        int has_debug = 0;
         VkExtensionProperties* props;
         if (vkEnumerateInstanceExtensionProperties && vkEnumerateInstanceExtensionProperties(NULL, &n, NULL) == VK_SUCCESS &&
             n && (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
             if (vkEnumerateInstanceExtensionProperties(NULL, &n, props) == VK_SUCCESS)
-                for (k = 0; k < n; k++)
-                    if (!strcmp(props[k].extensionName, surf[0]) || !strcmp(props[k].extensionName, surf[1])) found++;
+                for (k = 0; k < n; k++) {
+#ifdef _WIN32
+                    if (!strcmp(props[k].extensionName, VK_KHR_SURFACE_EXTENSION_NAME) ||
+                        !strcmp(props[k].extensionName, "VK_KHR_win32_surface"))
+                        found++;
+#endif
+                    if (!strcmp(props[k].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) has_debug = 1;
+                }
             free(props);
         }
         if (found == 2) {
-            ii.enabledExtensionCount = 2;
-            ii.ppEnabledExtensionNames = surf;
+            names[m++] = VK_KHR_SURFACE_EXTENSION_NAME;
+            names[m++] = "VK_KHR_win32_surface";
             g_inst_surface = 1;
         }
-#endif
+        if (ii.enabledLayerCount && has_debug) {
+            names[m++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+            g_debug_utils = 1;
+        }
+        ii.enabledExtensionCount = m;
+        ii.ppEnabledExtensionNames = m ? names : NULL;
     }
     r = vkCreateInstance(&ii, NULL, &g_inst);
+    if (r == VK_SUCCESS && g_debug_utils) {
+        PFN_vkCreateDebugUtilsMessengerEXT make =
+            (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(g_inst, "vkCreateDebugUtilsMessengerEXT");
+        VkDebugUtilsMessengerCreateInfoEXT di = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+        di.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        di.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        di.pfnUserCallback = debug_print;
+        if (!make || make(g_inst, &di, NULL, &g_messenger) != VK_SUCCESS) say("SOA_GPU_VALIDATE: no debug messenger");
+    }
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateInstance failed: VkResult %d (no Vulkan 1.1 driver?)", (int)r); return 0; }
     if (!load_instance(why, cap) || !pick_device(why, cap) || !make_device(why, cap)) return 0;
     if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
@@ -3008,6 +3050,13 @@ void gxv_shutdown(void)
             if (g_arena[i][k].mem) vkFreeMemory(g_dev, g_arena[i][k].mem, NULL);
     }
     vkDestroyDevice(g_dev, NULL);
+    if (g_messenger) {
+        PFN_vkDestroyDebugUtilsMessengerEXT gone =
+            (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(g_inst, "vkDestroyDebugUtilsMessengerEXT");
+        if (plat_load32(&g_n_validation)) say("validation: %d message(s) in all", (int)plat_load32(&g_n_validation));
+        if (gone) gone(g_inst, g_messenger, NULL);
+        g_messenger = VK_NULL_HANDLE;
+    }
     vkDestroyInstance(g_inst, NULL);
     g_dev = VK_NULL_HANDLE;
     free(g_tmp);
@@ -3038,6 +3087,8 @@ typedef VkResult(VKAPI_PTR* GxvCreateWin32Surface)(VkInstance, const GxvWin32Sur
 
 #define SWAP_MAX 8
 #define CHECK_BYTES (2560u * 1600u * 4u) /* the presenter's check: its largest target */
+static VkBuffer g_chk; /* the check's readback, made at its first use */
+static uint8_t* g_chk_map;
 static PlatLock g_present_lock;
 static int g_present_dead;
 static VkSurfaceKHR g_surface;
@@ -3583,11 +3634,10 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mod
     VkBufferImageCopy rg;
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkBufferMemoryBarrier bb = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-    static VkBuffer chk;
-    static uint8_t* chk_map;
+
     if (!g_dev || w < 1 || h < 1 || w * h * 4 > (int)READBACK_BYTES || dw < 1 || dh < 1 || (size_t)dw * dh * 4 > CHECK_BYTES)
         return 0;
-    if (!chk && !make_buffer(CHECK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1, &chk, &chk_map)) return 0;
+    if (!g_chk && !make_buffer(CHECK_BYTES, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1, &g_chk, &g_chk_map)) return 0;
     if (!g_pres_check_pass && !(g_pres_check_pass = present_pass(VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)))
         return 0;
     if (!present_pipeline(g_pres_check_pass) || !present_commands()) return 0;
@@ -3631,12 +3681,12 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mod
     rg.imageExtent.width = (uint32_t)dw;
     rg.imageExtent.height = (uint32_t)dh;
     rg.imageExtent.depth = 1;
-    vkCmdCopyImageToBuffer(g_pres_cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, chk, 1, &rg);
+    vkCmdCopyImageToBuffer(g_pres_cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_chk, 1, &rg);
     bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     bb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bb.buffer = chk;
+    bb.buffer = g_chk;
     bb.size = VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(g_pres_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &bb, 0, NULL);
     vkEndCommandBuffer(g_pres_cb);
@@ -3646,7 +3696,7 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int dw, int dh, int mod
     vkQueueSubmit(g_queue, 1, &si, g_pres_fence);
     plat_unlock(&g_queue_lock);
     vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
-    memcpy(out, chk_map, (size_t)dw * dh * 4);
+    memcpy(out, g_chk_map, (size_t)dw * dh * 4);
     vkDestroyFramebuffer(g_dev, fb, NULL);
     vkDestroyImageView(g_dev, view, NULL);
     vkDestroyImage(g_dev, img, NULL);
@@ -3683,6 +3733,7 @@ static void present_shutdown(void)
     if (g_pres_pass) vkDestroyRenderPass(g_dev, g_pres_pass, NULL);
     if (g_pres_check_pass) vkDestroyRenderPass(g_dev, g_pres_check_pass, NULL);
     if (g_pres_fence) vkDestroyFence(g_dev, g_pres_fence, NULL);
+    if (g_chk) vkDestroyBuffer(g_dev, g_chk, NULL);
     if (g_pres_cpool) vkDestroyCommandPool(g_dev, g_pres_cpool, NULL);
 }
 

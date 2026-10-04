@@ -133,9 +133,19 @@ The owner answered four questions, with the research behind them summarised in t
       - R4, the setup window;
       - R5, Android's runtime-only APK, recorded for L12.
       Its Q-D1 (the bundled compiler) is asked before R1 starts.
+- **The owner's answers of 2026-10-04:**
+  - **Q-D1, the bundled compiler: yes.** llvm-mingw may be fetched at a pinned release into
+    `vendor/`, never installed. Distribution R1 may start (specs/distribution.md).
+  - **V9 is split.** V9a, 2x and 3x internal resolution, is built now, after V8. V9b, the wide EFB
+    (16:9 and 21:9), waits for M10 as written. D-26 asked for both; D-27 put the gameplay milestone
+    that holds M10 after the GPU build.
+  - **The Vulkan SDK may be installed** on this PC (winget). Its validation layer is wanted for the
+    pipeline-library failure (FINDINGS "V7, fourth") and for every GPU check after it.
+  - **The display:** the owner will set 60 or 120 Hz for the windowed sessions (V6b, V8), and is to
+    be asked when one is ready.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
-  no spec).
+  no spec). For the sessions, 60 or 120 Hz, as answered above.
 - **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
 
 ---

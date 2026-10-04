@@ -50,7 +50,9 @@ layout(location = 1) in vec4 i_col0;
 layout(location = 2) in vec4 i_col1;
 layout(location = 3) in vec4 i_tex[8];
 
-layout(location = 0) out vec4 o_color;
+#ifndef GXV_LOGIC_INTERLOCK
+layout(location = 0) out vec4 o_color; // none for the interlock: its pass has no attachment
+#endif
 
 const uint DRAW_CHANNELS = 98u, DRAW_TEXMAP_OF = 99u, DRAW_FOG = 100u, DRAW_LOGIC = 105u, DRAW_MAPS = 108u, MAP_WORDS = 12u;
 const uint NO_TEXTURE = 0xFFFFFFFFu;
@@ -253,7 +255,6 @@ void main()
     if ((masks & 2u) != 0u) o.a = uint(outc.a);
     imageStore(efb_image, at, vec4(o) / 255.0);
     endInvocationInterlockARB();
-    o_color = vec4(o) / 255.0;
 #else
     if ((logic & 1u) != 0u) {
         uvec4 d = uvec4(unpack_rgba(snap[uint(gl_FragCoord.y) * 640u + uint(gl_FragCoord.x)]));

@@ -6448,3 +6448,45 @@ producer, which is the game's thread, publishes each command and goes on.
     screen copies taken.
   - **Unchanged:** `title` 5/5 on the GPU, the spike's self test, `queue`
     and `copyimage`.
+
+**The validation layer, installed: the GPU path is clean, and the pipeline-library failure is
+the driver's.** 2026-10-04.
+
+- **The owner's answers this day** (PLAN-NEXT §0):
+  - the Vulkan SDK may be installed (`winget install KhronosGroup.VulkanSDK`, 1.4.363.0);
+  - llvm-mingw may be fetched (distribution Q-D1);
+  - V9 is split: 2x and 3x now, the wide EFB after M10;
+  - the owner will set 60 or 120 Hz for the windowed sessions.
+- **`SOA_GPU_VALIDATE=1` now prints the layer's messages.** It had
+  switched the layer on, but with no debug messenger nothing it found
+  reached the log.
+  - gxv now enables `VK_EXT_debug_utils` with the layer, and each warning
+    or error is a `[gxv] validation warning:` or `validation error:` line:
+    the first 200, then a count, and a total at shutdown.
+  - **Shown to work:** the layer's best-practice checks
+    (`VK_KHRONOS_VALIDATION_ENABLES=VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT`)
+    put 8 warnings into a queue frame's log.
+- **What it found in this code** [V], both fixed:
+  - **A needless write:** the interlock variant of `raster.frag` (V10)
+    wrote `o_color` in a pass with no colour attachment. It no longer
+    declares it.
+  - **A buffer never freed:** the presenter's check (V8) made its readback
+    buffer and never destroyed it, so the device was destroyed with an
+    object alive. The buffer is now freed with the presenter.
+- **Then nothing** [V]. Every one of these ran with no validation message:
+  - the 67 captures, poisoned where they copy;
+  - the spike's self test, queue frame, copy image, presenter check and
+    both logic scenes, the interlock forced;
+  - `title` on the GPU, on its own thread;
+  - a windowed run through the swap chain, with fullscreen, back to the
+    window and a resize (5 swap chains).
+- **The pipeline-library failure** ("V7, fourth"), repeated under the
+  layer: `VK_EXT_graphics_pipeline_library` and its feature enabled on the
+  device, never used.
+  - **The result:** the self test's full-screen quad draws 0 of 307,200
+    red, and the layer reports nothing.
+  - **So the fault is the AMD driver's** (0x800184), not this code's
+    use. The route stays closed on this driver.
+  - **The last first-launch stall** in play ("V7, fifth") has other ways
+    out: the blend as dynamic state (`VK_EXT_extended_dynamic_state3`), or
+    the next driver.

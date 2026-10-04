@@ -335,7 +335,7 @@ skipped, by name, with no bindings), `tools/package.py` (R3's staging, used here
 ## 6. For the owner
 
 - **Q-D1. The bundled compiler** (before R1). llvm-mingw, about 190 MB, fetched at a pinned release and
-  never installed, as glslang is. *If unanswered: R1 waits; nothing else does.*
+  never installed, as glslang is. ***Answered 2026-10-04: yes, fetch it*** (PLAN-NEXT §0).
 - **Q-D2. Signing** (before the first public release). SignPath Foundation signs open-source releases free,
   if the binary is built by CI from this repository's source (research §5). The package fits that: it holds
   no game code, and `Setup.exe` is built from `tools/setup/`. Signing cannot cover the `soa.exe` built on the
