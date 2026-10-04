@@ -602,7 +602,9 @@ C5c) is now done.
    `picture_scale`). **V10 is done** (FINDINGS "V10"): without
    `logicOp` each logic draw is routed -- a snapshot for a quad, the
    interlock where it may overlap itself -- and `SOA_GPU_FEATURES=core`
-   gives the oracle's verdicts unchanged. Next: V8b, P5a's filters as
+   gives the oracle's verdicts unchanged. V7's first-launch stalls in play
+   fell from five to one with cull, topology and depth as dynamic state
+   (FINDINGS "V7, fifth"). Next: V8b, P5a's filters as
    shaders, which V9 needs; V9 itself waits for M10. The owner's windowed
    session wants the display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run

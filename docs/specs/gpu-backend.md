@@ -1566,6 +1566,9 @@ later in the submission samples the copy's image from the pool; `gxv.c`'s `uploa
 - *Pipeline libraries, the usual fix, made this driver draw nothing once enabled, and were backed
   out.*
 - *V7 is done but for that line.*
+- *Later the same day (FINDINGS "V7, fifth"), cull, topology and depth became dynamic state where
+  the device has it. A cold first launch then stalls once in play (30.3 ms, a blend not seen before),
+  not five times. Its 9 other creations come before the landing.*
 
 *Several days to week-plus. `--link`. Prerequisites: V6b. Files: `runtime/gxv.c`,
 `runtime/gxv/*.glsl`, `runtime/gxr_tev.c` (the `copy_image` flag honoured), `runtime/gxr.c` (the

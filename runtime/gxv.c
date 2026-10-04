@@ -241,6 +241,20 @@ enum { LOGIC_NATIVE, LOGIC_BLEND, LOGIC_SNAPSHOT, LOGIC_INTERLOCK };
 static int g_logic_mode = -1, g_has_logicop, g_has_interlock;
 static unsigned long long g_logic_routes[4];
 static int g_core; /* SOA_GPU_FEATURES=core (3.10): every optional feature treated as absent */
+/* Dynamic state (V7's budget; VK_EXT_extended_dynamic_state, where the device
+ * has it): cull, the topology within its class and the depth test, write and
+ * compare set by draw rather than built into the pipeline, so a state that
+ * differs from one already made only in those needs no pipeline of its own --
+ * which is what every draw-path stall of the cold soak was (FINDINGS "V7,
+ * fifth"). SOA_GPU_EDS=0, or SOA_GPU_FEATURES=core, builds them in. g_dyn_*
+ * are the values last set in this command buffer, -1 unknown. */
+static int g_eds;
+static int g_dyn_cull = -1, g_dyn_topo = -1, g_dyn_zen = -1, g_dyn_zupd = -1, g_dyn_zf = -1;
+static PFN_vkCmdSetCullModeEXT p_vkCmdSetCullModeEXT;
+static PFN_vkCmdSetPrimitiveTopologyEXT p_vkCmdSetPrimitiveTopologyEXT;
+static PFN_vkCmdSetDepthTestEnableEXT p_vkCmdSetDepthTestEnableEXT;
+static PFN_vkCmdSetDepthWriteEnableEXT p_vkCmdSetDepthWriteEnableEXT;
+static PFN_vkCmdSetDepthCompareOpEXT p_vkCmdSetDepthCompareOpEXT;
 static VkShaderModule g_fs_il;   /* raster.frag built with GXV_LOGIC_INTERLOCK */
 static VkRenderPass g_pass_il;   /* the interlock route's pass: no attachments */
 static VkFramebuffer g_fb_il;
@@ -480,6 +494,7 @@ static int begin_cb(void)
     if (g_rec) return 1;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VKCHECK(vkBeginCommandBuffer(g_cb, &bi));
+    g_dyn_cull = g_dyn_topo = g_dyn_zen = g_dyn_zupd = g_dyn_zf = -1;
     mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
@@ -784,6 +799,11 @@ static uint32_t pipe_state(int topo, const DrawCmd* D, PipeState* S)
      * route above that (V10). */
     blend = S->blend_en ? 1u | S->sfac << 1 | S->dfac << 4 | (S->subtract ? 1u : 0u) << 7
           : S->lop >= 0 && S->lop != 3 ? (unsigned)S->lop << 1 | 0x20u | (unsigned)(S->route & 3) << 6 : 0u;
+    if (g_eds) {
+        /* Dynamic: the key keeps only the topology's class. */
+        uint32_t cls = topo <= T_FAN ? T_TRIS : topo <= T_LSTRIP ? T_LINES : T_POINTS;
+        return 1u + ((((cls * 4 * 2 * 8 * 2) * 4 + S->mask) << 8) | blend);
+    }
     return 1u + ((((((((uint32_t)topo * 4 + S->cull) * 2 + (uint32_t)S->z_en) * 8 + S->zf) * 2 + (uint32_t)S->z_upd) * 4 +
                    S->mask) << 8) | blend);
 }
@@ -809,7 +829,12 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
     VkPipelineDepthStencilStateCreateInfo ds = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState ba = {0};
     VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    VkDynamicState dyn[1] = {VK_DYNAMIC_STATE_SCISSOR};
+    VkDynamicState dyn[6] = {VK_DYNAMIC_STATE_SCISSOR,
+                             VK_DYNAMIC_STATE_CULL_MODE_EXT,
+                             VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY_EXT,
+                             VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT,
+                             VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT,
+                             VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT};
     VkPipelineDynamicStateCreateInfo dys = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     VkGraphicsPipelineCreateInfo pi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     VkPipelineCreationFeedbackEXT fb = {0};
@@ -898,8 +923,10 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
         ds.depthTestEnable = VK_FALSE;
         ds.depthWriteEnable = VK_FALSE;
     }
-    dys.dynamicStateCount = 1;
+    dys.dynamicStateCount = g_eds ? 6 : 1;
     dys.pDynamicStates = dyn;
+    if (g_eds) /* the class's first topology: the draw sets its own */
+        ia.topology = k_topo[S->topo <= T_FAN ? T_TRIS : S->topo <= T_LSTRIP ? T_LINES : T_POINTS];
     pi.stageCount = 2;
     pi.pStages = st;
     pi.pVertexInputState = &vin;
@@ -1060,8 +1087,8 @@ static VkPipeline pipe_put(unsigned slot, uint32_t key, const PipeState* S, cons
         g_n_pipes++;
         /* One line each, which soak.py check counts against the map loads
          * around it (V7's budget). */
-        say("pipeline made on the draw path at frame %llu in %.2f ms%s", g_n_copies, (double)ns / 1e6,
-            hit ? ", from the cache" : "");
+        say("pipeline made on the draw path at frame %llu in %.2f ms%s (state %08x)", g_n_copies, (double)ns / 1e6,
+            hit ? ", from the cache" : "", key);
     }
     memcpy(g_pipes[slot].shape, shape ? shape : interp, sizeof interp);
     g_pipes[slot].pipe = p;
@@ -1074,13 +1101,14 @@ static VkPipeline pipe_put(unsigned slot, uint32_t key, const PipeState* S, cons
  * queued for the compiler thread the first time the shape is seen with this
  * state -- the interpreter's for the state, which gives the same pixels.
  * tev is the draw's TEV as draw_record packed it. */
-static VkPipeline pipeline(int topo, const DrawCmd* D, const uint32_t* tev)
+static VkPipeline pipeline(int topo, const DrawCmd* D, const uint32_t* tev, PipeState* out)
 {
     static const uint32_t interp[TEV_SHAPE_WORDS]; /* the interpreter's: no shape */
     static int said_full;
     uint32_t shape[TEV_SHAPE_WORDS];
     PipeState S;
     uint32_t key = pipe_state(topo, D, &S);
+    *out = S;
     unsigned slot;
     int at;
     if (!fragment_module()) return VK_NULL_HANDLE; /* before any job: the thread uses the modules */
@@ -1412,6 +1440,7 @@ static int gxv_draw(const DrawCmd* D)
     PushDraw pc;
     uint32_t tev[GXV_TEV_WORDS]; /* the draw's TEV words, for its pipeline */
     int route;
+    PipeState ps; /* the draw's state, which dynamic state sets (V7) */
     VkPipeline p;
 
     static int ztop_said;
@@ -1483,7 +1512,7 @@ static int gxv_draw(const DrawCmd* D)
         if (route == LOGIC_SNAPSHOT && !efb_to_buffer(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) return 0;
     }
     if (route == LOGIC_INTERLOCK ? !begin_interlock() : !begin_pass()) return 0;
-    p = pipeline(topo, D, tev);
+    p = pipeline(topo, D, tev, &ps);
     if (!p) return 0;
     first = g_ring_used / (uint32_t)sizeof(Vertex);
     memcpy(g_ring_map + g_ring_used, up, (size_t)n * sizeof(Vertex));
@@ -1491,6 +1520,16 @@ static int gxv_draw(const DrawCmd* D)
     g_n_verts += n;
     if (p != g_bound) { vkCmdBindPipeline(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p); g_bound = p; }
     vkCmdSetScissor(g_cb, 0, 1, &sc);
+    if (g_eds) {
+        /* What the pipeline no longer holds; the interlock's pass has no depth. */
+        int il = route == LOGIC_INTERLOCK;
+        int cull = (int)ps.cull, zen = il ? 0 : ps.z_en, zupd = il ? 0 : ps.z_upd, zf = (int)ps.zf;
+        if (cull != g_dyn_cull) { p_vkCmdSetCullModeEXT(g_cb, k_cull[cull]); g_dyn_cull = cull; }
+        if (ps.topo != g_dyn_topo) { p_vkCmdSetPrimitiveTopologyEXT(g_cb, k_topo[ps.topo]); g_dyn_topo = ps.topo; }
+        if (zen != g_dyn_zen) { p_vkCmdSetDepthTestEnableEXT(g_cb, (VkBool32)zen); g_dyn_zen = zen; }
+        if (zupd != g_dyn_zupd) { p_vkCmdSetDepthWriteEnableEXT(g_cb, (VkBool32)zupd); g_dyn_zupd = zupd; }
+        if (zf != g_dyn_zf) { p_vkCmdSetDepthCompareOpEXT(g_cb, k_zfunc[zf]); g_dyn_zf = zf; }
+    }
     pc.wd = D->rc.wd;
     pc.ht = D->rc.ht;
     pc.xorig = D->rc.xorig;
@@ -2512,11 +2551,14 @@ static int make_device(char* why, size_t cap)
     {
         /* VK_EXT_pipeline_creation_feedback, where the device has it: only
          * for the report's count of pipelines the disk cache had (V7). */
-        static const char* names[3];
+        static const char* names[4];
         static VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT ilf = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
+        static VkPhysicalDeviceExtendedDynamicStateFeaturesEXT edf = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
+        const char* eds_off = getenv("SOA_GPU_EDS");
         uint32_t n = 0, i, k = 0;
-        int has_swapchain = 0, has_il = 0;
+        int has_swapchain = 0, has_il = 0, has_eds = 0;
         VkExtensionProperties* props;
         if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, NULL) == VK_SUCCESS && n &&
             (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
@@ -2525,6 +2567,7 @@ static int make_device(char* why, size_t cap)
                     if (!strcmp(props[i].extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME)) g_feedback = 1;
                     if (!strcmp(props[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) has_swapchain = 1;
                     if (!strcmp(props[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME)) has_il = 1;
+                    if (!strcmp(props[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) has_eds = 1;
                 }
             free(props);
         }
@@ -2548,6 +2591,20 @@ static int make_device(char* why, size_t cap)
             }
         }
         if (!g_has_interlock) feat.fragmentStoresAndAtomics = VK_FALSE;
+        /* Dynamic state (V7), where the device has it; not under core. */
+        if (has_eds && g_core != 1 && !(eds_off && !strcmp(eds_off, "0"))) {
+            PFN_vkGetPhysicalDeviceFeatures2 feat2 =
+                (PFN_vkGetPhysicalDeviceFeatures2)vkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceFeatures2");
+            VkPhysicalDeviceFeatures2 f2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            f2.pNext = &edf;
+            if (feat2) feat2(g_phys, &f2);
+            if (edf.extendedDynamicState) {
+                edf.pNext = (void*)di.pNext;
+                di.pNext = &edf;
+                names[k++] = VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME;
+                g_eds = 1;
+            }
+        }
         /* The window's swap chain (V8), where the instance has a surface. */
         if (g_inst_surface && has_swapchain) {
             names[k++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -2560,6 +2617,16 @@ static int make_device(char* why, size_t cap)
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateDevice on %s failed: VkResult %d", g_devname, (int)r); return 0; }
     if (!load_device(why, cap)) return 0;
     vkGetDeviceQueue(g_dev, g_family, 0, &g_queue);
+    if (g_eds) {
+        p_vkCmdSetCullModeEXT = (PFN_vkCmdSetCullModeEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetCullModeEXT");
+        p_vkCmdSetPrimitiveTopologyEXT = (PFN_vkCmdSetPrimitiveTopologyEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetPrimitiveTopologyEXT");
+        p_vkCmdSetDepthTestEnableEXT = (PFN_vkCmdSetDepthTestEnableEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetDepthTestEnableEXT");
+        p_vkCmdSetDepthWriteEnableEXT = (PFN_vkCmdSetDepthWriteEnableEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetDepthWriteEnableEXT");
+        p_vkCmdSetDepthCompareOpEXT = (PFN_vkCmdSetDepthCompareOpEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetDepthCompareOpEXT");
+        if (!p_vkCmdSetCullModeEXT || !p_vkCmdSetPrimitiveTopologyEXT || !p_vkCmdSetDepthTestEnableEXT ||
+            !p_vkCmdSetDepthWriteEnableEXT || !p_vkCmdSetDepthCompareOpEXT)
+            g_eds = 0;
+    }
     pcache_open();
     return 1;
 }
@@ -2852,7 +2919,7 @@ int gxv_init(char* why, size_t cap)
     compiler_start();
     /* The start line (3.11), which a live run's log is judged by. */
     say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s; "
-        "interlock %s%s",
+        "interlock %s%s%s",
         VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
         VK_API_VERSION_PATCH(g_props.apiVersion), g_devname, g_props.driverVersion, g_has_logicop ? "yes" : "no", EFB_W,
         EFB_H,
@@ -2862,7 +2929,7 @@ int gxv_init(char* why, size_t cap)
         : g_logic_mode == LOGIC_INTERLOCK ? "through the interlock"
         : g_has_logicop ? "native"
                         : "routed by draw",
-        g_timestamps ? "on" : "unavailable", g_has_interlock ? "yes" : "no",
+        g_timestamps ? "on" : "unavailable", g_has_interlock ? "yes" : "no", g_eds ? "; dynamic state" : "",
         g_core == 1 ? "; SOA_GPU_FEATURES=core" : g_core == 2 ? "; SOA_GPU_FEATURES=nologicop" : "");
     return 1;
 }

@@ -6359,3 +6359,61 @@ producer, which is the game's thread, publishes each command and goes on.
   access, the spec's next choice after the interlock. This GPU has no such
   extension to try it on, so a device with neither interlock nor
   `logicOp` takes the snapshot, with its line.
+
+**V7, fifth: cull, topology and depth as dynamic state.** 2026-10-04.
+
+- **What the cold soak showed** [V].
+  - **The run:** V10 changed `raster.frag`, so AMD's own cache was cold
+    again for the interpreter's pipelines: a first launch. The soak of "V7,
+    fourth", with the state key on each draw-path creation's line, made 42
+    pipelines on the draw path; 7 took 27-40 ms.
+  - **What the 7 were:** none brought a write mask or blend not already
+    made. Each differed from a pipeline already made only in topology, cull
+    or depth state, which the driver compiles a pipeline for.
+- **What changed.** Where the device has `VK_EXT_extended_dynamic_state`
+  (core in Vulkan 1.3; the Deck's and flagship phones' drivers have it):
+  - **Set by draw:** the cull mode, the topology within its class and the
+    depth test, write and compare, with the last values kept so a repeat is
+    not set again.
+  - **The pipeline's key** keeps the topology's class, the write mask and
+    the blend.
+  - **Off switches:** `SOA_GPU_EDS=0`, or `SOA_GPU_FEATURES=core`, builds
+    the state into the pipeline as before.
+  - **The interlock route** sets depth off for its draw.
+  - **The start line** says `dynamic state`.
+- **The same soak again, cold for the new pipelines** [V]:
+
+  | Soak | Draw path: made, stalls over 20 ms after landing | Compiler thread: made, a shape |
+  |---|---|---|
+  | state built in (`V7, fourth`'s method, cold) | 42, 5 (27-40 ms) | 123, 4.9 |
+  | dynamic state, cold | 10, **1** (30.3 ms) | 38, 1.5 |
+
+  - **Where the first launch's creations fall now:** 9 of the 10 are before
+    the landing, at the first frames and the title (26-34 ms each, every one
+    new to the driver).
+  - **The one in play** is a blend not seen before, at frame 11,757.
+  - **So the 20 ms limit still does not hold on a first launch,** by that
+    one and the boot's. A second launch takes them from the disk cache, as
+    "V7, fourth" showed.
+  - **What would remove the last:** making the blend dynamic too
+    (`VK_EXT_extended_dynamic_state3`), which phones have less often.
+- **`partl`, interleaved, dynamic state on, off, on, off** [V]:
+
+  | Run | Consumer ms p50 / p99 | GPU ms p50 / p99 | Pipelines on the draw path | Specialised |
+  |---|---|---|---|---|
+  | on | 0.96 / 3.62 | 0.85 / 2.85 | 9 | 24 for 17 shapes |
+  | off | 0.97 / 3.28 | 0.81 / 2.46 | 32 | 62 for 17 shapes |
+  | on | 0.93 / 3.12 | 0.76 / 2.34 | 9 | 24 for 17 shapes |
+  | off | 0.93 / 3.25 | 0.77 / 2.32 | 32 | 62 for 17 shapes |
+
+  - **The cost:** the calls that set the state cost nothing measurable.
+  - **The pipelines:** a quarter as many on the draw path, and the
+    specialised ones from 3.6 a shape to 1.4.
+- **Unchanged:**
+  - the oracle's 67 GPU images (and its verdicts), the contrast 67/67, and
+    specdiff 67/67, now with 488 specialised pipelines summed over the
+    captures, against 808;
+  - logicop's 16 captures, logictest, queue, overlap, copyimage, present,
+    tevdiff, loddiff, copydiff and the self tests;
+  - `replay` 23/23, `title` 5/5 on the GPU, and `live title --range
+    1290-1400`.
