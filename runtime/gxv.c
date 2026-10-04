@@ -124,10 +124,32 @@ static VkDescriptorPool g_dpool;
 static VkDescriptorSet g_dset;
 static VkPipelineLayout g_layout;
 static VkShaderModule g_vs, g_fs;
+/* A pipeline: the state's key and, specialised (V7), the TEV's shape --
+ * the words tev.glsl's constants take, compared whole, never by a hash; the
+ * interpreter's pipeline for a state has the shape all zero. `ready`
+ * publishes `pipe`: 1 made, 0 compiling on the compiler thread, -1 failed.
+ * Only the draw path (the consumer, or the producer inline) fills a slot;
+ * the compiler thread writes a specialised slot's pipe and then its ready. */
+#define TEV_SHAPE_WORDS (3 + 16 * 4)
 static struct {
     uint32_t key; /* 0: free */
+    uint32_t shape[TEV_SHAPE_WORDS];
     VkPipeline pipe;
+    plat_a32 ready;
 } g_pipes[PIPE_SLOTS];
+/* SOA_GPU_SPECIALIZE: 1, the default, the shape as constants, compiled on a
+ * thread of their own while the interpreter draws -- the same pixels, so the
+ * switch cannot be seen; wait, compiled on the draw path, so that every draw
+ * is drawn specialised (the check that they are the interpreter's pixels);
+ * 0, the interpreter alone. */
+enum { SPEC_OFF, SPEC_BACKGROUND, SPEC_WAIT };
+static int g_specialize = -1;
+static unsigned long long g_n_spec, g_n_interim; /* specialised pipelines asked for; draws the interpreter drew meanwhile */
+/* The distinct shapes seen, for the report: the pipelines should number a
+ * few for each (V7's Done), not one for each draw. */
+#define SHAPE_SLOTS 1024
+static uint64_t g_shape_seen[SHAPE_SLOTS];
+static unsigned g_n_shapes;
 static VkBuffer g_drawbuf, g_poolbuf, g_texrecbuf;
 static uint8_t *g_draw_map, *g_pool_map, *g_texrec_map;
 static uint32_t g_draw_used, g_pool_used, g_pool_cap, g_texrec_used; /* words, texels, words */
@@ -154,6 +176,8 @@ static GxvUploadHook g_hook;
 static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g_mut_nofilter;
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
 static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace, g_mut_late;
+static int g_mut_spec_stages; /* --mutate spec-stages (V7): the specialised shape a stage short */
+static int g_mut_compile_wait; /* --mutate compile-wait (V7): the draw path waits for the compiler thread */
 /* --mutate late-readback (V6b): a copy's bytes put in guest RAM only when the
  * next command comes, after the consumer has counted the copy -- what 3.7's
  * "copies count only once their bytes are in guest RAM" forbids. */
@@ -215,12 +239,12 @@ typedef struct {
 
 static void say(const char* fmt, ...)
 {
+    char line[2048];
     va_list ap;
     va_start(ap, fmt);
-    fputs("[gxv] ", stderr);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
+    vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
+    fprintf(stderr, "[gxv] %s\n", line); /* one call: the compiler thread says too */
 }
 
 #define VKCHECK(call)                                                        \
@@ -554,20 +578,74 @@ static int fragment_module(void)
     return 1;
 }
 
-static VkPipeline pipeline(int topo, const DrawCmd* D)
+/* The TEV's shape, as tev.glsl's specialization constants take it: SC_ON,
+ * the stage count, word 1's compares and logic, and each stage's words 0-3,
+ * zero past the last stage -- from the words gxv_pack_tev wrote for the
+ * draw's record. */
+static void tev_shape(const uint32_t* packed, uint32_t* shape)
 {
-    int z_en = D->px.z_en != 0;
-    unsigned zf = z_en ? (D->px.z_func & 7) : 0;
-    int z_upd = z_en && D->px.z_upd;
-    unsigned mask = (D->px.col_upd ? 1u : 0u) | (D->px.alpha_upd ? 2u : 0u);
-    unsigned cull = topo <= T_FAN ? (D->rc.cull & 3) : 0;
-    int lop = draw_lop(D);
+    unsigned st, j;
+    memset(shape, 0, TEV_SHAPE_WORDS * sizeof *shape);
+    shape[0] = 1;
+    shape[1] = packed[0] - (g_mut_spec_stages && packed[0] > 1);
+    shape[2] = packed[1] & 0xFFFF0000u;
+    for (st = 0; st < packed[0] && st < 16; st++)
+        for (j = 0; j < 4; j++) shape[3 + st * 4 + j] = packed[18 + st * 5 + j];
+}
+
+static void shape_seen(const uint32_t* shape)
+{
+    uint64_t h = 1469598103934665603ull;
+    unsigned i, slot;
+    for (i = 0; i < TEV_SHAPE_WORDS; i++) h = (h ^ shape[i]) * 1099511628211ull;
+    h |= 1;
+    for (slot = (unsigned)(h >> 7) & (SHAPE_SLOTS - 1), i = 0; i < SHAPE_SLOTS; i++, slot = (slot + 1) & (SHAPE_SLOTS - 1)) {
+        if (g_shape_seen[slot] == h) return;
+        if (!g_shape_seen[slot]) {
+            g_shape_seen[slot] = h;
+            g_n_shapes++;
+            return;
+        }
+    }
+}
+
+/* The fixed-function state a pipeline is made for; pipe_state gives its key. */
+typedef struct {
+    int topo, z_en, z_upd, blend_en, subtract, lop;
+    unsigned cull, zf, mask, sfac, dfac;
+} PipeState;
+
+static uint32_t pipe_state(int topo, const DrawCmd* D, PipeState* S)
+{
+    unsigned blend;
+    S->topo = topo;
+    S->z_en = D->px.z_en != 0;
+    S->zf = S->z_en ? (D->px.z_func & 7) : 0;
+    S->z_upd = S->z_en && D->px.z_upd;
+    S->mask = (D->px.col_upd ? 1u : 0u) | (D->px.alpha_upd ? 2u : 0u);
+    S->cull = topo <= T_FAN ? (D->rc.cull & 3) : 0;
+    S->lop = draw_lop(D);
+    S->blend_en = D->px.blend_en != 0;
+    S->subtract = D->px.subtract != 0;
+    S->sfac = D->px.sfac & 7;
+    S->dfac = D->px.dfac & 7;
     /* The blend field: a blend's factors, or -- the blend being off -- a logic
      * op's number above bit 0, which never collides with a blend's. */
-    unsigned blend = D->px.blend_en ? 1u | (D->px.sfac & 7) << 1 | (D->px.dfac & 7) << 4 | (D->px.subtract ? 1u : 0u) << 7
-                   : lop >= 0 && lop != 3 ? (unsigned)lop << 1 | 0x20u : 0u;
-    uint32_t key = 1u + ((((((((uint32_t)topo * 4 + cull) * 2 + (uint32_t)z_en) * 8 + zf) * 2 + (uint32_t)z_upd) * 4 + mask) << 8) | blend);
-    unsigned slot = (key * 2654435761u) >> 20 & (PIPE_SLOTS - 1), probes;
+    blend = S->blend_en ? 1u | S->sfac << 1 | S->dfac << 4 | (S->subtract ? 1u : 0u) << 7
+          : S->lop >= 0 && S->lop != 3 ? (unsigned)S->lop << 1 | 0x20u : 0u;
+    return 1u + ((((((((uint32_t)topo * 4 + S->cull) * 2 + (uint32_t)S->z_en) * 8 + S->zf) * 2 + (uint32_t)S->z_upd) * 4 +
+                   S->mask) << 8) | blend);
+}
+
+/* One pipeline for the state S: the interpreter's when shape is NULL, else
+ * specialised on it. Any thread: it reads only what gxv_init and the first
+ * draw (fragment_module) set, and the pipeline cache is the driver's to
+ * synchronise. *ns is the creation's time, *hit whether the cache had it. */
+static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline* out, uint64_t* ns, int* hit)
+{
+    VkSpecializationMapEntry spec_map[TEV_SHAPE_WORDS];
+    VkSpecializationInfo spec = {0};
+    unsigned i;
     VkPipelineShaderStageCreateInfo st[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
                                              {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
     VkPipelineVertexInputStateCreateInfo vin = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -583,65 +661,74 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
     VkDynamicState dyn[1] = {VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dys = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     VkGraphicsPipelineCreateInfo pi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    VkPipelineCreationFeedbackEXT fb = {0};
+    VkPipelineCreationFeedbackCreateInfoEXT fci = {VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT};
+    uint64_t t0;
     VkResult r;
 
-    for (probes = 0; probes < PIPE_SLOTS; probes++, slot = (slot + 1) & (PIPE_SLOTS - 1)) {
-        if (g_pipes[slot].key == key) return g_pipes[slot].pipe;
-        if (!g_pipes[slot].key) break;
-    }
-    if (probes == PIPE_SLOTS) { say("the pipeline cache is full"); return VK_NULL_HANDLE; }
-    if (!fragment_module()) return VK_NULL_HANDLE;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     st[0].module = g_vs;
     st[0].pName = "main";
     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     st[1].module = g_fs;
     st[1].pName = "main";
-    ia.topology = k_topo[topo];
+    if (shape) {
+        for (i = 0; i < TEV_SHAPE_WORDS; i++) {
+            spec_map[i].constantID = i;
+            spec_map[i].offset = i * 4;
+            spec_map[i].size = 4;
+        }
+        spec.mapEntryCount = TEV_SHAPE_WORDS;
+        spec.pMapEntries = spec_map;
+        spec.dataSize = TEV_SHAPE_WORDS * sizeof *shape;
+        spec.pData = shape;
+        st[1].pSpecializationInfo = &spec;
+    }
+    ia.topology = k_topo[S->topo];
     vps.viewportCount = 1;
     vps.pViewports = &vp;
     vps.scissorCount = 1;
     vps.pScissors = &sc;
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = k_cull[cull];
+    rs.cullMode = k_cull[S->cull];
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    ds.depthTestEnable = (VkBool32)z_en;
-    ds.depthWriteEnable = (VkBool32)z_upd;
-    ds.depthCompareOp = k_zfunc[zf];
-    ba.colorWriteMask = ((mask & 1) ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT : 0) |
-                        ((mask & 2) ? VK_COLOR_COMPONENT_A_BIT : 0);
+    ds.depthTestEnable = (VkBool32)S->z_en;
+    ds.depthWriteEnable = (VkBool32)S->z_upd;
+    ds.depthCompareOp = k_zfunc[S->zf];
+    ba.colorWriteMask = ((S->mask & 1) ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT : 0) |
+                        ((S->mask & 2) ? VK_COLOR_COMPONENT_A_BIT : 0);
     /* blend_pixel: the colour blended by the factors, or the destination
      * less the source with the factors ignored; the alpha stored as the
      * source gives it, never blended. */
-    if (D->px.blend_en) { /* not `blend`, which also carries a logic op's number */
+    if (S->blend_en) {
         ba.blendEnable = VK_TRUE;
-        if (D->px.subtract) {
+        if (S->subtract) {
             ba.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
             ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
             ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
         } else {
             ba.colorBlendOp = VK_BLEND_OP_ADD;
-            ba.srcColorBlendFactor = k_src_factor[D->px.sfac & 7];
-            ba.dstColorBlendFactor = k_dst_factor[D->px.dfac & 7];
+            ba.srcColorBlendFactor = k_src_factor[S->sfac];
+            ba.dstColorBlendFactor = k_dst_factor[S->dfac];
         }
         ba.alphaBlendOp = VK_BLEND_OP_ADD;
         ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     }
-    if (!D->px.blend_en && lop >= 0 && lop != 3) {
+    if (!S->blend_en && S->lop >= 0 && S->lop != 3) {
         if (g_logic_mode == LOGIC_NATIVE) {
             /* All four channels: the CPU applies the op to RGB and stores the
              * source alpha, which nothing in this game reads (3.5). */
             cb.logicOpEnable = VK_TRUE;
-            cb.logicOp = (VkLogicOp)lop;
+            cb.logicOp = (VkLogicOp)S->lop;
         } else if (g_logic_mode == LOGIC_BLEND) {
             /* OR as src(1 - dst) + dst, AND as src dst; the alpha stored as it is. */
             ba.blendEnable = VK_TRUE;
             ba.colorBlendOp = VK_BLEND_OP_ADD;
-            ba.srcColorBlendFactor = lop == 7 ? VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR : VK_BLEND_FACTOR_DST_COLOR;
-            ba.dstColorBlendFactor = lop == 7 ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
+            ba.srcColorBlendFactor = S->lop == 7 ? VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR : VK_BLEND_FACTOR_DST_COLOR;
+            ba.dstColorBlendFactor = S->lop == 7 ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
             ba.alphaBlendOp = VK_BLEND_OP_ADD;
             ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
@@ -664,28 +751,218 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
     pi.pDynamicState = &dys;
     pi.layout = g_layout;
     pi.renderPass = g_pass;
-    {
-        VkPipelineCreationFeedbackEXT fb = {0};
-        VkPipelineCreationFeedbackCreateInfoEXT fci = {VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT};
-        uint64_t t0, dt;
-        if (g_feedback) {
-            fci.pPipelineCreationFeedback = &fb;
-            pi.pNext = &fci;
-        }
-        t0 = plat_mono_ns();
-        r = vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, &g_pipes[slot].pipe);
-        dt = plat_mono_ns() - t0;
-        if (r != VK_SUCCESS) { say("vkCreateGraphicsPipelines failed: VkResult %d", (int)r); return VK_NULL_HANDLE; }
-        if ((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT) &&
-            (fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT))
-            g_pipes_hit++;
-        if (dt > g_pipe_ns_max) g_pipe_ns_max = dt;
-        g_pipe_ns_total += dt;
-        if (g_n_pipes < PIPE_FRAMES) g_pipe_frame[g_n_pipes] = g_n_copies;
+    if (g_feedback) {
+        fci.pPipelineCreationFeedback = &fb;
+        pi.pNext = &fci;
     }
+    t0 = plat_mono_ns();
+    r = vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, out);
+    *ns = plat_mono_ns() - t0;
+    *hit = (fb.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT) &&
+           (fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT);
+    return r;
+}
+
+/* The compiler thread (V7): specialised pipelines made off the draw path. A
+ * ring with one producer, the draw path, and one consumer, the thread: each
+ * job a state and its slot, the slot's key and shape written before the job
+ * is put. The thread's figures are written by it alone and read by the
+ * report. */
+#define JOBS 256
+static struct {
+    PipeState S;
+    unsigned slot;
+} g_jobs[JOBS];
+static plat_a64 g_jobs_head, g_jobs_tail; /* only rise: put by the draw path, taken by the thread */
+static plat_a32 g_compiler_stop, g_compiler_running;
+static plat_a64 g_bg_made, g_bg_hit, g_bg_failed, g_bg_ns_max, g_bg_ns_total;
+static PlatThread g_compiler;
+/* A test knob: SOA_GPU_COMPILE_STALL=<ms>, the thread sleeping that long
+ * before each pipeline -- a driver with no shader cache of its own, as on a
+ * first launch, so a check can see the draw path not wait for it. */
+static unsigned g_compile_stall_ms;
+
+static void compiler_main(void* arg)
+{
+    int64_t tail = plat_load64(&g_jobs_tail);
+    (void)arg;
+    while (!plat_load32(&g_compiler_stop)) {
+        int64_t head = plat_load64(&g_jobs_head);
+        PipeState S;
+        unsigned slot;
+        VkPipeline p = VK_NULL_HANDLE;
+        uint64_t ns;
+        int hit;
+        if (tail == head) {
+            plat_wait64(&g_jobs_head, head, 50);
+            continue;
+        }
+        S = g_jobs[tail % JOBS].S;
+        slot = g_jobs[tail % JOBS].slot;
+        plat_xchg64(&g_jobs_tail, ++tail); /* the job read: its place free for the draw path */
+        if (g_compile_stall_ms) plat_sleep_ms(g_compile_stall_ms);
+        if (pipe_make(&S, g_pipes[slot].shape, &p, &ns, &hit) == VK_SUCCESS) {
+            g_pipes[slot].pipe = p;
+            plat_store64_relaxed(&g_bg_made, plat_load64(&g_bg_made) + 1);
+            if (hit) plat_store64_relaxed(&g_bg_hit, plat_load64(&g_bg_hit) + 1);
+            if ((int64_t)ns > plat_load64(&g_bg_ns_max)) plat_store64_relaxed(&g_bg_ns_max, (int64_t)ns);
+            plat_store64_relaxed(&g_bg_ns_total, plat_load64(&g_bg_ns_total) + (int64_t)ns);
+            plat_cas32(&g_pipes[slot].ready, 0, 1); /* after pipe: the draw path reads pipe once it sees 1 */
+        } else {
+            say("a specialised pipeline failed on the compiler thread; the interpreter draws its state");
+            plat_store64_relaxed(&g_bg_failed, plat_load64(&g_bg_failed) + 1);
+            plat_cas32(&g_pipes[slot].ready, 0, -1);
+        }
+    }
+    plat_cas32(&g_compiler_running, 1, 0);
+}
+
+/* SOA_GPU_SPECIALIZE, and the compiler thread where it is wanted; with no
+ * thread to be had, the interpreter alone rather than a stall at each new
+ * shape. */
+static void compiler_start(void)
+{
+    const char* sp = getenv("SOA_GPU_SPECIALIZE");
+    g_specialize = !sp || !*sp || !strcmp(sp, "1") ? SPEC_BACKGROUND : !strcmp(sp, "wait") ? SPEC_WAIT
+                 : !strcmp(sp, "0")                 ? SPEC_OFF
+                                                    : -1;
+    if (g_specialize < 0) {
+        say("SOA_GPU_SPECIALIZE=%s is not 0, 1 or wait; specialising in the background", sp);
+        g_specialize = SPEC_BACKGROUND;
+    }
+    if (g_specialize != SPEC_BACKGROUND) return;
+    if ((sp = getenv("SOA_GPU_COMPILE_STALL")) != NULL && atoi(sp) > 0) {
+        g_compile_stall_ms = (unsigned)atoi(sp);
+        say("SOA_GPU_COMPILE_STALL: the compiler thread sleeps %u ms before each pipeline; this run is a test",
+            g_compile_stall_ms);
+    }
+    plat_cas32(&g_compiler_stop, 1, 0);
+    plat_cas32(&g_compiler_running, 0, 1);
+    if (!plat_thread_start(&g_compiler, compiler_main, NULL, 0)) {
+        plat_cas32(&g_compiler_running, 1, 0);
+        say("no thread for the pipeline compiler; the TEV is interpreted");
+        g_specialize = SPEC_OFF;
+    }
+}
+
+/* The thread finishes the pipeline it is making, if any, and leaves the rest
+ * queued: their slots stay at 0, their pipes null. */
+static void compiler_stop(void)
+{
+    if (!plat_load32(&g_compiler_running)) return;
+    plat_cas32(&g_compiler_stop, 0, 1);
+    plat_wake_all64(&g_jobs_head);
+    while (plat_load32(&g_compiler_running)) plat_sleep_ms(1);
+}
+
+/* Where key and shape's pipeline is, 1 and its slot; 0 and the free slot it
+ * would go in; -1 when the table is full. */
+static int pipe_find(uint32_t key, const uint32_t* shape, unsigned* at)
+{
+    uint32_t h = key;
+    unsigned i, slot, probes;
+    for (i = 0; i < TEV_SHAPE_WORDS; i++) h = (h ^ shape[i]) * 16777619u;
+    slot = (h * 2654435761u) >> 20 & (PIPE_SLOTS - 1);
+    for (probes = 0; probes < PIPE_SLOTS; probes++, slot = (slot + 1) & (PIPE_SLOTS - 1)) {
+        if (g_pipes[slot].key == key && !memcmp(g_pipes[slot].shape, shape, TEV_SHAPE_WORDS * sizeof *shape)) {
+            *at = slot;
+            return 1;
+        }
+        if (!g_pipes[slot].key) {
+            *at = slot;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* A pipeline made on the draw path, timed into the report's figures, and its
+ * slot filled -- a failed specialised one too, at -1, so it is not tried
+ * again. */
+static VkPipeline pipe_put(unsigned slot, uint32_t key, const PipeState* S, const uint32_t* shape)
+{
+    static const uint32_t interp[TEV_SHAPE_WORDS];
+    VkPipeline p = VK_NULL_HANDLE;
+    uint64_t ns;
+    int hit;
+    VkResult r = pipe_make(S, shape, &p, &ns, &hit);
+    if (r != VK_SUCCESS) {
+        say("vkCreateGraphicsPipelines failed: VkResult %d", (int)r);
+        if (!shape) return VK_NULL_HANDLE;
+        p = VK_NULL_HANDLE;
+    } else {
+        if (hit) g_pipes_hit++;
+        if (ns > g_pipe_ns_max) g_pipe_ns_max = ns;
+        g_pipe_ns_total += ns;
+        if (g_n_pipes < PIPE_FRAMES) g_pipe_frame[g_n_pipes] = g_n_copies;
+        g_n_pipes++;
+    }
+    memcpy(g_pipes[slot].shape, shape ? shape : interp, sizeof interp);
+    g_pipes[slot].pipe = p;
+    g_pipes[slot].ready = p ? 1 : -1;
     g_pipes[slot].key = key;
-    g_n_pipes++;
-    return g_pipes[slot].pipe;
+    return p;
+}
+
+/* The draw's pipeline. Specialised: its shape's, once made; until then --
+ * queued for the compiler thread the first time the shape is seen with this
+ * state -- the interpreter's for the state, which gives the same pixels.
+ * tev is the draw's TEV as draw_record packed it. */
+static VkPipeline pipeline(int topo, const DrawCmd* D, const uint32_t* tev)
+{
+    static const uint32_t interp[TEV_SHAPE_WORDS]; /* the interpreter's: no shape */
+    static int said_full;
+    uint32_t shape[TEV_SHAPE_WORDS];
+    PipeState S;
+    uint32_t key = pipe_state(topo, D, &S);
+    unsigned slot;
+    int at;
+    if (!fragment_module()) return VK_NULL_HANDLE; /* before any job: the thread uses the modules */
+    if (g_specialize < 0) compiler_start();
+    if (g_specialize != SPEC_OFF) {
+        tev_shape(tev, shape);
+        at = pipe_find(key, shape, &slot);
+        if (at > 0) {
+            int32_t ready = plat_load32(&g_pipes[slot].ready);
+            if (ready > 0) return g_pipes[slot].pipe;
+            if (ready == 0) g_n_interim++;
+        } else if (at == 0) {
+            int64_t head = plat_load64(&g_jobs_head);
+            if (g_specialize == SPEC_WAIT) {
+                VkPipeline p;
+                shape_seen(shape);
+                g_n_spec++;
+                if ((p = pipe_put(slot, key, &S, shape)) != VK_NULL_HANDLE) return p;
+            } else if (head - plat_load64(&g_jobs_tail) < JOBS) {
+                shape_seen(shape);
+                g_n_spec++;
+                memcpy(g_pipes[slot].shape, shape, sizeof shape);
+                g_pipes[slot].ready = 0;
+                g_pipes[slot].key = key;
+                g_jobs[head % JOBS].S = S;
+                g_jobs[head % JOBS].slot = slot;
+                plat_inc64(&g_jobs_head); /* publishes the slot and the job */
+                plat_wake_all64(&g_jobs_head);
+                if (g_mut_compile_wait) {
+                    while (!plat_load32(&g_pipes[slot].ready)) plat_sleep_ms(1);
+                    if (plat_load32(&g_pipes[slot].ready) > 0) return g_pipes[slot].pipe;
+                }
+                g_n_interim++;
+            } else {
+                g_n_interim++; /* the ring full: asked again at the next draw */
+            }
+        } else if (!said_full) {
+            said_full = 1;
+            say("the pipeline table is full; new shapes are interpreted");
+        }
+    }
+    at = pipe_find(key, interp, &slot);
+    if (at > 0) return g_pipes[slot].pipe;
+    if (at < 0) {
+        say("the pipeline table is full");
+        return VK_NULL_HANDLE;
+    }
+    return pipe_put(slot, key, &S, NULL);
 }
 
 /* ---- the backend ------------------------------------------------------------ */
@@ -764,7 +1041,7 @@ static uint32_t float_bits(float f)
  * here and copied out whole: dst is mapped device memory, uncached, where
  * every |= below would be a read across the bus (V6a's profile put
  * gxv_pack_tev, writing there, first among the consumer's own work). */
-static int draw_record(const DrawCmd* D, uint32_t* dst)
+static int draw_record(const DrawCmd* D, uint32_t* dst, uint32_t* tev)
 {
     uint32_t r[GXV_DRAW_WORDS];
     uint32_t recs[8];
@@ -779,6 +1056,7 @@ static int draw_record(const DrawCmd* D, uint32_t* dst)
         if ((maps >> m) & 1) recs[m] = upload_texture(&D->tev.tex[m]);
     memset(r, 0, sizeof r);
     gxv_pack_tev(&D->tev, r);
+    memcpy(tev, r, GXV_TEV_WORDS * sizeof *tev); /* the pipeline's shape is taken from these */
     r[98] = (D->ntex & 255) | (D->nchan & 3) << 8 | (D->miptex & 255) << 16;
     for (i = 0; i < 8; i++) r[99] |= (uint32_t)(D->texmap_of[i] & 7) << (3 * i);
     r[100] = (D->px.fog_type & 7) | (D->px.fog_proj & 1) << 3 | (D->px.fog_b_shift & 31) << 8;
@@ -953,6 +1231,7 @@ static int gxv_draw(const DrawCmd* D)
     const Rect* s = &D->rc.scissor;
     VkRect2D sc;
     PushDraw pc;
+    uint32_t tev[GXV_TEV_WORDS]; /* the draw's TEV words, for its pipeline */
     VkPipeline p;
 
     static int ztop_said;
@@ -1006,9 +1285,9 @@ static int gxv_draw(const DrawCmd* D)
     }
     if (g_ring_used + (size_t)n * sizeof(Vertex) > RING_BYTES && !submit_wait()) return 0;
     if ((g_draw_used + GXV_DRAW_WORDS) * 4 > DRAWREC_BYTES && !submit_wait()) return 0;
-    if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used)) {
+    if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used, tev)) {
         if (!submit_wait()) return 0;
-        if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used)) {
+        if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used, tev)) {
             say("draw refused: its textures do not fit the %u-texel pool", g_pool_cap);
             return 0;
         }
@@ -1025,7 +1304,7 @@ static int gxv_draw(const DrawCmd* D)
         }
     }
     if (!begin_pass()) return 0;
-    p = pipeline(topo, D);
+    p = pipeline(topo, D, tev);
     if (!p) return 0;
     first = g_ring_used / (uint32_t)sizeof(Vertex);
     memcpy(g_ring_map + g_ring_used, up, (size_t)n * sizeof(Vertex));
@@ -1649,9 +1928,10 @@ static void pcache_open(void)
     free(data);
 }
 
-/* Only the consumer calls this, the one thread that makes pipelines (and
- * gxv_shutdown, after it has stopped). Written beside and renamed over, so a
- * run killed mid-write leaves the old file. */
+/* Only the consumer calls this (and gxv_shutdown, after it has stopped);
+ * the compiler thread may be making a pipeline through the cache meanwhile,
+ * which the driver synchronises. Written beside and renamed over, so a run
+ * killed mid-write leaves the old file. */
 static void pcache_save(void)
 {
     size_t n = 0;
@@ -1659,7 +1939,7 @@ static void pcache_save(void)
     char tmp[600];
     FILE* f;
     if (!g_pcache || !g_pcache_path[0]) return;
-    g_pipes_saved = g_n_pipes;
+    g_pipes_saved = g_n_pipes + (unsigned long long)plat_load64(&g_bg_made);
     g_pcache_saved_ns = plat_mono_ns();
     if (vkGetPipelineCacheData(g_dev, g_pcache, &n, NULL) != VK_SUCCESS || !n || !(data = malloc(n))) return;
     if (vkGetPipelineCacheData(g_dev, g_pcache, &n, data) == VK_SUCCESS) {
@@ -1676,7 +1956,9 @@ static void pcache_save(void)
 
 static void frame_mark(void)
 {
-    if (g_n_pipes != g_pipes_saved && plat_mono_ns() - g_pcache_saved_ns > 1000000000ull) pcache_save();
+    if (g_n_pipes + (unsigned long long)plat_load64(&g_bg_made) != g_pipes_saved &&
+        plat_mono_ns() - g_pcache_saved_ns > 1000000000ull)
+        pcache_save();
     if (g_frames_seen < FRAME_STATS) {
         g_frame_consumer_ms[g_frames_seen] = (float)((double)(g_consumer_ns - g_frame_consumer0) / 1e6);
         g_frame_gpu_ms[g_frames_seen] = (float)(g_gpu_ms - g_frame_gpu0);
@@ -1755,6 +2037,8 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "lodmin")) g_mut_lodmin = 1;
     else if (!strcmp(name, "pool-in-place")) g_mut_pool_inplace = 1;
     else if (!strcmp(name, "late-readback")) g_mut_late = 1;
+    else if (!strcmp(name, "spec-stages")) g_mut_spec_stages = 1;
+    else if (!strcmp(name, "compile-wait")) g_mut_compile_wait = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -1802,8 +2086,11 @@ static void report_frames(void)
     free(g);
 }
 
-/* The pipelines: how many, how many the cache already had, the longest and
- * total creation, and the frames (screen copies before) the first were made in. */
+/* The pipelines made on the draw path, where a creation stalls the frame:
+ * how many, how many the cache already had, the longest and total creation,
+ * and the frames (screen copies before) the first were made in. Then the
+ * specialised ones: how many for how many shapes, and those the compiler
+ * thread made, timed the same way. */
 static void report_pipelines(void)
 {
     char frames[PIPE_FRAMES * 12 + 8];
@@ -1812,18 +2099,34 @@ static void report_pipelines(void)
     frames[0] = 0;
     for (i = 0; i < n; i++) at += (size_t)snprintf(frames + at, sizeof frames - at, " %llu", g_pipe_frame[i]);
     char hits[64];
+    long long made = plat_load64(&g_bg_made), failed = plat_load64(&g_bg_failed);
     if (g_feedback) snprintf(hits, sizeof hits, "%llu of them from the cache", g_pipes_hit);
     else snprintf(hits, sizeof hits, "the device not saying which came from the cache");
-    say("pipelines: %llu made, %s; the longest %.2f ms, %.1f ms in all; made at frames%s%s; cache %s, %zu bytes loaded",
+    say("pipelines: %llu made on the draw path, %s; the longest %.2f ms, %.1f ms in all; made at frames%s%s; cache %s, "
+        "%zu bytes loaded",
         g_n_pipes, hits, (double)g_pipe_ns_max / 1e6, (double)g_pipe_ns_total / 1e6, frames,
         g_n_pipes > PIPE_FRAMES ? " ..." : "", g_pcache ? g_pcache_path : "off", g_pcache_loaded);
+    if (g_specialize == SPEC_OFF) {
+        say("pipelines not specialised (SOA_GPU_SPECIALIZE=0): the TEV is interpreted");
+        return;
+    }
+    say("pipelines specialised on the TEV's shape: %llu for %u distinct shapes, %.1f a shape; %s",
+        g_n_spec, g_n_shapes, g_n_shapes ? (double)g_n_spec / g_n_shapes : 0.0,
+        g_specialize == SPEC_WAIT ? "made on the draw path (SOA_GPU_SPECIALIZE=wait)" : "made on the compiler thread");
+    if (g_specialize != SPEC_BACKGROUND) return;
+    if (g_feedback) snprintf(hits, sizeof hits, "%lld of them from the cache", plat_load64(&g_bg_hit));
+    say("the compiler thread: %lld made, %s; the longest %.2f ms, %.1f ms in all; %lld failed, %lld still to make; "
+        "%llu draws drawn by the interpreter while theirs was made",
+        made, hits, (double)plat_load64(&g_bg_ns_max) / 1e6, (double)plat_load64(&g_bg_ns_total) / 1e6, failed,
+        (long long)g_n_spec - made - failed, g_n_interim);
 }
 
 void gxv_report(void)
 {
     say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu copies to a "
         "texture (%llu refused), %llu pipelines, %llu submissions, GPU %.3f ms%s",
-        g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused, g_n_pipes, g_n_submits, g_gpu_ms,
+        g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused,
+        g_n_pipes + (unsigned long long)plat_load64(&g_bg_made), g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
     report_pipelines();
@@ -2159,6 +2462,7 @@ int gxv_init(char* why, size_t cap)
         if (forced && *forced && !gxv_set_logicop(forced)) say("SOA_GPU_LOGICOP=%s is not native, blend or snapshot here; ignored", forced);
     }
     if (g_logic_mode < 0) g_logic_mode = g_has_logicop ? LOGIC_NATIVE : LOGIC_SNAPSHOT;
+    compiler_start();
     /* The start line (3.11), which a live run's log is judged by. */
     say("Vulkan %u.%u.%u on %s (driver %#x): logicOp %s; EFB %ux%u RGBA8 + D32F; logic ops %s; timestamps %s",
         VK_API_VERSION_MAJOR(g_props.apiVersion), VK_API_VERSION_MINOR(g_props.apiVersion),
@@ -2186,9 +2490,10 @@ void gxv_shutdown(void)
 {
     unsigned i;
     if (!g_dev) return;
+    compiler_stop();
     vkDeviceWaitIdle(g_dev);
     for (i = 0; i < PIPE_SLOTS; i++)
-        if (g_pipes[i].key) vkDestroyPipeline(g_dev, g_pipes[i].pipe, NULL);
+        if (g_pipes[i].key && g_pipes[i].pipe) vkDestroyPipeline(g_dev, g_pipes[i].pipe, NULL);
     if (g_qpool) vkDestroyQueryPool(g_dev, g_qpool, NULL);
     if (g_occ) vkDestroyQueryPool(g_dev, g_occ, NULL);
     vkDestroyFence(g_dev, g_fence, NULL);

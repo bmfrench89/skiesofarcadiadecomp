@@ -5936,3 +5936,136 @@ producer, which is the game's thread, publishes each command and goes on.
 - **A noise fix:** the spike's `--replay` no longer prints gxv's report
   twice. `gx_replay`'s own report has printed it, through the backend's
   hook, since V5.
+
+**V7, second: pipelines specialised on the TEV's shape.** 2026-10-04.
+
+- **What it does.** A draw's pipeline is specialised on its TEV's *shape*
+  (spec 3.4), passed to the shader as Vulkan specialization constants. The
+  driver then folds the interpreter loop into a shader for that one shape.
+  - **The shape:** the stage count; the alpha compares and their logic; and
+    each stage's words 0 to 3 from `gxv_pack_tev`. Those words hold the
+    colour and alpha inputs, the texture map, coordinate and channel, bias,
+    operation, clamp, shift and destination, and the swaps.
+  - **The values stay in the draw's record:** the registers, the alpha
+    references, and each stage's konst word.
+  - **`tev.glsl`:** 67 constants (`SC_ON`, `SC_STAGES`, `SC_ACMP` and 64
+    stage words). A stage's word is read through a switch, because glslang
+    builds no array from specialization constants.
+  - **`SC_ON` 0, the default, keeps the interpreter as it was:** the shader
+    reads everything from the record. tevdiff runs that way.
+  - **The pipeline's key:** the fixed-function state, as before, plus the
+    shape. The shape is compared whole, never by a hash.
+- **Made off the draw path.** A cold specialised pipeline took up to 144 ms
+  to make here (the first run after the shader changed: 62 pipelines, 3.36 s
+  in all). On the draw path that is a stall at every new shape.
+  - **By default (`SOA_GPU_SPECIALIZE=1`)** the draw path queues each new
+    pair of state and shape for a compiler thread, and draws with the
+    interpreter's pipeline for that state meanwhile. The two give the same
+    pixels, so the switch cannot be seen.
+  - **Publishing:** the thread writes the pipeline, then sets the slot's
+    `ready` with a compare-exchange. The draw path loads `ready` before it
+    reads the pipeline.
+  - **The other modes:** `SOA_GPU_SPECIALIZE=wait` makes them on the draw
+    path, so every draw is drawn specialised (the checks' way to see them);
+    `0` uses the interpreter alone.
+  - **The thread:**
+    - its queue is a ring of 256 jobs, one producer and one consumer;
+    - it sleeps in `plat_wait64`;
+    - at shutdown it finishes the pipeline it is making and stops;
+    - a creation that fails leaves that state on the interpreter.
+    - not yet seen by Vulkan's validation layer, which is not installed
+      here (`SOA_GPU_VALIDATE=1` says so). The pipeline cache is the
+      driver's to synchronise, and the thread touches only its own
+      slots' `pipe` and `ready`.
+  - **`say`** now formats its line and writes it in one call, because the
+    thread writes too.
+- **The report** has three lines:
+  - `pipelines: 32 made on the draw path, ...`: the stalls that count;
+  - `pipelines specialised on the TEV's shape: 62 for 17 distinct shapes,
+    3.6 a shape; made on the compiler thread`;
+  - `the compiler thread: 62 made, ...; 0 failed, 0 still to make; 380
+    draws drawn by the interpreter while theirs was made`.
+- **The same pixels** [V]:
+  - **`gpuspike.py specdiff` (new):** each of the 67 captures (corpus,
+    perfset and gpuset) is replayed twice, every draw specialised (`wait`)
+    and the interpreter alone (`0`). All 67 are byte-identical, with 808
+    specialised pipelines for 399 shapes summed over the captures.
+  - **Its mutation:** `--mutate spec-stages` cuts a stage from the
+    specialised shape. It fails 8 captures, perfset's battle, field, ship
+    and sky pairs. The corpus's 23 have no draw of two stages for it to
+    cut.
+  - **The oracle under `wait`, `0` and `1`:** 65 of 67 pass V0 (2 by
+    design), and the 67 GPU images are byte-identical to V6a's in all three.
+  - **The contrast (the V7 Done line):** 67 of 67 the same pixels, spike and
+    `soa.exe`, under all three modes. Under `wait`, `--mutate spec-stages`
+    fails perfset's 8.
+  - **Also unchanged:**
+    - the self test and tevdiff pass;
+    - the queue frame hashes to the CPU's;
+    - with background specialisation, `live title --range 1290-1400` passes
+      111 of 111 and `880-960` 81 of 81.
+- **The draw path does not wait** [V]. A test knob,
+  `SOA_GPU_COMPILE_STALL=200`, makes the thread sleep 200 ms before each
+  pipeline, as on a driver with no shader cache of its own.
+  - **With it:** the queue frame's 228 draws are all drawn by the
+    interpreter, its hash is unchanged, and the consumer's frame takes
+    11.8 ms.
+  - **Its mutation:** `--mutate compile-wait` makes the draw path wait for
+    the thread. That takes the consumer above 200 ms and fails the test.
+- **Measured on `partl`, interleaved** [V]:
+
+  | Run | Consumer ms, p50 / p99 | GPU ms, p50 / p99 |
+  |---|---|---|
+  | interpreted | 0.92 / 3.64 | 2.76 / 6.84 |
+  | specialised in the background | 0.94 / 3.51 | 0.77 / 2.56 |
+  | interpreted | 0.92 / 3.43 | 2.75 / 6.78 |
+  | specialised in the background | 0.96 / 3.73 | 0.77 / 2.53 |
+
+  - **GPU time:** 3.6 times less at the median, 2.7 times less at p99.
+    Specialised on the draw path (`wait`), warm, it was p50 0.77 and p99
+    2.26, so drawing the first frames of each shape with the interpreter
+    costs almost nothing.
+  - **The consumer:** about 3% more at the median, for the shape built and
+    looked up at each draw. Its p99 is within the spread of the runs.
+    - A first version packed the TEV twice a draw, once for the record and
+      once for the shape, and cost about 4%. The shape is now taken from
+      the record's words.
+  - **The pipelines:** 62 specialised for 17 shapes, 3.6 a shape. That is
+    under V7's limit of four a shape, so values are not keyed.
+    - The interpreter's 32, one for each fixed-function state, come on top:
+      94 in all, 5.5 a shape.
+    - The limit is read as the specialised count, which is what it was set
+      to test. This reading is recorded in the spec.
+- **A first launch can still stall** [V]. In the first background run, the
+  interpreter's new SPIR-V had been compiled for none of `partl`'s states.
+  - **The draw path's longest creation was 37.50 ms,** and 163.8 ms over
+    32. That is the interpreter's pipelines compiling with AMD's own shader
+    cache cold. Repeated, the longest was 0.34 ms.
+  - **The specialised pipelines in that run** were already in AMD's cache
+    from earlier runs: the longest on the thread was 1.22 ms.
+  - **Why no thread can fix it:** something has to draw while a pipeline
+    is made, and the interpreter's pipeline is that something.
+  - **Not new:** this was true before V7 and is measured here for the first
+    time.
+  - **What it means for the soak:** its 20 ms limit will see this on a first
+    launch. Two ways to meet it go with the soak:
+    - fewer interpreter pipelines, through dynamic state (cull, depth and
+      topology are core in Vulkan 1.3);
+    - making them at start, from the states of the last run.
+- **The live check in snapshot mode** [V]. One `live title` run with
+  background specialisation failed 16 of 40 frames by shift and blur: a
+  fade caught at another moment.
+  - **The repeats:** its rerun passed (18 of 18), and interpreted and
+    `wait` passed 40 of 40.
+  - **Why:** the guard judges only frames that two CPU runs agree on, but
+    nothing holds the GPU run to the same moment. This is V5's finding that
+    `--range` is the mode that reproduces.
+  - **The every-frame ranges pass** with background specialisation (above).
+    No test runs snapshot mode.
+- **Tests:**
+  - `test_gxv_queue.py` gains two (4 to 6). The compiler thread accounts
+    for every specialised pipeline; a frame with every compile stalled is
+    unchanged and its consumer stays under the stall; `compile-wait` fails
+    that; `wait` and `0` report as they should.
+  - `test_gpuspike.py` gains two (34 to 36): specdiff over the 35 captures
+    of the corpus and benchmark set, and its `spec-stages` mutation.

@@ -22,6 +22,158 @@
 //        rswap << 16 | tswap << 24 (two bits a channel)
 //     4  konst r | g << 8 | b << 16 | a << 24
 
+// Specialisation (specs/gpu-backend.md 3.4, V7): the shape -- the stage
+// count, the alpha compares and their logic, and each stage's words 0-3, its
+// selectors, operations, swaps, map and channel -- as constants, so the
+// driver folds this interpreter into the draw's own shader. The values (the
+// registers, konst, the alpha references) stay in the record. SC_ON 0, the
+// default, reads the shape from the record too: tevdiff, and
+// SOA_GPU_SPECIALIZE=0, run the interpreter as it was.
+layout(constant_id = 0) const uint SC_ON = 0u;
+layout(constant_id = 1) const uint SC_STAGES = 0u;
+layout(constant_id = 2) const uint SC_ACMP = 0u; // word 1 above its references: acomp0, acomp1, alogic
+layout(constant_id = 3) const uint SC_S0W0 = 0u;
+layout(constant_id = 4) const uint SC_S0W1 = 0u;
+layout(constant_id = 5) const uint SC_S0W2 = 0u;
+layout(constant_id = 6) const uint SC_S0W3 = 0u;
+layout(constant_id = 7) const uint SC_S1W0 = 0u;
+layout(constant_id = 8) const uint SC_S1W1 = 0u;
+layout(constant_id = 9) const uint SC_S1W2 = 0u;
+layout(constant_id = 10) const uint SC_S1W3 = 0u;
+layout(constant_id = 11) const uint SC_S2W0 = 0u;
+layout(constant_id = 12) const uint SC_S2W1 = 0u;
+layout(constant_id = 13) const uint SC_S2W2 = 0u;
+layout(constant_id = 14) const uint SC_S2W3 = 0u;
+layout(constant_id = 15) const uint SC_S3W0 = 0u;
+layout(constant_id = 16) const uint SC_S3W1 = 0u;
+layout(constant_id = 17) const uint SC_S3W2 = 0u;
+layout(constant_id = 18) const uint SC_S3W3 = 0u;
+layout(constant_id = 19) const uint SC_S4W0 = 0u;
+layout(constant_id = 20) const uint SC_S4W1 = 0u;
+layout(constant_id = 21) const uint SC_S4W2 = 0u;
+layout(constant_id = 22) const uint SC_S4W3 = 0u;
+layout(constant_id = 23) const uint SC_S5W0 = 0u;
+layout(constant_id = 24) const uint SC_S5W1 = 0u;
+layout(constant_id = 25) const uint SC_S5W2 = 0u;
+layout(constant_id = 26) const uint SC_S5W3 = 0u;
+layout(constant_id = 27) const uint SC_S6W0 = 0u;
+layout(constant_id = 28) const uint SC_S6W1 = 0u;
+layout(constant_id = 29) const uint SC_S6W2 = 0u;
+layout(constant_id = 30) const uint SC_S6W3 = 0u;
+layout(constant_id = 31) const uint SC_S7W0 = 0u;
+layout(constant_id = 32) const uint SC_S7W1 = 0u;
+layout(constant_id = 33) const uint SC_S7W2 = 0u;
+layout(constant_id = 34) const uint SC_S7W3 = 0u;
+layout(constant_id = 35) const uint SC_S8W0 = 0u;
+layout(constant_id = 36) const uint SC_S8W1 = 0u;
+layout(constant_id = 37) const uint SC_S8W2 = 0u;
+layout(constant_id = 38) const uint SC_S8W3 = 0u;
+layout(constant_id = 39) const uint SC_S9W0 = 0u;
+layout(constant_id = 40) const uint SC_S9W1 = 0u;
+layout(constant_id = 41) const uint SC_S9W2 = 0u;
+layout(constant_id = 42) const uint SC_S9W3 = 0u;
+layout(constant_id = 43) const uint SC_S10W0 = 0u;
+layout(constant_id = 44) const uint SC_S10W1 = 0u;
+layout(constant_id = 45) const uint SC_S10W2 = 0u;
+layout(constant_id = 46) const uint SC_S10W3 = 0u;
+layout(constant_id = 47) const uint SC_S11W0 = 0u;
+layout(constant_id = 48) const uint SC_S11W1 = 0u;
+layout(constant_id = 49) const uint SC_S11W2 = 0u;
+layout(constant_id = 50) const uint SC_S11W3 = 0u;
+layout(constant_id = 51) const uint SC_S12W0 = 0u;
+layout(constant_id = 52) const uint SC_S12W1 = 0u;
+layout(constant_id = 53) const uint SC_S12W2 = 0u;
+layout(constant_id = 54) const uint SC_S12W3 = 0u;
+layout(constant_id = 55) const uint SC_S13W0 = 0u;
+layout(constant_id = 56) const uint SC_S13W1 = 0u;
+layout(constant_id = 57) const uint SC_S13W2 = 0u;
+layout(constant_id = 58) const uint SC_S13W3 = 0u;
+layout(constant_id = 59) const uint SC_S14W0 = 0u;
+layout(constant_id = 60) const uint SC_S14W1 = 0u;
+layout(constant_id = 61) const uint SC_S14W2 = 0u;
+layout(constant_id = 62) const uint SC_S14W3 = 0u;
+layout(constant_id = 63) const uint SC_S15W0 = 0u;
+layout(constant_id = 64) const uint SC_S15W1 = 0u;
+layout(constant_id = 65) const uint SC_S15W2 = 0u;
+layout(constant_id = 66) const uint SC_S15W3 = 0u;
+// A stage's shape word, by index st * 4 + j: a switch, since glslang builds
+// no array from specialization constants; once the driver unrolls the
+// stage loop every index is a constant and the switch folds away.
+uint sc_shape(uint i)
+{
+    switch (i) {
+    case 0u: return SC_S0W0;
+    case 1u: return SC_S0W1;
+    case 2u: return SC_S0W2;
+    case 3u: return SC_S0W3;
+    case 4u: return SC_S1W0;
+    case 5u: return SC_S1W1;
+    case 6u: return SC_S1W2;
+    case 7u: return SC_S1W3;
+    case 8u: return SC_S2W0;
+    case 9u: return SC_S2W1;
+    case 10u: return SC_S2W2;
+    case 11u: return SC_S2W3;
+    case 12u: return SC_S3W0;
+    case 13u: return SC_S3W1;
+    case 14u: return SC_S3W2;
+    case 15u: return SC_S3W3;
+    case 16u: return SC_S4W0;
+    case 17u: return SC_S4W1;
+    case 18u: return SC_S4W2;
+    case 19u: return SC_S4W3;
+    case 20u: return SC_S5W0;
+    case 21u: return SC_S5W1;
+    case 22u: return SC_S5W2;
+    case 23u: return SC_S5W3;
+    case 24u: return SC_S6W0;
+    case 25u: return SC_S6W1;
+    case 26u: return SC_S6W2;
+    case 27u: return SC_S6W3;
+    case 28u: return SC_S7W0;
+    case 29u: return SC_S7W1;
+    case 30u: return SC_S7W2;
+    case 31u: return SC_S7W3;
+    case 32u: return SC_S8W0;
+    case 33u: return SC_S8W1;
+    case 34u: return SC_S8W2;
+    case 35u: return SC_S8W3;
+    case 36u: return SC_S9W0;
+    case 37u: return SC_S9W1;
+    case 38u: return SC_S9W2;
+    case 39u: return SC_S9W3;
+    case 40u: return SC_S10W0;
+    case 41u: return SC_S10W1;
+    case 42u: return SC_S10W2;
+    case 43u: return SC_S10W3;
+    case 44u: return SC_S11W0;
+    case 45u: return SC_S11W1;
+    case 46u: return SC_S11W2;
+    case 47u: return SC_S11W3;
+    case 48u: return SC_S12W0;
+    case 49u: return SC_S12W1;
+    case 50u: return SC_S12W2;
+    case 51u: return SC_S12W3;
+    case 52u: return SC_S13W0;
+    case 53u: return SC_S13W1;
+    case 54u: return SC_S13W2;
+    case 55u: return SC_S13W3;
+    case 56u: return SC_S14W0;
+    case 57u: return SC_S14W1;
+    case 58u: return SC_S14W2;
+    case 59u: return SC_S14W3;
+    case 60u: return SC_S15W0;
+    case 61u: return SC_S15W1;
+    case 62u: return SC_S15W2;
+    case 63u: return SC_S15W3;
+    default: return 0u;
+    }
+}
+
+uint tev_stages() { return SC_ON != 0u ? SC_STAGES : tev_word(0u); }
+uint tev_stage_word(uint st, uint j) { return SC_ON != 0u ? sc_shape(st * 4u + j) : tev_word(18u + st * 5u + j); }
+uint tev_alpha_word() { return SC_ON != 0u ? (tev_word(1u) & 0xFFFFu) | SC_ACMP : tev_word(1u); }
+
 // The input bank (gxr.h): the four registers, then the texel, the raster
 // colour, the konst, and the constants one, half and zero.
 const int TEV_BANK_TEX = 16, TEV_BANK_RAS = 20, TEV_BANK_KONST = 24;
@@ -96,10 +248,10 @@ void tev_run(ivec4 ras0, ivec4 ras1, out ivec4 outc, out bool pass)
     bank[TEV_BANK_HALF] = 128;
     bank[TEV_BANK_ZERO] = 0;
 
-    uint stages = tev_word(0u);
+    uint stages = tev_stages();
     for (st = 0u; st < stages; st++) {
-        uint o = 18u + st * 5u;
-        uint w0 = tev_word(o), w1 = tev_word(o + 1u), w2 = tev_word(o + 2u), w3 = tev_word(o + 3u), w4 = tev_word(o + 4u);
+        uint w0 = tev_stage_word(st, 0u), w1 = tev_stage_word(st, 1u), w2 = tev_stage_word(st, 2u), w3 = tev_stage_word(st, 3u);
+        uint w4 = tev_word(18u + st * 5u + 4u);
         uint texmap = (w2 >> 20) & 7u, texcoord = (w2 >> 23) & 7u, texen = (w2 >> 26) & 1u, chan = (w2 >> 27) & 7u;
         uint cbias = w3 & 3u, cop = (w3 >> 2) & 1u, cclamp = (w3 >> 3) & 1u, cshift = (w3 >> 4) & 3u, cdest = (w3 >> 6) & 3u;
         uint abias = (w3 >> 8) & 3u, aop = (w3 >> 10) & 1u, aclamp = (w3 >> 11) & 1u, ashift = (w3 >> 12) & 3u, adest = (w3 >> 14) & 3u;
@@ -170,5 +322,5 @@ void tev_run(ivec4 ras0, ivec4 ras1, out ivec4 outc, out bool pass)
         bank[adest * 4u + 3u] = ra;
     }
     outc = ivec4(tev_clamp255(bank[0]), tev_clamp255(bank[1]), tev_clamp255(bank[2]), tev_clamp255(bank[3]));
-    pass = tev_alpha_passes(tev_word(1u), outc.a);
+    pass = tev_alpha_passes(tev_alpha_word(), outc.a);
 }

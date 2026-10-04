@@ -536,7 +536,9 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
 - **Specialisation later**: V7 turns the **shape** fields (stage count, selectors, ops,
   bias/scale/clamp, swap tables, alpha compare functions and logic) into specialization constants,
   never the values, so the driver folds the uber-shader into small shaders with no run-time GLSL
-  compiler and the pipeline count follows the ~33 shapes, not the draws. The spike stays uber.
+  compiler and the pipeline count follows the ~33 shapes, not the draws. The interpreter stays:
+  it draws a state while its specialised pipeline is made on a thread of its own (V7), and
+  alone with `SOA_GPU_SPECIALIZE=0`.
 - **Colours**: interpolated perspective-correct as on the CPU, then `int(c·255 + 0.5)` clamped,
   the CPU's formula (gxr.c:1239-1244).
 - **Texture sampling in the shader, on the pool**: `sample` / `sample_level` (gxr_tev.c:1160-1235)
@@ -1529,6 +1531,21 @@ cases run with the GPU.*
 by default `build/gxv-pipelines.bin`; the report's `pipelines:` line gives the made, the cache's
 (through `VK_EXT_pipeline_creation_feedback`), the longest and the frames. On `partl` a second
 launch takes 32 of 32 from the cache. Copy images, the landed count and specialisation follow.*
+
+*Specialisation landed second, 2026-10-04 (FINDINGS "V7, second"). Each new state and shape is
+made on a compiler thread while the interpreter draws it, which gives the same pixels
+(`gpuspike.py specdiff`, 67 of 67, and its `spec-stages` mutation red). `SOA_GPU_SPECIALIZE=wait`
+makes them on the draw path and `0` never. On `partl` the GPU's time is 3.6 times less at the
+median and 2.7 at p99. Two Done lines are read as follows:*
+
+- *The pipeline limit counts the specialised ones (62 for 17 shapes), the thing it was set to
+  test. The interpreter's, one for each fixed-function state (32), come on top.*
+- *The budget's "longest single pipeline creation" is the draw path's, which stalls a frame.
+  The compiler thread's creations are reported on a line of their own. A first launch, with the
+  driver's own cache cold, made one interpreter pipeline in 37.5 ms; FINDINGS gives what the soak
+  may do about it.*
+
+*Copy images and the landed count follow.*
 
 *Several days to week-plus. `--link`. Prerequisites: V6b. Files: `runtime/gxv.c`,
 `runtime/gxv/*.glsl`, `runtime/gxr_tev.c` (the `copy_image` flag honoured), `runtime/gxr.c` (the

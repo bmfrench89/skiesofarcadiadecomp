@@ -381,6 +381,33 @@ def test_the_three_logic_op_paths_draw_the_same_frames():
     assert out.count("logic draws 3;") == 14
 
 
+def test_specialised_pipelines_draw_what_the_interpreter_draws():
+    """V7: the 35 captures with every draw's pipeline specialised on the TEV's
+    shape, and with the interpreter alone: byte-identical, which is what lets
+    the interpreter draw while a specialised pipeline is made."""
+    if not ORACLE_DATA:
+        reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
+        print(f"skip: {reason}")
+        pytest.skip(reason)
+    proc = run_spike("specdiff")
+    out = proc.stdout
+    assert proc.returncode == 0, out + proc.stderr
+    m = re.search(
+        r"specdiff: 35 of 35 captures the same pixels .*; (\d+) specialised pipelines", out
+    )
+    assert m and int(m.group(1)) > 0, out
+
+
+def test_a_shape_a_stage_short_fails_specdiff():
+    if not ORACLE_DATA:
+        reason = "no build/fifo or build/perfset: the captures are on the owner's machine only"
+        print(f"skip: {reason}")
+        pytest.skip(reason)
+    proc = run_spike("specdiff", "--mutate", "spec-stages")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "specialised and interpreted differ" in proc.stdout
+
+
 def test_the_shader_list_is_what_gxv_c_includes_and_each_stub_declares_its_array(tmp_path):
     """V5: tools/soa/shaders.py builds the headers runtime/gxv.c includes, for
     the spike and for soa.exe alike; a name in one list and not the other is a

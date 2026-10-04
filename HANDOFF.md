@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1218 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1222 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1218 |
+| Python tests | 1222 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,7 +417,7 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-02)
+## Where the last session stopped (2026-10-04)
 
 Everything below this section is older and still true. Landed in the last
 stretch, newest first, each with a FINDINGS entry of its name: **L6**
@@ -582,8 +582,13 @@ C5c) is now done.
    5 of 5 with `SOA_GPU=vulkan`. The owner's fifteen windowed minutes from
    a part-select save are open (the owner chose later, 2026-10-03).
    **V7 is under way**: the pipeline cache on disk landed first (FINDINGS
-   "V7, first"); next are copy images on the GPU, the copies' landed
-   count, and pipelines specialised by TEV shape (specs/gpu-backend.md V7). Still open for the owner, and not blocking: whether a
+   "V7, first"), then pipelines specialised by TEV shape, made on a
+   compiler thread while the interpreter draws (FINDINGS "V7, second":
+   the GPU's time on Part L down 3.6 times at the median). Next are copy
+   images on the GPU and the copies' landed count, then the soak, whose
+   20 ms limit a first launch's interpreter pipelines can break (37.5 ms
+   here, cold; FINDINGS names two ways out). `gpuspike.py specdiff` is
+   the check that specialised and interpreted draw the same bytes. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

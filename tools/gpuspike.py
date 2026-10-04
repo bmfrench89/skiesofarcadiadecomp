@@ -81,6 +81,17 @@ same pixels, with both runs' start lines naming the same device and driver.
 --mutate hands one of gxv's mutations to soa.exe alone (SOA_GPU_MUTATE), and
 the pictures must then differ, failing it.
 
+`specdiff` (V7) replays every capture of --set on the GPU twice, every draw
+specialised on the TEV's shape (SOA_GPU_SPECIALIZE=wait) and the interpreter
+alone (0), and holds the two to the same bytes. --mutate spec-stages (a
+stage dropped from the specialised shape) must fail it.
+
+--specialize (V7) gives every run a command makes SOA_GPU_SPECIALIZE: wait
+draws every draw with its pipeline specialised on the TEV's shape, made on
+the draw path; 0 with the interpreter alone; 1, gxv's default, with the
+interpreter until the compiler thread has made the specialised one. The
+oracle's pictures must be the same under all three.
+
 `queue` (V6a) draws one synthetic frame through the producer and the GPU on
 its own thread: 64 quads each sampling the same texture slot at a new
 generation, then 656,000 vertices that fill the producer's vertex arena
@@ -639,12 +650,20 @@ def copydiff(prof: toolchain.Profile, rects: int, seed: int, mutate: str | None)
 # ---- V4a: captures -------------------------------------------------------------
 
 
+# --specialize: SOA_GPU_SPECIALIZE for every run a command makes, or None to
+# leave gxv's default (1: specialised pipelines made on the compiler thread,
+# the interpreter drawing meanwhile).
+SPECIALIZE: str | None = None
+
+
 def clean_env() -> dict[str, str]:
     """The parent's environment with every SOA_* taken out, and SOA_SETTINGS=0:
     nothing set for another run may reach a replay (3.12's rule, and imgdiff's
-    for its references)."""
+    for its references). --specialize alone is put back."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     env["SOA_SETTINGS"] = "0"
+    if SPECIALIZE is not None:
+        env["SOA_GPU_SPECIALIZE"] = SPECIALIZE
     return env
 
 
@@ -1159,6 +1178,55 @@ LOGIC_MODES = ("native", "blend", "snapshot")
 
 # The GPU backend's start line; contrast holds both binaries' to one device.
 GXV_START = re.compile(r"^\[gxv\] Vulkan .*$", re.M)
+
+
+RE_SPEC = re.compile(r"specialised on the TEV's shape: (\d+) for (\d+) distinct shapes")
+
+
+def specdiff(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
+    """V7: every capture of --set replayed on the GPU twice -- every draw
+    with its pipeline specialised on the TEV's shape, made on the draw path
+    (SOA_GPU_SPECIALIZE=wait), and with the interpreter alone (0). The two
+    pictures must be byte-identical, which is what lets gxv draw with the
+    interpreter while a specialised pipeline is made. A mutation goes to the
+    specialised run alone, and must fail it."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    out = build_dir(prof) / "specdiff"
+    out.mkdir(parents=True, exist_ok=True)
+    caps = captures(sets)
+    differ, problems = [], []
+    pipes = shapes = 0
+    for cap in caps:
+        name = cap.capture.name
+        spec_png, interp_png = out / f"{name}_wait.png", out / f"{name}_interp.png"
+        spec, _ = replay(
+            prof, "gpu", cap.capture.base, spec_png, mutate, env={"SOA_GPU_SPECIALIZE": "wait"}
+        )
+        if skipped(spec):
+            return SKIP
+        interp, _ = replay(
+            prof, "gpu", cap.capture.base, interp_png, env={"SOA_GPU_SPECIALIZE": "0"}
+        )
+        m = RE_SPEC.search(spec.stderr)
+        if spec.returncode or interp.returncode or not m:
+            problems.append(f"{name}: a replay failed or said nothing of its pipelines")
+            continue
+        pipes += int(m.group(1))
+        shapes += int(m.group(2))
+        if not same_pixels(spec_png, interp_png):
+            differ.append(name)
+    for p in problems:
+        print(f"PROBLEM {p}")
+    for name in differ:
+        print(f"PROBLEM {name}: specialised and interpreted differ")
+    print(
+        f"[gpuspike] specdiff: {len(caps) - len(differ) - len(problems)} of {len(caps)} captures "
+        f"the same pixels specialised and interpreted; {pipes} specialised pipelines for "
+        f"{shapes} shapes, summed over the captures"
+    )
+    return 1 if differ or problems else 0
 
 
 def contrast(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
@@ -1731,6 +1799,7 @@ def main(argv: list[str] | None = None) -> int:
             "live",
             "queue",
             "overlap",
+            "specdiff",
         ),
     )
     ap.add_argument(
@@ -1753,7 +1822,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="selftest: how gxv draws logic ops (native, blend, snapshot)",
     )
+    ap.add_argument(
+        "--specialize",
+        choices=("0", "1", "wait"),
+        default=None,
+        help="SOA_GPU_SPECIALIZE for every run: 1 in the background, wait on the draw path, 0 never",
+    )
     args = ap.parse_args(argv)
+    global SPECIALIZE
+    SPECIALIZE = args.specialize
     prof = toolchain.profile(args.cc)
     if args.command == "build":
         built, why = build(prof)
@@ -1783,6 +1860,8 @@ def main(argv: list[str] | None = None) -> int:
         return live(prof, args.frames[0], args.range, args.mutate, args.live_seed)
     if args.command == "contrast":
         return contrast(prof, args.set.split(","), args.mutate)
+    if args.command == "specdiff":
+        return specdiff(prof, args.set.split(","), args.mutate)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)
