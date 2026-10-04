@@ -1525,6 +1525,11 @@ cases run with the GPU.*
 
 ### V7. GPU copy images, deferred readback, specialised pipelines
 
+*The pipeline cache on disk landed first, 2026-10-03 (FINDINGS "V7, first"): `SOA_GPU_PIPELINES`,
+by default `build/gxv-pipelines.bin`; the report's `pipelines:` line gives the made, the cache's
+(through `VK_EXT_pipeline_creation_feedback`), the longest and the frames. On `partl` a second
+launch takes 32 of 32 from the cache. Copy images, the landed count and specialisation follow.*
+
 *Several days to week-plus. `--link`. Prerequisites: V6b. Files: `runtime/gxv.c`,
 `runtime/gxv/*.glsl`, `runtime/gxr_tev.c` (the `copy_image` flag honoured), `runtime/gxr.c` (the
 "landed" count), `tools/tests/test_gxv_copyimage.py` (new), FINDINGS entry "V7".*

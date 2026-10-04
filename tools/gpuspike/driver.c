@@ -1353,10 +1353,7 @@ int main(int argc, char** argv)
             }
             if (f) fclose(f);
         }
-        if (g_gpu) {
-            gxv_report();
-            gxv_shutdown();
-        }
+        if (g_gpu) gxv_shutdown(); /* gx_replay's report printed gxv's, the backend's own */
         free(s.mem);
         return r ? 1 : 0;
     }

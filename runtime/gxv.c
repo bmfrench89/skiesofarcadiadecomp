@@ -51,7 +51,7 @@ typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : 
 #define GXV_INSTANCE(X)                                                                                  \
     X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties)                  \
     X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties)                   \
-    X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr)
+    X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties)
 #define GXV_DEVICE(X)                                                                                    \
     X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkDeviceWaitIdle) X(vkCreateBuffer) X(vkDestroyBuffer)      \
     X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory)          \
@@ -69,7 +69,8 @@ typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : 
     X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdPushConstants) X(vkCmdSetScissor)          \
     X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdClearAttachments) X(vkCmdPipelineBarrier)                    \
     X(vkCmdCopyImageToBuffer) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)                    \
-    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage) X(vkCmdBeginQuery) X(vkCmdEndQuery)
+    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage) X(vkCmdBeginQuery) X(vkCmdEndQuery)    \
+    X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)
 
 #define GXV_DECLARE(name) static PFN_##name name;
 static PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
@@ -189,6 +190,21 @@ static uint64_t g_consumer_ns, g_wait_ns;
 static char g_devname[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 
 static unsigned long long g_n_draws, g_n_rebuilt, g_n_verts, g_n_submits, g_n_clears, g_n_copies, g_n_pipes;
+
+/* The pipeline cache (V7): every pipeline made through it, its data loaded
+ * from a file at start (SOA_GPU_PIPELINES, by default build/gxv-pipelines.bin;
+ * off for none) and written back by the consumer at a frame's end when new
+ * pipelines were made, at most once a second. The driver checks the data's
+ * header and ignores another device's. Each creation is timed, and with
+ * VK_EXT_pipeline_creation_feedback each says whether the cache had it. */
+static VkPipelineCache g_pcache;
+static char g_pcache_path[512];
+static size_t g_pcache_loaded;
+static unsigned long long g_pipes_saved, g_pipes_hit, g_pipe_ns_max, g_pipe_ns_total;
+static uint64_t g_pcache_saved_ns;
+static int g_feedback;
+#define PIPE_FRAMES 48
+static unsigned long long g_pipe_frame[PIPE_FRAMES]; /* the screen copies before each of the first pipelines */
 static double g_gpu_ms;
 
 typedef struct {
@@ -648,8 +664,25 @@ static VkPipeline pipeline(int topo, const DrawCmd* D)
     pi.pDynamicState = &dys;
     pi.layout = g_layout;
     pi.renderPass = g_pass;
-    r = vkCreateGraphicsPipelines(g_dev, VK_NULL_HANDLE, 1, &pi, NULL, &g_pipes[slot].pipe);
-    if (r != VK_SUCCESS) { say("vkCreateGraphicsPipelines failed: VkResult %d", (int)r); return VK_NULL_HANDLE; }
+    {
+        VkPipelineCreationFeedbackEXT fb = {0};
+        VkPipelineCreationFeedbackCreateInfoEXT fci = {VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT};
+        uint64_t t0, dt;
+        if (g_feedback) {
+            fci.pPipelineCreationFeedback = &fb;
+            pi.pNext = &fci;
+        }
+        t0 = plat_mono_ns();
+        r = vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, &g_pipes[slot].pipe);
+        dt = plat_mono_ns() - t0;
+        if (r != VK_SUCCESS) { say("vkCreateGraphicsPipelines failed: VkResult %d", (int)r); return VK_NULL_HANDLE; }
+        if ((fb.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT_EXT) &&
+            (fb.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT))
+            g_pipes_hit++;
+        if (dt > g_pipe_ns_max) g_pipe_ns_max = dt;
+        g_pipe_ns_total += dt;
+        if (g_n_pipes < PIPE_FRAMES) g_pipe_frame[g_n_pipes] = g_n_copies;
+    }
     g_pipes[slot].key = key;
     g_n_pipes++;
     return g_pipes[slot].pipe;
@@ -1130,7 +1163,7 @@ static int compute_make(Compute* c, const uint32_t* code, size_t bytes, unsigned
     ci.stage.module = c->mod;
     ci.stage.pName = "main";
     ci.layout = c->layout;
-    VKCHECK(vkCreateComputePipelines(g_dev, VK_NULL_HANDLE, 1, &ci, NULL, &c->pipe));
+    VKCHECK(vkCreateComputePipelines(g_dev, g_pcache, 1, &ci, NULL, &c->pipe));
     return 1;
 }
 
@@ -1585,8 +1618,65 @@ static unsigned g_frames_seen;
 static uint64_t g_frame_consumer0;
 static double g_frame_gpu0;
 
+static void pcache_open(void)
+{
+    const char* path = getenv("SOA_GPU_PIPELINES");
+    VkPipelineCacheCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    void* data = NULL;
+    long n = 0;
+    FILE* f;
+    if (path && (!strcmp(path, "off") || !strcmp(path, "0"))) return;
+    snprintf(g_pcache_path, sizeof g_pcache_path, "%s", path && *path ? path : "build/gxv-pipelines.bin");
+    f = fopen(g_pcache_path, "rb");
+    if (f) {
+        if (fseek(f, 0, SEEK_END) == 0 && (n = ftell(f)) > 0 && n < (64L << 20) && fseek(f, 0, SEEK_SET) == 0) {
+            data = malloc((size_t)n);
+            if (data && fread(data, 1, (size_t)n, f) != (size_t)n) {
+                free(data);
+                data = NULL;
+            }
+        }
+        fclose(f);
+    }
+    ci.initialDataSize = data ? (size_t)n : 0;
+    ci.pInitialData = data;
+    if (vkCreatePipelineCache(g_dev, &ci, NULL, &g_pcache) != VK_SUCCESS) {
+        ci.initialDataSize = 0; /* data the driver refused outright: start empty */
+        ci.pInitialData = NULL;
+        if (vkCreatePipelineCache(g_dev, &ci, NULL, &g_pcache) != VK_SUCCESS) g_pcache = VK_NULL_HANDLE;
+    }
+    g_pcache_loaded = data ? (size_t)n : 0;
+    free(data);
+}
+
+/* Only the consumer calls this, the one thread that makes pipelines (and
+ * gxv_shutdown, after it has stopped). Written beside and renamed over, so a
+ * run killed mid-write leaves the old file. */
+static void pcache_save(void)
+{
+    size_t n = 0;
+    void* data;
+    char tmp[600];
+    FILE* f;
+    if (!g_pcache || !g_pcache_path[0]) return;
+    g_pipes_saved = g_n_pipes;
+    g_pcache_saved_ns = plat_mono_ns();
+    if (vkGetPipelineCacheData(g_dev, g_pcache, &n, NULL) != VK_SUCCESS || !n || !(data = malloc(n))) return;
+    if (vkGetPipelineCacheData(g_dev, g_pcache, &n, data) == VK_SUCCESS) {
+        snprintf(tmp, sizeof tmp, "%s.tmp", g_pcache_path);
+        if ((f = fopen(tmp, "wb")) != NULL) {
+            int ok = fwrite(data, 1, n, f) == n;
+            ok = fclose(f) == 0 && ok;
+            remove(ok ? g_pcache_path : tmp);
+            if (ok && rename(tmp, g_pcache_path) != 0) remove(tmp);
+        }
+    }
+    free(data);
+}
+
 static void frame_mark(void)
 {
+    if (g_n_pipes != g_pipes_saved && plat_mono_ns() - g_pcache_saved_ns > 1000000000ull) pcache_save();
     if (g_frames_seen < FRAME_STATS) {
         g_frame_consumer_ms[g_frames_seen] = (float)((double)(g_consumer_ns - g_frame_consumer0) / 1e6);
         g_frame_gpu_ms[g_frames_seen] = (float)(g_gpu_ms - g_frame_gpu0);
@@ -1712,6 +1802,23 @@ static void report_frames(void)
     free(g);
 }
 
+/* The pipelines: how many, how many the cache already had, the longest and
+ * total creation, and the frames (screen copies before) the first were made in. */
+static void report_pipelines(void)
+{
+    char frames[PIPE_FRAMES * 12 + 8];
+    size_t at = 0;
+    unsigned long long i, n = g_n_pipes < PIPE_FRAMES ? g_n_pipes : PIPE_FRAMES;
+    frames[0] = 0;
+    for (i = 0; i < n; i++) at += (size_t)snprintf(frames + at, sizeof frames - at, " %llu", g_pipe_frame[i]);
+    char hits[64];
+    if (g_feedback) snprintf(hits, sizeof hits, "%llu of them from the cache", g_pipes_hit);
+    else snprintf(hits, sizeof hits, "the device not saying which came from the cache");
+    say("pipelines: %llu made, %s; the longest %.2f ms, %.1f ms in all; made at frames%s%s; cache %s, %zu bytes loaded",
+        g_n_pipes, hits, (double)g_pipe_ns_max / 1e6, (double)g_pipe_ns_total / 1e6, frames,
+        g_n_pipes > PIPE_FRAMES ? " ..." : "", g_pcache ? g_pcache_path : "off", g_pcache_loaded);
+}
+
 void gxv_report(void)
 {
     say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu copies to a "
@@ -1719,6 +1826,7 @@ void gxv_report(void)
         g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused, g_n_pipes, g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
+    report_pipelines();
     report_frames();
     say("logic ops: %llu draws, drawn %s", g_n_logic,
         g_logic_mode == LOGIC_NATIVE ? "native" : g_logic_mode == LOGIC_BLEND ? "as blends" : "from a snapshot");
@@ -1801,10 +1909,29 @@ static int make_device(char* why, size_t cap)
     di.queueCreateInfoCount = 1;
     di.pQueueCreateInfos = &qi;
     di.pEnabledFeatures = &feat;
+    {
+        /* VK_EXT_pipeline_creation_feedback, where the device has it: only
+         * for the report's count of pipelines the disk cache had (V7). */
+        static const char* feedback = VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
+        uint32_t n = 0, i;
+        VkExtensionProperties* props;
+        if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, NULL) == VK_SUCCESS && n &&
+            (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
+            if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, props) == VK_SUCCESS)
+                for (i = 0; i < n; i++)
+                    if (!strcmp(props[i].extensionName, feedback)) g_feedback = 1;
+            free(props);
+        }
+        if (g_feedback) {
+            di.enabledExtensionCount = 1;
+            di.ppEnabledExtensionNames = &feedback;
+        }
+    }
     r = vkCreateDevice(g_phys, &di, NULL, &g_dev);
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateDevice on %s failed: VkResult %d", g_devname, (int)r); return 0; }
     if (!load_device(why, cap)) return 0;
     vkGetDeviceQueue(g_dev, g_family, 0, &g_queue);
+    pcache_open();
     return 1;
 }
 
@@ -2091,6 +2218,9 @@ void gxv_shutdown(void)
         vkDestroyBuffer(g_dev, g_lod_inputs, NULL);
         vkDestroyBuffer(g_dev, g_lod_results, NULL);
     }
+    pcache_save();
+    if (g_pcache) vkDestroyPipelineCache(g_dev, g_pcache, NULL);
+    g_pcache = VK_NULL_HANDLE;
     compute_free(&g_copy_cs);
     compute_free(&g_tev_cs);
     compute_free(&g_lod_cs);

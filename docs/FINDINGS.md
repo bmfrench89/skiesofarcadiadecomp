@@ -5894,3 +5894,45 @@ producer, which is the game's thread, publishes each command and goes on.
   names.
 - **The owner's look**, fifteen minutes windowed from a part-select save, is
   this slice's last Done line, and waits for the owner.
+
+**V7, first: the pipeline cache on disk.** 2026-10-03.
+
+- **What it does.** Every pipeline gxv makes, graphics and compute, goes
+  through one `VkPipelineCache`.
+  - **Loaded at start** from `SOA_GPU_PIPELINES`, by default
+    `build/gxv-pipelines.bin`; `off` turns it off.
+  - **Written back** by the consumer thread at the end of a frame that made
+    new pipelines, at most once a second, and at shutdown. It is written
+    beside the old file and renamed over it, so a killed run leaves the old
+    file intact.
+  - **Another device's data:** the driver checks the file's header and
+    ignores data from another device.
+- **What the report says now.** `[gxv] pipelines:` gives how many were made,
+  how many the cache already had, the longest creation, the total, and the
+  frame each of the first 48 was made in.
+  - **How it knows a hit:** with `VK_EXT_pipeline_creation_feedback`,
+    enabled where the device has it, each creation says whether the cache
+    supplied it. gxv asks for Vulkan 1.1, so the extension is used, not the
+    structure that is core in 1.3.
+- **Measured** [V]:
+
+  | Run | Pipelines | From the cache | Longest | All |
+  |---|---|---|---|---|
+  | capture 6000, first | 20 | 1 | 0.35 ms | 2.6 ms |
+  | capture 6000, second | 20 | 20 | 0.35 ms | 2.3 ms (464,220 bytes loaded) |
+  | `partl`, first | 32 | 1 | 1.03 ms | 6.5 ms |
+  | `partl`, second | 32 | 32 | 0.41 ms | 4.7 ms |
+
+  - **Where they are made:** across the run, frames 1 to 2,738, as each new
+    state is first drawn.
+  - **Why it is fast even uncached:** AMD's driver keeps a shader cache of
+    its own, so creation is short here either way. The file is for drivers
+    that do not, phones and the Deck among them.
+- **The test** (`test_gxv_queue.py`): the queue frame run twice against one
+  cache file. The second run finds every pipeline the first made. A file of
+  junk gives back none, so the count is not one the driver always reports.
+- **Unchanged pictures:** the self test passes, and the contrast gives 23 of
+  23 the same pixels.
+- **A noise fix:** the spike's `--replay` no longer prints gxv's report
+  twice. `gx_replay`'s own report has printed it, through the backend's
+  hook, since V5.

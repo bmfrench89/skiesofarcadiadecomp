@@ -62,3 +62,56 @@ def test_each_queue_mutation_fails_it(mutation):
     proc = run_queue("--mutate", mutation)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "PROBLEM gpu stalled" in proc.stdout
+
+
+def queue_pipelines(env: dict, out: Path) -> tuple[int, int, str]:
+    """One queue frame on the GPU: (pipelines made, how many the cache had, the line)."""
+    import re
+
+    from soa import toolchain
+
+    proc = subprocess.run(
+        [
+            str(gpuspike.exe_path(toolchain.MSVC)),
+            "--backend",
+            "gpu",
+            "--out",
+            str(out),
+            "--queue",
+            "1",
+        ],
+        cwd=ROOT,
+        env={**gpuspike.clean_env(), **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    text = proc.stdout + proc.stderr
+    m = re.search(
+        r"^\[gxv\] pipelines: (\d+) made, (?:(\d+) of them from the cache|the device not saying).*$",
+        text,
+        re.M,
+    )
+    assert proc.returncode == 0 and m, text[-2000:]
+    return int(m.group(1)), int(m.group(2) or 0), m.group(0)
+
+
+def test_the_disk_cache_gives_every_pipeline_back_to_the_next_run(tmp_path):
+    """V7: the pipelines a run makes go to SOA_GPU_PIPELINES at a frame's end,
+    and the next run's driver finds every one of them there; a file of junk
+    gives none back, so the count is not one the driver always reports."""
+    from soa import toolchain
+
+    if gpuspike.ready(toolchain.MSVC) is not None:
+        pytest.skip("the spike cannot be built here")
+    cache = tmp_path / "pipelines.bin"
+    env = {"SOA_GPU_PIPELINES": str(cache)}
+    made, _, line = queue_pipelines(env, tmp_path)
+    if "the device not saying" in line:
+        pytest.skip("this device has no VK_EXT_pipeline_creation_feedback")
+    assert made > 0 and cache.stat().st_size > 0, line
+    again, hits, line = queue_pipelines(env, tmp_path)
+    assert again == made and hits == made, line
+    cache.write_bytes(b"not a pipeline cache" * 64)
+    _, hits, line = queue_pipelines(env, tmp_path)
+    assert hits == 0, line

@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1217 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1218 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1217 |
+| Python tests | 1218 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -580,9 +580,10 @@ C5c) is now done.
    hazards hold with the GPU as consumer (`gpuspike.py overlap`, its
    oracle the GPU's own synchronous run), and `title` and `battle` hold
    5 of 5 with `SOA_GPU=vulkan`. The owner's fifteen windowed minutes from
-   a part-select save are open. **Next is V7**, copy images on the GPU,
-   deferred readback and specialised pipelines (specs/gpu-backend.md V7).
-   Read the slice against HEAD before any code. Still open for the owner, and not blocking: whether a
+   a part-select save are open (the owner chose later, 2026-10-03).
+   **V7 is under way**: the pipeline cache on disk landed first (FINDINGS
+   "V7, first"); next are copy images on the GPU, the copies' landed
+   count, and pipelines specialised by TEV shape (specs/gpu-backend.md V7). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the
