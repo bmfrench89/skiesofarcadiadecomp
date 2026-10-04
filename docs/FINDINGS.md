@@ -6574,3 +6574,42 @@ the driver's.** 2026-10-04.
   - **The presenter reads its slot from host-visible memory,** 12 MB a frame at 3x. That is shared
     memory on the Ally X, but would cross the bus on a discrete GPU.
 - **Owner:** to judge 2x and 3x in a window (the Done's last line), at 60 or 120 Hz.
+
+**V8b: P5a's filters drawn by the GPU, at the size it draws.** 2026-10-04.
+
+- **What it does.** Gamma, colour-blind correction or simulation, and the flash limiter now apply to
+  the picture the GPU drew: at 2x and 3x too, where V8b's first step showed the native picture.
+  - **The pass.** `filters.comp` runs when the presenter takes a new screen copy. It reads the slot at
+  the copy's own scale and writes `SCREEN_SHOWN`, which the present pass reads; a present of the same
+  frame again (the interval, a resize) filters nothing.
+  - **The arithmetic is the CPU's.** Colour-blind and gamma use `picture.c`'s own tables (`lin`, the
+  65,536-step `enc`, `gam`) and matrix, unfused, so the GPU's bytes are `picture_filter`'s.
+  - **The flash limiter's decision stays on the CPU.** Its history is a whole frame, and its search
+  for how far to blend has no cheap exact GPU form. `window.c` runs `picture_filter` on the native
+  picture only when `flash_limit` is set, for the blend it returns, and the pass blends the frame
+  shown before toward the new one by those 256ths, rounded as `picture.c`'s `blend`.
+  - **What went:** `gxv_present_image` and `SCREEN_HOST`, V8b's first step. Where the pass cannot be
+  made, DXGI presents and the CPU filters, so the window never loses its filters.
+- **Checked** [V]:
+  - **`gpuspike.py present --filters`,** at scale 1 and at 3: 24 of 24 cases exact, every byte.
+    - The cases: eight filter sets (two gammas, the three models corrected and simulated, with and
+      without gamma), each into the picture's own size and into 1920x1080 fit; and two of them
+      blended twice, half and a quarter of the way.
+    - The reference: `picture_filter`, `picture_blend`, then `picture_scale` or
+      `picture_scale_area`, on the CPU.
+    - **`--mutate filter`** (one colour coefficient times 1.01) gives 12 of 24: every colour-blind
+      set fails and the gamma-only sets pass.
+  - **Live, windowed at 3x** with gamma 1.2, deutan corrected and the flash limiter, 1,500 frames:
+    - 1,489 screen copies taken, and 1,489 frames through the GPU's filters;
+    - 90 blended by the flash limiter, the 90 its CPU half held back in the opening's flashes
+      (frames 902-942).
+  - **Live at 2x** with protan corrected and gamma 0.8: 594 of 594 frames through the GPU's filters,
+    0 blended, and the CPU filtering nothing.
+  - **What a present costs the window's thread:** p50 0.62 ms without the flash limiter, and 4.14 ms
+    with it, the CPU's decision costing what the first step's whole filtering did.
+  - **Unchanged:**
+    - `present` at scale 1, 2 and 3 (32 of 32);
+    - V5's contrast (67 of 67 captures the same pixels from the spike and `soa.exe`);
+    - `compile_runtime`, `dc_check` and `render_check` under MSVC and clang-cl.
+- **V8's remainder:** M8's overlay, when M8 lands; H8's pacing, from a windowed run at 60 or 120 Hz;
+  and the owner's session.

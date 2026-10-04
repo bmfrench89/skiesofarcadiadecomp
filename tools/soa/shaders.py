@@ -44,6 +44,8 @@ SHADERS = [
     ("copy.comp", "copy_comp_taps", ("GXV_MUTATE_TAPS",)),
     ("copy.comp", "copy_comp_phase", ("GXV_MUTATE_PHASE",)),
     ("present.vert", "present_vert", ()),
+    ("filters.comp", "filters_comp", ()),
+    ("filters.comp", "filters_comp_mutated", ("GXV_MUTATE_FILTER",)),
     ("present.frag", "present_frag", ()),
     ("present.frag", "present_frag_offset", ("GXV_MUTATE_PRESENT",)),
 ]

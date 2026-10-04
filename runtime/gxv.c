@@ -45,6 +45,8 @@
 #include "copy_comp_intensity.h"
 #include "copy_comp_taps.h"
 #include "copy_comp_phase.h"
+#include "filters_comp.h"
+#include "filters_comp_mutated.h"
 #include "present_vert.h"
 #include "present_frag.h"
 #include "present_frag_offset.h"
@@ -241,6 +243,7 @@ static unsigned long long g_n_land_waits, g_n_cimg_served;
  * landed, instead of the pool's. */
 static int g_mut_land_at_copy, g_mut_cimg_cpu;
 static int g_mut_present; /* --mutate present (V8): present.frag one column over */
+static int g_mut_filter;  /* --mutate filter (V8b): filters.comp with one colour coefficient changed */
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
  * (the EFB copied out before the draw and the op done in the shader). */
@@ -1856,10 +1859,10 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
 
 /* The screen buffer's slots (V8), each the EFB's size at its scale: three
  * for the presenter's triple buffer; a fourth, SCREEN_SCRATCH, for
- * gxv_read_depth and the presenter's check; a fifth, SCREEN_HOST, the
- * window's own frame (V8b: P5a's filters, which run on the CPU, then
- * presented by the GPU); and a sixth, SCREEN_NATIVE, a screen copy's native
- * picture at scale, for g_screen (V9a). The consumer writes g_scr_back;
+ * gxv_read_depth and the presenter's check; a fifth, SCREEN_NATIVE, a screen
+ * copy's native picture at scale, for g_screen (V9a); and a sixth,
+ * SCREEN_SHOWN, the picture through P5a's filters, which the window's thread
+ * alone writes and reads (V8b). The consumer writes g_scr_back;
  * g_scr_middle is the newest it has finished, with SCREEN_FRESH set until
  * the presenter takes it, which it does by swapping its own g_scr_front in;
  * so neither ever writes or reads a slot the other holds. A slot's size --
@@ -1867,8 +1870,8 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
  * it is published. */
 #define SCREEN_SLOTS 6
 #define SCREEN_SCRATCH 3
-#define SCREEN_HOST 4
-#define SCREEN_NATIVE 5
+#define SCREEN_NATIVE 4
+#define SCREEN_SHOWN 5
 #define SCREEN_FRESH 4
 static unsigned g_scr_back = 0, g_scr_front = 2, g_scr_last;
 static plat_a64 g_scr_middle = 1;
@@ -2453,6 +2456,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "land-at-copy")) g_mut_land_at_copy = 1;
     else if (!strcmp(name, "cimg-cpu")) g_mut_cimg_cpu = 1;
     else if (!strcmp(name, "present")) g_mut_present = 1;
+    else if (!strcmp(name, "filter")) g_mut_filter = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
     else if (!strcmp(name, "and-copy")) g_mut_logic = MUT_AND_COPY;
@@ -3242,7 +3246,20 @@ static VkDescriptorSet g_pres_set;
 static VkCommandPool g_pres_cpool;
 static VkCommandBuffer g_pres_cb;
 static VkFence g_pres_fence;
-static unsigned long long g_n_presents, g_n_present_frames, g_n_present_images, g_n_swap_made;
+static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
+/* P5a's filters on the GPU (V8b): the pass, its tables (picture.c's, laid
+ * out as filters.comp reads them), which filters are on, and the frame that
+ * the next present runs through them -- the slot it was drawn in and the
+ * flash limiter's blend, in 256ths -- set when a new frame is taken, so a
+ * present of the same frame again does not filter or blend it twice. */
+static Compute g_filt_cs;
+static VkBuffer g_filt_tab;
+static uint8_t* g_filt_map;
+static unsigned g_filt_flags; /* 1 colour-blind, 2 gamma; 0 with no filter on the GPU */
+static int g_filt_on, g_filt_pending, g_filt_k;
+static unsigned g_filt_src;
+static unsigned long long g_n_filtered, g_n_blended;
+#define FILT_TAB_BYTES (256 * 4 + 256 * 4 + 12 * 4 + PICTURE_ENC_N)
 static PFN_vkDestroySurfaceKHR p_vkDestroySurfaceKHR;
 static PFN_vkGetPhysicalDeviceSurfaceSupportKHR p_vkGetPhysicalDeviceSurfaceSupportKHR;
 static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
@@ -3423,12 +3440,20 @@ static void present_record(VkRenderPass pass, VkFramebuffer fb, int w, int h, un
     VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     VkViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
     VkRect2D sc = {{0, 0}, {(uint32_t)w, (uint32_t)h}};
-    PicRect r = picture_layout(g_scr_w[slot], g_scr_h[slot], w, h, mode);
-    int k = g_scr_k[slot] > 1 ? g_scr_k[slot] : 1;
+    PicRect r;
+    int k;
     struct {
         int32_t rx, ry, rw, rh;
         uint32_t w, h, at, area;
     } pc;
+    if (g_filt_pending && slot == SCREEN_SHOWN) {
+        /* the filter pass below makes the slot: its picture's size first */
+        g_scr_w[SCREEN_SHOWN] = g_scr_w[g_filt_src];
+        g_scr_h[SCREEN_SHOWN] = g_scr_h[g_filt_src];
+        g_scr_k[SCREEN_SHOWN] = g_scr_k[g_filt_src];
+    }
+    r = picture_layout(g_scr_w[slot], g_scr_h[slot], w, h, mode);
+    k = g_scr_k[slot] > 1 ? g_scr_k[slot] : 1;
     pc.rx = r.x;
     pc.ry = r.y;
     pc.rw = r.w;
@@ -3442,11 +3467,37 @@ static void present_record(VkRenderPass pass, VkFramebuffer fb, int w, int h, un
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(g_pres_cb, &bi);
     /* The screen copy was written by an earlier submission's compute pass,
-     * or by the host for the check: visible to this pass's fragment reads. */
+     * or by the host for the check: visible to this pass's fragment reads,
+     * and to the filter pass's. */
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(g_pres_cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0,
+                         NULL);
+    if (g_filt_pending) {
+        /* A new frame through P5a's filters, into SCREEN_SHOWN (V8b). */
+        struct {
+            uint32_t src_at, dst_at, count, flags;
+            int32_t k;
+        } fp;
+        int fk = g_scr_k[g_filt_src] > 1 ? g_scr_k[g_filt_src] : 1;
+        fp.src_at = (uint32_t)(g_filt_src * (READBACK_BYTES / 4));
+        fp.dst_at = (uint32_t)(SCREEN_SHOWN * (READBACK_BYTES / 4));
+        fp.count = (uint32_t)(g_scr_w[g_filt_src] * fk * g_scr_h[g_filt_src] * fk);
+        fp.flags = g_filt_flags;
+        fp.k = g_filt_k;
+        vkCmdBindPipeline(g_pres_cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_filt_cs.pipe);
+        vkCmdBindDescriptorSets(g_pres_cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_filt_cs.layout, 0, 1, &g_filt_cs.set, 0, NULL);
+        vkCmdPushConstants(g_pres_cb, g_filt_cs.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof fp, &fp);
+        vkCmdDispatch(g_pres_cb, (fp.count + 63) / 64, 1, 1);
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(g_pres_cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0,
+                             NULL, 0, NULL);
+        g_filt_pending = 0;
+        g_n_filtered++;
+        if (g_filt_k < 256) g_n_blended++;
+    }
     rb.renderPass = pass;
     rb.framebuffer = fb;
     rb.renderArea.extent.width = (uint32_t)w;
@@ -3712,29 +3763,66 @@ static int present_slot(unsigned slot, unsigned interval, int mode)
     return ok;
 }
 
-int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode)
+/* P5a's filters on the GPU (V8b): picture.c's tables into the pass's
+ * buffer, the pass made at the first call; NULL, or a state with neither
+ * colour-blind nor gamma on and no flash limiter, turns them off. On the
+ * window's thread, before the first present. */
+int gxv_present_filters(const PicTables* t)
 {
-    int ok;
-    if (!bgra || w < 1 || h < 1 || (size_t)w * h * 4 > READBACK_BYTES) return 0;
+    uint8_t* d;
+    int i;
     plat_lock(&g_present_lock);
-    if (g_present_dead || !g_swap) {
+    g_filt_on = 0;
+    g_filt_pending = 0;
+    g_filt_flags = 0;
+    if (!t || !(t->colour || t->gamma || t->flash)) {
+        plat_unlock(&g_present_lock);
+        return 1;
+    }
+    if (!g_filt_tab && !make_buffer(FILT_TAB_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_filt_tab, &g_filt_map)) {
         plat_unlock(&g_present_lock);
         return 0;
     }
-    if (g_scale > 1 && !g_n_present_images)
-        say("P5a's filters run on the native picture, so at scale %d the window shows it native (V8b's shaders "
-            "are not built)",
-            g_scale);
-    upload_bgra(SCREEN_HOST, bgra, w, h, 1);
-    g_n_present_images++;
-    ok = present_slot(SCREEN_HOST, interval, mode);
+    if (!g_filt_cs.pipe) {
+        VkBuffer bufs[2];
+        const uint32_t* code = g_mut_filter ? filters_comp_mutated : filters_comp;
+        size_t bytes = g_mut_filter ? sizeof filters_comp_mutated : sizeof filters_comp;
+        if (!compute_make(&g_filt_cs, code, bytes, 2, 5 * 4)) {
+            plat_unlock(&g_present_lock);
+            return 0;
+        }
+        bufs[0] = g_screenbuf;
+        bufs[1] = g_filt_tab;
+        compute_bind(&g_filt_cs, bufs, 2);
+    }
+    /* lin[256], gam[256] as words, m[12], enc as bytes: filters.comp's Tables */
+    d = g_filt_map;
+    memcpy(d, t->lin, 256 * 4);
+    for (i = 0; i < 256; i++) {
+        uint32_t g = t->gam[i];
+        memcpy(d + 1024 + 4 * i, &g, 4);
+    }
+    memset(d + 2048, 0, 12 * 4);
+    memcpy(d + 2048, t->m, 9 * 4);
+    memcpy(d + 2048 + 48, t->enc, PICTURE_ENC_N);
+    g_filt_flags = (t->colour ? 1u : 0u) | (t->gamma ? 2u : 0u);
+    g_filt_on = 1;
+    g_scr_w[SCREEN_SHOWN] = 0;
     plat_unlock(&g_present_lock);
-    return ok;
+    return 1;
 }
 
-int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+/* The flash limiter's blend, in 256ths, as picture.c's blend takes it. */
+static int blend_k(double a)
+{
+    int k = (int)(a * 256.0 + 0.5);
+    return k < 0 ? 0 : k > 256 ? 256 : k;
+}
+
+int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {
     int ok;
+    unsigned slot;
     plat_lock(&g_present_lock);
     if (g_present_dead || !g_swap) {
         plat_unlock(&g_present_lock);
@@ -3745,12 +3833,28 @@ int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown
         vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
         g_scr_front = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)g_scr_front) & 3);
         g_n_present_frames++;
+        if (g_filt_on) {
+            /* the new frame through the filters, once, at the next present */
+            g_filt_src = g_scr_front;
+            g_filt_k = blend_k(blend);
+            g_filt_pending = 1;
+        }
     }
     if (!g_scr_w[g_scr_front]) { /* nothing drawn yet */
         plat_unlock(&g_present_lock);
         return 0;
     }
-    ok = present_slot(g_scr_front, interval, mode);
+    slot = g_scr_front;
+    if (g_filt_on) {
+        if (!g_filt_pending && !g_scr_w[SCREEN_SHOWN]) {
+            /* filters turned on after the frame was taken: it, unblended */
+            g_filt_src = g_scr_front;
+            g_filt_k = 256;
+            g_filt_pending = 1;
+        }
+        slot = SCREEN_SHOWN;
+    }
+    ok = present_slot(slot, interval, mode);
     if (shown_w) *shown_w = g_scr_w[g_scr_front];
     if (shown_h) *shown_h = g_scr_h[g_scr_front];
     plat_unlock(&g_present_lock);
@@ -3761,9 +3865,11 @@ int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown
  * keeps a frame, through upload_bgra and the present pass into a dw x dh
  * image of the swap chain's usual format, B8G8R8A8_UNORM, read back into
  * out, row by row. With k > 1, bgra is a w x h picture drawn at scale k,
- * (k*w) x (k*h), as a screen copy at scale is (V9a). Not with a window
- * open. */
-int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, uint8_t* out)
+ * (k*w) x (k*h), as a screen copy at scale is (V9a). With P5a's filters
+ * on the GPU (gxv_present_filters), the image goes through them first, as a
+ * new frame, blended toward the check's last by `blend` (V8b). Not with a
+ * window open. */
+int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend, uint8_t* out)
 {
     VkImage img;
     VkImageView view;
@@ -3816,8 +3922,13 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, 
     if (vkCreateFramebuffer(g_dev, &fi, NULL, &fb) != VK_SUCCESS) return 0;
     /* The image into the scratch slot as the window's own frame goes. */
     upload_bgra(SCREEN_SCRATCH, bgra, w, h, k);
+    if (g_filt_on) {
+        g_filt_src = SCREEN_SCRATCH;
+        g_filt_k = blend_k(blend);
+        g_filt_pending = 1;
+    }
     vkResetFences(g_dev, 1, &g_pres_fence);
-    present_record(g_pres_check_pass, fb, dw, dh, SCREEN_SCRATCH, mode);
+    present_record(g_pres_check_pass, fb, dw, dh, g_filt_on ? SCREEN_SHOWN : SCREEN_SCRATCH, mode);
     memset(&rg, 0, sizeof rg);
     rg.bufferOffset = 0;
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -3850,9 +3961,9 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, 
 static void present_report(void)
 {
     if (g_swap || g_n_presents)
-        say("presented from the GPU: %llu screen copies taken, %llu images of the window's own (P5a's filters, V8b), %llu "
-            "presents, %llu swap chains made",
-            g_n_present_frames, g_n_present_images, g_n_presents, g_n_swap_made);
+        say("presented from the GPU: %llu screen copies taken, %llu presents, %llu swap chains made; %llu frames through "
+            "P5a's filters on the GPU, %llu of them blended by the flash limiter (V8b)",
+            g_n_present_frames, g_n_presents, g_n_swap_made, g_n_filtered, g_n_blended);
 }
 
 static void present_shutdown(void)
@@ -3878,6 +3989,9 @@ static void present_shutdown(void)
     if (g_pres_check_pass) vkDestroyRenderPass(g_dev, g_pres_check_pass, NULL);
     if (g_pres_fence) vkDestroyFence(g_dev, g_pres_fence, NULL);
     if (g_chk) vkDestroyBuffer(g_dev, g_chk, NULL);
+    if (g_filt_tab) vkDestroyBuffer(g_dev, g_filt_tab, NULL);
+    g_filt_tab = VK_NULL_HANDLE;
+    compute_free(&g_filt_cs);
     if (g_pres_cpool) vkDestroyCommandPool(g_dev, g_pres_cpool, NULL);
 }
 
@@ -3907,21 +4021,18 @@ int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* w
     return 0;
 }
 
-int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode)
+int gxv_present_filters(const PicTables* t)
 {
-    (void)bgra;
-    (void)w;
-    (void)h;
-    (void)interval;
-    (void)mode;
+    (void)t;
     return 0;
 }
 
-int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h)
+int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {
     (void)fresh;
     (void)interval;
     (void)mode;
+    (void)blend;
     (void)shown_w;
     (void)shown_h;
     return 0;

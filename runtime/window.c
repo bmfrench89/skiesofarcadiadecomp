@@ -84,6 +84,7 @@ static UINT g_interval = 2;     /* refreshes each frame is held */
 static double g_refresh_ms = 0; /* the display's refresh period, as DWM measures it */
 static unsigned g_present_failed, g_resize_failed;
 static PicFilterState* g_filters; /* P5a: gamma, colour-blind, flash limit; NULL with none set */
+static int g_flash;               /* the flash limiter is on: the CPU decides its blend, even with the GPU presenting */
 static LONGLONG* g_pw;            /* QPC ticks of each present's own work, the frame to the back buffer */
 static size_t g_pw_n, g_pw_cap;
 static LONGLONG g_pw_t0;
@@ -223,9 +224,13 @@ static void present_report_locked(void)
         unsigned long long frames, held;
         double most;
         picture_filter_counts(g_filters, &frames, &held, &most);
-        fprintf(stderr, "[picture] %llu frame(s) filtered; the flash limiter held %llu back, and at most %.2f%% of the "
-                        "picture flashed more than three times in a second (the limit is under 25%%)\n",
-                frames, held, 100.0 * most);
+        if (g_vk && !g_flash)
+            fprintf(stderr, "[picture] the filters ran on the GPU, at the size it drew (V8b); [gxv] counts the frames\n");
+        else
+            fprintf(stderr, "[picture] %llu frame(s) filtered%s; the flash limiter held %llu back, and at most %.2f%% of the "
+                            "picture flashed more than three times in a second (the limit is under 25%%)\n",
+                    frames, g_vk ? " on the CPU for the flash limiter's decision, which the GPU applied (V8b)" : "", held,
+                    100.0 * most);
     }
     fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
     if (g_drift_started && g_pt_n > 1) {
@@ -502,6 +507,31 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
 }
 
+/* The renderer's newest frame into g_bgra and through P5a's filters, timed
+ * at the display's clock so the flash limiter counts seconds as shown; the
+ * answer is the limiter's blend, 1 where it held nothing back. */
+static double filter_on_cpu(LARGE_INTEGER t0)
+{
+    int w, h, x, y;
+    double a = 1.0;
+    const uint8_t* src = gxr_screen(&w, &h);
+    if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
+    for (y = 0; y < h; y++) {
+        const uint8_t* s = src + (size_t)y * EFB_W * 4;
+        uint8_t* d = g_bgra + (size_t)y * w * 4;
+        for (x = 0; x < w; x++) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; s += 4; d += 4; }
+    }
+    if (g_filters) {
+        static unsigned logged;
+        a = picture_filter(g_filters, g_bgra, w, h, (double)t0.QuadPart / (double)g_qpf.QuadPart);
+        if (a < 1.0 && logged++ < 20)
+            fprintf(stderr, "[picture] frame %ld: held back from a flash, shown %.0f%% of the way%s\n", gxr_presented(),
+                    100.0 * a, logged == 20 ? " (the last of these lines)" : "");
+    }
+    g_shown_w = w; g_shown_h = h;
+    return a;
+}
+
 /* The frame on screen: a new one from the renderer (`fresh`), converted and
  * through P5a's filters, or the one already shown, again at a new client
  * size -- which the flash limiter must not see twice. */
@@ -510,10 +540,13 @@ static void present(int fresh)
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);
     g_pw_t0 = t0.QuadPart;
-    if (g_vk && !g_filters) {
-        /* The GPU's own picture (V8): no copy to the CPU, no scale here. */
+    if (g_vk) {
+        /* The GPU's own picture (V8), through P5a's filters on the GPU at
+         * the size it was drawn (V8b). The CPU filters the native picture
+         * only for the flash limiter, whose blend the GPU then applies. */
         int w = 0, h = 0;
-        if (gxv_present(fresh, g_interval, g_scaler, &w, &h)) {
+        double a = fresh && g_flash ? filter_on_cpu(t0) : 1.0;
+        if (gxv_present(fresh, g_interval, g_scaler, a, &w, &h)) {
             g_shown_w = w;
             g_shown_h = h;
             note_present_work();
@@ -521,33 +554,8 @@ static void present(int fresh)
         }
         return;
     }
-    if (fresh || !g_shown_w) {
-        int w, h, x, y;
-        const uint8_t* src = gxr_screen(&w, &h);
-        if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
-        for (y = 0; y < h; y++) {
-            const uint8_t* s = src + (size_t)y * EFB_W * 4;
-            uint8_t* d = g_bgra + (size_t)y * w * 4;
-            for (x = 0; x < w; x++) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; s += 4; d += 4; }
-        }
-        /* P5a's filters, on the frame at its own size, timed at the
-         * display's clock so the flash limiter counts seconds as shown */
-        if (g_filters) {
-            static unsigned logged;
-            double a = picture_filter(g_filters, g_bgra, w, h, (double)t0.QuadPart / (double)g_qpf.QuadPart);
-            if (a < 1.0 && logged++ < 20)
-                fprintf(stderr, "[picture] frame %ld: held back from a flash, shown %.0f%% of the way%s\n", gxr_presented(),
-                        100.0 * a, logged == 20 ? " (the last of these lines)" : "");
-        }
-        g_shown_w = w; g_shown_h = h;
-    }
-    if (g_vk) {
-        /* P5a's filters ran on the CPU above; the GPU presents the result (V8b). */
-        if (gxv_present_image(g_bgra, g_shown_w, g_shown_h, g_interval, g_scaler)) {
-            note_present_work();
-            note_present();
-        }
-    } else if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
+    if (fresh || !g_shown_w) filter_on_cpu(t0);
+    if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
     else {
         InvalidateRect(g_hwnd, NULL, FALSE);
         UpdateWindow(g_hwnd); /* the paint -- its scale -- inside the time taken, as DXGI's is */
@@ -701,14 +709,20 @@ static unsigned __stdcall ui_thread(void* arg)
             if (picture_filters_any(&pf) && (g_filters = picture_filters_new(&pf)) != NULL) {
                 picture_filters_name(&pf, why, sizeof why);
                 fprintf(stderr, "[picture] %s\n", why);
+                g_flash = pf.flash_limit;
             }
         }
         /* With the GPU drawing, the GPU presents (V8), unless SOA_PRESENTER
-         * names another; P5a's filters run on the CPU's copy and the GPU
-         * presents what they make (V8b). */
+         * names another, and P5a's filters run on the GPU at the size it drew
+         * (V8b): where their pass cannot be made, DXGI presents and the CPU
+         * filters, rather than the window losing them. */
         if (gxv_running() && !(p && (!strcmp(p, "gdi") || !strcmp(p, "dxgi")))) {
             char why[256];
-            if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
+            PicTables tables;
+            if (g_filters) picture_filter_tables(g_filters, &tables);
+            if (g_filters && !gxv_present_filters(&tables))
+                fprintf(stderr, "[window] the GPU's filter pass could not be made; presenting with DXGI\n");
+            else if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
                 g_vk = 1;
             else
                 fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);

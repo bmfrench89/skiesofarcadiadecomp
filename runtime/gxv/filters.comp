@@ -1,0 +1,83 @@
+// P5a's picture filters on the GPU (specs/gpu-backend.md V8b), transcribed
+// from runtime/picture.c: the colour-blind matrix in linear light through
+// its own tables (colour, encode), then gamma, then the flash limiter's blend
+// toward the frame shown before (blend). One invocation a pixel of the
+// screen copy, at the scale it was drawn at, from slot `src_at` into the
+// shown picture at `dst_at`, which the present pass reads.
+//
+// The tables are the CPU's own (picture_filter_tables) and the arithmetic is
+// the CPU's, unfused, so every byte is picture_filter's. The flash limiter's
+// decision is the CPU's too, made on the native picture: `k` is the blend it
+// chose, in 256ths, and 256 is none.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer Screen { uint screen[]; }; // the screen buffer's slots, RGBA words
+layout(std430, binding = 1) readonly buffer Tables {
+    float lin[256];  // an sRGB byte in linear light
+    uint gam[256];   // the gamma table
+    float m[12];     // the colour matrix, rows giving R, G, B; three words of padding
+    uint enc[16384]; // linear back to a byte, 65,536 steps, four to a word
+} tab;
+
+layout(push_constant) uniform Filter {
+    uint src_at, dst_at; // in words
+    uint count;          // pixels
+    uint flags;          // 1 colour-blind, 2 gamma
+    int k;               // the flash limiter's blend in 256ths; 256 is none
+} pc;
+
+const float ENC_STEPS = 65535.0; // PICTURE_ENC_N - 1
+
+// picture.c's encode: 0 at or below 0, 255 at or above 1, else the table.
+uint encode(float l)
+{
+    if (!(l > 0.0)) return 0u;
+    if (l >= 1.0) return 255u;
+    precise float at = l * ENC_STEPS + 0.5;
+    uint i = uint(int(at));
+    return (tab.enc[i >> 2] >> ((i & 3u) * 8u)) & 255u;
+}
+
+// picture.c's blend, one byte: before + (now - before) k / 256, each step
+// rounded half away from zero.
+uint blend(uint before, uint now)
+{
+    int d = (int(now) - int(before)) * pc.k;
+    return uint(int(before) + (d >= 0 ? (d + 128) / 256 : -((-d + 128) / 256)));
+}
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    uint v = screen[pc.src_at + i];
+    uint r = v & 255u, g = (v >> 8) & 255u, b = (v >> 16) & 255u, a = v >> 24;
+    if ((pc.flags & 1u) != 0u) {
+        precise float lr = tab.lin[r], lg = tab.lin[g], lb = tab.lin[b];
+        float m0 = tab.m[0];
+#ifdef GXV_MUTATE_FILTER
+        m0 *= 1.01; // --mutate filter: one coefficient changed
+#endif
+        precise float nr = m0 * lr + tab.m[1] * lg + tab.m[2] * lb;
+        precise float ng = tab.m[3] * lr + tab.m[4] * lg + tab.m[5] * lb;
+        precise float nb = tab.m[6] * lr + tab.m[7] * lg + tab.m[8] * lb;
+        r = encode(nr);
+        g = encode(ng);
+        b = encode(nb);
+    }
+    if ((pc.flags & 2u) != 0u) {
+        r = tab.gam[r];
+        g = tab.gam[g];
+        b = tab.gam[b];
+    }
+    if (pc.k < 256) {
+        uint p = screen[pc.dst_at + i];
+        r = blend(p & 255u, r);
+        g = blend((p >> 8) & 255u, g);
+        b = blend((p >> 16) & 255u, b);
+        a = blend(p >> 24, a);
+    }
+    screen[pc.dst_at + i] = r | g << 8 | b << 16 | a << 24;
+}

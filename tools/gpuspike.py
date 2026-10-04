@@ -17,6 +17,7 @@
     python tools/gpuspike.py specdiff [--mutate M]        # V7: specialised and interpreted, the same bytes
     python tools/gpuspike.py copyimage [--mutate M]       # V7: a copy sampled in its frame, from the pool
     python tools/gpuspike.py present [--mutate M]         # V8: the GPU's presenter against picture_scale
+    python tools/gpuspike.py present --filters            # V8b: P5a's filters on the GPU against picture.c
     python tools/gpuspike.py logictest                    # V10: logic ops routed without logicOp
     python tools/gpuspike.py oracle --scale 3             # V9a: the EFB at 3x, its centre samples judged
 
@@ -102,7 +103,11 @@ in a line, never a blend, under core.
 `present` (V8) draws two synthetic screen copies through the GPU presenter's
 pass into eight target sizes at both layouts (integer and fit) and holds each
 to picture_scale's picture, the CPU presenter's, every pixel's colour exact.
---mutate present (one column over) must fail it.
+--mutate present (one column over) must fail it. With --filters (V8b) it
+holds P5a's filters on the GPU to picture.c instead: eight filter sets and a
+flash-limiter blend of two frames, each into the picture's own size and into
+1920x1080 fit, every byte picture_filter's, picture_blend's and the scaler's;
+--mutate filter (one colour coefficient changed) must fail it.
 
 `specdiff` (V7) replays every capture of --set on the GPU twice, every draw
 specialised on the TEV's shape (SOA_GPU_SPECIALIZE=wait) and the interpreter
@@ -1754,9 +1759,10 @@ def logictest(prof: toolchain.Profile) -> int:
 
 
 RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact, at scale (\d+)$", re.M)
+RE_FILTERS = re.compile(r"^filters (\d+) of (\d+) cases exact, at scale (\d+)$", re.M)
 
 
-def present(prof: toolchain.Profile, mutate: str | None) -> int:
+def present(prof: toolchain.Profile, mutate: str | None, filters: bool = False) -> int:
     """V8's presenter: two synthetic screen copies through the GPU's present
     pass into eight target sizes at both layouts, each held to picture_scale's
     picture (the CPU presenter's), every pixel's colour exact. --mutate
@@ -1766,7 +1772,8 @@ def present(prof: toolchain.Profile, mutate: str | None) -> int:
         return code
     out = build_dir(prof) / "present"
     out.mkdir(parents=True, exist_ok=True)
-    args = [str(exe_path(prof)), "--backend", "gpu", "--out", str(out), "--present", "1"]
+    args = [str(exe_path(prof)), "--backend", "gpu", "--out", str(out), "--present"]
+    args.append("2" if filters else "1")
     if mutate:
         args += ["--mutate", mutate]
     proc = subprocess.run(
@@ -1775,7 +1782,7 @@ def present(prof: toolchain.Profile, mutate: str | None) -> int:
     if skipped(proc):
         return SKIP
     print(proc.stdout.strip())
-    m = RE_PRESENT.search(proc.stdout)
+    m = (RE_FILTERS if filters else RE_PRESENT).search(proc.stdout)
     ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2) and int(m.group(3)) == SCALE
     print(f"[gpuspike] present {'passes' if ok else 'FAILS'}")
     return 0 if ok else 1
@@ -2235,6 +2242,11 @@ def main(argv: list[str] | None = None) -> int:
         help="SOA_GPU_FEATURES for every run: core treats every optional feature as absent",
     )
     ap.add_argument(
+        "--filters",
+        action="store_true",
+        help="present: P5a's filters on the GPU against picture.c (V8b)",
+    )
+    ap.add_argument(
         "--scale",
         type=int,
         choices=(1, 2, 3),
@@ -2282,7 +2294,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "copyimage":
         return copyimage(prof, args.mutate)
     if args.command == "present":
-        return present(prof, args.mutate)
+        return present(prof, args.mutate, args.filters)
     if args.command == "logictest":
         return logictest(prof)
     if args.command == "time":

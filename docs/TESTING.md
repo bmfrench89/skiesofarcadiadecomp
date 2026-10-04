@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1239 passed, 2 skipped in 543.47s
+1242 passed, 2 skipped in 599.50s
 ```
 
-1241 tests in 71 files, none of which reads the disc. The two FMA probes of
+1244 tests in 71 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here; the counts below include those two skips. CI's Windows runner
 ships LLVM, so they run there. They cover the Python
@@ -64,7 +64,7 @@ its own and run it, some of the C as well:
 | `test_gxv_live.py` | 10 | a run with `SOA_GPU=vulkan` judged on its own log (GPU spec V5): `scenario.gpu_problems` passes a run the GPU drew whole, and fails a fallback, each count off by one against what the renderer sent or counted, a run that drew nothing, two start lines, and a backend that is not vulkan; it reads the last report, not the watchdog's; and the fifth invariant is there only with the GPU. A real log is checked with `scenario.py check <log>`, which applies it to any log the backend wrote in |
 | `test_gxv_copyimage.py` | 3 | a copy sampled in its own frame (GPU spec V7), through `gpuspike.py copyimage`: sixteen cells copied to an RGBA8 texture and sampled in the same frame give the CPU's hash and all sixteen cells on the GPU, one sampler served from the copy's image in the GPU's pool and no readback wait of its own; `--mutate cimg-cpu` (the producer's image sampled before it lands) and `--mutate land-at-copy` (V6's wait at every copy) each fail it. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_logicop.py` | 1 | logic ops without `logicOp` (GPU spec V10), through `gpuspike.py logictest`: 0x55 ORed into 0xAA gives 0xFF from the CPU, native, a snapshot, the interlock and `SOA_GPU_FEATURES=core`'s route, and 198 from the forced blend; two overlapping triangles XORed onto black come back black in the overlap from the CPU and native, and with `SOA_GPU_FEATURES=nologicop` the draw is routed to the interlock and drawn as native draws it, while `core` routes it to a snapshot, named in a line, never to a blend. It skips without MSVC, `vendor/` or a Vulkan device |
-| `test_gxv_present.py` | 2 | the window's picture from the GPU (GPU spec V8), through `gpuspike.py present`: two synthetic screen copies through the presenter's pass into eight target sizes at both layouts give `picture_scale`'s picture in every pixel's colour, 32 of 32, and `--mutate present` (one column over) gives 0 of 32. They skip without MSVC, `vendor/` or a Vulkan device |
+| `test_gxv_present.py` | 5 | the window's picture from the GPU (GPU spec V8), through `gpuspike.py present`: two synthetic screen copies through the presenter's pass into eight target sizes at both layouts give `picture_scale`'s picture in every pixel's colour, 32 of 32, and `--mutate present` (one column over) gives 0 of 32; and (V8b) `present --filters`, P5a's filters on the GPU, at scale 1 and 3: eight filter sets and a two-frame flash-limiter blend give `picture_filter`'s, `picture_blend`'s and the scaler's bytes in 24 of 24 cases, and one colour coefficient changed (`--mutate filter`) 12 of 24. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_scale.py` | 6 | the EFB at three times the console's size (GPU spec V9a): `copydiff --scale 3`, on an EFB whose samples are alike within each pixel, gives the CPU's bytes, image and screen, with the pool's image and the full screen the native ones replicated, and `--mutate taps` (the copy filter's taps one sample apart) fails it; `copyimage --scale 3` gives the CPU's frame from a copy sampled at scale, and `--mutate copy-scale` (the scaled image sampled as if native) fails it; `present --scale 3` gives `picture_scale_area`'s picture, 32 of 32, and `--mutate present` 0 of 32. The oracle at scale is `gpuspike.py oracle --scale 3`, too long for here. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_queue.py` | 6 | the GPU backend on its own thread (GPU spec V6a), and (V7) the pipeline cache on disk: a second run of the queue frame finds every pipeline the first made, and a file of junk none; the compiler thread accounts for every pipeline specialised on the TEV's shape, with every compile stalled 200 ms the frame is unchanged and its consumer under the stall, `--mutate compile-wait` fails that, and `SOA_GPU_SPECIALIZE` `wait` and `0` report as they should; through `gpuspike.py queue`: a synthetic frame of 64 quads each sampling one texture slot at a new generation and 656,000 vertices that fill the vertex arena twice gives the CPU's frame hash, every quad its own texture and two arena drains, three times on the thread, inline and with the consumer stalled; and the pool-in-place and count-early mutations each fail it. MSVC, `vendor/` and a Vulkan device, skipped saying which without |
 | `test_gxr_backend.py` | 5 | the renderer's backend seam (GPU spec V2), on a renderer-only build with a counting backend: the commands arrive as 0 0 1 2 1 2 0 1 2 for two draws, a filtered and an unfiltered copy to texture and a screen copy, each copy's clear its own command; a texture's generation moves when its bytes change and not otherwise; the frame and presented counts agree; each command carries the EFB it was built for; and the 23 corpus captures through the passthrough keep their manifest hashes (skipped, with its reason, without `build/fifo`). Each of the spec's five mutations turns it red |
@@ -126,10 +126,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1239 passed, 2 skipped` |
-| no capstone | `1220 passed, 3 skipped` |
-| no MSVC | `840 passed, 401 skipped` |
-| neither | `821 passed, 402 skipped` |
+| everything (MSVC + capstone) | `1242 passed, 2 skipped` |
+| no capstone | `1223 passed, 3 skipped` |
+| no MSVC | `843 passed, 401 skipped` |
+| neither | `824 passed, 402 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1384,7 +1384,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 401 of the 1241 skip without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
+² 401 of the 1244 skip without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, and the two FMA probes want a clang.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

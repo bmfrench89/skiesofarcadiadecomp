@@ -679,7 +679,7 @@ required features are listed in 3.10 (none beyond Vulkan 1.1 core).
 | M3c texture provider, M9 packs, P8 | Through the CPU cache: the replaced image is what is uploaded |
 | X6 injected draws | They are `DrawCmd`s (beyond-gamecube.md §7): drawn like the game's |
 | H17 interpolation | `DrawCmd.efb` = 1 selects the second target (V12). The in-between pass samples F+1's copy images, which the real pass made first |
-| M8 overlay, H8 presenter | Since V8: with a window, the GPU presents its own screen copy (`SOA_PRESENTER=dxgi` or `gdi` keeps the CPU's presenter); with a P5a filter set, the filters run on the CPU's copy and the GPU presents the result (V8b); H8's pacing and its histogram are kept |
+| M8 overlay, H8 presenter | Since V8: with a window, the GPU presents its own screen copy (`SOA_PRESENTER=dxgi` or `gdi` keeps the CPU's presenter); P5a's filters run on the GPU at the size it drew, the flash limiter's decision made on the CPU (V8b); H8's pacing and its histogram are kept |
 | Frame hook, pokes, peeks, mods | Unchanged; a hook's hazard wait also waits for the readback |
 
 ### 3.10 API, shader toolchain and build
@@ -1612,6 +1612,30 @@ later in the submission samples the copy's image from the pool; `gxv.c`'s `uploa
   - *V8b, P5a's filters as shaders. Their first step landed the same day (FINDINGS "V8b, first step"):
     the filters run on the CPU's copy and the GPU presents the result, so a filter no longer falls back
     to DXGI. The shaders wait for V9, the first time the picture is larger than the CPU's copy;*
+    - *V8b landed the same day, after V9a (FINDINGS "V8b"), as designed below.*
+    - *V8b's design, 2026-10-04, after V9a, written before its code:*
+      - *A compute pass, `filters.comp`, runs when the presenter takes a new screen copy. It reads the
+        slot at the copy's own scale and writes a seventh region of the screen buffer,
+        `SCREEN_SHOWN`, which the present pass then reads. A present of the same frame again (the
+        interval, a resize) does not run it.*
+      - *Colour-blind and gamma are P5a's own tables: `lin`, the 65,536-step `enc`, `gam` and the
+        3×3 matrix. They are uploaded once, and the arithmetic is the CPU's, unfused (`precise`).
+        So the pass is held to `picture_filter` byte for byte, not within 1.*
+      - *The flash limiter's decision stays on the CPU. Its history is a whole frame, and its search
+        has no cheap exact GPU form. `window.c` still runs `picture_filter` on the native picture,
+        but only to get the blend it returns, and only with `flash_limit` set. The pass then blends
+        `SHOWN`, the frame shown before at scale, toward the new one by the same 1/256ths and the
+        same rounding as `picture.c`'s `blend`. At scale 1 that is the CPU's picture exactly. At
+        scale it is the native decision applied to the larger picture: a flash over a quarter of the
+        picture is the same at any size.*
+      - *With only colour-blind and gamma set, the CPU does no filtering at all.*
+      - *`gxv_present_image` and `SCREEN_HOST` (the first step) go, and so does the native picture
+        at scale the first step showed.*
+      - *Check: `gpuspike.py present --filters`. A synthetic image goes through each filter set (two
+        gammas, the three models corrected and simulated) and through a two-frame blend, at scale 1
+        and at 3. It is held to `picture_filter`, and to `picture.c`'s blend, then `picture_scale` or
+        `picture_scale_area`, every byte. `--mutate filter` (one matrix coefficient changed) must
+        fail it.*
   - *M8's overlay, when M8 lands;*
   - *the pacing target and the owner's session at 60 or 120 Hz (the display here is at 85).*
 
@@ -1686,6 +1710,7 @@ owner's look (FINDINGS "V9a"); V9b waits for M10.*
   - Scale 1 keeps `picture_scale`'s nearest neighbour byte for byte.
   - `picture.c` gains the same filter in C (`picture_scale_area`), as the check's twin.
 - **P5a's filters** at S > 1 still run on the native picture (V8b's first step), so that picture is
+  *[superseded the same day: V8b runs them on the GPU at scale]*
   shown native, and the log says so once. Their shaders (V8b) come next.
 - **Checks, each with a mutation that must fail it:**
   - **Scale 1:** V5's contrast stays byte-identical.

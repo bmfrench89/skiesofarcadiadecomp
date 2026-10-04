@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1241 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1244 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1241 |
+| Python tests | 1244 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -604,9 +604,7 @@ C5c) is now done.
    interlock where it may overlap itself -- and `SOA_GPU_FEATURES=core`
    gives the oracle's verdicts unchanged. V7's first-launch stalls in play
    fell from five to one with cull, topology and depth as dynamic state
-   (FINDINGS "V7, fifth"). P5a's filters now run on the CPU's copy and the
-   GPU presents what they make (FINDINGS "V8b, first step"); their shaders
-   wait for V9. **The owner answered four questions on 2026-10-04**
+   (FINDINGS "V7, fifth"). **The owner answered four questions on 2026-10-04**
    (PLAN-NEXT §0): llvm-mingw may be fetched (R1 may start), V9 is split
    (2x/3x now as V9a, the wide EFB after M10), the Vulkan SDK is installed
    (`SOA_GPU_VALIDATE=1` now prints the layer's messages; the whole GPU path
@@ -618,11 +616,16 @@ C5c) is now done.
    (`gpuspike.py oracle --scale 3`, 65 of 67 with the by-design pair the
    same) and must equal `g_screen` exactly; `copydiff`, `copyimage` and
    `present` take `--scale` too. A copy sampled after its own submission is
-   still the native image, and P5a's filters show the native picture.
-   **Next:** V8b, P5a's filters as shaders, now that the picture can be
-   larger than the CPU's copy; then the owner's windowed session (V6b's
-   fifteen minutes, V8's presenter, V9a's 2x and 3x), which wants the
-   display at 60 or 120 Hz (it is at 85). Still open for the owner, and not blocking: whether a
+   still the native image. **V8b is done** (FINDINGS "V8b"): P5a's filters
+   are a GPU pass at the size the GPU drew, byte for byte `picture.c`'s
+   (`gpuspike.py present --filters`), the flash limiter deciding its blend
+   on the CPU. The owner's windowed session (V6b's fifteen minutes, V8's
+   presenter, V9a's 2x and 3x) was set up on 2026-10-04 and put off by the
+   owner; it wants the display at 60 or 120 Hz (it is still at 85), and
+   View+LS marks a frame. **Next:** distribution's R1, `soa.exe` built by a
+   fetched llvm-mingw (specs/distribution.md; Q-D1 answered yes): the GPU
+   build is done but for what waits on others (that session, M8's overlay,
+   V9b after M10, V12 after H17), and R1-R4 come before L12. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

@@ -120,7 +120,7 @@ void picture_scale_area(const uint8_t* src, int w, int h, int k, uint8_t* dst, i
 
 /* ---- P5a: the filters (comfort-pack spec 3.13) ---------------------------- */
 
-#define ENC_N 65536 /* the encode table's steps over linear 0-1: 20 to the darkest sRGB step */
+#define ENC_N PICTURE_ENC_N /* the encode table's steps over linear 0-1: 20 to the darkest sRGB step */
 
 /* Machado, Oliveira and Fernandes (2009), severity 1.0, rows multiplying
  * linear (R, G, B); each row sums to 1, so grey stays grey. */
@@ -258,6 +258,18 @@ PicFilterState* picture_filters_new(const PicFilters* f)
     return s;
 }
 
+void picture_filter_tables(const PicFilterState* s, PicTables* t)
+{
+    memset(t, 0, sizeof *t);
+    t->colour = s->f.colorblind != PIC_CB_OFF;
+    t->gamma = s->f.gamma != 1.0;
+    t->flash = s->f.flash_limit;
+    memcpy(t->m, s->m, sizeof t->m);
+    t->lin = s->lin;
+    t->enc = s->enc;
+    t->gam = s->gam;
+}
+
 void picture_filters_free(PicFilterState* s)
 {
     if (!s) return;
@@ -387,6 +399,11 @@ static void blend(uint8_t* dst, const uint8_t* before, const uint8_t* now, size_
         int d = ((int)now[i] - (int)before[i]) * k;
         dst[i] = (uint8_t)(before[i] + (d >= 0 ? (d + 128) / 256 : -((-d + 128) / 256)));
     }
+}
+
+void picture_blend(uint8_t* dst, const uint8_t* before, const uint8_t* now, size_t bytes, double a)
+{
+    blend(dst, before, now, bytes, a);
 }
 
 static void flash_free(PicFilterState* s)

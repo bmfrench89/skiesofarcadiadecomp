@@ -19,6 +19,7 @@
 #define SOA_GXV_H
 
 #include "gxr_cmd.h"
+#include "picture.h"
 #include <stddef.h>
 
 /* 1 when this build has the backend; 0 when gxv.c was compiled without
@@ -49,15 +50,18 @@ const char* gxv_device_name(void);
  * swap chain at a new client size at the next present. */
 int gxv_running(void);
 int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* why, size_t cap);
-int gxv_present(int fresh, unsigned interval, int mode, int* shown_w, int* shown_h);
+/* `blend` is the flash limiter's answer for a new frame (1 for none),
+ * which P5a's filters on the GPU apply to it (V8b). */
+int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h);
 void gxv_present_resize(int w, int h);
-/* A frame of the window's own, BGRA (V8b: P5a's filters done on the CPU),
- * presented as gxv_present presents a screen copy. */
-int gxv_present_image(const uint8_t* bgra, int w, int h, unsigned interval, int mode);
+/* P5a's filters on the GPU (V8b): picture.c's tables for the state in use,
+ * each new frame through them before it is presented; NULL turns them off.
+ * 0 when the pass cannot be made, and then the GPU must not present. */
+int gxv_present_filters(const PicTables* t);
 /* The presenter's check (test_gxv_present.py): bgra, a w x h picture drawn
  * at scale k ((k*w) x (k*h), V9a), through the upload and the present pass
  * into a dw x dh B8G8R8A8 image, read back. */
-int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, uint8_t* out);
+int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend, uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */
 void gxv_report(void);

@@ -53,6 +53,25 @@ typedef struct PicFilterState PicFilterState;
 PicFilterState* picture_filters_new(const PicFilters* f); /* its tables, and the flash limiter's memory */
 void picture_filters_free(PicFilterState* s);
 
+/* What a filter state applies, for the GPU's own pass (gpu-backend V8b),
+ * which does the same arithmetic on the same tables: which filters are on,
+ * the colour matrix (rows giving R, G and B from linear R, G, B), an sRGB
+ * byte in linear light, the encode table back (PICTURE_ENC_N steps over
+ * linear 0-1) and the gamma table. The pointers live as long as the state. */
+#define PICTURE_ENC_N 65536
+typedef struct {
+    int colour, gamma, flash;
+    float m[9];
+    const float* lin;
+    const uint8_t* enc;
+    const uint8_t* gam;
+} PicTables;
+void picture_filter_tables(const PicFilterState* s, PicTables* t);
+
+/* The flash limiter's blend: dst = before + a (now - before), a byte at a
+ * time, `a` in 1/256ths rounded, each step rounded half away from zero. */
+void picture_blend(uint8_t* dst, const uint8_t* before, const uint8_t* now, size_t bytes, double a);
+
 /* Filters a w x h frame in place, shown at `t` seconds. The answer is the
  * flash limiter's blend: 1 the frame as filtered, less when it was held back
  * toward the frame before. */

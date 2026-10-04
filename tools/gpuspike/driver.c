@@ -1068,7 +1068,7 @@ static int present_check(void)
                 unsigned bad = 0, px;
                 PicRect r = picture_layout(w, h, dw, dh, (int)mode);
                 total++;
-                if (!gxv_present_check(bgra, w, h, k, dw, dh, (int)mode, got)) {
+                if (!gxv_present_check(bgra, w, h, k, dw, dh, (int)mode, 1.0, got)) {
                     printf("present %dx%d into %dx%d (%s): the check could not run\n", w, h, dw, dh, mode ? "fit" : "integer");
                     continue;
                 }
@@ -1086,6 +1086,112 @@ static int present_check(void)
     free(src);
     free(bgra);
     free(ref);
+    free(got);
+    return exact != total;
+}
+
+/* V8b: P5a's filters on the GPU (--present 2). A synthetic picture, every
+ * pixel its own colour, drawn at SOA_GPU_SCALE's k, through each filter set
+ * -- two gammas, the three colour-blind models corrected and simulated, with
+ * and without gamma -- and through a flash-limiter blend of two frames, half
+ * and a quarter of the way: each through gxv_present_filters' pass and the
+ * present pass, into a target the picture's own size (where the scaler is
+ * the identity) and into 1920x1080 fit. The reference is the CPU's:
+ * picture_filter on the same picture, picture_blend, then picture_scale or
+ * picture_scale_area. Every byte must agree. */
+static const char* const k_filter_sets[][3] = {
+    {"1.8", NULL, NULL},          {"0.6", NULL, NULL},          {NULL, "protan", NULL},
+    {NULL, "deutan", "simulate"}, {"2.2", "tritan", NULL},      {"1.3", "protan", "simulate"},
+    {NULL, "tritan", "simulate"}, {"0.8", "deutan", NULL},
+};
+
+static unsigned filter_case(const uint8_t* img, int w, int h, int k, int dw, int dh, double blend, uint8_t* expect,
+                            uint8_t* got)
+{
+    unsigned px, bad = 0;
+    if (!gxv_present_check(img, w, h, k, dw, dh, PICTURE_FIT, blend, got)) return (unsigned)(dw * dh);
+    for (px = 0; px < (unsigned)(dw * dh); px++)
+        if (memcmp(got + px * 4, expect + px * 4, 3)) bad++;
+    return bad;
+}
+
+static void scale_ref(const uint8_t* img, int w, int h, int k, uint8_t* out, int dw, int dh)
+{
+    if (k > 1) picture_scale_area(img, w, h, k, out, dw, dh, PICTURE_FIT);
+    else picture_scale(img, w, h, out, dw, dh, PICTURE_FIT);
+}
+
+static int present_filters_check(void)
+{
+    const int w = 640, h = 480, k = gxv_scale();
+    const int sizes[2][2] = {{640 * k, 480 * k}, {1920, 1080}};
+    size_t n = (size_t)w * h * k * k;
+    uint8_t *a = (uint8_t*)malloc(n * 4), *b = (uint8_t*)malloc(n * 4), *fa = (uint8_t*)malloc(n * 4);
+    uint8_t *fb = (uint8_t*)malloc(n * 4), *mix = (uint8_t*)malloc(n * 4);
+    uint8_t *expect = (uint8_t*)malloc(2560u * 1600u * 4u), *got = (uint8_t*)malloc(2560u * 1600u * 4u);
+    unsigned si, ti, total = 0, exact = 0, shown = 0;
+    size_t i;
+    char why[160];
+    if (!a || !b || !fa || !fb || !mix || !expect || !got) return 1;
+    for (i = 0; i < n; i++) {
+        uint32_t v = (uint32_t)i * 2654435761u, u = (uint32_t)i * 40503u + 0x9E3779B9u;
+        a[i * 4] = (uint8_t)v; a[i * 4 + 1] = (uint8_t)(v >> 8); a[i * 4 + 2] = (uint8_t)(v >> 16); a[i * 4 + 3] = 255;
+        b[i * 4] = (uint8_t)(u >> 3); b[i * 4 + 1] = (uint8_t)(u >> 11); b[i * 4 + 2] = (uint8_t)(u >> 19); b[i * 4 + 3] = 255;
+    }
+    for (si = 0; si < sizeof k_filter_sets / sizeof k_filter_sets[0]; si++) {
+        PicFilters pf;
+        PicFilterState* st;
+        PicTables t;
+        if (!picture_filters_parse(&pf, k_filter_sets[si][0], k_filter_sets[si][1], k_filter_sets[si][2], NULL, why, sizeof why) ||
+            !(st = picture_filters_new(&pf))) {
+            printf("filters: set %u refused: %s\n", si, why);
+            return 1;
+        }
+        picture_filter_tables(st, &t);
+        if (!gxv_present_filters(&t)) {
+            printf("filters: the GPU's pass could not be made\n");
+            return 1;
+        }
+        /* the CPU's picture of each frame: the filters, then the scaler */
+        memcpy(fa, a, n * 4);
+        picture_filter(st, fa, w * k, h * k, 0.0);
+        memcpy(fb, b, n * 4);
+        picture_filter(st, fb, w * k, h * k, 0.0);
+        for (ti = 0; ti < 2; ti++) {
+            int dw = sizes[ti][0], dh = sizes[ti][1];
+            unsigned bad;
+            scale_ref(fa, w, h, k, expect, dw, dh);
+            bad = filter_case(a, w, h, k, dw, dh, 1.0, expect, got);
+            total++;
+            exact += !bad;
+            if (bad && shown++ < 8) printf("filters: set %u into %dx%d: %u pixels differ\n", si, dw, dh, bad);
+            if (si < 2) {
+                /* the flash limiter's blend: frame a shown, then b half and a
+                 * quarter of the way toward it, each from the one shown before */
+                double steps[2] = {0.5, 0.25};
+                int j;
+                memcpy(mix, fa, n * 4);
+                for (j = 0; j < 2; j++) {
+                    picture_blend(mix, mix, fb, n * 4, steps[j]);
+                    scale_ref(mix, w, h, k, expect, dw, dh);
+                    bad = filter_case(b, w, h, k, dw, dh, steps[j], expect, got);
+                    total++;
+                    exact += !bad;
+                    if (bad && shown++ < 8)
+                        printf("filters: set %u blended %.2f into %dx%d: %u pixels differ\n", si, steps[j], dw, dh, bad);
+                }
+            }
+        }
+        picture_filters_free(st);
+    }
+    gxv_present_filters(NULL);
+    printf("filters %u of %u cases exact, at scale %d\n", exact, total, k);
+    free(a);
+    free(b);
+    free(fa);
+    free(fb);
+    free(mix);
+    free(expect);
     free(got);
     return exact != total;
 }
@@ -1530,7 +1636,7 @@ int main(int argc, char** argv)
             fprintf(stderr, "[gpuspike] --present wants --backend gpu\n");
             return 2;
         }
-        failures = present_check();
+        failures = present == 2 ? present_filters_check() : present_check();
         gxv_shutdown();
         return failures ? 1 : 0;
     }
