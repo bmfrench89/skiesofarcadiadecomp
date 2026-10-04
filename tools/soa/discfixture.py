@@ -308,3 +308,35 @@ def build(
         gaps=gaps,
         tail=size - last_end,
     )
+
+
+def write_rvz(image: bytes, dest, chunk: int = 0x20000) -> None:
+    """`image` as an RVZ file at `dest`, as tools/soa/rvz.py reads one: the two
+    headers, one raw-data entry over the whole disc, and every chunk a group
+    of its own, zstd-compressed (distribution R2: the embedded Python reads
+    an RVZ through compression.zstd). No partitions and no junk runs, which
+    a GameCube disc's RVZ need not have."""
+    from compression import zstd
+
+    groups, data = [], bytearray()
+    body_at = 0x48 + 0xDC
+    for at in range(0, len(image), chunk):
+        packed = zstd.compress(image[at : at + chunk])
+        offset = body_at + len(data)
+        groups.append(struct.pack(">III", offset // 4, len(packed) | 0x80000000, 0))
+        data += packed
+        data += bytes(-len(data) % 4)
+    raw = zstd.compress(struct.pack(">QQII", 0x80, len(image) - 0x80, 0, len(groups)))
+    table = zstd.compress(b"".join(groups))
+    rde_at = body_at + len(data)
+    ge_at = rde_at + len(raw)
+    h2 = bytearray(0xDC)
+    struct.pack_into(">IIiI", h2, 0, 1, 5, 3, chunk)  # GameCube, zstd, level 3
+    h2[0x10:0x90] = image[:0x80]
+    struct.pack_into(">IQI", h2, 0xB4, 1, rde_at, len(raw))
+    struct.pack_into(">IQI", h2, 0xC4, len(groups), ge_at, len(table))
+    h1 = bytearray(0x48)
+    h1[:4] = b"RVZ\x01"
+    struct.pack_into(">I", h1, 0x0C, len(h2))
+    struct.pack_into(">Q", h1, 0x24, len(image))
+    Path(dest).write_bytes(bytes(h1) + bytes(h2) + bytes(data) + raw + table)

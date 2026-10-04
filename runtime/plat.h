@@ -393,6 +393,9 @@ int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes);
 void* plat_dl_open(const char* path, char* err, size_t cap);
 void* plat_dl_sym(void* lib, const char* name);
 void plat_dl_close(void* lib);
+/* One directory, not its parents: 1 when it is there afterwards, made now or
+ * already (distribution R2: the pipeline cache under the port root). */
+int plat_mkdir(const char* path);
 
 /* ---- threads (L2) --------------------------------------------------------
  * plat_thread_start runs fn(arg) on a new thread and returns 1, or 0 if none

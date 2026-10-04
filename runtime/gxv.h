@@ -61,6 +61,11 @@ int gxv_present_filters(const PicTables* t);
 /* The presenter's check (test_gxv_present.py): bgra, a w x h picture drawn
  * at scale k ((k*w) x (k*h), V9a), through the upload and the present pass
  * into a dw x dh B8G8R8A8 image, read back. */
+/* The port root (settings_root, which the spike does not link): the
+ * pipeline cache is <root>/build/gxv-pipelines.bin when SOA_GPU_PIPELINES
+ * names none, whatever the working directory (distribution R2). Before
+ * gxv_start; without it the cache is build/gxv-pipelines.bin, relative. */
+void gxv_set_root(const char* root);
 int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend, uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */

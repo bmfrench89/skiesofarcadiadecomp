@@ -16,9 +16,16 @@
  * and strcmp's one ordering comparison is guarded in the unit itself. A
  * routine that reads a field of one of the game's structures is not, and waits
  * for byte-order-aware accessors over guest memory.
+ *
+ * A player's build has no src/ (specs/distribution.md 3.1): it is linked with
+ * SOA_NO_DECOMP, translated without these bindings, and the translated MSL
+ * runs in their place, as it did before each was decompiled. Then this file is
+ * empty.
  */
 #include "cpu.h"
 #include <stddef.h>
+
+#ifndef SOA_NO_DECOMP
 
 size_t dc_strlen(const char* str);
 char* dc_strchr(const char* str, int chr);
@@ -73,3 +80,6 @@ void fn_8025EF88(CpuState* s) { s->pc = 0x8025EF88u; s->gpr[3] = (uint32_t)dc_fn
 /* Only the pattern goes through host(): the original returns str unread when
  * pat is NULL, and dereferences str without ever testing it. */
 void fn_8025ED74(CpuState* s) { s->pc = 0x8025ED74u; s->gpr[3] = guest(s, dc_strstr((const char*)mem_ptr(s, s->gpr[3]), (const char*)host(s, s->gpr[4]))); } /* strstr */
+#else
+typedef int decomp_swap_is_empty; /* a translation unit must declare something */
+#endif

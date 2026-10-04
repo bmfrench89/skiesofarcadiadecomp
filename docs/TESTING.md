@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1248 passed, 3 skipped in 682.24s
+1261 passed, 3 skipped in 722.82s
 ```
 
-1251 tests in 72 files, none of which reads the disc. The two FMA probes of
+1264 tests in 73 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode); the counts below include those three skips. CI's Windows runner
@@ -65,6 +65,7 @@ its own and run it, some of the C as well:
 | `test_gxv_live.py` | 10 | a run with `SOA_GPU=vulkan` judged on its own log (GPU spec V5): `scenario.gpu_problems` passes a run the GPU drew whole, and fails a fallback, each count off by one against what the renderer sent or counted, a run that drew nothing, two start lines, and a backend that is not vulkan; it reads the last report, not the watchdog's; and the fifth invariant is there only with the GPU. A real log is checked with `scenario.py check <log>`, which applies it to any log the backend wrote in |
 | `test_gxv_copyimage.py` | 3 | a copy sampled in its own frame (GPU spec V7), through `gpuspike.py copyimage`: sixteen cells copied to an RGBA8 texture and sampled in the same frame give the CPU's hash and all sixteen cells on the GPU, one sampler served from the copy's image in the GPU's pool and no readback wait of its own; `--mutate cimg-cpu` (the producer's image sampled before it lands) and `--mutate land-at-copy` (V6's wait at every copy) each fail it. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_logicop.py` | 1 | logic ops without `logicOp` (GPU spec V10), through `gpuspike.py logictest`: 0x55 ORed into 0xAA gives 0xFF from the CPU, native, a snapshot, the interlock and `SOA_GPU_FEATURES=core`'s route, and 198 from the forced blend; two overlapping triangles XORed onto black come back black in the overlap from the CPU and native, and with `SOA_GPU_FEATURES=nologicop` the draw is routed to the interlock and drawn as native draws it, while `core` routes it to a snapshot, named in a line, never to a blend. It skips without MSVC, `vendor/` or a Vulkan device |
+| `test_player_build.py` | 12 | the player's build (distribution R2): the 12 bindings `decomp_swap.c` answers are the ones `hle.txt` notes as decompiled, an adapter added without its note is seen, `--no-decomp`'s link builds no native unit and defines `SOA_NO_DECOMP`, and the runtime keeps that branch; `player_build.py` refuses a disc of another game by name, an executable whose SHA-1 differs, an image that is not a disc and a config it cannot read, each exit 2 and a `[build] refused:` line; a changed input retranslates and an unchanged one relinks, and without the check a changed `cpu.h` would only relink; a synthetic RVZ reads back as its disc, and under the embedded CPython, which fails it with `_zstd.pyd` taken out (skipped without `vendor/`'s zip) |
 | `test_mingw.py` | 7 | `soa.exe` with no Microsoft compiler (distribution R1): `fetch_mingw.py` keeps the x86-64 target alone, its `--verify` finds a byte changed and a file missing, and the Linux archive unpacks files and links and skips the rest (where the OS makes links); the `mingw` profile's flags, libraries and stack are the spec's, a `SOA_MINGW` naming no compiler finds none, and its plan writes only under `gen/mingw`, each `mod.dll` under `gen/mingw/mods`; and, with `vendor/llvm-mingw` and the disc's executable, the whole build runs with `msvc_env` made to raise and the exe imports no `fma`, `exp2f` or `log2f` |
 | `test_gxv_present.py` | 5 | the window's picture from the GPU (GPU spec V8), through `gpuspike.py present`: two synthetic screen copies through the presenter's pass into eight target sizes at both layouts give `picture_scale`'s picture in every pixel's colour, 32 of 32, and `--mutate present` (one column over) gives 0 of 32; and (V8b) `present --filters`, P5a's filters on the GPU, at scale 1 and 3: eight filter sets and a two-frame flash-limiter blend give `picture_filter`'s, `picture_blend`'s and the scaler's bytes in 24 of 24 cases, and one colour coefficient changed (`--mutate filter`) 12 of 24. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_scale.py` | 6 | the EFB at three times the console's size (GPU spec V9a): `copydiff --scale 3`, on an EFB whose samples are alike within each pixel, gives the CPU's bytes, image and screen, with the pool's image and the full screen the native ones replicated, and `--mutate taps` (the copy filter's taps one sample apart) fails it; `copyimage --scale 3` gives the CPU's frame from a copy sampled at scale, and `--mutate copy-scale` (the scaled image sampled as if native) fails it; `present --scale 3` gives `picture_scale_area`'s picture, 32 of 32, and `--mutate present` 0 of 32. The oracle at scale is `gpuspike.py oracle --scale 3`, too long for here. They skip without MSVC, `vendor/` or a Vulkan device |
@@ -106,7 +107,7 @@ its own and run it, some of the C as well:
 | `test_tick.py` | 6 | `runtime/tick.c`'s native `VIGetRetraceCount`, built alone: the original everywhere but the main loop's two call sites; the top of the loop runs the safe-point callbacks in order, and the frame end's spin answers start + 1 from the unlock frame on |
 | `test_gxr_lifetimes.py` | 6 | the lifetime rules the renderer's queue lives by — the texture use-after-free of 2026-09-17 — under H14's fences and again under `SOA_GXR_DRAIN=1`, where a draw's setup still drains for a queued copy |
 | `test_clock.py` | 6 | `runtime/clock.c`, built alone and fed synthetic host times (M19): steady steps are guest time, a 10 s gap counts as none and bumps the epoch (10 s with the rule off), a host step backwards moves nothing, a speed change is continuous and bumps the epoch, a pause is excluded, and a peek writes nothing |
-| `test_citest.py` | 5 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only |
+| `test_citest.py` | 6 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only, and so is `player_build.py`'s, which a package runs on the embeddable CPython (distribution 3.5) |
 | `test_gxr_atomics.py` | 5 | the render queue's rule 4 (portability 3.4, L2), text only: every use of a shared counter in `gxr.c` is an argument of a `plat_*` helper, its declaration, or the producer's plain read of its own `g_published` on a line marked `own count`; a bare `g_ran[1]` read added to `worker()` (the spec's mutation), a marked worker count, a cast and a condition each fail it, and the code before L2 fails it 38 times |
 | `test_sct.py` | 5 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, and an entry that runs off its end |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
@@ -128,10 +129,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1248 passed, 3 skipped` |
-| no capstone | `1229 passed, 4 skipped` |
-| no MSVC | `849 passed, 402 skipped` |
-| neither | `830 passed, 403 skipped` |
+| everything (MSVC + capstone) | `1261 passed, 3 skipped` |
+| no capstone | `1242 passed, 4 skipped` |
+| no MSVC | `862 passed, 402 skipped` |
+| neither | `843 passed, 403 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1386,7 +1387,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 402 of the 1251 skip here without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 402 of the 1264 skip here without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

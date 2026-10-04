@@ -17,6 +17,19 @@ never be linked into gen/soa.exe. mingw (llvm-mingw, distribution R1) links
 GNU-style into gen/mingw/soa.exe with no Microsoft compiler, and builds each
 mod's mod.dll under gen/mingw/mods, beside a copy of its mod.ini and
 patches.txt, never over the msvc build's beside mod.c.
+
+--no-decomp is the player's build (specs/distribution.md 3.1), which has no
+src/ or include/: the translation leaves out every binding runtime/
+decomp_swap.c answers with decompiled code, so the game's own MSL runs
+translated, the link builds no native unit and defines SOA_NO_DECOMP, and the
+self test says the swap's comparison is skipped. Translate, compile and link
+with it together: chunks translated without it name functions it never links.
+
+--reproducible (mingw; distribution 3.8) links with no timestamp, no PDB and
+the source tree's path mapped to `.`, so two builds of the same package and
+disc give the same soa.exe byte for byte, in any folder. --progress prints a
+`[build]` line per step and translation unit, which tools/player_build.py
+passes to the setup window.
 """
 
 import argparse
@@ -81,9 +94,24 @@ def mod_out_dir(p: toolchain.Profile, out: Path, src: Path) -> Path:
     return (out / "mods" / src.parent.name).resolve()
 
 
-def gnu_mod_dll_command(p: toolchain.Profile, src: Path, dest: Path) -> list[str]:
+# A reproducible mingw link (distribution 3.8): no timestamp in the headers,
+# and the source tree's path, which __FILE__ would write into the exe, as `.`.
+def reproducible_flags() -> list[str]:
+    return ["-Wl,--no-insert-timestamp", f"-ffile-prefix-map={RUNTIME.parent}=."]
+
+
+def gnu_mod_dll_command(
+    p: toolchain.Profile, src: Path, dest: Path, reproducible: bool = False
+) -> list[str]:
     """The mingw profile's line for a mod's mod.dll, written into dest."""
-    return [*p.cflags, "-shared", f"/I{RUNTIME}", str(src.resolve()), f"/Fe{dest / 'mod.dll'}"]
+    return [
+        *p.cflags,
+        "-shared",
+        *(reproducible_flags() if reproducible else []),
+        f"/I{RUNTIME}",
+        str(src.resolve()),
+        f"/Fe{dest / 'mod.dll'}",
+    ]
 
 
 # ---- the command lines, one profile at a time (portability.md 3.9, L3a) ----
@@ -145,27 +173,52 @@ def decomp_objects(p: toolchain.Profile, out: Path, dc_files: list[str]) -> list
 
 
 def gnu_link_command(
-    p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = False
+    p: toolchain.Profile,
+    out: Path,
+    objs: list[Path],
+    gxv: bool = False,
+    defines: tuple[str, ...] = (),
+    reproducible: bool = False,
 ) -> list[str]:
     """The mingw profile's link (distribution R1): msvc's, in clang's words.
     -gcodeview and lld's --pdb write <out>/soa.pdb, which SOA_HOSTPROF's
-    report reads through dbghelp as it reads MSVC's. The libraries and the
-    stack are the profile's linker flags, last, after every source and object."""
+    report reads through dbghelp as it reads MSVC's; a reproducible link
+    writes none (reproducible_flags). The libraries and the stack are the
+    profile's linker flags, last, after every source and object."""
+    debug = reproducible_flags() if reproducible else ["-gcodeview"]
     return [
         *p.cflags,
-        "-gcodeview",
+        *debug,
+        *defines,
         f"/I{RUNTIME}",
         f"/I{out}",
         *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
         f"/Fe{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
         *map(str, objs),
-        f"-Wl,--pdb={out / 'soa.pdb'}",
+        *([] if reproducible else [f"-Wl,--pdb={out / 'soa.pdb'}"]),
         *p.linker,
     ]
 
 
-def link_command(p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = False) -> list[str]:
+# A binding runtime/decomp_swap.c answers: the one record of which bindings
+# need src/, since each of its adapters calls a dc_ function built from there.
+_SWAPPED = re.compile(r"^void fn_([0-9A-F]{8})\(CpuState\* s\)", re.M)
+
+
+def decomp_bound(swap: Path = RUNTIME / "decomp_swap.c") -> set[int]:
+    """The addresses decomp_swap.c answers with decompiled code: the
+    bindings a build without src/ leaves out (--no-decomp)."""
+    return {int(a, 16) for a in _SWAPPED.findall(swap.read_text(encoding="utf-8"))}
+
+
+def link_command(
+    p: toolchain.Profile,
+    out: Path,
+    objs: list[Path],
+    gxv: bool = False,
+    defines: tuple[str, ...] = (),
+) -> list[str]:
     """The link of runtime/ and the objects into soa.exe, run in the root.
 
     gxv builds runtime/gxv.c as the GPU backend (SOA_GXV=1), against
@@ -185,6 +238,7 @@ def link_command(p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = 
         *p.cflags,
         "/Zi",
         f"/Fd{out}/runtime.pdb",
+        *defines,
         f"/I{RUNTIME}",
         f"/I{out}",
         *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
@@ -214,21 +268,30 @@ def link_plan(
     dc_files: list[str],
     dc_defines: list[str],
     gxv: bool = False,
+    defines: tuple[str, ...] = (),
+    reproducible: bool = False,
 ) -> list[tuple[list[str], Path]]:
     """Every compiler command --link runs, in order, each with its working
-    directory: the decompiled units, the link, then (msvc only) each mod."""
+    directory: the decompiled units, the link, then each mod (msvc and
+    mingw). `defines` go on the link's runtime compile: SOA_NO_DECOMP for
+    --no-decomp."""
     objs = sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
     plan: list[tuple[list[str], Path]] = []
     if dc_files:
         plan.append((decomp_command(p, out, dc_files, dc_defines), Path(".")))
         objs += decomp_objects(p, out, dc_files)
-    link = gnu_link_command if p.name == "mingw" else link_command
-    plan.append((link(p, out, objs, gxv), Path(".")))
+    if p.name == "mingw":
+        plan.append((gnu_link_command(p, out, objs, gxv, defines, reproducible), Path(".")))
+    else:
+        plan.append((link_command(p, out, objs, gxv, defines), Path(".")))
     if p.name == "msvc":
         plan += [(mod_dll_command(src), src.parent) for src in mod_dll_sources()]
     elif builds_mods(p):
         plan += [
-            (gnu_mod_dll_command(p, src, mod_out_dir(p, out, src)), mod_out_dir(p, out, src))
+            (
+                gnu_mod_dll_command(p, src, mod_out_dir(p, out, src), reproducible),
+                mod_out_dir(p, out, src),
+            )
             for src in mod_dll_sources()
         ]
     return plan
@@ -306,6 +369,19 @@ def main() -> int:
     ap.add_argument(
         "--link", action="store_true", help="link the objects with runtime/ into soa.exe"
     )
+    ap.add_argument(
+        "--reproducible",
+        action="store_true",
+        help="mingw: no timestamp, no PDB, the source path mapped to . (distribution 3.8)",
+    )
+    ap.add_argument(
+        "--progress", action="store_true", help="a [build] line per step and unit (player_build)"
+    )
+    ap.add_argument(
+        "--no-decomp",
+        action="store_true",
+        help="the player's build, with no src/: the translated MSL runs (distribution 3.1)",
+    )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
     # A clang build goes to its own directory, so it can never be linked into
@@ -318,6 +394,8 @@ def main() -> int:
     shown = "MSVC" if prof is toolchain.MSVC else prof.name
     into = "" if prof is toolchain.MSVC else f" into {args.out}"
 
+    if args.progress:
+        print("[build] translate", flush=True)
     dol = D.parse(args.dol.read_bytes())
     t0 = time.time()
     functions, _ = cfg.build_iterative(dol)
@@ -331,6 +409,13 @@ def main() -> int:
         names = {a: r["name"] for a, r in S.load_tsv(tsv).items()}
 
     hle = load_hle(args.config / "hle.txt")
+    if args.no_decomp:
+        swapped = decomp_bound()
+        hle = {a: n for a, n in hle.items() if a not in swapped}
+        print(
+            f"no src/ (--no-decomp): {len(swapped)} bindings to decompiled code left out; "
+            "the translated MSL runs"
+        )
     hooks = load_hle(args.config / "hooks.txt")
     savepoints = load_hle(args.config / "savepoints.txt")
     traces = load_hle(args.config / "trace.txt")
@@ -392,7 +477,9 @@ def main() -> int:
 
         failures = collections.Counter()
         with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for path, proc in pool.map(build, units):
+            for n, (path, proc) in enumerate(pool.map(build, units), 1):
+                if args.progress:
+                    print(f"[build] {n}/{len(units)} {path.name}", flush=True)
                 if proc.returncode != 0:
                     failures[path.name] += 1
                     errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
@@ -418,9 +505,19 @@ def main() -> int:
         # renamed dc_<name> so they sit beside the C runtime's own strlen and
         # friends; the selftest runs them against their recompiled twins.
         try:
-            dc_files, dc_defines = native_decomp_sources(Path("config/GEAE8P/units.txt"))
+            dc_files, dc_defines = (
+                ([], [])
+                if args.no_decomp
+                else native_decomp_sources(Path("config/GEAE8P/units.txt"))
+            )
         except RenameError as exc:
             print(exc, file=sys.stderr)
+            return 1
+        except FileNotFoundError as exc:
+            print(
+                f"{exc.filename}: no decompiled source here; --no-decomp builds without src/",
+                file=sys.stderr,
+            )
             return 1
         if dc_files:
             (args.out / "decomp").mkdir(parents=True, exist_ok=True)
@@ -445,7 +542,15 @@ def main() -> int:
         else:
             print("GPU backend: not built in (python tools/fetch_gpu.py, then --link again)")
         failed_mods = 0
-        for cmd, cwd in link_plan(prof, args.out, dc_files, dc_defines, gxv):
+        defines = ("/DSOA_NO_DECOMP=1",) if args.no_decomp else ()
+        plan = link_plan(prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible)
+        exe_flags = (f"/Fe:{exe}", f"/Fe{exe}")
+        for cmd, cwd in plan:
+            if args.progress:
+                what = "link" if any(a in exe_flags for a in cmd) else f"mod {cwd.name}"
+                if cwd == Path(".") and what != "link":
+                    what = "decompiled units"
+                print(f"[build] {what}", flush=True)
             if cwd != Path(".") and prof.name == "mingw":
                 # the mod's own text beside the mod.dll this build makes
                 src = next(s for s in mod_dll_sources() if s.parent.name == cwd.name)
@@ -455,7 +560,10 @@ def main() -> int:
                         (cwd / name).write_bytes((src.parent / name).read_bytes())
             proc = toolchain.cc(cmd, cwd, prof)
             if cwd != Path("."):  # a mod.dll, beside its mod.c or under <out>/mods
-                where = cwd.relative_to(RUNTIME.parent) / "mod.dll"
+                try:
+                    where = cwd.relative_to(RUNTIME.parent) / "mod.dll"
+                except ValueError:  # a player's folder, outside the source tree
+                    where = cwd / "mod.dll"
                 if proc.returncode != 0:
                     out_text = proc.stdout + proc.stderr
                     errs = [ln for ln in out_text.splitlines() if "error" in ln.lower()]
@@ -470,7 +578,7 @@ def main() -> int:
             if proc.returncode != 0:
                 print((proc.stdout + proc.stderr)[-2000:], file=sys.stderr)
                 return 1
-            if "/link" in cmd or any(a.startswith("-Wl,--pdb=") for a in cmd):
+            if any(a in exe_flags for a in cmd):
                 print(f"linked {exe} ({time.time() - t0:.1f}s)")
         if failed_mods:
             return 1

@@ -2298,6 +2298,13 @@ static unsigned g_frames_seen;
 static uint64_t g_frame_consumer0;
 static double g_frame_gpu0;
 
+static char g_root_dir[512]; /* gxv_set_root's, or empty */
+
+void gxv_set_root(const char* root)
+{
+    snprintf(g_root_dir, sizeof g_root_dir, "%s", root ? root : "");
+}
+
 static void pcache_open(void)
 {
     const char* path = getenv("SOA_GPU_PIPELINES");
@@ -2306,7 +2313,17 @@ static void pcache_open(void)
     long n = 0;
     FILE* f;
     if (path && (!strcmp(path, "off") || !strcmp(path, "0"))) return;
-    snprintf(g_pcache_path, sizeof g_pcache_path, "%s", path && *path ? path : "build/gxv-pipelines.bin");
+    if (path && *path) {
+        snprintf(g_pcache_path, sizeof g_pcache_path, "%s", path);
+    } else if (g_root_dir[0]) {
+        /* under the root, made if this is its first run (distribution R2) */
+        char dir[sizeof g_root_dir + 8];
+        snprintf(dir, sizeof dir, "%s/build", g_root_dir);
+        plat_mkdir(dir);
+        snprintf(g_pcache_path, sizeof g_pcache_path, "%s/gxv-pipelines.bin", dir);
+    } else {
+        snprintf(g_pcache_path, sizeof g_pcache_path, "%s", "build/gxv-pipelines.bin");
+    }
     f = fopen(g_pcache_path, "rb");
     if (f) {
         if (fseek(f, 0, SEEK_END) == 0 && (n = ftell(f)) > 0 && n < (64L << 20) && fseek(f, 0, SEEK_SET) == 0) {
@@ -4042,6 +4059,11 @@ void gxv_present_resize(int w, int h)
 {
     (void)w;
     (void)h;
+}
+
+void gxv_set_root(const char* root)
+{
+    (void)root;
 }
 
 #endif

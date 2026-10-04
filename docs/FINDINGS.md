@@ -6689,3 +6689,58 @@ the driver's.** 2026-10-04.
   - the player's build without `src/` and `include/` (3.1), and one command from disc to folder
     (R2);
   - reproducible bytes: no timestamps, no absolute paths, which R2 asks.
+
+**R2: one command from a disc image to a folder that plays.** 2026-10-04.
+
+- **What it does.** `python tools/player_build.py --disc <image> --root <folder>` builds the game into a
+  folder with nothing of Microsoft's:
+  - it checks the disc;
+  - it extracts what the game reads;
+  - it translates, compiles and links with llvm-mingw (`--no-decomp`, `--reproducible`, every core);
+  - it puts `soa.exe` and the mods at the folder's top and writes `soa.ini` (`gpu = vulkan`, the mods
+    on);
+  - it prints a `[build]` line per step and translation unit, for R4's window, and ends with the exe's
+    SHA-256.
+- **The package.** `python tools/package.py stage <folder>` lays out what a release holds:
+  - `python/`, CPython 3.14.8's embeddable distribution (pinned and hashed), 24 MB;
+  - `toolchain/`, llvm-mingw, 425 MB;
+  - `source/`, 31 MB: `runtime/`, `config/`, the tools the build runs, the mods' text and
+    `vendor/`'s GPU build files.
+  - Never `src/`, `include/`, `gen/`, `extracted/` or `build/`.
+- **The build without `src/`** (3.1). `recompile.py --no-decomp`:
+  - leaves out the 12 bindings `decomp_swap.c` answers with decompiled code (a test holds them to the
+    ones `hle.txt` notes as decompiled), so the game's own MSL runs translated;
+  - links with `SOA_NO_DECOMP`, which empties `decomp_swap.c` and has the self test name its
+    comparison skipped.
+- **The pipeline cache under the root:** `main.c` hands `settings_root()` to `gxv_set_root`, and the
+  cache is `<root>/build/gxv-pipelines.bin` (`plat_mkdir` makes the folder) whatever the working
+  directory. The spike, which links no `settings.c`, keeps the relative path.
+- **Checked** [V]:
+  - **From the staged package,** with `PATH` holding only its `python/`, the owner's disc builds into an
+    empty folder:
+    - in 137 s the first time, and 85 s when it rebuilt;
+    - `GPU backend: built in`;
+    - the same `soa.exe`, byte for byte, as the builds from the repository (sha256 8e5d246f...).
+  - **The installed exe:** `SOA_SELFTEST=1` gives 0 failures with case 73 named as skipped; `replay
+    --exe` matches 23 of 23 at 1, 2, 3 and 8 threads; `title --check` holds 4 of 4.
+  - **Reproducible:** `build/player1`, `build/second player` (a space in its name) and the staged
+    package's build give the same `soa.exe`. Without `--no-insert-timestamp`, the two folders' links
+    differ.
+  - **Never stale:** one byte of the staged package's `runtime/cpu.h` changed, and the build over the
+    finished folder logged `[build] translate: runtime/cpu.h` and compiled all 19 units again.
+    `test_player_build.py` holds the decision, with the mutation that only relinks.
+  - **Run from elsewhere:** started from another working directory, the exe's `[gxv] pipelines:`
+    line names `<root>/build/gxv-pipelines.bin`, and no `build/` appears where it was started.
+  - **Refusals,** four tests with a synthetic disc, each exit 2 and a `[build] refused:` line:
+    - another game id, named (GTSE01);
+    - an executable whose SHA-1 differs;
+    - an image that is not a disc;
+    - a config that cannot be read, never a warning.
+  - **RVZ under the embedded Python:** `discfixture.write_rvz` (new) makes a synthetic RVZ, which reads
+    back under `python.exe`. With `_zstd.pyd` taken out, the same run fails.
+  - **What the translated MSL costs** on `partl` (3,000 frames at `SOA_SPEED=20`, the mingw build with
+    `src/` against the one without, interleaved three times):
+    - native 34.8, 41.8 and 43.7 s; translated 43.9, 39.3 and 34.9 s;
+    - medians 41.8 and 39.3, so no cost shows above the noise, and 3.1's plain-C equivalents are not
+      needed.
+- **Not yet:** R3 (the zip, the guard over it, the release workflow) and R4 (the setup window).

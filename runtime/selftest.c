@@ -1501,6 +1501,22 @@ void* dc_memset(void* dst, int val, size_t n);
 
 /* The recompiled twins, by name: dispatch() now reaches the adapters in
  * runtime/decomp_swap.c for these addresses (config/hle.txt). */
+#ifdef SOA_NO_DECOMP
+/* A build without src/ (distribution 3.1) binds none of these: the translation
+ * is fn_ itself, and the twins the checks below run are the game's own. */
+#define recomp_fn_8025F1D8 fn_8025F1D8
+#define recomp_fn_8025EF18 fn_8025EF18
+#define recomp_fn_8025C73C fn_8025C73C
+#define recomp_fn_8025C710 fn_8025C710
+#define recomp_fn_8025EF48 fn_8025EF48
+#define recomp_fn_8025F0B0 fn_8025F0B0
+#define recomp_fn_8025F0DC fn_8025F0DC
+#define recomp_fn_80005520 fn_80005520
+#define recomp_fn_80005434 fn_80005434
+#define recomp_fn_8025EF88 fn_8025EF88
+#define recomp_fn_8025ED74 fn_8025ED74
+#define recomp_fn_8025F120 fn_8025F120
+#endif
 void recomp_fn_8025F1D8(CpuState* s); void recomp_fn_8025EF18(CpuState* s); void recomp_fn_8025C73C(CpuState* s);
 void recomp_fn_8025C710(CpuState* s); void recomp_fn_8025EF48(CpuState* s); void recomp_fn_8025F0B0(CpuState* s);
 void recomp_fn_8025F0DC(CpuState* s); void recomp_fn_80005520(CpuState* s); void recomp_fn_80005434(CpuState* s);
@@ -1532,6 +1548,14 @@ static void random_string(CpuState* s, uint32_t addr, unsigned len)
 
 static int decomp_selftest(CpuState* s, char* got, size_t cap)
 {
+#ifdef SOA_NO_DECOMP
+    (void)s;
+    (void)got;
+    (void)cap;
+    fprintf(stderr, "[selftest] %-28s skip  a build without src/: the translated MSL runs (distribution 3.1)\n",
+            "decompiled vs recompiled");
+    return 0;
+#else
     const uint32_t A = SCRATCH + 0x1000, B = SCRATCH + 0x1200, DST = SCRATCH + 0x1400;
     int failures = 0, round, bad = 0;
     for (round = 0; round < 200 && !bad; round++) {
@@ -1624,6 +1648,7 @@ static int decomp_selftest(CpuState* s, char* got, size_t cap)
     if (!bad) snprintf(got, cap, "12 functions agree over %d rounds", round);
     failures += check("decompiled vs recompiled", got, bad ? "agreement" : got);
     return failures;
+#endif
 }
 
 /* VIGetRetraceCount is answered by runtime/tick.c (PLAN M2), which must be the

@@ -85,6 +85,24 @@ def test_the_native_job_needs_no_pip_install():
     assert not outside, f"importing recompile.py now pulls in {outside}"
 
 
+def test_the_player_build_runs_on_the_standard_library_alone():
+    """specs/distribution.md 3.5: a player's package runs tools/player_build.py
+    on CPython's embeddable distribution, which has the standard library and
+    nothing else. Everything it imports -- the recompiler, the disc and RVZ
+    readers, extraction -- has to stay inside it."""
+    probe = (
+        "import sys, json;"
+        f"sys.path.insert(0, {str(ROOT / 'tools')!r});"
+        "import player_build, extract, soa.rvz;"
+        "print(json.dumps([getattr(m, '__file__', '') or '' for m in list(sys.modules.values())]))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True, cwd=ROOT
+    )
+    outside = [f for f in json.loads(out.stdout) if "site-packages" in f.replace("\\", "/")]
+    assert not outside, f"importing player_build.py now pulls in {outside}"
+
+
 def test_the_render_driver_still_runs_the_ports_own_checks():
     """tools/citest/render_driver.c carries a verbatim copy of the render
     recipe in runtime/selftest.c, because the original is static in a file

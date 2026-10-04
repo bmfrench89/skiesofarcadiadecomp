@@ -243,6 +243,11 @@ every runtime file with the pinned llvm-mingw).*
 
 ### R2. One command from a disc image to an install folder
 
+*Landed 2026-10-04 (FINDINGS "R2"), every Done line holding. As built: `tools/package.py stage`
+is R3's staging; `discfixture.write_rvz` makes the synthetic RVZ; the never-stale check is
+`test_player_build.py` on the build's decision, and the staged package's run with `cpu.h` changed
+is in FINDINGS.*
+
 *Several days. Rebuild: none for the port. Prerequisites: R1. Files: `tools/player_build.py` (new),
 `tools/extract.py` (callable as a function), `tools/recompile.py` (a build with no `src/`: no native units,
 no MSL bindings), `runtime/gxv.c` (the pipeline cache under the root), `runtime/selftest.c` (case 73

@@ -266,3 +266,18 @@ void plat_dl_close(void* lib)
     if (lib) dlclose(lib);
 }
 #endif
+
+/* ---- directories ------------------------------------------------------------ */
+
+#ifdef _WIN32
+int plat_mkdir(const char* path)
+{
+    return CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+#else
+#include <sys/stat.h>
+int plat_mkdir(const char* path)
+{
+    return mkdir(path, 0755) == 0 || errno == EEXIST;
+}
+#endif

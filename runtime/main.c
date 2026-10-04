@@ -1230,6 +1230,7 @@ static void gpu_start(void)
         fprintf(stderr, "[gxv] SOA_GPU=vulkan but nothing is drawn (SOA_RENDER is not set); the GPU is not started\n");
         return;
     }
+    gxv_set_root(settings_root()); /* the pipeline cache under the root, not the working directory */
     if (!gxv_start(why, sizeof why)) fprintf(stderr, "[gxv] fallback: %s; the CPU draws\n", why);
 }
 
