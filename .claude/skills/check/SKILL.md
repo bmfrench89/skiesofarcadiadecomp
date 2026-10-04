@@ -26,8 +26,9 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5b | `python tools/citest/dc_check.py` | 2.5 s | MSVC |
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
+| 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 600 s | nothing (399 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 680 s | nothing (399 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -271,6 +272,21 @@ file; FINDINGS "L4a"), but an error under one is an error under both. Clear
 `SOA_CC` and `PYTHONPATH` afterwards: `test_gxr_fastpath.py` reads `SOA_CC`
 in every later run of the suite.
 
+### 5e. Every runtime file under llvm-mingw
+
+CI's `Runtime compiles (llvm-mingw)` job (distribution R1): the runtime's
+Windows half under mingw-w64's headers, which no other job compiles. R1's own
+case was the host profiler's inline-frame calls, which `dbghelp.h` there does
+not declare. It needs the compiler in `vendor/`, fetched once:
+
+```
+python tools/fetch_mingw.py
+python tools/citest/compile_runtime.py --cc mingw
+```
+```
+compiled 31/31 runtime translation units
+```
+
 ## 6. The decompilation check
 
 ```
@@ -320,14 +336,15 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1242 passed, 2 skipped in 599.50s
+1248 passed, 3 skipped in 682.24s
 ```
 
-1244 tests in 71 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1223 passed, 3 skipped` without
+1251 tests in 72 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1229 passed, 4 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `843 passed, 401 skipped` without MSVC. The two
-skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`).
+into one module-level skip), `849 passed, 402 skipped` without MSVC. The three
+skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
+`test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather

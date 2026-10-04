@@ -254,6 +254,37 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_toolchain_fp.py tools/tests/test_gxr_fastpath.py -v
 
+  # Every runtime file compiled for Windows by llvm-mingw, the compiler a
+  # player's package carries (specs/distribution.md R1): the pinned release,
+  # its Ubuntu-hosted build -- the same compiler, a smaller download --
+  # fetched and verified by tools/fetch_mingw.py, and compile_runtime.py's
+  # strict set promoting a call that matches nothing to an error, so code only
+  # MSVC accepts (an __try, a missing declaration) fails here. It links
+  # nothing: the whole build, the self test, the replay and the GPU contrast
+  # with gen/mingw/soa.exe run on the owner's machine (test_mingw.py).
+  mingw:
+    name: Runtime compiles (llvm-mingw)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: llvm-mingw, pinned and verified
+        run: |
+          python tools/fetch_mingw.py
+          python tools/fetch_mingw.py --verify
+
+      - name: The compiler the checks use
+        run: vendor/llvm-mingw/bin/x86_64-w64-mingw32-clang --version
+
+      - name: Vulkan-Headers for the GPU backend
+        run: python tools/fetch_gpu.py --headers
+
+      - name: Compile every runtime/*.c
+        run: python tools/citest/compile_runtime.py --cc mingw --require-gxv
+
   # The same checks under gcc and clang on Linux (portability.md 3.12, L4b).
   # These are the first runs of plat.h's POSIX half -- pthread_create, the
   # futex wait and CLOCK_MONOTONIC -- and of the native twins on a host where

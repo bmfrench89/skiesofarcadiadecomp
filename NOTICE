@@ -21,6 +21,11 @@ a different GameCube title could build on it — and MIT is meant to let them.
 which the file reproduces above each function. The top of the file lists
 every change made to them.
 
+`runtime/soafma.c` holds musl's `fma` (https://musl.libc.org/, commit 9683bd62
+of 2024-03-14, by Szabolcs Nagy), copyright Rich Felker et al. and published
+under the MIT licence, which the file reproduces above it. The top of the file
+lists every change made to it.
+
 ## Not covered, and not ours to licence
 
 `src/` contains C written to reproduce the original program's compiled output

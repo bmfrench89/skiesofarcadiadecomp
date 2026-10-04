@@ -20,6 +20,15 @@
 #include <stdint.h>
 #include <string.h>
 
+/* A MinGW build's fma would come from the UCRT DLL, Wine's under Proton:
+ * the guest's fused multiply-adds call the exe's own instead (soafma.c,
+ * specs/distribution.md R1). Every other build's fma is in the exe already,
+ * or exact. */
+#if defined(__MINGW32__)
+double soa_fma(double a, double b, double c);
+#define fma soa_fma
+#endif
+
 #define MEM1_SIZE 0x01800000u /* the RAM the console has: 24 MB */
 #define MEM_MASK 0x01FFFFFFu  /* what mem_ptr narrows an address to: 32 MB */
 

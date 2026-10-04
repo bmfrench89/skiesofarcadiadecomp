@@ -2009,12 +2009,20 @@ static void hp_print(const HpTable* t, int mode, int rows)
             BOOL got;
             memset(&line, 0, sizeof line);
             line.SizeOfStruct = sizeof line;
+#ifndef __MINGW32__
             if (SymAddrIncludeInlineTrace(proc, t->rip[k]) &&
                 SymQueryInlineTrace(proc, t->rip[k], 0, t->rip[k], t->rip[k], &ictx, &iframe)) {
                 DWORD64 idisp = 0;
                 if (SymFromInlineContext(proc, t->rip[k], ictx, &idisp, sym)) disp = idisp;
                 got = SymGetLineFromInlineContext(proc, t->rip[k], ictx, 0, &ldisp, &line);
-            } else {
+            } else
+#else
+            /* mingw-w64's dbghelp.h has no inline-frame API (distribution R1):
+             * there a sample is charged to the line that calls the inline. */
+            (void)ictx;
+            (void)iframe;
+#endif
+            {
                 got = SymGetLineFromAddr64(proc, t->rip[k], &ldisp, &line);
             }
             if (mode == 1) {

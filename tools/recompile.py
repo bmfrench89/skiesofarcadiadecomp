@@ -2,7 +2,7 @@
 """Translate the whole DOL to C.
 
     python tools/recompile.py [--dol extracted/sys/main.dol] [--out gen] [--chunk 400]
-                              [--cc msvc|clang-cl|gcc|clang] [--compile] [--link] [--limit N]
+                              [--cc msvc|clang-cl|gcc|clang|mingw] [--compile] [--link] [--limit N]
 
 Writes gen/functions.h, gen/dispatch.c and gen/chunk_NNN.c (gitignored: they
 are derived from the game binary and are reproduced locally from the user's
@@ -12,8 +12,11 @@ visible. --compile runs the compiler over every chunk to prove the C is valid;
 
 --cc picks a toolchain profile (tools/soa/toolchain.py; portability.md 3.9):
 msvc by default. Another profile writes everything -- the C, the objects, the
-exe -- under its own directory, gen/clang for clang-cl, and never builds the
-mods, so a clang build can never be linked into gen/soa.exe.
+exe -- under its own directory, gen/clang for clang-cl, so a clang build can
+never be linked into gen/soa.exe. mingw (llvm-mingw, distribution R1) links
+GNU-style into gen/mingw/soa.exe with no Microsoft compiler, and builds each
+mod's mod.dll under gen/mingw/mods, beside a copy of its mod.ini and
+patches.txt, never over the msvc build's beside mod.c.
 """
 
 import argparse
@@ -63,6 +66,24 @@ def mod_dll_command(src: Path) -> list[str]:
         f"/Fo{folder}{os.sep}",
         f"/Fe:{folder / 'mod.dll'}",
     ]
+
+
+# The text files a mod folder's mod.dll is loaded beside: a mingw build copies
+# them into its own mods/ folder with the mod.dll it builds.
+MOD_TEXT = ("mod.ini", "patches.txt")
+
+
+def mod_out_dir(p: toolchain.Profile, out: Path, src: Path) -> Path:
+    """Where --link puts a mod's mod.dll: beside its mod.c for msvc, under
+    <out>/mods/<folder> for mingw (distribution R1), absolute."""
+    if p.name == "msvc":
+        return src.parent.resolve()
+    return (out / "mods" / src.parent.name).resolve()
+
+
+def gnu_mod_dll_command(p: toolchain.Profile, src: Path, dest: Path) -> list[str]:
+    """The mingw profile's line for a mod's mod.dll, written into dest."""
+    return [*p.cflags, "-shared", f"/I{RUNTIME}", str(src.resolve()), f"/Fe{dest / 'mod.dll'}"]
 
 
 # ---- the command lines, one profile at a time (portability.md 3.9, L3a) ----
@@ -123,6 +144,27 @@ def decomp_objects(p: toolchain.Profile, out: Path, dc_files: list[str]) -> list
     return sorted(out / "decomp" / (Path(f).stem + p.objext) for f in dc_files)
 
 
+def gnu_link_command(
+    p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = False
+) -> list[str]:
+    """The mingw profile's link (distribution R1): msvc's, in clang's words.
+    -gcodeview and lld's --pdb write <out>/soa.pdb, which SOA_HOSTPROF's
+    report reads through dbghelp as it reads MSVC's. The libraries and the
+    stack are the profile's linker flags, last, after every source and object."""
+    return [
+        *p.cflags,
+        "-gcodeview",
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
+        f"/Fe{out / ('soa' + p.exeext)}",
+        *map(str, sorted(RUNTIME.glob("*.c"))),
+        *map(str, objs),
+        f"-Wl,--pdb={out / 'soa.pdb'}",
+        *p.linker,
+    ]
+
+
 def link_command(p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = False) -> list[str]:
     """The link of runtime/ and the objects into soa.exe, run in the root.
 
@@ -160,10 +202,10 @@ def link_command(p: toolchain.Profile, out: Path, objs: list[Path], gxv: bool = 
 
 
 def builds_mods(p: toolchain.Profile) -> bool:
-    """Only the msvc profile builds mods/*/mod.c: the shipped mods are MSVC
-    DLLs for gen/soa.exe, and a clang build must touch nothing outside its
-    own directory (L9 builds mod.so on Linux)."""
-    return p.name == "msvc"
+    """The msvc profile builds mods/*/mod.c beside each, for gen/soa.exe;
+    mingw builds them under its own directory (mod_out_dir). clang-cl's build
+    must touch nothing outside its own, and L9 builds mod.so on Linux."""
+    return p.name in ("msvc", "mingw")
 
 
 def link_plan(
@@ -180,9 +222,15 @@ def link_plan(
     if dc_files:
         plan.append((decomp_command(p, out, dc_files, dc_defines), Path(".")))
         objs += decomp_objects(p, out, dc_files)
-    plan.append((link_command(p, out, objs, gxv), Path(".")))
-    if builds_mods(p):
+    link = gnu_link_command if p.name == "mingw" else link_command
+    plan.append((link(p, out, objs, gxv), Path(".")))
+    if p.name == "msvc":
         plan += [(mod_dll_command(src), src.parent) for src in mod_dll_sources()]
+    elif builds_mods(p):
+        plan += [
+            (gnu_mod_dll_command(p, src, mod_out_dir(p, out, src)), mod_out_dir(p, out, src))
+            for src in mod_dll_sources()
+        ]
     return plan
 
 
@@ -355,9 +403,9 @@ def main() -> int:
             return 1
 
     if args.link:
-        if prof.style != "msvc":
+        if prof.style != "msvc" and prof.name != "mingw":
             print(
-                f"\n--link builds with msvc or clang-cl; {prof.name}'s link is portability L4b's",
+                f"\n--link builds with msvc, clang-cl or mingw; {prof.name}'s link is portability L10's",
                 file=sys.stderr,
             )
             return 1
@@ -398,13 +446,21 @@ def main() -> int:
             print("GPU backend: not built in (python tools/fetch_gpu.py, then --link again)")
         failed_mods = 0
         for cmd, cwd in link_plan(prof, args.out, dc_files, dc_defines, gxv):
+            if cwd != Path(".") and prof.name == "mingw":
+                # the mod's own text beside the mod.dll this build makes
+                src = next(s for s in mod_dll_sources() if s.parent.name == cwd.name)
+                cwd.mkdir(parents=True, exist_ok=True)
+                for name in MOD_TEXT:
+                    if (src.parent / name).exists():
+                        (cwd / name).write_bytes((src.parent / name).read_bytes())
             proc = toolchain.cc(cmd, cwd, prof)
-            if cwd != Path("."):  # a mod.dll, beside its mod.c
+            if cwd != Path("."):  # a mod.dll, beside its mod.c or under <out>/mods
                 where = cwd.relative_to(RUNTIME.parent) / "mod.dll"
                 if proc.returncode != 0:
-                    errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
+                    out_text = proc.stdout + proc.stderr
+                    errs = [ln for ln in out_text.splitlines() if "error" in ln.lower()]
                     print(
-                        f"  FAIL {where}: {errs[0] if errs else proc.stdout[-300:]}",
+                        f"  FAIL {where}: {errs[0] if errs else out_text[-300:]}",
                         file=sys.stderr,
                     )
                     failed_mods += 1
@@ -412,9 +468,9 @@ def main() -> int:
                     print(f"built {where}")
                 continue
             if proc.returncode != 0:
-                print(proc.stdout[-2000:], file=sys.stderr)
+                print((proc.stdout + proc.stderr)[-2000:], file=sys.stderr)
                 return 1
-            if "/link" in cmd:
+            if "/link" in cmd or any(a.startswith("-Wl,--pdb=") for a in cmd):
                 print(f"linked {exe} ({time.time() - t0:.1f}s)")
         if failed_mods:
             return 1

@@ -68,6 +68,11 @@ gen\soa.exe extracted
 `--cc clang-cl` builds the whole game with clang-cl instead, into `gen\clang` and never `gen`:
 `python tools/recompile.py --cc clang-cl --compile --optimize --link` makes `gen\clang\soa.exe` in
 about a minute and a half, and it draws the 23 reference frames exactly as MSVC's build does (L3b).
+`--cc mingw` needs nothing of Microsoft's at all: `python tools/fetch_mingw.py` fetches llvm-mingw
+(pinned and verified, about 190 MB, into `vendor\`), then
+`python tools/recompile.py --cc mingw --compile --optimize --link` makes `gen\mingw\soa.exe` in
+about a minute and a quarter, with the mods' `mod.dll` under `gen\mingw\mods` (point `SOA_MODS`
+there). It draws the 23 reference frames exactly as MSVC's build does too (distribution R1).
 `SOA_CLANG_CL` names the compiler; the Android NDK's
 (`...\Android\Sdk\ndk\<version>\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`)
 is enough,
@@ -308,7 +313,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1244 tests; any that need a dump skip themselves
+python -m pytest                     # 1251 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

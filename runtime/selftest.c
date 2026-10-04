@@ -2051,6 +2051,80 @@ static int rearm_selftest(CpuState* s, char* got, size_t cap)
 int mod_call_guest(CpuState* s, uint32_t addr, const uint32_t* ints, uint32_t n_ints, const double* floats,
                    uint32_t n_floats, uint32_t* r3, double* f1, char* why, size_t cap);
 
+/* The guest's fused multiply-add rounds once (specs/distribution.md R1, 3.4).
+ * The translated 80120A50 is a vector lerp, out = a + t (b - a), each
+ * component an fmadds of t, b - a and a. With t = 1 + 2^-30 in f1, a.z =
+ * -(1 + 2^-23) and b.z = 0, the exact z is 2^-30 (1 + 2^-23), a float:
+ * 0x30800001. Round the product first and the 2^-53 it carries is lost:
+ * 0x30800000. Then soa_fma_soft, the software fma a MinGW build falls back to
+ * on a CPU without FMA3 (soafma.c), held to this build's own fma over
+ * 200,000 triples where one rounding decides: most of a product cancelled,
+ * subnormal results, and random bit patterns, infinities and NaNs among them. */
+double soa_fma_soft(double x, double y, double z);
+
+static uint64_t fused_rng(uint64_t* x)
+{
+    *x ^= *x << 13;
+    *x ^= *x >> 7;
+    *x ^= *x << 17;
+    return *x;
+}
+
+static double fused_bits(uint64_t v)
+{
+    double d;
+    memcpy(&d, &v, 8);
+    return d;
+}
+
+static int fused_selftest(CpuState* s, char* got, size_t cap)
+{
+    const uint32_t OUT = SCRATCH + 0x1900, A = SCRATCH + 0x1910, B = SCRATCH + 0x1920;
+    uint64_t x = 0x9E3779B97F4A7C15ull;
+    unsigned n, bad = 0;
+    int i, fails = 0;
+    for (i = 0; i < 3; i++) {
+        mem_wf32(s, A + 4 * i, i == 2 ? -(1.0f + 0x1p-23f) : 1.0f);
+        mem_wf32(s, B + 4 * i, i == 2 ? 0.0f : 2.0f);
+        mem_w32(s, OUT + 4 * i, 0);
+    }
+    s->gpr[3] = OUT;
+    s->gpr[4] = A;
+    s->gpr[5] = B;
+    s->fpr[1].ps0 = s->fpr[1].ps1 = 1.0 + 0x1p-30;
+    call(s, 0x80120A50u);
+    snprintf(got, cap, "%08X", mem_r32(s, OUT + 8));
+    fails += check("guest fmadds rounds once", got, "30800001");
+    for (n = 0; n < 200000; n++) {
+        double a, b, c, want, soft;
+        uint64_t r = fused_rng(&x);
+        if (n % 8 == 0) {
+            /* anything at all: subnormals, infinities and NaNs too */
+            a = fused_bits(fused_rng(&x));
+            b = fused_bits(fused_rng(&x));
+            c = fused_bits(fused_rng(&x));
+        } else {
+            /* moderate magnitudes, the sum mostly cancelling the product,
+             * now and then pushed to the subnormal range */
+            a = ldexp(1.0 + (double)(r >> 11) * 0x1p-53, (int)(r % 64) - 32);
+            b = ldexp(1.0 + (double)(fused_rng(&x) >> 11) * 0x1p-53, (int)(fused_rng(&x) % 64) - 32);
+            if (r & 1) a = -a;
+            c = -(a * b) * (1.0 + (double)(int)(fused_rng(&x) % 9 - 4) * 0x1p-52);
+            if (n % 8 == 1) {
+                a = ldexp(a, -520);
+                b = ldexp(b, -520);
+                c = ldexp(c, -1040);
+            }
+        }
+        want = fma(a, b, c);
+        soft = soa_fma_soft(a, b, c);
+        if (memcmp(&want, &soft, 8) && !(want != want && soft != soft)) bad++;
+    }
+    snprintf(got, cap, "%u of %u differ", bad, n);
+    fails += check("software fma rounds once", got, "0 of 200000 differ");
+    return fails;
+}
+
 static int call_guest_selftest(CpuState* s, char* got, size_t cap)
 {
     static CpuState before;
@@ -2206,6 +2280,7 @@ int selftest(CpuState* s)
     failures += epoch_selftest(s, got, sizeof got);
     failures += rearm_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
+    failures += fused_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

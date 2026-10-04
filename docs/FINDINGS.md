@@ -6613,3 +6613,79 @@ the driver's.** 2026-10-04.
     - `compile_runtime`, `dc_check` and `render_check` under MSVC and clang-cl.
 - **V8's remainder:** M8's overlay, when M8 lands; H8's pacing, from a windowed run at 60 or 120 Hz;
   and the owner's session.
+
+**R1: soa.exe built with no Microsoft compiler.** 2026-10-04.
+
+- **What it does.** `python tools/fetch_mingw.py` fetches llvm-mingw 20260922 (LLVM 23.1.2) into
+  `vendor/llvm-mingw`, from the release asset whose sha256 is pinned (GitHub records the same
+  digest beside it).
+  - It keeps the x86-64 Windows target alone: 5,300 files, 425 MB of the archive's 750.
+  - It records each one in `vendor/MINGW.sha256`, which `--verify` checks.
+  - `python tools/recompile.py --cc mingw --compile --optimize --link` then builds
+    `gen/mingw/soa.exe`, and each shipped mod's `mod.dll` under `gen/mingw/mods`, beside a copy of
+    its `mod.ini`, never over the msvc build's.
+- **What the runtime needed:**
+  - **One change in `gxr.c`:** the host profiler's inline-frame symbols, which mingw-w64's
+    `dbghelp.h` does not declare. There a sample is charged to the line that calls the inline.
+  - **The guest's `fma` inside the exe** (3.3):
+    - The mingw link imported `fma` from the UCRT DLL, which under Proton is Wine's.
+    - `runtime/soafma.c` now gives it the instruction where the CPU has FMA3, and otherwise musl's
+      exact software `fma` (vendored, MIT, named in NOTICE).
+    - `cpu.h` names it in a MinGW build only. MSVC's static CRT keeps its own, already inside the
+      exe.
+    - `exp2f` and `log2f` were already CORE-MATH's, inside the exe (L6).
+- **Checked** [V]:
+  - **`--verify`:** 5,300 of 5,300 files unchanged; one byte flipped in `include/stdio.h` gives
+    5,299 and exit 1.
+  - **The build with nothing of Microsoft's:** `test_mingw.py` runs the whole build with
+    `msvc_env` made to raise. Every runtime file also compiles under `compile_runtime.py --cc mingw`
+    (31 of 31, `gxv.c` as the backend too).
+  - **The import table** (`llvm-readobj --coff-imports`) lists no `fma`, `exp2f` or `log2f`.
+    Before `soafma.c` it listed `fma`. What it still takes from the UCRT:
+    - `floor`, `floorf`, `ceilf` and `sqrt`, which have exactly one correct answer, so every
+      library agrees;
+    - `pow`, which only `picture.c`'s filter tables call, never the game's arithmetic.
+  - **With `gen/mingw/soa.exe`:**
+    - `SOA_SELFTEST=1` gives 0 failures. Its new case calls the translated vector lerp at 80120A50
+      with t = 1 + 2^-30, a.z = -(1 + 2^-23) and b.z = 0, and gets 0x30800001, the once-rounded
+      float. `soa_fma_soft` agrees with the build's own `fma` on 200,000 triples where one rounding
+      decides.
+    - `scenario.py replay --exe gen/mingw/soa.exe --threads 1,2,3,8` matches all 23 captures
+      against the manifest.
+    - `title --check` holds 4 of 4 invariants.
+    - `SOA_GPU=vulkan` starts the backend, and `gpuspike.py contrast --exe gen/mingw/soa.exe` gives
+      the spike's pixels on 67 of 67 captures.
+    - The four mods built by the GNU build load. The co-op mod's live check
+      (`test_mods.py p10b`, battle scenario, pad 2 scripted) passes.
+  - **The mutations:**
+    - **A naive `fma`** (`a * b + c`) linked in fails the case: 0x30800000, and 165,071 of 200,000
+      triples differ.
+    - **One sticky bit dropped** from the software `fma`'s normalisation gives 6 of 200,000 that
+      differ: the comparison sees a rounding-edge error, not only a gross one.
+    - **`-mfma` without `-ffp-contract=off`** moves all 23 replay hashes. So the renderer's float
+      maths does contract wherever an FMA instruction exists, the flag is what keeps it the
+      console's, and the replay catches its loss.
+  - **CI:** a new job, `Runtime compiles (llvm-mingw)`, fetches and verifies the release's
+    Ubuntu-hosted build and compiles every runtime file for Windows with it. Its mutation, an `__try` added to
+    `clock.c` on a scratch branch (run 37231179534, `gh workflow run --ref`; the branch deleted
+    after), turns it red: 30 of 31 compiled, "use of undeclared identifier '__try'".
+    - The Linux gcc and clang jobs fail it too, and the clang-cl and MSVC jobs pass it.
+    - What only this job compiles is the Windows half of the runtime under mingw-w64's headers.
+      The `dbghelp` inline-frame calls R1 had to guard were such a case: every other job compiled
+      them.
+    - Its verify recorded 5,208 files from the Linux archive.
+  - **Build times**, full `--compile --optimize --link` from the same translation, interleaved twice
+    on this machine (16 threads): compile, link and the whole command (translation
+    included), in seconds:
+
+    | | compile | link | whole |
+    |---|---|---|---|
+    | MSVC | 150.4, 148.5 | 9.3, 10.4 | 187, 182 |
+    | clang-cl (the NDK's) | 54.2, 60.2 | 18.1, 14.2 | 93, 97 |
+    | llvm-mingw | 44.0, 41.4 | 11.6, 13.2 | 77, 75 |
+
+    llvm-mingw builds the game in about two fifths of MSVC's time, on this machine.
+- **Not yet:**
+  - the player's build without `src/` and `include/` (3.1), and one command from disc to folder
+    (R2);
+  - reproducible bytes: no timestamps, no absolute paths, which R2 asks.

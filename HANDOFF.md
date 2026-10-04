@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1244 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1251 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1244 |
+| Python tests | 1251 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -622,10 +622,15 @@ C5c) is now done.
    on the CPU. The owner's windowed session (V6b's fifteen minutes, V8's
    presenter, V9a's 2x and 3x) was set up on 2026-10-04 and put off by the
    owner; it wants the display at 60 or 120 Hz (it is still at 85), and
-   View+LS marks a frame. **Next:** distribution's R1, `soa.exe` built by a
-   fetched llvm-mingw (specs/distribution.md; Q-D1 answered yes): the GPU
-   build is done but for what waits on others (that session, M8's overlay,
-   V9b after M10, V12 after H17), and R1-R4 come before L12. Still open for the owner, and not blocking: whether a
+   View+LS marks a frame. The GPU build is done but for what waits on
+   others (that session, M8's overlay, V9b after M10, V12 after H17).
+   **R1 is done** (FINDINGS "R1"): `python tools/fetch_mingw.py`, then
+   `recompile.py --cc mingw --compile --optimize --link` builds
+   `gen/mingw/soa.exe` with nothing of Microsoft's, its guest `fma` inside
+   the exe (`runtime/soafma.c`), and it passes the self test, the replay,
+   `title --check` and the GPU contrast; CI compiles every runtime file with
+   the pinned llvm-mingw. **Next:** R2, one command from a disc image to an
+   install folder (specs/distribution.md), then R3 and R4, before L12. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

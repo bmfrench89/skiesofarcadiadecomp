@@ -1415,19 +1415,21 @@ def specdiff(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> in
     return 1 if differ or problems else 0
 
 
-def contrast(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
+def contrast(
+    prof: toolchain.Profile, sets: list[str], mutate: str | None, exe: Path | None = None
+) -> int:
     """V5's same-session contrast. Each capture is copied once into
     build/gpuspike/<cc>/contrast/<set>/ -- soa.exe --replay writes <base>.png
-    beside it -- and replayed by the spike and by gen/soa.exe with
-    SOA_GPU=vulkan. Pass: every pair of pictures has the same pixels and every
-    run started on the same device. A mutation goes to soa.exe alone, and
-    must fail it."""
+    beside it -- and replayed by the spike and by gen/soa.exe (or --exe:
+    distribution R1's gen/mingw/soa.exe) with SOA_GPU=vulkan. Pass: every pair
+    of pictures has the same pixels and every run started on the same device.
+    A mutation goes to soa.exe alone, and must fail it."""
     code = ready(prof)
     if code is not None:
         return code
-    exe = ROOT / "gen" / f"soa{prof.exeext}"
+    exe = (exe if exe is not None else ROOT / "gen" / f"soa{prof.exeext}").resolve()
     if not exe.exists():
-        print(f"skip: no {exe.relative_to(ROOT)} (python tools/recompile.py --link)")
+        print(f"skip: no {exe} (python tools/recompile.py --link)")
         return SKIP
     out = build_dir(prof) / "contrast"
     caps = captures(sets)
@@ -2242,6 +2244,12 @@ def main(argv: list[str] | None = None) -> int:
         help="SOA_GPU_FEATURES for every run: core treats every optional feature as absent",
     )
     ap.add_argument(
+        "--exe",
+        type=Path,
+        default=None,
+        help="contrast: the soa.exe to hold to the spike (default gen/soa.exe)",
+    )
+    ap.add_argument(
         "--filters",
         action="store_true",
         help="present: P5a's filters on the GPU against picture.c (V8b)",
@@ -2288,7 +2296,7 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("live takes one scenario, e.g. title")
         return live(prof, args.frames[0], args.range, args.mutate, args.live_seed)
     if args.command == "contrast":
-        return contrast(prof, args.set.split(","), args.mutate)
+        return contrast(prof, args.set.split(","), args.mutate, args.exe)
     if args.command == "specdiff":
         return specdiff(prof, args.set.split(","), args.mutate)
     if args.command == "copyimage":

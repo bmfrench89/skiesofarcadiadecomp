@@ -205,6 +205,11 @@ regardless. R5 is built with L12.
 
 ### R1. `soa.exe` with no Microsoft compiler
 
+*Landed 2026-10-04 (FINDINGS "R1"): every Done line below holds. Added while building:
+`runtime/soafma.c` (the instruction where the CPU has FMA3, musl's exact `fma` otherwise), named by
+`cpu.h` in a MinGW build only; and the GNU mod build writes `gen/mingw/mods`, never beside the msvc
+build's `mod.dll`.*
+
 *Week-plus. Rebuild: one retranslation with the new profile. Prerequisites: Q-D1. Files:
 `tools/fetch_mingw.py` (new); `tools/soa/toolchain.py` (a `mingw` profile:
 `--target=x86_64-w64-mingw32 -O2 -ffp-contract=off -fno-strict-aliasing -fwrapv`, the libraries of §2 as

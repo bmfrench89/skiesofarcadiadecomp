@@ -198,7 +198,35 @@ _GNU_FLAGS = (
 _GNU_LINK = ("-pthread", "-lm")
 GCC = Profile("gcc", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux", _GNU_LINK)
 CLANG = Profile("clang", "gnu", _GNU_FLAGS, _CLANG_STRICT, ".o", "", "gen/linux", _GNU_LINK)
-PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG)}
+# llvm-mingw (specs/distribution.md R1): clang for x86_64-w64-mingw32 against
+# the UCRT, with mingw-w64's headers and libraries and lld, so Windows builds
+# with no Microsoft compiler. clang's flags are clang-cl's, in their GNU
+# spelling. The libraries are the ones the runtime names in #pragma
+# comment(lib) under MSVC, and the stack is /STACK's: guest call depth becomes
+# host call depth.
+MINGW = Profile(
+    "mingw",
+    "gnu",
+    ("-std=c17", "-O2", "-ffp-contract=off", "-fno-strict-aliasing", "-fwrapv", "-Wall"),
+    _CLANG_STRICT,
+    ".o",
+    ".exe",
+    "gen/mingw",
+    (
+        "-luser32",
+        "-lgdi32",
+        "-lxinput9_1_0",
+        "-ld3d11",
+        "-ldxgi",
+        "-ldxguid",
+        "-ldwmapi",
+        "-lwinmm",
+        "-ldbghelp",
+        "-lsynchronization",
+        "-Wl,--stack,33554432",
+    ),
+)
+PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG, MINGW)}
 
 
 def profile(name: str | None) -> Profile:
@@ -223,6 +251,15 @@ def _vs_llvm() -> list[Path]:
     return [bat.parents[3] / "VC" / "Tools" / "Llvm" / "x64" / "bin" / "clang-cl.exe"]
 
 
+def mingw_bins() -> list[Path]:
+    """Where llvm-mingw's bin/ may be, in the order looked: SOA_MINGW, then a
+    player's package's toolchain/ (specs/distribution.md 3.2), then vendor/,
+    where tools/fetch_mingw.py puts it."""
+    root = Path(__file__).resolve().parents[2]
+    out = [Path(os.environ["SOA_MINGW"])] if os.environ.get("SOA_MINGW") else []
+    return out + [root.parent / "toolchain" / "bin", root / "vendor" / "llvm-mingw" / "bin"]
+
+
 def compiler_path(p: Profile = MSVC) -> str | None:
     """The compiler a profile runs, or None when it is not here.
 
@@ -231,9 +268,16 @@ def compiler_path(p: Profile = MSVC) -> str | None:
     environment for headers, libraries and link.exe, so without MSVC it is
     None. A SOA_CLANG_CL that names no file is None too, never the next one
     found: a typo would otherwise test another clang's version unannounced.
-    gcc and clang: PATH."""
+    gcc and clang: PATH. mingw: x86_64-w64-mingw32-clang in mingw_bins(),
+    needing nothing of Microsoft's; a SOA_MINGW that holds none is None."""
     if p.name == "msvc":
         return cl_path()
+    if p.name == "mingw":
+        name = "x86_64-w64-mingw32-clang" + (".exe" if os.name == "nt" else "")
+        bins = mingw_bins()
+        if os.environ.get("SOA_MINGW"):
+            bins = bins[:1]
+        return next((str(b / name) for b in bins if (b / name).is_file()), None)
     if p.name == "clang-cl":
         if msvc_env() is None:
             return None
