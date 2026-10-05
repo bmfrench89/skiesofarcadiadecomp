@@ -1,0 +1,66 @@
+name: Release
+
+# The player's package (specs/distribution.md R3): built from this commit and
+# the pinned downloads -- the embeddable CPython, llvm-mingw, Vulkan-Headers
+# and glslang -- with no translated or decompiled game code and no game data
+# (SPEC section 2 rule 5), checked by guard.py --tree once unzipped, and left
+# as a DRAFT release for the owner to publish. On a version tag, and by hand:
+#   gh workflow run release.yml --ref <branch>
+# Each step runs only if every step before it passed, so a package the guard
+# refuses is never drafted.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package, guard and draft
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe names a version from the tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest "ruff==0.16.7"
+
+      - name: The tests
+        run: python -m pytest tools/tests -q
+
+      # R1's job: every runtime file compiled by the compiler the package
+      # carries, fetched and verified as the package will have it.
+      - name: llvm-mingw, pinned and verified
+        run: |
+          python tools/fetch_mingw.py
+          python tools/fetch_mingw.py --verify
+
+      - name: The GPU build files (Vulkan-Headers and glslang), pinned
+        run: python tools/fetch_gpu.py
+
+      - name: Every runtime file under llvm-mingw
+        run: python tools/citest/compile_runtime.py --cc mingw --require-gxv
+
+      - name: The package
+        run: python tools/package.py --out dist
+
+      - name: The guard, over the package unzipped
+        run: |
+          python -c "import glob, zipfile; zipfile.ZipFile(glob.glob('dist/*.zip')[0]).extractall('dist/check')"
+          python tools/guard.py --tree (Get-ChildItem dist/check -Directory)[0].FullName
+
+      - name: A draft release, for the owner to publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = (Get-ChildItem dist/*.zip)[0]
+          $sum = Get-Content "$($zip.FullName).sha256"
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "draft-$("${{ github.sha }}".Substring(0, 7))" }
+          $notes = "The player's package: build the game from your own disc with Setup (or tools/player_build.py). $($zip.Length) bytes; sha256 $sum"
+          gh release create $tag --draft --target "${{ github.sha }}" --title "$($zip.BaseName)" --notes $notes $zip.FullName "$($zip.FullName).sha256"

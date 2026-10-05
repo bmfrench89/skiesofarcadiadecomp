@@ -570,3 +570,80 @@ def test_an_exempt_blob_is_not_judged_by_content(tmp_path):
 
 def test_this_repository_mod_folders_pass_the_content_check():
     assert guard.content_problems(ROOT, guard.tracked_files(ROOT)) == []
+
+
+# ---- --tree: a player's package (specs/distribution.md R3) ----------------
+
+
+def package_tree(root: Path) -> Path:
+    """A package's shape with nothing wrong in it: text source, a mod's text,
+    and third-party binaries over the size limit in the three folders that
+    may hold them."""
+    files = {
+        "source/runtime/main.c": b"int main(void) { return 0; }\n",
+        "source/mods/coop/mod.ini": b"name = Couch co-op\n",
+        "source/mods/coop/mod.c": b"/* mod */\n",
+        "source/vendor/glslang/bin/glslang.exe": b"MZ\0" + bytes(3 << 20),
+        "toolchain/bin/libLLVM-23.dll": b"MZ\0" + bytes(3 << 20),
+        "toolchain/include/stdio.h": b"/* mingw-w64 */\n",
+        "python/python314.dll": b"MZ\0" + bytes(3 << 20),
+        "licenses/llvm.txt": b"Apache License\n",
+    }
+    for rel, data in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(data)
+    return root
+
+
+def test_a_clean_package_passes_the_tree_guard(tmp_path):
+    assert guard.tree_problems(package_tree(tmp_path)) == []
+
+
+def test_the_tree_guard_refuses_decompiled_code_and_a_dol_wherever_it_sits(tmp_path):
+    import random
+
+    from soa import discfixture
+
+    root = package_tree(tmp_path)
+    dol = discfixture.make_dol(random.Random(7))
+    planted = {
+        "source/src/sdk/msl/strlen.c": b"/* decompiled */\n",
+        "source/runtime/include/types.h": b"/* decompiled headers */\n",
+        "source/config/notes.txt": dol,  # a DOL by any other name
+        "source/runtime/blob.h": b"\0" * 96 + dol,  # inside a file, on a 32-byte step
+        "toolchain/bin/clang-helper.dll": dol,  # in a third party's folder too
+    }
+    for rel, data in planted.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(data)
+    problems = "\n".join(guard.tree_problems(root))
+    assert "source/src/sdk/msl/strlen.c: under 'src/'" in problems
+    assert "source/runtime/include/types.h: under 'include/'" in problems
+    assert "source/config/notes.txt: holds a DOL's header at offset 0x0" in problems
+    assert "source/runtime/blob.h: holds a DOL's header at offset 0x60" in problems
+    assert "toolchain/bin/clang-helper.dll: holds a DOL's header at offset 0x0" in problems
+    assert "toolchain/include" not in problems  # the compiler's own headers
+
+
+def test_the_tree_guard_keeps_every_other_rule_outside_the_third_party_folders(tmp_path):
+    root = package_tree(tmp_path)
+    for rel, data in {
+        "source/runtime/huge.c": b"x" * (3 << 20),
+        "source/config/vendor/x.txt": b"x\n",
+        "toolchain/share/disc.iso": b"\0\0",
+        "source/mods/coop/patch.bin2": b"\0\1\2",
+    }.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(data)
+    problems = "\n".join(guard.tree_problems(root))
+    assert "source/runtime/huge.c: 3,145,728 bytes exceeds" in problems
+    assert "source/config/vendor/x.txt: under 'vendor/'" in problems
+    assert "toolchain/share/disc.iso: forbidden extension '.iso'" in problems  # a suffix anywhere
+    assert "source/mods/coop/patch.bin2: not text, in a mod folder" in problems
+
+
+def test_the_dol_check_passes_random_bytes_and_text():
+    import random
+
+    assert guard.dol_inside(random.Random(3).randbytes(1 << 20)) is None
+    assert guard.dol_inside((ROOT / "tools" / "guard.py").read_bytes()) is None

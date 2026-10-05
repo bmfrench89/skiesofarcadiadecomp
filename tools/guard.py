@@ -5,10 +5,13 @@ SPEC.md section 2 says no disc images, executables, or extracted assets are ever
 committed. This enforces that mechanically, in CI and as a local pre-commit hook:
 
     python tools/guard.py
+    python tools/guard.py --history      # every blob history ever held
+    python tools/guard.py --tree <dir>   # a player's package, unzipped (distribution R3)
 
 Exits non-zero and names every offending file.
 """
 
+import struct
 import subprocess
 import sys
 import threading
@@ -430,7 +433,112 @@ def history_problems(root: Path, exempt: frozenset = HISTORY_EXEMPT) -> list[str
     return problems
 
 
+# ---- --tree: a player's package (specs/distribution.md R3) ----------------
+# A package is a folder, not a repository, and holds third-party binaries the
+# repository never does: CPython's embeddable distribution, llvm-mingw, and
+# vendor/'s GPU build files, each fetched at a pinned hash. There the size
+# limit and the directory names do not apply; every other rule does,
+# everywhere. And two more: no src/ or include/, the decompiled code and its
+# headers (3.6), and no DOL, found by its header wherever it sits.
+THIRD_PARTY = ("toolchain", "python", "source/vendor")
+DECOMPILED_DIRS = {"src", "include"}
+GUEST_MEMORY = (0x80000000, 0x81800000)  # MEM1, where every DOL section loads
+DOL_HEADER = 0x100
+
+
+def dol_header(data: bytes, at: int = 0) -> bool:
+    """Whether a DOL's header sits at ``at``: 18 section offsets, then their
+    load addresses, then their sizes, then the bss address and size and the
+    entry point. Every section with a size loads inside MEM1 from an offset
+    past the header, at least one is text, and the entry point is in a text
+    section. Random bytes and text never satisfy all of it."""
+    if len(data) < at + DOL_HEADER:
+        return False
+    offs = struct.unpack_from(">18I", data, at)
+    addrs = struct.unpack_from(">18I", data, at + 0x48)
+    sizes = struct.unpack_from(">18I", data, at + 0x90)
+    bss_addr, bss_size, entry = struct.unpack_from(">3I", data, at + 0xD8)
+    lo, hi = GUEST_MEMORY
+    if not lo <= entry < hi:
+        return False
+    for o, a, n in zip(offs, addrs, sizes, strict=True):
+        if n and not (lo <= a and a + n <= hi and o >= DOL_HEADER and n <= hi - lo):
+            return False
+    if bss_size and not lo <= bss_addr < hi:
+        return False
+    return any(sizes[i] and addrs[i] <= entry < addrs[i] + sizes[i] for i in range(7))
+
+
+def dol_inside(data: bytes) -> int | None:
+    """The offset of a DOL header anywhere in ``data`` on a 32-byte step,
+    or None. Only where the entry point's first byte could be MEM1's."""
+    for at in range(0, len(data) - DOL_HEADER + 1, 32):
+        if data[at + 0xE0] in (0x80, 0x81) and dol_header(data, at):
+            return at
+    return None
+
+
+def third_party(rel: str) -> bool:
+    return any(rel == z or rel.startswith(z + "/") for z in THIRD_PARTY)
+
+
+def tree_problems(root: Path) -> list[str]:
+    """What --tree refuses under ``root``: every file, by name, place, size
+    and content, with the third-party folders' exceptions above."""
+    files = sorted(f for f in root.rglob("*") if f.is_file())
+    rels = [f.relative_to(root).as_posix() for f in files]
+    mods = mod_folders(rels)
+    problems = []
+    for f, rel in zip(files, rels, strict=True):
+        path = Path(rel)
+        suffix = forbidden_suffix(path.name)
+        if suffix:
+            problems.append(f"{rel}: forbidden extension '{suffix}' (game data)")
+        theirs = third_party(rel)
+        if not theirs:
+            for part in path.parts[:-1]:
+                if part.lower() in DECOMPILED_DIRS:
+                    problems.append(
+                        f"{rel}: under '{part}/', the decompiled code a package never holds"
+                    )
+                    break
+            part = forbidden_dir(path)
+            if part:
+                problems.append(f"{rel}: under '{part}/'")
+            size = f.stat().st_size
+            if size > MAX_TRACKED_BYTES:
+                problems.append(f"{rel}: {size:,} bytes exceeds the {MAX_TRACKED_BYTES:,} limit")
+        data = (
+            f.read_bytes()
+            if not theirs or in_mod_folder(path, mods)
+            else f.read_bytes()[:HEAD_BYTES]
+        )
+        problem = content_problem(path, data, mods)
+        if problem:
+            problems.append(f"{rel}: {problem}")
+        at = 0 if dol_header(data) else (None if theirs else dol_inside(data))
+        if at is not None:
+            problems.append(
+                f"{rel}: holds a DOL's header at offset {at:#x} -- the game's executable"
+            )
+    return problems
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--tree"] and len(sys.argv) == 3:
+        root = Path(sys.argv[2])
+        if not root.is_dir():
+            print(f"guard: {root} is not a folder", file=sys.stderr)
+            return 2
+        problems = tree_problems(root)
+        if problems:
+            print(f"GAME DATA GUARD FAILED: {root} holds\n", file=sys.stderr)
+            for p in problems:
+                print(f"  {p}", file=sys.stderr)
+            return 1
+        n = sum(1 for f in root.rglob("*") if f.is_file())
+        print(f"guard: {n} files under {root}, no game data and no decompiled code")
+        return 0
     if sys.argv[1:] == ["--history"]:
         problems = history_problems(ROOT)
         if problems:

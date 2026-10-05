@@ -75,7 +75,9 @@ about a minute and a quarter, with the mods' `mod.dll` under `gen\mingw\mods` (p
 there). It draws the 23 reference frames exactly as MSVC's build does too (distribution R1).
 `python tools/player_build.py --disc <image> --root <folder>` is the player's build: it checks the
 disc, extracts it, builds with llvm-mingw and no `src/`, and leaves `soa.exe`, the mods and `soa.ini`
-in the folder; `python tools/package.py stage <folder>` lays out the package that carries it (R2).
+in the folder; `python tools/package.py stage <folder>` lays out the package that carries it (R2),
+and `python tools/package.py --out <dir>` zips it (R3), which `.github/workflows/release.yml` builds,
+checks with `python tools/guard.py --tree` and leaves as a draft release for the owner to publish.
 `SOA_CLANG_CL` names the compiler; the Android NDK's
 (`...\Android\Sdk\ndk\<version>\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`)
 is enough,
@@ -316,7 +318,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1264 tests; any that need a dump skip themselves
+python -m pytest                     # 1272 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

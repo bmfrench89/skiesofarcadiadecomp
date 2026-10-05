@@ -281,6 +281,11 @@ skipped, by name, with no bindings), `tools/package.py` (R3's staging, used here
 
 ### R3. The package, its guard, and the workflow that makes it
 
+*As built, 2026-10-04: `tools/package.py --out` stages, adds `licenses/` (eight texts: those the
+package carries, and llvm-mingw's and glslang's fetched at their tags, pinned), zips and hashes;
+`guard.py --tree` also allows `python/`, the embeddable CPython, whose DLLs pass the size limit;
+its DOL check reads offset 0 of every file and every 32-byte step of the package's own files.*
+
 *A day to several days. Rebuild: none. Prerequisites: R2. Files: `tools/package.py` (new), `tools/guard.py`
 (`--tree <dir>`), `.github/workflows/release.yml` (new).*
 
