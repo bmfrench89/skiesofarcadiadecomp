@@ -30,7 +30,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
+#ifdef _WIN32
+#include <windows.h> /* env() */
+#endif
 
 #define SCENE_BATTLE 7u
 #define PHASE 0x8034733Cu    /* u32: the battle's phase machine; 1 is party input */
@@ -123,11 +125,17 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     g_last2 = there ? two.buttons : 0;
 }
 
-static int env(const char* name, char* out, DWORD cap)
+static int env(const char* name, char* out, unsigned cap)
 {
-    DWORD n = GetEnvironmentVariableA(name, out, cap);
+#ifdef _WIN32
+    DWORD n = GetEnvironmentVariableA(name, out, cap); /* the process's environment */
     if (!n) return 0;
     if (n >= cap) snprintf(out, cap, "%s", "(too long)");
+#else
+    const char* v = getenv(name); /* libc's, which settings.c's setenv writes (portability L10) */
+    if (!v) return 0;
+    snprintf(out, cap, "%s", strlen(v) < cap ? v : "(too long)");
+#endif
     return 1;
 }
 

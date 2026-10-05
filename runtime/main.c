@@ -1420,8 +1420,8 @@ int main(int argc, char** argv)
         int want = rendering && !snap && !scripted;
         unsigned secs;
         if (w) want = atoi(w) != 0;
-#ifndef _WIN32
-        want = 0; /* window.c is stubs off Windows; do not promise a window or a quit key */
+#if !defined(_WIN32) && !defined(SOA_SDL)
+        want = 0; /* window.c is stubs off Windows without SDL; do not promise a window or a quit key */
 #endif
         gx_set_frame_limit(frames);
         /* Skipping the frames between snapshots is a headless speed-up. A

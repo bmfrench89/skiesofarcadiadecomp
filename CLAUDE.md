@@ -9,7 +9,7 @@ broken here first, with its reason attached, because one without its reason is a
 
 **The owner's goal is any Windows or Android device** (2026-09-30): x86-64 PCs and
 handhelds (this machine is their ROG Ally X), the Steam Deck, and Android flagships.
-Nothing runs off Windows yet. What is next, in order, is
+Linux runs natively since L10 (2026-10-05; no owner session there yet), Android not yet. What is next, in order, is
 [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) §0, which overrides the rest of that file. Before
 choosing or starting work, use the `orient` skill.
 
@@ -45,6 +45,7 @@ Then, only if you touched the matching thing:
 | `src/`, `include/`, `config/GEAE8P/units.txt` | `python tools/decomp.py` (4 s) | 83 functions across 21 units still match byte for byte |
 | `config/hle.txt` | `--compile --optimize --link`, then the self test | see below; selftest case 73 is what checks the swap |
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
+| `runtime/window_sdl.c`, `audio_sdl.c`, `tools/fetch_sdl.py` | in a Linux container: `compile_runtime.py --cc gcc --require-sdl`, and `test_window_sdl.py` under Xvfb (`docs/TESTING.md` section 2) | Windows compiles them to nothing; only Linux, and CI's Linux legs, ever build them |
 
 The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only enforcer.
 

@@ -29,7 +29,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
 | 5f | `python tools/citest/disc_check.py` | 4 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (404 tests want a C compiler) |
+| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (407 tests want a C compiler) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -171,10 +171,12 @@ python tools/citest/compile_runtime.py
 ```
 ...
 ok   window.c
+ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 30/30 runtime translation units
+compiled 35/35 runtime translation units
 gxv.c: compiled as the backend too
+the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -242,7 +244,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 30/30 runtime translation units
+compiled 35/35 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...
@@ -285,7 +287,7 @@ python tools/fetch_mingw.py
 python tools/citest/compile_runtime.py --cc mingw
 ```
 ```
-compiled 31/31 runtime translation units
+compiled 35/35 runtime translation units
 ```
 
 ## 6. The decompilation check
@@ -337,19 +339,20 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1326 passed, 3 skipped in 657.72s
+1338 passed, 4 skipped in 756.76s
 ```
 
-1329 tests in 82 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1307 passed, 4 skipped` without
+1342 tests in 84 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1319 passed, 5 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `922 passed, 407 skipped` without MSVC. The three
-skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
-`test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
+into one module-level skip), `931 passed, 411 skipped` without MSVC. The four
+skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
+`test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
+and `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 404 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 407 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

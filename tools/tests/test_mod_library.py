@@ -86,9 +86,10 @@ def map_log(root: Path, source: Path | None = None) -> Path:
     return d
 
 
-def play(driver, mods: Path, script: str) -> tuple[str, str]:
+def play(driver, mods: Path, script: str, extra: dict[str, str] | None = None) -> tuple[str, str]:
     exe, dol = driver
     env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env.update(extra or {})
     proc = subprocess.run(
         [str(exe), str(mods), str(dol)],
         input=script,
@@ -108,6 +109,37 @@ def test_the_example_library_loads_and_the_recording_names_it(driver, tmp_path):
     assert "loaded 1" in out, err
     assert f"and {LIB}" in err and "[mod] map-log: map-log loaded" in err, err
     assert "describe [mods=map-log@1.0:" in out, out
+
+
+# What each shipped mod says when its switch is on (portability L10). The
+# switch comes from the environment: GetEnvironmentVariableA on Windows,
+# getenv elsewhere, where all three once called the first alone and never
+# compiled -- unnoticed until L10 built them, since only map-log was built here.
+SWITCHED = {
+    "autotext": ("SOA_AUTOTEXT", "on", "a complete page turns itself after 45 frames"),
+    "coop": ("SOA_COOP", "1", "pad 2 chooses the commands of party slot(s) 1"),
+    "encounter-rate": ("SOA_ENCOUNTERS", "half", "random battles half in the field"),
+}
+
+
+def test_every_shipped_mod_has_a_switch_to_check():
+    assert sorted(p.parent.name for p in (ROOT / "mods").glob("*/mod.c")) == sorted(SWITCHED)
+
+
+@needs_cc
+@pytest.mark.parametrize("name", sorted(SWITCHED))
+def test_every_shipped_mod_builds_here_loads_and_reads_its_switch(driver, tmp_path, name):
+    d = tmp_path / name
+    d.mkdir()
+    ini = (ROOT / "mods" / name / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "mods" / name / "mod.c")
+    var, value, says = SWITCHED[name]
+    out, err = play(driver, tmp_path, "", {var: value})
+    assert "loaded 1" in out and f"and {LIB}" in err, err
+    assert f"[mod] {name}: {says}" in err, err
 
 
 @needs_cc

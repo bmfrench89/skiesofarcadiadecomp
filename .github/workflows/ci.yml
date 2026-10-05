@@ -312,10 +312,17 @@ jobs:
   # guest runs on. noskip.py makes test_memguard's skip -- no compiler --
   # fail the step, as in the clang-cl job.
   #
-  # NOT COVERED: linking or running the port itself off Windows (it needs a
-  # window and audio that are Win32 today, L12), a second guest thread (no
-  # fibers off Windows yet), the replay corpus, and everything the native
-  # job's comment lists.
+  # L10 adds the window and the sound off Windows: window_sdl.c and
+  # audio_sdl.c compile with SOA_SDL against SDL3's pinned headers on both
+  # legs (--require-sdl), and on the gcc leg SDL3 is built (tools/fetch_sdl.py,
+  # the packages it names) and test_window_sdl runs them under Xvfb: the
+  # frame read back off the X screen, a key typed with xdotool reaching port
+  # 1, a resize, the [present] report, and the sound's drop rule.
+  #
+  # NOT COVERED: linking or running the port itself off Windows (it needs the
+  # player's disc; L10's headless Done ran in a container on the owner's PC),
+  # a second guest thread (no fibers off Windows yet), the replay corpus, and
+  # everything the native job's comment lists.
   linux:
     name: Runtime compiles (Linux, ${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -343,9 +350,15 @@ jobs:
       - name: Vulkan-Headers for the GPU backend
         run: python tools/fetch_gpu.py --headers
 
+      # window_sdl.c and audio_sdl.c compile against the pinned source's
+      # include/ (tools/fetch_sdl.py --headers); --require-sdl fails the
+      # compile step if they were not compiled with SOA_SDL (portability L10)
+      - name: SDL3's headers for the window and sound
+        run: python tools/fetch_sdl.py --headers
+
       - name: Compile every runtime/*.c
         if: ${{ !cancelled() }}
-        run: python tools/citest/compile_runtime.py --cc ${{ matrix.cc }} --require-gxv
+        run: python tools/citest/compile_runtime.py --cc ${{ matrix.cc }} --require-gxv --require-sdl
 
       - name: Decompiled MSL routines against the host C library
         if: ${{ !cancelled() }}
@@ -367,15 +380,34 @@ jobs:
         run: python -m pytest -p noskip tools/tests/test_memguard.py -v
 
       # portability L9: a mod's mod.so through the real loader (the recording
-      # names it; one with no soa_mod_init is refused in dlerror's words),
-      # SOA_WAV's file, and soa.ini's search order, built with this leg's
-      # compiler; a skip is a failure here
+      # names it; one with no soa_mod_init is refused in dlerror's words), and
+      # since L10 each shipped mod built, loaded and switched on; SOA_WAV's
+      # file, and soa.ini's search order, built with this leg's compiler; a
+      # skip is a failure here
       - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
         if: ${{ !cancelled() }}
         env:
           SOA_CC: ${{ matrix.cc }}
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
+
+      # portability L10: SDL3 built from its pinned source with the packages
+      # tools/fetch_sdl.py names, then the window and sound run on an X
+      # display (Xvfb, no window manager); xwd reads the screen back and
+      # xdotool types. A skip is a failure here.
+      - name: SDL3 built for the window and sound
+        if: ${{ !cancelled() && matrix.cc == 'gcc' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libgl-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev xvfb x11-apps xdotool
+          python tools/fetch_sdl.py
+
+      - name: The SDL window and sound under Xvfb, no skips
+        if: ${{ !cancelled() && matrix.cc == 'gcc' }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" python -m pytest -p noskip tools/tests/test_window_sdl.py -v
 
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}
@@ -461,9 +493,12 @@ jobs:
       - name: Vulkan-Headers for the GPU backend
         run: python tools/fetch_gpu.py --headers
 
+      - name: SDL3's headers for the window and sound
+        run: python tools/fetch_sdl.py --headers
+
       - name: Compile every runtime/*.c
         if: ${{ !cancelled() }}
-        run: python tools/citest/compile_runtime.py --cc gcc --require-gxv
+        run: python tools/citest/compile_runtime.py --cc gcc --require-gxv --require-sdl
 
       - name: Decompiled MSL routines against the host C library
         if: ${{ !cancelled() }}
@@ -485,9 +520,10 @@ jobs:
         run: python -m pytest -p noskip tools/tests/test_memguard.py -v
 
       # portability L9: a mod's mod.so through the real loader (the recording
-      # names it; one with no soa_mod_init is refused in dlerror's words),
-      # SOA_WAV's file, and soa.ini's search order, built with this leg's
-      # compiler; a skip is a failure here
+      # names it; one with no soa_mod_init is refused in dlerror's words), and
+      # since L10 each shipped mod built, loaded and switched on; SOA_WAV's
+      # file, and soa.ini's search order, built with this leg's compiler; a
+      # skip is a failure here
       - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
         if: ${{ !cancelled() }}
         env:

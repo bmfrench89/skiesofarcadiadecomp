@@ -7161,3 +7161,103 @@ the driver's.** 2026-10-04.
   - **CI:** the gcc, clang and ARM64 legs run the three Linux checks with skips refused.
 - **What follows:** L10, native Linux with SDL3, whose prerequisites (L6, L7, L9) are now all done.
   After it, L12.
+
+**L10: native Linux with SDL3.** 2026-10-05.
+
+- **What it is:** the port builds and runs on Linux, its window, pads and sound through SDL3. Windows
+  keeps its Win32 window and waveOut (D2).
+  - **`tools/fetch_sdl.py`** fetches SDL 3.4.18's source, its sha256 pinned (another archive is
+    refused), and builds a static library with CMake into the gitignored `vendor/sdl3/<system>-<machine>`.
+    `vendor/SDL.sha256` records every installed file and the drivers built. SDL loads X11 or Wayland,
+    and PipeWire, PulseAudio or ALSA, at run time, so `gen/linux/soa` needs no `libSDL3.so`. Without a
+    window system's headers SDL's configure stops, and the script names Debian's packages. `--headers`
+    unpacks the source alone, for compiling against it on any host.
+  - **`runtime/window_sdl.c`** is window.c on SDL3, behind the same seams (`window_start`,
+    `window_open`, `window_pad`, `window_pad2`, `window_host`, `window_toggle_fullscreen`):
+    - its own thread, every SDL call on it, the pads reaching the guest thread as a snapshot under a
+      lock;
+    - `picture_scale` on the CPU into a client-sized texture, shown 1:1 and held by the renderer's
+      vsync, as the DXGI presenter scales;
+    - the keyboard by the layout in use, as Win32's virtual keys are; any gamepad SDL knows for ports 1
+      and 2, with XInput's dead zones and trigger threshold, and rumble on port 1;
+    - fullscreen, the cursor, focus and `unfocused`, P5a's filters, `SOA_WINDOW_TEST` and the
+      [present] report, in window.c's words.
+  - **`runtime/audio_sdl.c`** is an SDL audio stream. audio_out.c's new `SOA_SDL` branch keeps the
+    meter, the WAV, the mute, the report and waveOut's rule: a block is dropped when the device is 24
+    blocks behind.
+  - **`tools/recompile.py`** links on Linux at last (`--cc gcc` or `clang`, the mods as `mod.so` under
+    `gen/linux/mods`), and builds the window and sound in whenever `vendor/sdl3` holds this host's
+    build. Without it the build is headless, as before.
+  - **The three shipped mods build off Windows.** Each read its switch with `GetEnvironmentVariableA`
+    and included `windows.h` for it, so none compiled as `mod.so`. L9's test built only the example.
+    `env()` keeps that call on Windows and reads `getenv` elsewhere, which settings.c's `setenv`
+    writes.
+- **Checked** [V]:
+  - **The headless Done, in a Docker container on this PC** (python:3.14-slim, gcc 14.2, 16 cores, the
+    owner's disc mounted read-only). The final run, from the tree as committed, every exit status 0:
+    - `recompile.py --cc gcc --compile --optimize --link` builds in 232 s, the 19 units in 199 s at
+      -O2, with SDL3 and all four mods;
+    - the self test: 0 failures;
+    - replay: 23 of 23 against the same manifest at 1, 2, 3 and 8 threads, in 26 s;
+    - `title --check`: 4 of 4, at 27.8 fps, the audio 128,000 bytes a second (SDL found no sound
+      device in the container and said so, as waveOut does when it fails).
+    - The same three passed before SDL was linked, and after (175 s, 23/23, 4 of 4).
+  - **All four mods load on Linux**, each reading its switch: autotext's 45 frames, coop's pad 2, and
+    encounter-rate's half. On Windows they build with MSVC and load as before.
+  - **The window, under Xvfb** (X11; SDL3's OpenGL renderer on Mesa's software rasterizer):
+    - the intro's logo at 2x, whole pixels, in a screenshot;
+    - with openbox: fullscreen `fit` at 1440x1080 from +240+0 (a screenshot too), then windowed, then a
+      900x600 client with the picture at 800x600 from +50+0, each in the [window] line window.c prints;
+    - keys typed by xdotool reached the game: X as A over frames 116-147 of a pad recording, and Left
+      as the stick at 0 over frames 162-184;
+    - 0 failed presents.
+  - **The audio rate.** The tolerance was fixed before the run: 32,000 samples a wall second, plus or
+    minus 2%, counting the WAV's samples over the wall seconds between the first block and the last.
+    The runs went through SDL's disk device, which takes samples in real time.
+    - `SOA_SPEED=1`: 32,022, inside.
+    - `SOA_SPEED=2`: 63,961, outside. The device took 9,009 of 18,229 blocks and the rest were
+      dropped.
+  - **Drops track the container's load, not the backend.** Over 1,200 frames:
+    - 0 with nothing drawn;
+    - 14, in 6 runs, drawing with no window;
+    - 242, in 95 runs, drawing into Xvfb through software OpenGL, with the guest itself behind real time
+      (52.1 s in 57.5).
+  - **`tools/tests/test_window_sdl.py`** runs the window and sound for real on an X display, with a
+    driver standing in for the renderer. It checks the frame read back off the X screen, a key through
+    `window_pad`, a resize's line, the presents, and 200 blocks of sound at once keeping 24.
+    - Each of four mutations fails it: red and blue swapped, the X key sent as B, the queue a hundred
+      times deeper, and the resize not asked.
+    - It failed once in an ordinary run, unread. In a fully loaded 16-core container it then failed in
+      two ways:
+      - 3 of 12 runs showed fewer presents than it asked for (41 to 44 of 50), so the bar is now 20;
+      - after that, 1 of 12 exited before the X server had finished the resize, so the driver now
+        waits two seconds more.
+      Then 20 of 20 under the same load.
+  - **`tools/tests/test_fetch_sdl.py`** (8 tests): the pin, the record, the drivers, sdl3.pc, and the
+    link line with and without SDL.
+  - **`tools/tests/test_mod_library.py`**, 4 new tests: each shipped mod builds as this system's
+    library, loads, and reads its switch, and every shipped mod must be listed. On Linux, autotext as
+    it was fails to build, and with its `getenv` finding nothing it fails its switch. CI's Linux legs
+    run it with skips refused.
+  - **Windows unchanged:** MSVC, clang-cl and llvm-mingw compile all 35 runtime files, the two SDL files
+    to nothing. `soa.exe` links with the GPU backend and the four mods, and the self test reports 0
+    failures.
+  - **CI:** every Linux leg compiles the SDL files with `SOA_SDL` (`--require-sdl`). The gcc leg builds
+    SDL and runs `test_window_sdl.py` under Xvfb, with skips refused. Before main, a scratch branch
+    ran the new steps (run 37369073677): SDL built on the runner with X11, Wayland, PipeWire, PulseAudio
+    and ALSA, and the window test and the shipped mods passed. GitHub left some jobs unacquired by any
+    runner twice before they ran.
+  - **The test count** is 1342 in 84 files, measured: 1338 passed and 4 skipped here (the fourth is
+    `test_window_sdl.py`, with no X display on Windows), 931 and 411 without MSVC.
+- **Fixed on the way** [V, code]: the guest thread could read port 1 before the window thread's first
+  snapshot, and get the stick hard left and down for one poll. The window now reads the input once
+  before it says it is open.
+- **A filtered log hid a failure** [V]. The first builds' logs dropped lines that start with two
+  spaces, which is how `recompile.py` names a mod that failed, and a pipe hid its exit 1. `soa` linked
+  each time, so the build looked whole. The final run above prints every exit status.
+- **Not checked:** a person playing. That means a real gamepad (SDL's mapping and rumble), Wayland, and
+  a real display's vsync: Xvfb has none, and SDL's OpenGL renderer there would hold each present for
+  one refresh, not two, leaving the rest of the pacing to the loop. These are the owner's fifteen
+  windowed minutes, which need a Linux desktop: a WSL distribution, which brings WSLg (`wsl --install -d
+  Ubuntu`; this PC has only Docker Desktop's, without it), a Linux PC or the Deck.
+- **What follows:** L12, the Android shell, to be specified in full, with R5.

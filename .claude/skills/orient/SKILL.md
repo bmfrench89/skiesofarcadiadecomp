@@ -60,7 +60,7 @@ gh run list --workflow ci.yml --limit 3
 
 ## 4. The platform lens: ask it of every change
 
-Nothing runs off Windows today. Don't make that harder:
+Windows runs, and since L10 Linux (no owner session there yet); Android does not. Don't make that harder:
 
 - **Does it compile under clang?** Run check step 5d. Android's compiler is
   clang, and code that only MSVC accepts counts as a regression.

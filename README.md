@@ -43,7 +43,9 @@ game and plays through the opening cutscenes, the first battle and into
 the first fields (the Valuan ship's hold and the room the story carries it
 to next: the stick, the minimap, menus and random encounters), with dialogue text, music and sound, rendered by a
 software implementation of the GameCube's graphics pipeline in a window
-with keyboard or gamepad input. It mounts a memory card and the game
+with keyboard or gamepad input, on Windows and, since portability L10, natively
+on Linux through SDL3 (checked in a container; nobody has played it there yet).
+It mounts a memory card and the game
 formats one itself, but no save has been written or loaded yet. See the
 roadmap for what is done and what is not.
 
@@ -84,6 +86,15 @@ builds from the disc image they pick with no console window, and starts the game
 (`...\Android\Sdk\ndk\<version>\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`)
 is enough,
 and either build's first lines say which compiler made it (`[boot] built with ...`).
+
+**Linux** (portability L10) builds natively with gcc or clang, the window, pads and sound through
+SDL3. `python3 tools/fetch_sdl.py` fetches SDL 3.4.18 (pinned) and builds it with CMake into
+`vendor/sdl3`, in about a minute; without the development headers it needs it stops and names
+Debian's packages (SDL's `docs/README-linux.md` has every distribution's). Then
+`python3 tools/recompile.py --cc gcc --compile --optimize --link` makes `gen/linux/soa`, with the
+mods' `mod.so` under `gen/linux/mods`, and `SOA_RENDER=1 gen/linux/soa extracted` plays in a
+window, X11 or Wayland. Without `vendor/sdl3` the same build is headless: the self test, the replay
+and `title --check` (all three pass, the replay 23 of 23 against the same manifest), and `SOA_WAV`.
 
 **cmd.exe** — the same commands, except for the line that sets the variable:
 
@@ -345,7 +356,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1329 tests; any that need a dump skip themselves
+python -m pytest                     # 1342 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

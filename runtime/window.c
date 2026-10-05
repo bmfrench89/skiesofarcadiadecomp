@@ -1004,7 +1004,7 @@ int window_host(uint16_t* host)
     *host = h;
     return 1;
 }
-#else
+#elif !defined(SOA_SDL) /* with SDL, window_sdl.c is the window (portability L10) */
 #include <stdint.h>
 void window_start(void) {}
 int window_open(void) { return 0; }

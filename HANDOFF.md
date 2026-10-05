@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1329 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1342 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1329 |
+| Python tests | 1342 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -668,8 +668,20 @@ C5c) is now done.
    (FINDINGS "L9"): settings.c, mod.c, hle.c and audio_out.c go through
    plat.h; mods load as `mod.so` on Linux, `SOA_WAV` writes there, and
    `tools/tests/test_portability.py` holds `_WIN32` to a written list of
-   sites. **Next:** L10, native Linux with SDL3 (a window, audio and
-   pads behind the existing seams), then L12, the Android shell, with R5. Still open for the owner, and not blocking: whether a
+   sites. **L10 is done but the owner's session** (FINDINGS "L10"):
+   `python3 tools/fetch_sdl.py` builds SDL 3.4.18 (pinned) into
+   `vendor/sdl3`, and `recompile.py --cc gcc --compile --optimize --link`
+   makes `gen/linux/soa` with an SDL3 window, pads and sound
+   (`runtime/window_sdl.c`, `audio_sdl.c`), and the four mods as `mod.so`
+   (the three shipped ones read their switches with `getenv` there). In a
+   Docker container here the
+   self test, replay 23/23 at 1-8 threads and `title --check` pass, and
+   under Xvfb the window shows the game, takes keys and plays sound at
+   32,022 samples a wall second. The owner's fifteen minutes need a Linux
+   desktop: a WSL distribution, which brings WSLg (`wsl --install -d
+   Ubuntu`; this PC has only Docker Desktop's, without it), a Linux PC or
+   the Deck. **Next:** L12, the Android shell, to be specified in full
+   (portability.md's L12 is an outline), with R5 beside it. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

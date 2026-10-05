@@ -31,8 +31,11 @@
 #include "soa_mod.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <windows.h>
+#ifdef _WIN32
+#include <windows.h> /* env() */
+#endif
 
 #define MULTIPLIER 0x8030B7ADu /* s8: -1 the normal rate, else the odds x byte/50 */
 #define PARTY 0x8030B7F4u      /* character c's block at PARTY + 92c */
@@ -119,11 +122,17 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
 }
 
 /* An environment variable as the mod sees it: 1 with its value, 0 unset. */
-static int env(const char* name, char* out, DWORD cap)
+static int env(const char* name, char* out, unsigned cap)
 {
-    DWORD n = GetEnvironmentVariableA(name, out, cap);
+#ifdef _WIN32
+    DWORD n = GetEnvironmentVariableA(name, out, cap); /* the process's environment */
     if (!n) return 0;
     if (n >= cap) snprintf(out, cap, "%s", "(too long)"); /* no value this mod takes: refused with its line */
+#else
+    const char* v = getenv(name); /* libc's, which settings.c's setenv writes (portability L10) */
+    if (!v) return 0;
+    snprintf(out, cap, "%s", strlen(v) < cap ? v : "(too long)"); /* no value this mod takes: refused with its line */
+#endif
     return 1;
 }
 

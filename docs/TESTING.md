@@ -34,14 +34,15 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1326 passed, 3 skipped in 657.72s
+1338 passed, 4 skipped in 756.76s
 ```
 
-1329 tests in 82 files, none of which reads the disc. The two FMA probes of
+1342 tests in 84 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
-a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
-(Windows without developer mode); the counts below include those three skips. CI's Windows runner
-ships LLVM, so they run there. They cover the Python
+a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
+(Windows without developer mode), and `test_window_sdl.py` wherever there is no X display or
+SDL build, as on every Windows run; the counts below include those four skips. CI's Windows runner
+ships LLVM, so the FMA probes run there, and CI's gcc leg runs the SDL window under Xvfb. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -80,8 +81,10 @@ its own and run it, some of the C as well:
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
 | `test_portability.py` | 4 | where `runtime/` may say `_WIN32` (portability L9): every `#if`/`#ifdef`/`#ifndef`/`#elif` naming it is found and named by its function, comments and strings blanked first, and held to a written list -- the window, waveOut, the fibers, the profilers, the GPU's Win32 surface and loader name, the Windows console, the mods' export macro and the renderer-only build's mkdir pairs; a listed site that has gone fails too; an `#ifdef _WIN32` added to another function of exi.c is caught |
-| `test_mod_library.py` | 2 | a mod's native library on every system (portability L9), built with the profile `SOA_CC` names (CI's Linux legs: gcc and clang): examples/mods/map-log as `mod.dll` or `mod.so` loads through the real loader and the recording names it `map-log@1.0`; one exporting no `soa_mod_init` is refused in the loader's words (dlerror's) |
+| `test_mod_library.py` | 6 | a mod's native library on every system (portability L9), built with the profile `SOA_CC` names (CI's Linux legs: gcc and clang): examples/mods/map-log as `mod.dll` or `mod.so` loads through the real loader and the recording names it `map-log@1.0`; one exporting no `soa_mod_init` is refused in the loader's words (dlerror's); and (L10) each of the three shipped mods builds as this system's library, loads, and reads its switch from the environment, which every shipped mod must have listed. On Linux, autotext as it was before L10 (`windows.h`) fails to build, and with its `getenv` finding nothing fails its switch |
 | `test_audio_wav.py` | 1 | `SOA_WAV` on every system (portability L9), with `SOA_CC`'s profile: a driver pushes seven blocks to `audio_out.c` with no device, and the WAV's header holds 7 x 640 bytes, the samples left then right, and the report says so; with the writer back inside `#ifdef _WIN32` it fails on Linux |
+| `test_fetch_sdl.py` | 8 | SDL3 for the window and sound off Windows (portability L10): an archive that is not the pinned one is refused and nothing unpacked, and the pinned one is unpacked once and its headers found; `--verify` finds a changed byte and a missing file of this host's build, and with none recorded says how to make one; the build config's drivers are read without their features; what a static `libSDL3.a` needs comes from `sdl3.pc`, either way SDL writes it; with a build in `vendor/sdl3` the Linux link compiles every runtime file with `SOA_SDL` and links the library after the objects and before the profile's libraries, and without one the link is as it was; on Windows the build is refused (D2) |
+| `test_window_sdl.py` | 1 | the SDL3 window and sound run for real (L10), built with `SOA_CC`'s profile against `vendor/sdl3` with a driver standing in for the renderer, on an X display (CI's gcc leg: Xvfb): the frame read back with xwd is the driver's, whole pixels and its colours in order; a key typed with xdotool is port 1's A, and let go nothing; `SOA_WINDOW_TEST`'s size gives a 1000x700 client with the frame at 1x, centred, in window.c's words; the presents are counted, none failed; 200 blocks of sound at once keep waveOut's 24 and drop the rest. Red and blue swapped, the key sent as B, the queue a hundred times deeper and the resize not asked each fail it. Skips without gcc or clang, SDL, a display, xwd or xdotool, as everywhere on Windows |
 | `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
 | `test_disc_const.py` | 4 | `runtime/disc.c`'s `DISC_DOL_SHA1` is `config/GEAE8P/config.yml`'s hash and its `DISC_GAME_ID` the config directory's name; one hex digit changed, or another id, is refused by the same checker; both sit behind `#ifndef` for the fixture build |
@@ -132,23 +135,23 @@ its own and run it, some of the C as well:
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine on 2026-10-03 by hiding one at a time, with a pytest plugin that
+this machine on 2026-10-05 by hiding one at a time, with a pytest plugin that
 makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 "L3a's review"); there is no clang here, so every row has the two FMA skips:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1326 passed, 3 skipped` |
-| no capstone | `1307 passed, 4 skipped` |
-| no MSVC | `922 passed, 407 skipped` |
-| neither | `903 passed, 408 skipped` |
+| everything (MSVC + capstone) | `1338 passed, 4 skipped` |
+| no capstone | `1319 passed, 5 skipped` |
+| no MSVC | `931 passed, 411 skipped` |
+| neither | `912 passed, 412 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 404 compiler-gated tests are the ones that build runtime
+Two things follow. The 407 compiler-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -219,7 +222,7 @@ Each takes `--cc clang-cl` (portability L3a) to build with the clang-cl profile
 instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
 compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
 Since L2a all three pass under the NDK's clang-cl 19.0.1: `compile_runtime.py
---cc clang-cl` compiles every file, 29 of 29 since L7's `plat.c` (until then `gxr_tev.c` failed with clang's
+--cc clang-cl` compiles every file, 35 of 35 on 2026-10-05 (29 of 29 at L7's `plat.c`; until then `gxr_tev.c` failed with clang's
 SSE4.1 always_inline error, portability.md 2.2's). CI runs all three that way
 on every push, in the clang-cl job (L4a, section 7), which is what reports the
 day a runtime change compiles under MSVC and not under clang.
@@ -236,10 +239,12 @@ python tools/citest/render_check.py
 ok   aram.c
 ...
 ok   window.c
+ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 30/30 runtime translation units
+compiled 35/35 runtime translation units
 gxv.c: compiled as the backend too
+the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
 ```
 
@@ -249,6 +254,14 @@ without the GPU backend links, and with `SOA_GXV=1`, the backend, against
 alone) and one-word stand-ins for the SPIR-V, so no glslang is needed. Without
 the headers it says so; `--require-gxv`, which every CI compile job passes,
 makes that a failure.
+
+`window_sdl.c` and `audio_sdl.c`, the window and sound off Windows (L10),
+compile to nothing without `SOA_SDL`. Under `--cc gcc` or `clang` they are
+compiled again with `SOA_SDL=1`, with the three files whose code that changes
+(window.c, audio_out.c, main.c), against SDL3's headers (`python
+tools/fetch_sdl.py --headers` fetches the pinned source alone). Without the
+headers it says so; `--require-sdl`, which CI's Linux legs pass, makes that a
+failure.
 
 Each file compiled on its own with `/c` and the flags in
 `tools/soa/toolchain.py`, plus nine warnings promoted to errors. Nothing links,
@@ -527,6 +540,34 @@ docker run --rm -v "C:/Users/<you>/.../SOA:/soa:ro" -v soa-l1-build:/soa/build \
     python3 tools/scenario.py run title --check --exe /tmp/soa.exe --wrap wine --env SOA_CARD=build/card-copy.raw'
 docker volume rm soa-l1-build
 ```
+
+**Natively on Linux (L10).** gcc in a `python:3.14-slim` container through
+Docker Desktop (D-13). The checkout is mounted read-only at `/src` and copied
+to `/work`, so nothing is written back; `extracted/` is linked in read-only
+and the captures are copied into the container's own layer, gone with it:
+
+```
+docker run -d --name soa-linux -v "C:/Users/<you>/.../SOA:/src:ro" python:3.14-slim sleep infinity
+docker exec soa-linux sh -c '
+  apt-get update -qq && apt-get install -y -qq gcc libc6-dev && pip install -q pytest
+  mkdir -p /work/build && cd /src && cp -r runtime tools config src include mods examples pyproject.toml /work/
+  cp -r build/fifo /work/build/fifo && cd /work && ln -s /src/extracted extracted
+  python3 tools/recompile.py --cc gcc --compile --optimize --link
+  SOA_SELFTEST=1 gen/linux/soa extracted
+  python3 tools/scenario.py replay --exe gen/linux/soa --threads 1,2,3,8
+  python3 tools/scenario.py run title --check --exe gen/linux/soa'
+docker rm -f soa-linux
+```
+
+The build takes about three minutes on this PC, the replay 23 s. For the
+window and sound, install the packages `python3 tools/fetch_sdl.py` names
+(Debian's), and `xvfb x11-apps xdotool` for a display with no screen, run
+it (about a minute), `--link` again, and give the run a display:
+`Xvfb :99 -screen 0 1920x1080x24 &`, then `DISPLAY=:99 SOA_RENDER=1
+SOA_WINDOW=1 gen/linux/soa extracted`, or `DISPLAY=:99 SOA_CC=gcc python3 -m
+pytest tools/tests/test_window_sdl.py`. `SDL_AUDIO_DRIVER=disk` sends the
+sound to a file at the device's pace, which is how L10's audio rate was
+taken; `openbox &` before the run gives fullscreen a window manager to ask.
 
 **Run the exe from a copy inside the container.** Started straight off the
 Docker Desktop share from Windows, Wine 10.0 faults at the entry point on a
@@ -1429,7 +1470,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 407 of the 1329 skip here without a C compiler: 404 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 411 of the 1342 skip here without a C compiler: 407 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, and `test_window_sdl.py` wants an X display and SDL, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

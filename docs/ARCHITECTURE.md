@@ -478,8 +478,9 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `hle_stdio.c` | host plumbing | The guest's own `printf`, formatted from the EABI argument layout, so the game's messages reach the log | You lose the game's own diagnostics — which is how "memory reallocate error" was ever seen |
 | `decomp_swap.c` | host plumbing | The EABI adapters that let a natively compiled decompiled function stand in for its translation, and the program counter each one stores for the profiler | `memcpy`, `memset` and `strcpy` corrupt guest memory. The selftest's twin comparison is what catches it |
 | `decomp_shims.c` | host plumbing | Native stand-ins for functions a decompiled unit calls but nobody has decompiled yet. Empty today | A swapped-in function computes the wrong thing while byte-matching perfectly, because the error is in its callee |
-| `audio_out.c` | host plumbing | `waveOut` playback and the `SOA_WAV` writer | Nothing is audible, or blocks are dropped. The mix itself is unaffected: `ax.c` writes into guest memory whether or not a device exists |
+| `audio_out.c` | host plumbing | `waveOut` playback, or SDL3's through `audio_sdl.c` off Windows (L10), and the `SOA_WAV` writer | Nothing is audible, or blocks are dropped. The mix itself is unaffected: `ax.c` writes into guest memory whether or not a device exists |
 | `ax.c` | device model | The AX mixer: the command list, parameter blocks, voices, resampling, the buses, and the census the report prints. Reached through `dsp.c`'s mailbox rather than through registers of its own, because that is how the console reaches it too | Wrong or missing sound, and the game never notices — it writes a command list and reads buses back, so an error here is silent outside the report |
+| `window_sdl.c`, `audio_sdl.c` | host plumbing | Off Windows (L10, built when `vendor/sdl3` holds SDL3): window.c's window, pads, rumble and report on SDL3, every SDL call on its own thread; and the sound's SDL audio stream | As window.c's and audio_out.c's, on Linux |
 | `window.c` | host plumbing | The Win32 window on its own thread, presented through a DXGI flip-model swap chain paced to the display's refresh (GDI with `SOA_PRESENTER=gdi`; with `SOA_GPU=vulkan`, gxv's own swap chain, V8), and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
@@ -664,7 +665,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1329 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1342 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

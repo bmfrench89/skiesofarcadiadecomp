@@ -1666,6 +1666,8 @@ I3, and I5a if it is agreed) have landed in these files. Files:*
 
 ### L10. Native Linux x86-64 with SDL3 — gated on Q6
 
+*Landed 2026-10-05 (FINDINGS "L10") but the owner's fifteen windowed minutes, which need a Linux desktop. The headless Done and the audio rate hold in a Docker container on this PC (D-13) rather than WSL2, which this PC has only as Docker Desktop's own distribution, with no WSLg. Where it differs from the text below: "never in `vendor/`" is read as never committed -- SDL3 is built into the gitignored `vendor/sdl3`, as `fetch_gpu.py` fills `vendor/`; `fetch_sdl.py --headers` and `compile_runtime.py --require-sdl` compile the SDL files on every Linux CI leg; the window runs under Xvfb in `test_window_sdl.py` on CI's gcc leg, a key typed by xdotool and the screen read back; and `audio_out.c` keeps the device's drop rule, calling `audio_sdl.c` for the stream.*
+
 *Week-plus. Rebuild: one Linux build; Windows none, unless Q6 also moves Windows to SDL3. Prerequisites:
 Q6 answered "SDL3"; L6, L7 and L9. Files: `runtime/window_sdl.c` and `audio_sdl.c` (behind the existing
 seams), `tools/fetch_sdl.py` (SDL3 3.4.x, hash-pinned, never in `vendor/`), `tools/recompile.py` (gnu

@@ -643,6 +643,9 @@ count kept before it starts.
   `l7-posix`, the mutation red on `l7-mutation`.
 - **L9:** its second part, after M1's and M3's files have settled. **Done** 2026-10-05 (FINDINGS
   "L9"): mods load as `mod.so`, `SOA_WAV` writes, and `soa.ini` is found, under gcc on Linux.
+- **L10:** native Linux with SDL3. **Done** 2026-10-05 but the owner's windowed session (FINDINGS
+  "L10"): gcc builds the port in a container on this PC; the self test, replay 23/23 at 1-8 threads
+  and `title --check` pass; and the SDL3 window, pads and sound run under Xvfb.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:
@@ -655,7 +658,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 "M4b before M5".
 
 **Gated, not scheduled:**
-- **L10**, native Linux: gate G2 (SDL3).
+- **L10**, native Linux: gate G2 (SDL3). **Done** 2026-10-05 but the owner's windowed session (FINDINGS "L10").
 - **L11**, ARM64 on a device: hardware you name.
 - **L12**, Android: gate G1 answering A, gate G3, and Android as a goal (all three since 2026-10-03), and G3's builder.
 

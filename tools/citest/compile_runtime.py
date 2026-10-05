@@ -23,6 +23,13 @@ given one-word stand-ins for the SPIR-V headers (tools/soa/shaders.py stub),
 so it compiles all of the backend's C on any machine, glslang or not; without
 the headers it is reported as not compiled, and --require-gxv, which CI
 passes, makes that a failure.
+
+window_sdl.c and audio_sdl.c, the window and the sound off Windows
+(portability L10), are empty without SOA_SDL, so on Linux's gcc and clang
+they are compiled again with SOA_SDL=1 against SDL3's headers (python
+tools/fetch_sdl.py --headers), with the three files whose code SOA_SDL
+changes; without the headers they are reported as not compiled, and
+--require-sdl, which CI's Linux legs pass, makes that a failure.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
+import fetch_sdl  # noqa: E402
 from soa import shaders, toolchain  # noqa: E402
 
 RUNTIME = ROOT / "runtime"
@@ -104,6 +112,39 @@ def compile_backend(
     return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
 
 
+# What SOA_SDL changes, compiled again with it (L10): the two SDL files are
+# empty without it, window.c's stubs must leave the names to them, and
+# audio_out.c and main.c take another branch.
+SDL_FILES = ("window_sdl.c", "audio_sdl.c", "window.c", "audio_out.c", "main.c")
+
+
+def compile_sdl(
+    out: Path, prof: toolchain.Profile, include: Path | None = None
+) -> tuple[bool | None, str]:
+    """SDL_FILES with SOA_SDL=1 against SDL3's headers under `include`, into
+    out/sdl: True compiled, False failed, None not compiled because there are
+    no headers; and the compiler's output."""
+    include = include or fetch_sdl.headers(ROOT / "vendor")
+    if not (include / "SDL3" / "SDL.h").exists():
+        return None, ""
+    (out / "sdl").mkdir(parents=True, exist_ok=True)
+    proc = toolchain.cc(
+        [
+            *prof.cflags,
+            *prof.strict,
+            "/c",
+            "/DSOA_SDL=1",
+            f"/I{include}",
+            f"/I{RUNTIME}",
+            *(str(RUNTIME / f) for f in SDL_FILES),
+            f"/Fo{out / 'sdl'}/",
+        ],
+        ROOT,
+        prof,
+    )
+    return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -114,6 +155,11 @@ def main() -> int:
         "--require-gxv",
         action="store_true",
         help="fail when gxv.c cannot be compiled as the backend (no vendor/vulkan-headers)",
+    )
+    ap.add_argument(
+        "--require-sdl",
+        action="store_true",
+        help="fail when the SDL window and sound cannot be compiled (no SDL3 headers; gcc and clang only)",
     )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
@@ -167,8 +213,31 @@ def main() -> int:
         backend_ok = compiled
         gxv_note = "compiled as the backend too" if compiled else "FAILED as the backend"
 
+    # The window and the sound off Windows (L10): Linux's profiles only, since
+    # window_sdl.c is POSIX's (_exit from unistd.h) and Windows keeps window.c.
+    sdl_ok = True
+    sdl_note = "not compiled with SOA_SDL: Windows keeps window.c (D2)"
+    if prof.name in ("gcc", "clang"):
+        sdl_note = (
+            "not compiled with SOA_SDL: no SDL3 headers (python tools/fetch_sdl.py --headers)"
+        )
+        compiled, text = compile_sdl(args.out, prof)
+        if compiled is None:
+            print(f"---- {', '.join(SDL_FILES)} with SOA_SDL=1: {sdl_note}")
+            sdl_ok = not args.require_sdl
+        else:
+            print(f"{'ok  ' if compiled else 'FAIL'} {', '.join(SDL_FILES)} with SOA_SDL=1")
+            for line in text.splitlines():
+                if line.strip() and line.strip() not in SDL_FILES:
+                    print(f"      {line}")
+            sdl_ok = compiled
+            sdl_note = "compiled with SOA_SDL too" if compiled else "FAILED with SOA_SDL"
+    elif args.require_sdl:
+        sdl_ok = False
+
     print(f"\ncompiled {len(covered) - len(failed)}/{len(covered)} runtime translation units")
     print(f"gxv.c: {gxv_note}")
+    print(f"the SDL window and sound: {sdl_note}")
     if UNCOVERED:
         print("not compiled here:")
         for name, why in sorted(UNCOVERED.items()):
@@ -180,6 +249,9 @@ def main() -> int:
         return 1
     if not backend_ok:
         print(f"::error::gxv.c {gxv_note}")
+        return 1
+    if not sdl_ok:
+        print(f"::error::the SDL window and sound: {sdl_note}")
         return 1
     return 0
 

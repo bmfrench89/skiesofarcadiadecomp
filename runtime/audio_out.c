@@ -3,8 +3,8 @@
  * DAC. Blocks arrive as big-endian right/left 16-bit pairs at 32 kHz (or 48
  * kHz). The meter, the arrival rate, SOA_WAV's file, the mute and the report
  * are every platform's (portability L9: a headless Linux run writes its
- * WAV); the device is a backend, waveOut on Windows and none elsewhere until
- * L10's SDL3 audio.
+ * WAV); the device is a backend, waveOut on Windows, SDL3's audio stream
+ * where the build has SDL (L10's audio_sdl.c), and none otherwise.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "plat.h"
@@ -109,8 +109,38 @@ static void audio_play(const uint8_t* be_rl, unsigned bytes)
         note_drop(1);
     }
 }
+#elif defined(SOA_SDL)
+/* SDL3's audio stream (portability L10, audio_sdl.c). A block goes when the
+ * device has fallen behind by waveOut's 24 of them, as it does there. */
+int audio_sdl_open(unsigned rate);
+unsigned audio_sdl_queued(void);
+int audio_sdl_put(const int16_t* lr, unsigned bytes);
+
+#define BLOCKS 24
+
+static int16_t g_out[BLOCK_BYTES / 2];
+
+static int audio_open(unsigned rate)
+{
+    if (getenv("SOA_NOSOUND")) return 0;
+    return audio_sdl_open(rate);
+}
+
+/* One block to the device, at most BLOCK_BYTES of it. */
+static void audio_play(const uint8_t* be_rl, unsigned bytes)
+{
+    unsigned n = bytes / 4;
+    if (audio_sdl_queued() + n * 4 > BLOCKS * n * 4) { note_drop(1); return; } /* the device is behind; drop */
+    to_device(be_rl, n, g_out);
+    if (audio_sdl_put(g_out, n * 4)) {
+        g_pushed++;
+        note_drop(0);
+    } else {
+        note_drop(1);
+    }
+}
 #else
-/* No device here yet: the meter, the rate and the WAV still run. */
+/* No device here: the meter, the rate and the WAV still run. */
 static int audio_open(unsigned rate)
 {
     (void)rate;

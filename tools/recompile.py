@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # units.txt is read by one parser, which decomp.py owns (stdlib only, so the
 # no-pip CI job that imports this file still needs nothing installed).
 import fetch_gpu  # noqa: E402
+import fetch_sdl  # noqa: E402
 from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
 from soa import embed, shaders, toolchain  # noqa: E402
@@ -156,8 +157,9 @@ MOD_TEXT = ("mod.ini", "patches.txt")
 
 
 def mod_out_dir(p: toolchain.Profile, out: Path, src: Path) -> Path:
-    """Where --link puts a mod's mod.dll: beside its mod.c for msvc, under
-    <out>/mods/<folder> for mingw (distribution R1), absolute."""
+    """Where --link puts a mod's library: beside its mod.c for msvc, under
+    <out>/mods/<folder> for mingw (distribution R1) and Linux's gcc and clang
+    (portability L10), absolute."""
     if p.name == "msvc":
         return src.parent.resolve()
     return (out / "mods" / src.parent.name).resolve()
@@ -172,14 +174,17 @@ def reproducible_flags() -> list[str]:
 def gnu_mod_dll_command(
     p: toolchain.Profile, src: Path, dest: Path, reproducible: bool = False
 ) -> list[str]:
-    """The mingw profile's line for a mod's mod.dll, written into dest."""
+    """A GNU profile's line for a mod's library, written into dest: mod.dll
+    under mingw, mod.so (position-independent) on Linux."""
+    lib = "mod.dll" if p.name == "mingw" else "mod.so"
     return [
         *p.cflags,
         "-shared",
+        *([] if p.name == "mingw" else ["-fPIC"]),
         *(reproducible_flags() if reproducible else []),
         f"/I{RUNTIME}",
         str(src.resolve()),
-        f"/Fe{dest / 'mod.dll'}",
+        f"/Fe{dest / lib}",
     ]
 
 
@@ -248,13 +253,24 @@ def gnu_link_command(
     gxv: bool = False,
     defines: tuple[str, ...] = (),
     reproducible: bool = False,
+    sdl: tuple[list[str], list[str]] | None = None,
 ) -> list[str]:
-    """The mingw profile's link (distribution R1): msvc's, in clang's words.
-    -gcodeview and lld's --pdb write <out>/soa.pdb, which SOA_HOSTPROF's
-    report reads through dbghelp as it reads MSVC's; a reproducible link
-    writes none (reproducible_flags). The libraries and the stack are the
-    profile's linker flags, last, after every source and object."""
-    debug = reproducible_flags() if reproducible else ["-gcodeview"]
+    """A GNU profile's link: mingw's (distribution R1), msvc's in clang's
+    words, where -gcodeview and lld's --pdb write <out>/soa.pdb, which
+    SOA_HOSTPROF's report reads through dbghelp as it reads MSVC's, and a
+    reproducible link writes none (reproducible_flags); or Linux's gcc and
+    clang (portability L10), with neither. The libraries and the stack are the
+    profile's linker flags, last, after every source and object.
+
+    `sdl` is fetch_sdl.link_args' pair on Linux when vendor/sdl3 holds this
+    host's SDL3 (L10): SOA_SDL and the headers on the compile, so
+    window_sdl.c and audio_sdl.c are the window and the sound, and the
+    static library and what it needs after the objects."""
+    windows = p.name == "mingw"
+    if not windows:
+        debug: list[str] = []
+    else:
+        debug = reproducible_flags() if reproducible else ["-gcodeview"]
     return [
         *p.cflags,
         *debug,
@@ -262,11 +278,13 @@ def gnu_link_command(
         f"/I{RUNTIME}",
         f"/I{out}",
         *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
+        *(sdl[0] if sdl else []),
         f"/Fe{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
         str(out / "disc_sys.c"),
         *map(str, objs),
-        *([] if reproducible else [f"-Wl,--pdb={out / 'soa.pdb'}"]),
+        *([] if reproducible or not windows else [f"-Wl,--pdb={out / 'soa.pdb'}"]),
+        *(sdl[1] if sdl else []),
         *p.linker,
     ]
 
@@ -328,9 +346,10 @@ def link_command(
 
 def builds_mods(p: toolchain.Profile) -> bool:
     """The msvc profile builds mods/*/mod.c beside each, for gen/soa.exe;
-    mingw builds them under its own directory (mod_out_dir). clang-cl's build
-    must touch nothing outside its own, and L9 builds mod.so on Linux."""
-    return p.name in ("msvc", "mingw")
+    mingw, gcc and clang build them under their own directory (mod_out_dir):
+    mod.dll, or mod.so on Linux (L9 loads it, L10 builds it). clang-cl's build
+    must touch nothing outside its own."""
+    return p.name in ("msvc", "mingw", "gcc", "clang")
 
 
 def link_plan(
@@ -341,6 +360,7 @@ def link_plan(
     gxv: bool = False,
     defines: tuple[str, ...] = (),
     reproducible: bool = False,
+    sdl: tuple[list[str], list[str]] | None = None,
 ) -> list[tuple[list[str], Path]]:
     """Every compiler command --link runs, in order, each with its working
     directory: the decompiled units, the link, then each mod (msvc and
@@ -351,8 +371,8 @@ def link_plan(
     if dc_files:
         plan.append((decomp_command(p, out, dc_files, dc_defines), Path(".")))
         objs += decomp_objects(p, out, dc_files)
-    if p.name == "mingw":
-        plan.append((gnu_link_command(p, out, objs, gxv, defines, reproducible), Path(".")))
+    if p.style == "gnu":
+        plan.append((gnu_link_command(p, out, objs, gxv, defines, reproducible, sdl), Path(".")))
     else:
         plan.append((link_command(p, out, objs, gxv, defines), Path(".")))
     if p.name == "msvc":
@@ -603,12 +623,6 @@ def main() -> int:
         write_build_inputs(args.out, dol_sha1, prof.name)
 
     if args.link:
-        if prof.style != "msvc" and prof.name != "mingw":
-            print(
-                f"\n--link builds with msvc, clang-cl or mingw; {prof.name}'s link is portability L10's",
-                file=sys.stderr,
-            )
-            return 1
         if toolchain.compiler_path(prof) is None:
             print(f"\n{shown} not found; skipping link", file=sys.stderr)
             return 1
@@ -657,9 +671,29 @@ def main() -> int:
             print("GPU backend: built in (SOA_GPU=vulkan)")
         else:
             print("GPU backend: not built in (python tools/fetch_gpu.py, then --link again)")
+        # The window and the sound off Windows (portability L10), when
+        # tools/fetch_sdl.py has built SDL3 for this host into vendor/sdl3.
+        # Without it the Linux build is as before: headless, the run's own
+        # watchdog and SOA_WAV.
+        sdl = None
+        if prof.name in ("gcc", "clang"):
+            if fetch_sdl.available(VENDOR):
+                bad = fetch_sdl.verify(VENDOR)
+                if bad:
+                    print(
+                        f"vendor/sdl3 is not as recorded ({bad[0]}); run python tools/fetch_sdl.py",
+                        file=sys.stderr,
+                    )
+                    return 1
+                sdl = fetch_sdl.link_args(VENDOR)
+                print(f"window and sound: SDL3 {fetch_sdl.VERSION} (vendor/sdl3)")
+            else:
+                print(
+                    "window and sound: none, headless (python tools/fetch_sdl.py, then --link again)"
+                )
         failed_mods = 0
         defines = ("/DSOA_NO_DECOMP=1",) if args.no_decomp else ()
-        plan = link_plan(prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible)
+        plan = link_plan(prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible, sdl)
         exe_flags = (f"/Fe:{exe}", f"/Fe{exe}")
         for cmd, cwd in plan:
             if args.progress:
@@ -667,19 +701,20 @@ def main() -> int:
                 if cwd == Path(".") and what != "link":
                     what = "decompiled units"
                 print(f"[build] {what}", flush=True)
-            if cwd != Path(".") and prof.name == "mingw":
-                # the mod's own text beside the mod.dll this build makes
+            if cwd != Path(".") and prof.style == "gnu":
+                # the mod's own text beside the library this build makes
                 src = next(s for s in mod_dll_sources() if s.parent.name == cwd.name)
                 cwd.mkdir(parents=True, exist_ok=True)
                 for name in MOD_TEXT:
                     if (src.parent / name).exists():
                         (cwd / name).write_bytes((src.parent / name).read_bytes())
             proc = toolchain.cc(cmd, cwd, prof)
-            if cwd != Path("."):  # a mod.dll, beside its mod.c or under <out>/mods
+            if cwd != Path("."):  # a mod's library, beside its mod.c or under <out>/mods
+                lib = "mod.so" if prof.name in ("gcc", "clang") else "mod.dll"
                 try:
-                    where = cwd.relative_to(RUNTIME.parent) / "mod.dll"
+                    where = cwd.relative_to(RUNTIME.parent) / lib
                 except ValueError:  # a player's folder, outside the source tree
-                    where = cwd / "mod.dll"
+                    where = cwd / lib
                 if proc.returncode != 0:
                     out_text = proc.stdout + proc.stderr
                     errs = [ln for ln in out_text.splitlines() if "error" in ln.lower()]
