@@ -35,6 +35,7 @@ passes to the setup window.
 import argparse
 import collections
 import concurrent.futures
+import hashlib
 import os
 import re
 import sys
@@ -48,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import fetch_gpu  # noqa: E402
 from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
-from soa import shaders, toolchain  # noqa: E402
+from soa import embed, shaders, toolchain  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa.hle import load_hle  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
@@ -60,6 +61,74 @@ VENDOR = Path(__file__).resolve().parents[1] / "vendor"
 # Where mods with native code live: the ones the port ships, and the examples
 # a mod author copies. --link builds each folder's mod.c into its mod.dll.
 MOD_FOLDERS = ("mods", "examples/mods")
+
+
+BUILD_INPUTS = "build_inputs.txt"
+
+
+def write_build_inputs(out: Path, dol_sha1: str, profile: str) -> None:
+    """After a --compile that succeeded: the executable its chunks were
+    translated from, and the toolchain profile (disc-layer I3, portability
+    3.9). --link holds the executable it builds in to this."""
+    (out / BUILD_INPUTS).write_text(
+        f"dol_sha1 = {dol_sha1}\nprofile = {profile}\n", encoding="utf-8"
+    )
+
+
+def read_build_inputs(out: Path) -> dict[str, str] | None:
+    path = out / BUILD_INPUTS
+    if not path.exists():
+        return None
+    rows = (ln.split("=", 1) for ln in path.read_text(encoding="utf-8").splitlines() if "=" in ln)
+    return {k.strip(): v.strip() for k, v in rows}
+
+
+def check_build_inputs(out: Path, dol_sha1: str) -> str | None:
+    """Why --link must refuse: the chunks in `out` were compiled from another
+    executable than the one about to be built in beside them, which would
+    link old code to new data with nothing saying so. None when they agree,
+    or when there is no record (a gen/ from before this: build_inputs_note)."""
+    rec = read_build_inputs(out)
+    if rec is None or rec.get("dol_sha1") == dol_sha1:
+        return None
+    return (
+        f"{out}: its translated code was compiled from the executable with SHA-1 "
+        f"{rec.get('dol_sha1')}, and this one is {dol_sha1}; run --compile again (stale link)"
+    )
+
+
+def build_inputs_note(out: Path) -> str | None:
+    """The one-time note for a gen/ compiled before the record existed."""
+    if read_build_inputs(out) is not None:
+        return None
+    return (
+        f"note: {out} has no {BUILD_INPUTS}, so this link cannot check its code was compiled "
+        "from this executable; the next --compile writes one"
+    )
+
+
+def system_files(
+    disc: Path, dol_bytes: bytes, want_sha1: str, force: bool
+) -> tuple[dict[str, bytes] | None, str | None]:
+    """The executable, boot.bin and file table to build in (I3), from the
+    disc at `disc`; or None and why not. Refused, unless forced, when the
+    disc's executable is not the one config/ names, or differs from --dol."""
+    from soa.disc import Disc, open_data
+
+    try:
+        data = open_data(disc)
+    except (OSError, ValueError) as exc:
+        return None, f"{disc}: {exc}"
+    if not isinstance(data, Disc):
+        return None, f"{disc}: no disc image to take the system files from (tools/extract.py)"
+    with data:
+        files = data.system_files()
+    got = hashlib.sha1(files["main.dol"], usedforsecurity=False).hexdigest()
+    if not force and got != want_sha1:
+        return None, f"{disc}: its executable has SHA-1 {got}, not config/'s {want_sha1}"
+    if not force and files["main.dol"] != dol_bytes:
+        return None, f"{disc}: its executable is not --dol's (the code is translated from --dol)"
+    return files, None
 
 
 def mod_dll_sources(root: Path = RUNTIME.parent) -> list[Path]:
@@ -195,6 +264,7 @@ def gnu_link_command(
         *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
         f"/Fe{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
+        str(out / "disc_sys.c"),
         *map(str, objs),
         *([] if reproducible else [f"-Wl,--pdb={out / 'soa.pdb'}"]),
         *p.linker,
@@ -245,6 +315,7 @@ def link_command(
         f"/Fo{out}/",
         f"/Fe:{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
+        str(out / "disc_sys.c"),  # the player's system files (disc-layer I3), compiled every link
         *map(str, objs),
         *p.linker,
         "/link",
@@ -349,6 +420,22 @@ def native_decomp_sources(units: Path) -> tuple[list[str], list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dol", type=Path, default=Path("extracted/sys/main.dol"))
+    ap.add_argument(
+        "--disc",
+        type=Path,
+        default=Path("extracted"),
+        help="the disc whose executable, boot.bin and file table are built in (disc-layer I3)",
+    )
+    ap.add_argument(
+        "--no-embed",
+        action="store_true",
+        help="build none in: the runtime reads them from the image, and says so",
+    )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="build in a disc's system files even when its executable is not config/'s or --dol's",
+    )
     ap.add_argument("--config", type=Path, default=Path("config"))
     ap.add_argument(
         "--cc",
@@ -396,7 +483,26 @@ def main() -> int:
 
     if args.progress:
         print("[build] translate", flush=True)
-    dol = D.parse(args.dol.read_bytes())
+    dol_bytes = args.dol.read_bytes()
+    dol_sha1 = hashlib.sha1(dol_bytes, usedforsecurity=False).hexdigest()
+    # The stale-link guard, before anything is parsed: a link of chunks
+    # compiled from another executable is refused (disc-layer I3).
+    if args.link and not args.compile:
+        stale = check_build_inputs(args.out, dol_sha1)
+        if stale:
+            print(stale, file=sys.stderr)
+            return 1
+    if args.no_embed:
+        system = None
+    else:
+        from soa.dump import read_project
+
+        want = read_project(args.config / "GEAE8P" / "config.yml").sha1.lower()
+        system, why = system_files(args.disc, dol_bytes, want, args.force)
+        if system is None:
+            print(f"{why}; --no-embed builds without them", file=sys.stderr)
+            return 1
+    dol = D.parse(dol_bytes)
     t0 = time.time()
     functions, _ = cfg.build_iterative(dol)
     code = cfg.CodeView(dol)
@@ -432,6 +538,12 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "functions.h").write_text(em.prototypes(), encoding="utf-8")
     (args.out / "dispatch.c").write_text(em.dispatch_c(), encoding="utf-8")
+    (args.out / "disc_sys.c").write_text(embed.disc_sys_c(system), encoding="utf-8")
+    print(
+        "system files: built in (disc_sys.c; never share this build)"
+        if system is not None
+        else "system files: not built in (--no-embed): the runtime reads the image's"
+    )
 
     t0 = time.time()
     chunks: list[Path] = []
@@ -488,6 +600,7 @@ def main() -> int:
         print(f"compiled {len(units) - len(failures)}/{len(units)} units in {elapsed:.1f}s")
         if failures:
             return 1
+        write_build_inputs(args.out, dol_sha1, prof.name)
 
     if args.link:
         if prof.style != "msvc" and prof.name != "mingw":
@@ -500,6 +613,9 @@ def main() -> int:
             print(f"\n{shown} not found; skipping link", file=sys.stderr)
             return 1
         exe = args.out / ("soa" + prof.exeext)
+        note = build_inputs_note(args.out)
+        if note:
+            print(note)
         t0 = time.time()
         # The hand-decompiled units (src/) are built natively too, every function
         # renamed dc_<name> so they sit beside the C runtime's own strlen and

@@ -11,6 +11,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "disc.h"
+#include "sha1.h"
 #include "gxr.h"
 #include "gxv.h"
 #include "mod.h"
@@ -1219,6 +1220,7 @@ int main(int argc, char** argv)
     const uint8_t *dol, *boot, *fst;
     size_t dol_size, fst_size;
     uint32_t fst_addr, fst_max;
+    int built_in;
     static CpuState s;
 
     /* An option we do not know is a typo, not a directory: saying so beats
@@ -1278,9 +1280,15 @@ int main(int argc, char** argv)
          * itself, checked to be this port's disc before anything of it is
          * believed (disc-layer I1). Here, after the switches above, so their
          * diagnostics print even with no disc; without one, nothing would
-         * load but zeros, so the run stops and says how to make one. */
+         * load but zeros, so the run stops and says how to make one. A build
+         * carrying its own executable, boot.bin and file table (I3) opens
+         * none for the self test or a replay, which read nothing else of
+         * the disc; for a game run it opens one and refuses an image whose
+         * file table is not the build's. */
         char why[1024];
-        if (disc_open(dir, why, sizeof why) != 0 ||
+        int no_disc = getenv("SOA_SELFTEST") || (argc > 2 && strcmp(argv[1], "--replay") == 0);
+        built_in = disc_builtin(why, sizeof why);
+        if (built_in < 0 || (!(built_in && no_disc) && disc_open(dir, why, sizeof why) != 0) ||
             disc_system(&dol, &dol_size, &boot, &fst, &fst_size, why, sizeof why) != 0) {
             fprintf(stderr, "[boot] %s\n", why);
             return 1;
@@ -1349,6 +1357,15 @@ int main(int argc, char** argv)
     s.spr[287] = GEKKO_PVR;
     s.msr = 0x00002030u; /* FP | IR | DR -- __init_hardware rewrites it anyway */
 
+    /* One of the two always, so a build that lost its embed cannot pass
+     * for one that has it (I3). */
+    if (built_in) {
+        char sha[41];
+        sha1_hex(dol, dol_size, sha);
+        fprintf(stderr, "[boot] system files built in (DOL sha1 %s)\n", sha);
+    } else {
+        fprintf(stderr, "[boot] system files from the image (built without them)\n");
+    }
     fprintf(stderr, "[boot] DOL %zu bytes, FST %zu bytes at %08X; entering %s\n", dol_size,
             fst_size, fst_addr, STR(ENTRY_FN));
     /* Which compiler built this binary (L3b): a replay or a run from another

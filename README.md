@@ -134,6 +134,11 @@ one; it used to boot and read zeros.
 
 `recompile.py` translates the whole executable to C into `gen/` (also
 gitignored), compiles it with MSVC and links the runtime into `gen/soa.exe`.
+It builds your disc's executable, boot.bin and file table into it too (from
+`--disc`, `extracted` by default), so the self test and replays need no image
+and an image other than the one it was built from is refused at boot;
+`--no-embed` builds without them, and the runtime then reads the image's.
+**`gen\soa.exe` contains your copy of the game's executable. Never share it.**
 The default compiles the translated code without optimisation (fast to
 build, fine for testing); add `--optimize` for a release build of it, which
 takes longer but runs the game faster. After changing anything under
@@ -328,7 +333,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1293 tests; any that need a dump skip themselves
+python -m pytest                     # 1302 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

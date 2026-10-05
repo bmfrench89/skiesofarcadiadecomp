@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1293 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1302 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1293 |
+| Python tests | 1302 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -650,9 +650,14 @@ C5c) is now done.
    .iso>` runs with no copy, an image that is not this port's (game id,
    revision, the executable's SHA-1) is refused by name, no image stops
    the run naming `extract.py`, and `tools/citest/disc_check.py` holds
-   disc.c to a synthetic image in CI. **Next:** the Android path (§0,
-   D-27). I3 waits for the owner's D-5; the store (I4, then I5) comes
-   before L12, which specifies R5. Still open for the owner, and not blocking: whether a
+   disc.c to a synthetic image in CI. **I3 is done** (FINDINGS "I3", after
+   the owner's D-5 yes on 2026-10-05): `soa.exe` carries the player's
+   executable, boot.bin and file table (`gen/disc_sys.c`; never share
+   the exe), the self test and replays open no disc, an image whose
+   table is not the build's is refused, and `--link` refuses chunks
+   compiled from another executable. **Next:** the Android path (§0,
+   D-27). The store (I4, then I5) comes before L12, which specifies R5;
+   I4, the importer, first, since I5 needs I5a or a re-specification. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

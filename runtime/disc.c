@@ -37,6 +37,15 @@
 
 unsigned gx_frame_count(void); /* gx.c: the frame a logged read belongs to */
 
+/* The build's own copies of the executable, boot.bin and the file table
+ * (I3): <--out>/disc_sys.c, which tools/recompile.py writes at every run --
+ * little-endian words of the files' bytes, each with its size and SHA-1. A
+ * --no-embed build has the same symbols with sizes of zero. */
+extern const uint32_t disc_sys_dol[], disc_sys_boot[], disc_sys_fst[];
+extern const size_t disc_sys_dol_size, disc_sys_boot_size, disc_sys_fst_size;
+extern const char disc_sys_dol_sha1[], disc_sys_boot_sha1[], disc_sys_fst_sha1[];
+static int g_builtin; /* 0 not yet asked; 1 built in and sound; 2 none; -1 broken */
+
 typedef struct {
     uint64_t off;
     uint32_t size;
@@ -260,6 +269,18 @@ int disc_open(const char* where, char* why, size_t cap)
     g_fst = (uint8_t*)malloc(g_fst_n);
     if (!g_fst || !read_at(fst_off, g_fst, g_fst_n)) return refuse(why, cap, "%s: cannot read the file table", g_path);
     if (!index_fst()) return refuse(why, cap, "%s: the file table is malformed", g_path);
+    sha1_hex(g_boot, BOOT_SIZE, boot_sha);
+    sha1_hex(g_fst, g_fst_n, fst_sha);
+    /* The stale-disc guard (I3): with the build's own file table built in,
+     * an image whose table differs -- a patched or another image -- would
+     * boot with offsets pointing at the wrong bytes. */
+    if (disc_builtin(why, cap) == 1 &&
+        (disc_sys_fst_size != g_fst_n || memcmp(disc_sys_fst, g_fst, g_fst_n) != 0))
+        return refuse(why, cap,
+                      "this disc image is not the one this build was made from (a patched or different "
+                      "image?): %s has file table SHA-1 %s, and the build's is %s; rebuild from it with "
+                      "python tools/recompile.py --link, or use the image it was built from",
+                      g_path, fst_sha, disc_sys_fst_sha1);
 
     g_info.image_size = size;
     g_info.covered_end = size;
@@ -268,18 +289,64 @@ int disc_open(const char* where, char* why, size_t cap)
     g_open = 1;
     env = getenv("SOA_DISC_LOG");
     g_log = env && *env && strcmp(env, "0") != 0;
-    sha1_hex(g_boot, BOOT_SIZE, boot_sha);
-    sha1_hex(g_fst, g_fst_n, fst_sha);
-    fprintf(stderr, "[disc] %s: %s rev %u disc image, %llu bytes; DOL %s, boot.bin %s, FST %s\n", g_path,
-            g_info.game_id, g_info.revision, (unsigned long long)size, got, boot_sha, fst_sha);
+    fprintf(stderr, "[disc] %s: %s rev %u disc image, %llu bytes; DOL %s, boot.bin %s, FST %s%s\n", g_path,
+            g_info.game_id, g_info.revision, (unsigned long long)size, got, boot_sha, fst_sha,
+            g_builtin == 1 ? "; FST matches this build" : "");
     return 0;
 }
 
 const DiscInfo* disc_info(void) { return g_open ? &g_info : NULL; }
 
+/* Each built-in part against its own SHA-1, and the executable against the
+ * one the port was translated from: a generator or byte-order fault shows
+ * here, at boot, not as a game that runs strangely. */
+static int hashes_to(const uint32_t* words, size_t n, const char* want, char hex[41])
+{
+    sha1_hex((const uint8_t*)words, n, hex);
+    return strcmp(hex, want) == 0;
+}
+
+int disc_builtin(char* why, size_t cap)
+{
+    static char said[512];
+    char hex[41];
+    if (g_builtin == 0) {
+        g_builtin = -1;
+        if (disc_sys_dol_size == 0)
+            g_builtin = 2; /* --no-embed: the image's own are read */
+        else if (disc_sys_boot_size != BOOT_SIZE || disc_sys_fst_size < 12)
+            snprintf(said, sizeof said, "the system files built into this soa.exe are the wrong sizes");
+        else if (!hashes_to(disc_sys_dol, disc_sys_dol_size, disc_sys_dol_sha1, hex) || strcmp(hex, DISC_DOL_SHA1) != 0)
+            snprintf(said, sizeof said,
+                     "the executable built into this soa.exe hashes to %s, not its own %s and the port's %s (a "
+                     "generator or byte-order fault); rebuild with python tools/recompile.py --link",
+                     hex, disc_sys_dol_sha1, DISC_DOL_SHA1);
+        else if (!hashes_to(disc_sys_boot, BOOT_SIZE, disc_sys_boot_sha1, hex))
+            snprintf(said, sizeof said, "the boot.bin built into this soa.exe hashes to %s, not its own %s", hex,
+                     disc_sys_boot_sha1);
+        else if (!hashes_to(disc_sys_fst, disc_sys_fst_size, disc_sys_fst_sha1, hex))
+            snprintf(said, sizeof said, "the file table built into this soa.exe hashes to %s, not its own %s", hex,
+                     disc_sys_fst_sha1);
+        else
+            g_builtin = 1;
+    }
+    if (g_builtin < 0) snprintf(why, cap, "%s", said);
+    return g_builtin == 2 ? 0 : g_builtin;
+}
+
 int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const uint8_t** fst, size_t* fst_n,
                 char* why, size_t cap)
 {
+    int built = disc_builtin(why, cap);
+    if (built < 0) return 1;
+    if (built == 1) { /* the build's own copies: the image may not even be open */
+        *dol = (const uint8_t*)disc_sys_dol;
+        *dol_n = disc_sys_dol_size;
+        *boot = (const uint8_t*)disc_sys_boot;
+        *fst = (const uint8_t*)disc_sys_fst;
+        *fst_n = disc_sys_fst_size;
+        return 0;
+    }
     if (!g_open) {
         snprintf(why, cap, "no disc image is open");
         return 1;

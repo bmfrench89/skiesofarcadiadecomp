@@ -145,6 +145,10 @@ The owner answered four questions, with the research behind them summarised in t
     pipeline-library failure (FINDINGS "V7, fourth") and for every GPU check after it.
   - **The display:** the owner will set 60 or 120 Hz for the windowed sessions (V6b, V8), and is to
     be asked when one is ready.
+- **The owner's answer of 2026-10-05: D-5, yes.** `soa.exe` may hold the player's own copy of the
+  executable (disc-layer I3), given it was never shareable: replays and the self test then need no
+  disc, and an image other than the one a build was made from is refused. Never attach `soa.exe` to
+  an issue or send it to anyone.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
@@ -582,7 +586,7 @@ H17a, as C5b's Done says.
 | # | Slice | Size | Rebuild | Needs first | Owner |
 |---|---|---|---|---|---|
 | 1 | **I1** one seam for the disc (`runtime/disc.c`, `sha1.c`); system files from the image; the DOL-hash refusal; `SOA_DISC_LOG`. The drive's deadline is unchanged. **Done** 2026-10-05 (FINDINGS "I1"): runs from the player's ISO; ten images refused by name; every read of a title run names its file | a day to several days | `--link` | I2; M5b (its `aram_set_data_dir`) | — |
-| 2 | **I3** the executable built in (`disc_sys.c` in `--out`); `--no-embed`; the stale-link guard; guard suffixes 43 to 48 | a day | `--link` (the guard arms at the next `--compile`) | I1; **D-5** | **Owner** agrees first |
+| 2 | **I3** the executable built in (`disc_sys.c` in `--out`); `--no-embed`; the stale-link guard; guard suffixes 43 to 48. **Done** 2026-10-05 (FINDINGS "I3"): the self test and replays open no disc; an image whose table is not the build's is refused | a day | `--link` (the guard arms at the next `--compile`) | I1; **D-5** | **Owner** agrees first |
 | — | **I5a**, off the default path: the deadline from the command's start, with overruns counted in guest ticks. A deliberate change to every run's disc timing; built only if agreed, then alone | hours | `--link` | I1; **the implementation session agrees** to the change (disc impl Q1). Not before | — |
 
 **Later:**
@@ -811,7 +815,7 @@ until you say otherwise.
 | **D-2** | Which handheld; which refresh rate you play at | gameplay Q1, comfort Q-O4 | H8's check, H19a, H17b | D4's default |
 | D-3 | Relative paths and the default card mean "inside the SOA folder" | comfort Q-O1 | M5b | yes |
 | D-4 | Escape in fullscreen leaves fullscreen; should quitting need confirming? | comfort Q-O3 | H19a | leaves fullscreen; no confirmation |
-| **D-5** | `soa.exe` may hold your copy of the executable (never shared) | disc Q5 | I3 | **none: I3 waits** |
+| **D-5** | `soa.exe` may hold your copy of the executable (never shared) | disc Q5 | I3 | **answered 2026-10-05: yes** (§0); I3 may start |
 | D-6 | Chord layout: View+LB fullscreen, View+RS turbo, LB to skip text | comfort Q-O5 | CH1 | as proposed |
 | D-7 | Rumble on by default, at strength 100? | comfort Q-O2 | M18 | 100, with the game's option deciding |
 | D-8 | Auto-advance delay | comfort Q-O6 | P11 | 1.5 s |

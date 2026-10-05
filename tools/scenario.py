@@ -1063,6 +1063,12 @@ INLINE_SAYS = "[gxr] rasterizing on 0 worker threads"
 # The GPU backend's start line (runtime/gxv.c): a replay that prints it was
 # drawn on the GPU, and no pinned hash is the GPU's (specs/gpu-backend.md 3.9).
 GXV_SAYS = "[gxv] Vulkan "
+# A build carrying the player's system files (disc-layer I3) says so, and a
+# replay from it opens no disc: the capture's RAM is the whole guest. Its
+# [disc] open line in a replay is a disc read where none belongs. A build
+# without them (--no-embed) still opens the image for the executable.
+BUILT_IN_SAYS = "[boot] system files built in"
+DISC_OPEN = re.compile(r"^\[disc\] .+ disc image, \d+ bytes;", re.M)
 
 
 def replay_once(exe: Path, base: Path, threads, wrap=()) -> tuple[int, str]:
@@ -1123,6 +1129,8 @@ def sweep(
                     problems.append(
                         f"{at}: the GPU drew it, and a pinned hash is the CPU renderer's"
                     )
+                if BUILT_IN_SAYS in text and DISC_OPEN.search(text):
+                    problems.append(f"{at}: it opened a disc image, and a replay needs none")
                 if len(got) != 1:
                     # gx_replay returns 1 and says why when a file will not
                     # open; counting the lines is what tells a replay that

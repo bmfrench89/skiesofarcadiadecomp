@@ -757,6 +757,27 @@ def test_a_replay_the_gpu_drew_is_refused(tmp_path):
     assert problems == []
 
 
+def test_a_replay_that_opened_a_disc_is_refused(tmp_path):
+    """Disc-layer I3: a build carrying the player's system files opens no
+    image for a replay. Its [disc] open line in a replay is a disc read where
+    none belongs; a --no-embed build, which needs the image, is not held to it."""
+    captures = [make_capture(tmp_path, "0100")]
+    built = "[boot] system files built in (DOL sha1 " + "0" * 40 + ")\n"
+    opened = "[disc] extracted/disc.iso: GTSE01 rev 0 disc image, 1212416 bytes; DOL 00, boot.bin 00, FST 00\n"
+    _, problems = scenario.sweep(
+        captures, (1,), 1, lambda base, t: (0, built + opened + REPLAY_TEXT), echo=lambda *a: None
+    )
+    assert len(problems) == 1 and "opened a disc image" in problems[0]
+    for text in (
+        built + REPLAY_TEXT,
+        "[boot] system files from the image (built without them)\n" + opened + REPLAY_TEXT,
+    ):
+        _, problems = scenario.sweep(
+            captures, (1,), 1, lambda base, t, x=text: (0, x), echo=lambda *a: None
+        )
+        assert problems == []
+
+
 def test_a_replay_cannot_see_the_gpu_switch(tmp_path, monkeypatch):
     """V5: replay_once hands soa.exe no SOA_* variable of the caller's, so
     SOA_GPU=vulkan set for another run never reaches a pinned replay, and

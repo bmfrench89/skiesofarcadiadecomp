@@ -49,8 +49,11 @@ Non-negotiable, applies to every commit:
 
 1. **No game data in the repo.** No disc images, no `boot.dol`, no extracted assets.
    Enforced by `tools/guard.py` in CI, over the full git history, not just the tree.
-2. **No generated code derived from the game binary is committed.** Recompiler output is
-   a build artifact reproduced locally from the user's own dump. `gen/` is ignored.
+2. **No generated code derived from the game binary is committed.** Recompiler output --
+   the translated C and the copies of the player's executable, disc header and file table
+   built into it (disc-layer I3) -- is a build artifact reproduced locally from the user's own
+   dump. `gen/` is ignored, and the guard refuses a file holding those copies and any built
+   binary. `soa.exe` holds the player's executable verbatim: it is never shared.
 3. **Analysis metadata is fine.** Addresses, sizes, symbol names, signature hashes and
    structural offsets are facts about the binary, not copies of it. These live in `config/`.
 4. The user runs extraction and build against a disc they own.

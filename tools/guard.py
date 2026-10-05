@@ -71,7 +71,22 @@ FORBIDDEN_SUFFIXES = {
     ".flac",
     ".mp3",
     ".opus",
+    # What a build writes (disc-layer I3, 2026-10-05): once soa.exe holds the
+    # player's executable verbatim, a built binary is game data too -- the
+    # exe, its objects and debug database, a Linux or Android library and an
+    # APK. A player's package carries third-party executables and Setup.exe,
+    # which --tree allows where they belong (BUILD_SUFFIXES below).
+    ".exe",
+    ".obj",
+    ".pdb",
+    ".so",
+    ".apk",
 }
+BUILD_SUFFIXES = {".exe", ".obj", ".pdb", ".so", ".apk"}
+# The first line of a gen/disc_sys.c that holds the player's system files
+# (tools/soa/embed.py): refused in any file, by its content. Built by
+# concatenation, as embed.py builds it, so this file does not hold it.
+EMBED_MARKER = ("soa" + ":" + "embedded-game-data").encode()
 
 # Directories that hold extracted or vendored material.
 FORBIDDEN_DIRS = {
@@ -305,6 +320,8 @@ def content_problem(path: Path, data: bytes, mods: set[Path]) -> str | None:
     what = signature_of(data[:HEAD_BYTES])
     if what:
         return f"begins as {what} -- game data, whatever it is named"
+    if EMBED_MARKER in data[:HEAD_BYTES]:
+        return "holds a build's copy of the player's executable and file table (gen/disc_sys.c)"
     if in_mod_folder(path, mods) and not is_text(data):
         return NOT_TEXT
     return None
@@ -491,10 +508,13 @@ def tree_problems(root: Path) -> list[str]:
     problems = []
     for f, rel in zip(files, rels, strict=True):
         path = Path(rel)
+        theirs = third_party(rel)
         suffix = forbidden_suffix(path.name)
+        # a third party's own programs, and the package's setup window
+        if suffix and suffix.lower() in BUILD_SUFFIXES and (theirs or rel == "Setup.exe"):
+            suffix = None
         if suffix:
             problems.append(f"{rel}: forbidden extension '{suffix}' (game data)")
-        theirs = third_party(rel)
         if not theirs:
             for part in path.parts[:-1]:
                 if part.lower() in DECOMPILED_DIRS:

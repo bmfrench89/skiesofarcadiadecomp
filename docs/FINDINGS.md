@@ -6931,3 +6931,75 @@ the driver's.** 2026-10-04.
   - **The store** (I4, I5) is next in M3, since §0's G5 default now applies.
   - **The player's package** could now read an ISO where it lies, not copy it (distribution §3.7).
     `player_build.py` still copies it, because Setup's Rebuild reads `extracted\disc.iso`.
+
+**I3: the executable built in.** 2026-10-05, after the owner's D-5 yes.
+
+- **What it is:** `tools/recompile.py` builds the disc's executable, boot.bin and file table into
+  `soa.exe`.
+  - **Where they come from:** `--disc`, `extracted` by default. `tools/soa/embed.py` writes them
+    into `<--out>/disc_sys.c` at every run, as little-endian 32-bit words with each part's size and
+    SHA-1. Both links compile that file beside `runtime/`. The file's first line is a marker the
+    guard refuses in any file.
+  - **Refusals, unless `--force`:** a disc whose executable is not `config.yml`'s, and one that is
+    not `--dol`'s.
+  - **`--no-embed`** writes the same symbols empty.
+- **At boot:**
+  - **The built-in parts are checked first:** `runtime/disc.c`'s `disc_builtin` holds each to its
+    own SHA-1, and the executable to the port's. A part that fails stops the boot naming a generator
+    fault.
+  - **No disc for the self test or a replay:** neither opens one. A game run still opens the image,
+    and an image whose file table is not the build's is refused: "not the one this build was made
+    from (a patched or different image?)", with both hashes. Otherwise the `[disc]` line ends
+    "FST matches this build".
+  - **One boot line always says which:** `[boot] system files built in (DOL sha1 ...)`, or
+    `[boot] system files from the image (built without them)`.
+- **The stale-link guard:** a `--compile` that succeeds writes `<--out>/build_inputs.txt`, the
+  executable's SHA-1 and the profile. `--link` refuses chunks compiled from another executable
+  before it parses anything. A `gen/` from before says so once.
+- **The guard:**
+  - `.exe`, `.obj`, `.pdb`, `.so` and `.apk` are refused, so 48 suffixes, CI's history grep with
+    them.
+  - So is the marker, in any file's first 24 KB.
+  - `--tree` keeps the package's python, compiler and `Setup.exe`.
+  - All of history passes both forms.
+- **Other changes:**
+  - `player_build.py` passes its own `--disc`, because recompile.py runs from the package's
+    `source/`.
+  - SPEC §2.2 names the copies.
+  - README says plainly that `gen\soa.exe` holds your executable and is never shared.
+- **Checked** [V]:
+  - **A game run:** `$env:SOA_SETTINGS='0'; $env:SOA_FRAMES='300'; gen\soa.exe extracted` prints
+    `[boot] system files built in (DOL sha1 8c0e278126fa...)`. The `[boot]` DOL line is unchanged
+    and the open line says the table matches.
+  - **The self test with no disc:** `$env:SOA_SELFTEST='1'; gen\soa.exe build\citest\no-disc`
+    reports 0 failures and prints no `[disc]` line. With `extracted` it opens none either.
+  - **Replay:** `scenario.py replay` matched 23 of 23 at 1, 2, 3 and 8 threads. Its sweep now
+    reports a replay that opened a disc from a build that says it needs none. The mutation, once:
+    `main.c` built to open the image on every path made the sweep report all 184 runs (23 captures,
+    four thread counts, two passes). Restored and relinked, 23 of 23.
+  - **`--no-embed`:** a link without them prints `[boot] system files from the image (built
+    without them)` and boots from the image. With no image it stops, as I1 does.
+  - **The stale-link guard, live:** a `gen/build_inputs.txt` one digit off stopped `--link`
+    ("stale link") before translating anything. With the right digit it linked.
+  - **The player's path:** `player_build.py` into a fresh folder (llvm-mingw, `--compile`) wrote
+    `build_inputs.txt` (`profile = mingw`) and a `disc_sys.c`. Its `soa.exe` booted with the system
+    files built in and the table matching. Two fresh folders made the same `soa.exe`
+    (8207e14d...), so the build is still reproducible. That is a new hash, since the executable is
+    now inside. Cold, the build took 72 s; an earlier run took 122 s, with the machine busy.
+  - **`disc_check.py`, 92 of 92** under MSVC, clang-cl and llvm-mingw, adding to I1's:
+    - built without system files, it has none to give;
+    - built with the fixture's, it hands them back with no image open, opens their image saying
+      the table matches, and refuses one whose table differs by one letter;
+    - built with a table that misses its own SHA-1, it refuses before handing anything out.
+    `--mutate fst-offset` still fails it.
+  - **The new tests:**
+    - `test_recompile_inputs.py` (6): the record; embed's words read back to the fixture's bytes;
+      `--no-embed`'s empty symbols; the refusals; both links.
+    - `test_guard.py` (+2): built binaries outside the third-party folders, and the marker under
+      any name.
+    - `test_scenario.py` (+1): the sweep's new check.
+  - **The contract:** the self test reported 0 failures, `title --check` held 4 of 4, and
+    `decomp.py` is unchanged.
+- **What follows:** M3 is done: I1 and I3. The store (I4, I5) is G5's to start. Its default, "build
+  it when Android or the Deck is firm", now holds. I5 needs I5a (the deadline change, off the
+  default path until agreed) or a re-specification, so I4, the importer, comes first.

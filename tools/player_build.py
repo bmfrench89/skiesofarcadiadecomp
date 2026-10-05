@@ -158,7 +158,14 @@ def build(root: Path, gen: Path, retranslate: bool) -> int:
     cmd += ["--reproducible", "--progress", "--out", str(gen), "--link"]
     if retranslate:
         cmd += ["--compile", "--optimize"]
-    cmd += ["--dol", str(root / "extracted" / "sys" / "main.dol")]
+    # the disc whose system files are built in (disc-layer I3): the player's,
+    # not the default's, which would be source/extracted
+    cmd += [
+        "--dol",
+        str(root / "extracted" / "sys" / "main.dol"),
+        "--disc",
+        str(root / "extracted"),
+    ]
     proc = subprocess.Popen(
         cmd, cwd=SOURCE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )

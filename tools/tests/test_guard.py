@@ -587,6 +587,9 @@ def package_tree(root: Path) -> Path:
         "toolchain/bin/libLLVM-23.dll": b"MZ\0" + bytes(3 << 20),
         "toolchain/include/stdio.h": b"/* mingw-w64 */\n",
         "python/python314.dll": b"MZ\0" + bytes(3 << 20),
+        "python/python.exe": b"MZ\0" + bytes(64),
+        "toolchain/bin/x86_64-w64-mingw32-clang.exe": b"MZ\0" + bytes(64),
+        "Setup.exe": b"MZ\0" + bytes(64),  # the package's setup window (R4)
         "licenses/llvm.txt": b"Apache License\n",
     }
     for rel, data in files.items():
@@ -647,3 +650,44 @@ def test_the_dol_check_passes_random_bytes_and_text():
 
     assert guard.dol_inside(random.Random(3).randbytes(1 << 20)) is None
     assert guard.dol_inside((ROOT / "tools" / "guard.py").read_bytes()) is None
+
+
+def test_a_built_binary_outside_the_third_party_folders_is_refused(tmp_path):
+    """Disc-layer I3: soa.exe holds the player's executable verbatim, so a
+    build's outputs are game data. A package keeps its python's, its
+    compiler's and its own Setup.exe; anything else built is refused."""
+    root = package_tree(tmp_path)
+    cases = (
+        ("soa.exe", ".exe"),
+        ("source/soa.pdb", ".pdb"),
+        ("source/libsoa_game.so", ".so"),
+        ("source/x/disc_sys.obj", ".obj"),
+        ("soa.apk", ".apk"),
+    )
+    for rel, _ in cases:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(b"MZ\0" + bytes(64))
+    problems = guard.tree_problems(root)
+    for rel, suffix in cases:
+        assert f"{rel}: forbidden extension '{suffix}' (game data)" in problems, rel
+    assert not [p for p in problems if p.startswith(("Setup.exe", "python/", "toolchain/"))]
+    for name in ("soa.exe", "x.OBJ", "soa.pdb", "libsoa_game.so", "a.apk", "soa.exe.bak"):
+        assert guard.forbidden_suffix(name), name
+
+
+def test_a_file_holding_the_embed_marker_is_refused_by_its_content(tmp_path):
+    """gen/disc_sys.c's first line marks the player's system files; under any
+    name, anywhere, it is refused. The marker is built here as embed.py and
+    guard.py build it, so this file does not hold it either."""
+    from soa import embed
+
+    marker = "soa" + ":" + "embedded-game-data"
+    assert marker == embed.MARKER and marker.encode() == guard.EMBED_MARKER
+    files = {"main.dol": b"\x01" * 300, "boot.bin": bytes(0x440), "fst.bin": bytes(24)}
+    text = embed.disc_sys_c(files)
+    assert guard.content_problem(Path("notes/x.c"), text.encode(), set())
+    assert guard.content_problem(Path("notes/x.c"), embed.disc_sys_c(None).encode(), set()) is None
+    root = package_tree(tmp_path)
+    (root / "source" / "runtime" / "disc_sys.c").write_text(text, encoding="utf-8")
+    problems = "\n".join(guard.tree_problems(root))
+    assert "source/runtime/disc_sys.c: holds a build's copy of the player's executable" in problems

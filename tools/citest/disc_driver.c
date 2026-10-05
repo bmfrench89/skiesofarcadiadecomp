@@ -8,10 +8,13 @@
  *   serve <off> <len>    "serve <sha1 of the bytes>"   (the drive's read: counted)
  *   peek <off> <len>     "peek <bytes from the image> <sha1>"
  *   name <off>           "name <path> <start> <size>", or "name -"
+ *   builtin              "builtin <1|0|-1> <why>": the build's own system files (I3)
+ *   system               disc_system with or without an image open: as open's three lines
  *   report               disc_report's lines, on stdout
  *
  * Offsets and lengths are decimal. No guest, no clock: disc.c needs only the
- * frame counter, which is 0 here.
+ * frame counter, which is 0 here, and a disc_sys.c, which disc_check.py
+ * writes: the fixture's system files built in, or none (--no-embed's).
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "disc.h"
@@ -74,6 +77,25 @@ int main(void)
             name = disc_name_at(off, &start, &size);
             if (name) printf("name %s %llu %u\n", name, (unsigned long long)start, size);
             else printf("name -\n");
+        } else if (!strcmp(cmd, "builtin")) {
+            int b;
+            why[0] = 0;
+            b = disc_builtin(why, sizeof why);
+            printf("builtin %d %s\n", b, why);
+        } else if (!strcmp(cmd, "system")) {
+            const uint8_t *dol, *boot, *fst;
+            size_t dol_n, fst_n;
+            if (disc_system(&dol, &dol_n, &boot, &fst, &fst_n, why, sizeof why) != 0) {
+                printf("refused %s\n", why);
+            } else {
+                printf("system ok\n");
+                sha1_hex(dol, dol_n, hex);
+                printf("dol %zu %s\n", dol_n, hex);
+                sha1_hex(boot, 0x440, hex);
+                printf("boot %u %s\n", 0x440u, hex);
+                sha1_hex(fst, fst_n, hex);
+                printf("fst %zu %s\n", fst_n, hex);
+            }
         } else if (!strcmp(cmd, "report")) {
             fflush(stdout);
             disc_report();

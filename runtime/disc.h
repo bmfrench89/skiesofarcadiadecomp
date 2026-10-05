@@ -7,8 +7,9 @@
  * disc_open, answering "nothing".
  *
  * I1 is the ISO backend: an .iso or .gcm file, or a directory holding
- * disc.iso. The store (I5), the executable built in (I3) and mods' files
- * (I6-I8) come later, behind these same calls.
+ * disc.iso. I3 builds the executable, boot.bin and the file table into
+ * soa.exe. The store (I5) and mods' files (I6-I8) come later, behind these
+ * same calls.
  */
 #ifndef SOA_DISC_H
 #define SOA_DISC_H
@@ -32,7 +33,14 @@ typedef struct {
  * otherwise nonzero with the reason in `why`, which names the fix. */
 int disc_open(const char* where, char* why, size_t cap);
 const DiscInfo* disc_info(void); /* NULL until disc_open succeeds */
-/* The executable, boot.bin (0x440 bytes) and fst.bin, as the image holds them. */
+/* The system files built into this soa.exe (I3, <--out>/disc_sys.c): 1 when
+ * there and each matches its SHA-1, 0 for a --no-embed build, -1 when they do
+ * not match (the reason in `why`). With them, disc_open refuses an image
+ * whose file table is not the build's, and nothing needs an image open to
+ * have the executable: the self test and --replay open none. */
+int disc_builtin(char* why, size_t cap);
+/* The executable, boot.bin (0x440 bytes) and fst.bin: the build's own when
+ * built in, else the open image's. */
 int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const uint8_t** fst,
                 size_t* fst_n, char* why, size_t cap);
 /* The drive's read: the image's bytes, zeros past its end. Counted, and with

@@ -27,7 +27,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
-| 5f | `python tools/citest/disc_check.py` | 2.8 s | MSVC |
+| 5f | `python tools/citest/disc_check.py` | 4 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
 | 7 | `python -m pytest tools/tests -q` | 690 s | nothing (400 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
@@ -77,7 +77,7 @@ python tools/guard.py
 guard: 161 tracked files, no game data
 ```
 
-Catches game data about to enter the repository: 43 forbidden extensions
+Catches game data about to enter the repository: 48 forbidden extensions
 wherever they sit in a name (`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`,
 `.gci`, …, and `slotA.raw.bak`), eighteen directory
 names that must never be tracked (`extracted/`, `gen/`, `build/`, `vendor/`,
@@ -337,13 +337,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1290 passed, 3 skipped in 678.12s
+1299 passed, 3 skipped in 715.16s
 ```
 
-1293 tests in 77 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1271 passed, 4 skipped` without
+1302 tests in 78 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1280 passed, 4 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `890 passed, 403 skipped` without MSVC. The three
+into one module-level skip), `899 passed, 403 skipped` without MSVC. The three
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
 

@@ -20,7 +20,12 @@ that id and that executable's SHA-1 in place of the real ones, and checks:
   - ten images are refused, each with its own words: no image, an RVZ, bad
     boot magic, another game id, another revision, the file table past the
     end, a truncated image ending inside it, an executable section past the
-    end, an executable with one byte changed, and a malformed file table.
+    end, an executable with one byte changed, and a malformed file table;
+  - built as --no-embed builds it (I3), it has no system files of its own;
+    built with the fixture's in its disc_sys.c, it hands them back with no
+    image open, opens their image saying the table matches, refuses an image
+    whose table differs by one byte as not the build's, and a built-in copy
+    that misses its own SHA-1 is refused before anything is handed out.
 
 --mutate fst-offset moves the fixture's file-table offset by 4, which must
 fail it. The second form checks a live run's SOA_DISC_LOG=1 lines against the
@@ -43,7 +48,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import discfixture, toolchain  # noqa: E402
+from soa import discfixture, embed, toolchain  # noqa: E402
 from soa.disc import Disc  # noqa: E402
 
 PROF = toolchain.MSVC  # --cc sets it
@@ -70,8 +75,18 @@ def run_cl(what: str, args: list[str]) -> bool:
     return True
 
 
-def build(out: Path, game_id: str, dol_sha1: str, cflags: list[str]) -> Path | None:
-    """disc.c with the fixture's id and executable hash, sha1.c, the driver."""
+def build(
+    out: Path,
+    game_id: str,
+    dol_sha1: str,
+    cflags: list[str],
+    system: dict[str, bytes] | None = None,
+    disc_sys: str | None = None,
+) -> Path | None:
+    """disc.c with the fixture's id and executable hash, sha1.c, the driver,
+    and a disc_sys.c: `system` built in (I3), or none, as --no-embed; or
+    `disc_sys` as given, for a broken one."""
+    out.mkdir(parents=True, exist_ok=True)
     wrapper = out / "disc_fixture.c"
     wrapper.write_text(
         f"/* disc.c built for a synthetic image (disc_check.py) */\n"
@@ -79,7 +94,9 @@ def build(out: Path, game_id: str, dol_sha1: str, cflags: list[str]) -> Path | N
         f'#include "disc.c"\n',
         encoding="utf-8",
     )
-    sources = [wrapper, RUNTIME / "sha1.c", HERE / "disc_driver.c"]
+    text = disc_sys if disc_sys is not None else embed.disc_sys_c(system)
+    (out / "disc_sys.c").write_text(text, encoding="utf-8")
+    sources = [wrapper, RUNTIME / "sha1.c", HERE / "disc_driver.c", out / "disc_sys.c"]
     if not run_cl(
         "compiling disc.c",
         [*PROF.cflags, *cflags, "/c", f"/I{RUNTIME}", f"/Fo{out}/", *map(str, sources)],
@@ -174,6 +191,59 @@ def broken_images(fx: discfixture.Fixture, out: Path) -> dict[str, tuple[Path, s
     return result
 
 
+def check_built_in(c: Checks, fx: discfixture.Fixture, out: Path, cflags: list[str]) -> None:
+    """I3: the fixture's system files built in. disc_system hands them back
+    with no image open; the image they came from opens and is said to match;
+    one whose file table differs by a byte is refused as not the build's; a
+    built-in copy that does not hash to its own SHA-1 is refused at once.
+    And the --no-embed build (the checks above) has none to give."""
+    want = [
+        "system ok",
+        f"dol {len(fx.system['main.dol'])} {sha1(fx.system['main.dol'])}",
+        f"boot 1088 {sha1(fx.system['boot.bin'])}",
+        f"fst {len(fx.system['fst.bin'])} {sha1(fx.system['fst.bin'])}",
+    ]
+    plain = out / "image" / f"disc_driver{PROF.exeext}"
+    lines, _ = drive(plain, ["builtin", "system"])
+    c.check(lines[:1] == ["builtin 0 "], f"--no-embed: builtin says {lines[:1]}")
+    c.check(
+        lines[1:2] == ["refused no disc image is open"], f"--no-embed: system says {lines[1:2]}"
+    )
+
+    exe = build(out / "embedded", fx.game_id, fx.dol_sha1, cflags, fx.system)
+    c.check(exe is not None, "the embedding build compiles")
+    if exe is None:
+        return
+    b = bytearray(fx.image)
+    fst_off, _ = fx.slices["fst.bin"]
+    names = fst_off + struct.unpack_from(">I", b, fst_off + 8)[0] * 12
+    b[names] ^= 0x20  # one letter of the first name, upper case: the table still parses
+    other = out / "embedded" / "other.iso"
+    other.write_bytes(bytes(b))
+    lines, err = drive(exe, ["builtin", "system", f"open {fx.path}", f"open {other}"])
+    c.check(lines[:1] == ["builtin 1 "], f"embedded: builtin says {lines[:1]}")
+    c.check(lines[1:5] == want, f"embedded, no image open: {lines[1:5]}")
+    c.check(lines[5:6] == ["open ok"], f"embedded, its own image: {lines[5:6]}")
+    c.check("; FST matches this build" in err, "the open line says the table is the build's")
+    refusal = lines[9] if len(lines) > 9 else ""
+    c.check(
+        refusal.startswith("refused this disc image is not the one this build was made from"),
+        f"embedded, an image whose table differs by one byte: {refusal!r}",
+    )
+
+    # a built-in copy that is not what its own SHA-1 says: a generator fault
+    bad = embed.disc_sys_c(fx.system).replace(sha1(fx.system["fst.bin"]), "0" * 40)
+    exe = build(out / "broken-embed", fx.game_id, fx.dol_sha1, cflags, disc_sys=bad)
+    c.check(exe is not None, "the broken embedding build compiles")
+    if exe is not None:
+        lines, _ = drive(exe, ["builtin", "system"])
+        c.check(
+            lines[:1] != [] and lines[0].startswith("builtin -1 the file table built into"),
+            f"a built-in table that misses its SHA-1: {lines[:1]}",
+        )
+        c.check(lines[1:2] != [] and lines[1].startswith("refused "), "and nothing is handed out")
+
+
 def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     fx = discfixture.build(out / "good" / "disc.iso")
@@ -181,7 +251,7 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
         b = bytearray(fx.image)
         struct.pack_into(">I", b, 0x424, struct.unpack_from(">I", b, 0x424)[0] + 4)
         fx.path.write_bytes(bytes(b))
-    exe = build(out, fx.game_id, fx.dol_sha1, cflags)
+    exe = build(out / "image", fx.game_id, fx.dol_sha1, cflags)  # --no-embed's: the image's own
     if exe is None:
         return 1
     c = Checks()
@@ -256,6 +326,7 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
         )
         said[name] = line
     c.check(len(set(said.values())) == len(said), "every refusal says something different")
+    check_built_in(c, fx, out, cflags)
 
     print(
         f"disc check: {c.passed} passed, {c.failed} failed ({len(fx.offsets)} files, {size} bytes)"

@@ -30,7 +30,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import toolchain  # noqa: E402
+from soa import embed, toolchain  # noqa: E402
 
 # Everything runtime/main.c calls out to. Stubbing them is what lets the boot
 # path link on its own; none of them is reached before SOA_MEMPOKE is.
@@ -206,12 +206,16 @@ def build(tmp_path):
     """Compile, then link: two steps, because cl's compile-and-link with
     /Fo<dir> has no gcc spelling."""
     (tmp_path / "stubs.c").write_text(STUBS)
+    # a --no-embed build's disc_sys.c (disc-layer I3): disc.c reads the image,
+    # and there is none, so the boot stops as these tests need it to
+    (tmp_path / "disc_sys.c").write_text(embed.disc_sys_c(None), encoding="utf-8")
     runtime = ROOT / "runtime"
     sources = [
         *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c")),
         *(runtime / f for f in ("disc.c", "sha1.c")),  # disc-layer I1
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",
+        tmp_path / "disc_sys.c",
     ]
     proc = toolchain.cc(
         [
