@@ -641,7 +641,8 @@ count kept before it starts.
   the pinned libm hashes on `l6-determinism`; the mutations red on `l6-mutation`.
 - **L7:** the POSIX layer's first part. **Done** 2026-10-02 (FINDINGS "L7"): green on
   `l7-posix`, the mutation red on `l7-mutation`.
-- **L9:** its second part, after M1's and M3's files have settled.
+- **L9:** its second part, after M1's and M3's files have settled. **Done** 2026-10-05 (FINDINGS
+  "L9"): mods load as `mod.so`, `SOA_WAV` writes, and `soa.ini` is found, under gcc on Linux.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

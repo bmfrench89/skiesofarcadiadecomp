@@ -127,7 +127,7 @@ static int env(const char* name, char* out, DWORD cap)
     return 1;
 }
 
-__declspec(dllexport) int soa_mod_init(const SoaModApi* api, uint32_t version)
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
 {
     char v[32], line[160];
     int i;

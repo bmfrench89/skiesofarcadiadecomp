@@ -30,11 +30,7 @@
 #include "clock.h"
 #include <stdio.h>
 #include <stdlib.h>
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
+#include "plat.h"
 
 #define NS 1000000000ull
 
@@ -56,19 +52,15 @@ void clock_configure(unsigned speed, long gap_ms, void (*gap_note)(double gap_s)
     g_gap_note = gap_note;
 }
 
+/* plat.h's monotonic counter in nanoseconds, in whole numbers: a double
+ * would round once the counter is large (the QPC rate on Windows, 1e9 off
+ * it). */
 uint64_t clock_host_ns(void)
 {
-#ifdef _WIN32
-    static LARGE_INTEGER f;
-    LARGE_INTEGER c;
-    if (!f.QuadPart) QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&c);
-    return (uint64_t)c.QuadPart / (uint64_t)f.QuadPart * NS + (uint64_t)c.QuadPart % (uint64_t)f.QuadPart * NS / (uint64_t)f.QuadPart;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * NS + (uint64_t)ts.tv_nsec;
-#endif
+    static uint64_t f;
+    uint64_t c = plat_mono_raw();
+    if (!f) f = (uint64_t)plat_mono_hz();
+    return c / f * NS + c % f * NS / f;
 }
 
 uint64_t clock_advance_at(uint64_t host_ns)

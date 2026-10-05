@@ -1,27 +1,21 @@
 /*
  * Sound output: the AI DMA's blocks, as the console would send them to the
- * DAC, queued to the default Windows audio device through waveOut. Blocks
- * arrive as big-endian right/left 16-bit pairs at 32 kHz (or 48 kHz).
+ * DAC. Blocks arrive as big-endian right/left 16-bit pairs at 32 kHz (or 48
+ * kHz). The meter, the arrival rate, SOA_WAV's file, the mute and the report
+ * are every platform's (portability L9: a headless Linux run writes its
+ * WAV); the device is a backend, waveOut on Windows and none elsewhere until
+ * L10's SDL3 audio.
  */
-#ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS
-#include <windows.h>
-#include <mmsystem.h>
+#include "plat.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#pragma comment(lib, "winmm.lib")
-
-#define BLOCKS 24
 #define BLOCK_BYTES 4096
 
-static HWAVEOUT g_wo;
-static WAVEHDR g_hdr[BLOCKS];
-static uint8_t g_buf[BLOCKS][BLOCK_BYTES];
-static int g_next, g_ready = -1;
-static unsigned g_rate;
+static int g_ready = -1;
 static uint64_t g_pushed, g_dropped;
 /* Drops come in runs: a burst after a stall the clock counted, which the
  * queue cannot hold, is one run; a device slower than its rate is many
@@ -34,6 +28,40 @@ static void note_drop(int dropped)
     if (!g_drop_run++) g_drop_runs++;
     if (g_drop_run > g_drop_longest) g_drop_longest = g_drop_run;
 }
+
+/* Silence while another window is in front (`unfocused = mute`, M5b): the
+ * samples handed to the device are zeroed, and the WAV and the meter still
+ * hear the game. The test sink (the self test's) takes the samples in place
+ * of the device, so the check needs no audio hardware. */
+static volatile int g_muted;
+static void (*g_test_sink)(const int16_t* lr, unsigned frames);
+
+/* Big-endian right/left pairs to little-endian left/right, or zeros. */
+static void to_device(const uint8_t* be_rl, unsigned n, int16_t* out)
+{
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        int16_t r = (int16_t)(((uint16_t)be_rl[4 * i] << 8) | be_rl[4 * i + 1]);
+        int16_t l = (int16_t)(((uint16_t)be_rl[4 * i + 2] << 8) | be_rl[4 * i + 3]);
+        out[2 * i] = g_muted ? 0 : l;
+        out[2 * i + 1] = g_muted ? 0 : r;
+    }
+}
+
+/* ---- the device: waveOut on Windows --------------------------------------- */
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "winmm.lib")
+#endif
+
+#define BLOCKS 24
+
+static HWAVEOUT g_wo;
+static WAVEHDR g_hdr[BLOCKS];
+static uint8_t g_buf[BLOCKS][BLOCK_BYTES];
+static int g_next;
 
 static int audio_open(unsigned rate)
 {
@@ -57,19 +85,54 @@ static int audio_open(unsigned rate)
         g_hdr[i].dwBufferLength = BLOCK_BYTES;
         g_hdr[i].dwFlags = WHDR_DONE;
     }
-    g_rate = rate;
     fprintf(stderr, "[audio] output open at %u Hz\n", rate);
     return 1;
 }
 
-/* Queue one AI DMA block (big-endian R/L pairs). */
+/* One block to the device, at most BLOCK_BYTES of it. */
+static void audio_play(const uint8_t* be_rl, unsigned bytes)
+{
+    WAVEHDR* h = &g_hdr[g_next];
+    unsigned n;
+    if (!(h->dwFlags & WHDR_DONE)) { note_drop(1); return; } /* the device is behind; drop */
+    if (h->dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_wo, h, sizeof *h);
+    n = bytes / 4;
+    to_device(be_rl, n, (int16_t*)g_buf[g_next]);
+    h->dwBufferLength = n * 4;
+    h->dwFlags = 0;
+    if (waveOutPrepareHeader(g_wo, h, sizeof *h) == MMSYSERR_NOERROR && waveOutWrite(g_wo, h, sizeof *h) == MMSYSERR_NOERROR) {
+        g_pushed++;
+        g_next = (g_next + 1) % BLOCKS;
+        note_drop(0);
+    } else {
+        h->dwFlags = WHDR_DONE;
+        note_drop(1);
+    }
+}
+#else
+/* No device here yet: the meter, the rate and the WAV still run. */
+static int audio_open(unsigned rate)
+{
+    (void)rate;
+    return 0;
+}
+static void audio_play(const uint8_t* be_rl, unsigned bytes)
+{
+    (void)be_rl;
+    (void)bytes;
+    (void)note_drop; /* a device that falls behind counts its drops there */
+}
+#endif
+
+/* ---- every platform's ------------------------------------------------------ */
+
 static int g_peak;
 static uint64_t g_blocks_seen;
 /* The rate blocks arrive at in wall time, for turbo's check (M11a): at any
  * game speed the DSP should feed 128,000 bytes a second, and 2x audio is a
  * clock running fast. */
 static uint64_t g_rate_bytes;
-static LARGE_INTEGER g_rate_first, g_rate_last;
+static uint64_t g_rate_first, g_rate_last;
 
 /* SOA_WAV=path: every block also goes to a WAV file (stereo 16-bit, little-endian),
  * so a headless run's sound can be listened to or compared afterwards. */
@@ -110,13 +173,6 @@ static void wav_append(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     }
 }
 
-/* Silence while another window is in front (`unfocused = mute`, M5b): the
- * samples handed to the device are zeroed, and the WAV and the meter still
- * hear the game. The test sink (the self test's) takes the samples in place
- * of the device, so the check needs no audio hardware. */
-static volatile int g_muted;
-static void (*g_test_sink)(const int16_t* lr, unsigned frames);
-
 void audio_set_muted(int on)
 {
     g_muted = on;
@@ -127,27 +183,15 @@ void audio_set_test_sink(void (*fn)(const int16_t* lr, unsigned frames))
     g_test_sink = fn;
 }
 
-/* Big-endian right/left pairs to little-endian left/right, or zeros. */
-static void to_device(const uint8_t* be_rl, unsigned n, int16_t* out)
-{
-    unsigned i;
-    for (i = 0; i < n; i++) {
-        int16_t r = (int16_t)(((uint16_t)be_rl[4 * i] << 8) | be_rl[4 * i + 1]);
-        int16_t l = (int16_t)(((uint16_t)be_rl[4 * i + 2] << 8) | be_rl[4 * i + 3]);
-        out[2 * i] = g_muted ? 0 : l;
-        out[2 * i + 1] = g_muted ? 0 : r;
-    }
-}
-
+/* Queue one AI DMA block (big-endian R/L pairs). */
 void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
 {
-    WAVEHDR* h;
     unsigned i, n;
-    int16_t* out;
+    uint64_t now = plat_mono_raw();
     g_blocks_seen++;
-    if (!g_rate_first.QuadPart) QueryPerformanceCounter(&g_rate_first);
+    if (!g_rate_first) g_rate_first = now ? now : 1;
     else g_rate_bytes += bytes; /* the bytes after the first block, over the time since it */
-    QueryPerformanceCounter(&g_rate_last);
+    g_rate_last = now;
     for (i = 0; i + 1 < bytes; i += 2) { /* a meter, so silence is visible in the report */
         int v = (int16_t)(((uint16_t)be_rl[i] << 8) | be_rl[i + 1]);
         if (v < 0) v = -v;
@@ -163,23 +207,7 @@ void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate)
     }
     if (g_ready < 0) g_ready = audio_open(rate);
     if (!g_ready) return;
-    if (bytes > BLOCK_BYTES) bytes = BLOCK_BYTES;
-    h = &g_hdr[g_next];
-    if (!(h->dwFlags & WHDR_DONE)) { note_drop(1); return; } /* the device is behind; drop */
-    if (h->dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(g_wo, h, sizeof *h);
-    out = (int16_t*)g_buf[g_next];
-    n = bytes / 4;
-    to_device(be_rl, n, out);
-    h->dwBufferLength = n * 4;
-    h->dwFlags = 0;
-    if (waveOutPrepareHeader(g_wo, h, sizeof *h) == MMSYSERR_NOERROR && waveOutWrite(g_wo, h, sizeof *h) == MMSYSERR_NOERROR) {
-        g_pushed++;
-        g_next = (g_next + 1) % BLOCKS;
-        note_drop(0);
-    } else {
-        h->dwFlags = WHDR_DONE;
-        note_drop(1);
-    }
+    audio_play(be_rl, bytes > BLOCK_BYTES ? BLOCK_BYTES : bytes);
 }
 
 void audio_report(void)
@@ -189,11 +217,8 @@ void audio_report(void)
     if (g_dropped)
         fprintf(stderr, " in %llu run(s), the longest %llu", (unsigned long long)g_drop_runs, (unsigned long long)g_drop_longest);
     fprintf(stderr, "\n");
-    if (g_rate_last.QuadPart > g_rate_first.QuadPart) {
-        LARGE_INTEGER f;
-        double secs;
-        QueryPerformanceFrequency(&f);
-        secs = (double)(g_rate_last.QuadPart - g_rate_first.QuadPart) / (double)f.QuadPart;
+    if (g_rate_last > g_rate_first) {
+        double secs = (double)(g_rate_last - g_rate_first) / plat_mono_hz();
         fprintf(stderr, "[audio] %llu bytes over %.1f s of wall time between the first block and the last: %.0f bytes a second\n",
                 (unsigned long long)g_rate_bytes, secs, (double)g_rate_bytes / secs);
     }
@@ -204,10 +229,3 @@ void audio_report(void)
         fprintf(stderr, "[audio] wrote %u bytes of samples to the WAV file\n", g_wav_bytes);
     }
 }
-#else
-#include <stdint.h>
-void audio_push_block(const uint8_t* be_rl, unsigned bytes, unsigned rate) { (void)be_rl; (void)bytes; (void)rate; }
-void audio_set_muted(int on) { (void)on; }
-void audio_set_test_sink(void (*fn)(const int16_t* lr, unsigned frames)) { (void)fn; }
-void audio_report(void) {}
-#endif

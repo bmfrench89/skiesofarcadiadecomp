@@ -7,16 +7,14 @@
  * register for the end-of-run report, and SOA_MMIO=1 additionally prints the
  * first few of each as they happen.
  */
+#define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "clock.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN /* mmsystem.h defines MMIO_READ/MMIO_WRITE, which are ours below */
-#include <windows.h>
-#endif
+#include "plat.h"
 
 #define MMIO_BASE 0xCC000000u
 #define MMIO_SLOTS 0x2000u /* 32 KB of registers, one slot per word */
@@ -188,18 +186,12 @@ void hle_report(void)
      * would cut the report off partway and leave the WAV header unfinalised
      * (audio_report, at the end of irq_report, is what writes the real data
      * size). The wait is bounded so a wedged reporter cannot hang the exit. */
-    static long reported;
-    static volatile long done;
-#ifdef _WIN32
-    if (InterlockedCompareExchange(&reported, 1, 0) != 0) {
+    static plat_a32 reported, done;
+    if (plat_cas32(&reported, 0, 1) != 0) {
         int waited = 0;
-        while (!done && waited < 5000) { Sleep(1); waited++; }
+        while (!plat_load32(&done) && waited < 5000) { plat_sleep_ms(1); waited++; }
         return;
     }
-#else
-    if (reported) return;
-    reported = 1;
-#endif
     {
         unsigned frames = gx_frame_count();
         unsigned long long retraces = irq_retrace_count();
@@ -234,7 +226,7 @@ void hle_report(void)
     }
     profile_report();
     fflush(stderr);
-    done = 1; /* release any other stop path waiting above */
+    plat_cas32(&done, 0, 1); /* release any other stop path waiting above */
 }
 
 void hle_dump(CpuState* s, uint32_t pc)
@@ -352,32 +344,15 @@ static uint64_t timebase(void)
 static uint64_t g_wall_origin;
 static int g_wall_started;
 
-static uint64_t wall_now(void)
-{
-#ifdef _WIN32
-    LARGE_INTEGER c;
-    QueryPerformanceCounter(&c);
-    return (uint64_t)c.QuadPart;
-#else
-    struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-#endif
-}
+/* The monotonic clock, so a change to the wall clock's time of day never
+ * reaches a run's seconds (off Windows it was TIME_UTC until L9). */
+static uint64_t wall_now(void) { return plat_mono_raw(); }
 
 static double wall_hz(void)
 {
-#ifdef _WIN32
     static double hz;
-    if (hz == 0.0) {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        hz = (double)f.QuadPart;
-    }
+    if (hz == 0.0) hz = plat_mono_hz();
     return hz;
-#else
-    return 1e9;
-#endif
 }
 
 /* main() calls this once, before the guest starts, so that wall seconds mean
@@ -401,14 +376,9 @@ static unsigned g_ft_from; /* 0: every frame of the run */
  * the UI thread, so the buffer is locked: the report copies it under the lock
  * and works from the copy (the review of 2026-09-25 found the report reading
  * g_ft_n twice across a malloc while a mark could append or realloc). */
-#ifdef _WIN32
-static SRWLOCK g_ft_lock = SRWLOCK_INIT;
-#define FT_LOCK() AcquireSRWLockExclusive(&g_ft_lock)
-#define FT_UNLOCK() ReleaseSRWLockExclusive(&g_ft_lock)
-#else
-#define FT_LOCK() ((void)0)
-#define FT_UNLOCK() ((void)0)
-#endif
+static PlatLock g_ft_lock; /* held for a copy or an append: short (off Windows a no-op until L9) */
+#define FT_LOCK() plat_lock(&g_ft_lock)
+#define FT_UNLOCK() plat_unlock(&g_ft_lock)
 
 /* Forget the frames so far, and count from frame `frame` on: SOA_UNCAP=N
  * calls this at N, so an uncapped run's percentiles are the uncapped
@@ -449,20 +419,7 @@ static int cmp_double(const void* a, const void* b)
     return (x > y) - (x < y);
 }
 
-static double process_cpu_seconds(double* user, double* kernel)
-{
-#ifdef _WIN32
-    FILETIME c, e, k, u;
-    if (GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) {
-        *user = (double)(((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime) / 1e7;
-        *kernel = (double)(((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) / 1e7;
-        return *user + *kernel;
-    }
-#endif
-    *user = (double)clock() / CLOCKS_PER_SEC;
-    *kernel = 0.0;
-    return *user;
-}
+static double process_cpu_seconds(double* user, double* kernel) { return plat_process_cpu(user, kernel); }
 
 static void frametime_report(void)
 {

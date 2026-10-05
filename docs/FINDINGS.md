@@ -7114,3 +7114,50 @@ the driver's.** 2026-10-04.
 - **What follows:** M3 and the store are done, I1 to I5. Next on §0's Android path is L12, the
   Android shell, which is to be specified in full when its gates open, and they now have; it
   specifies R5 with it.
+
+**L9: the POSIX layer, part 2.** 2026-10-05.
+
+- **What it is:** what settings.c, mod.c, hle.c and audio_out.c asked of Windows now goes through
+  `runtime/plat.h` and `plat.c`. So do clock.c, tick.c, selftest.c and main.c's watchdog.
+  - **New in plat.h:** `plat_exe_path`, `plat_realpath`, `plat_dl_why` (the loader's own words),
+    `plat_list_dirs`, `plat_process_cpu`, `plat_thread_detach`, `PLAT_SEP` and `PLAT_DL_SUFFIX`.
+  - **Mods:** a native mod is `mod.dll` on Windows and `mod.so` elsewhere. It is loaded by its full
+    path; on Windows that keeps `LOAD_WITH_ALTERED_SEARCH_PATH`. `soa_mod.h` gained
+    `SOA_MOD_EXPORT` (additive, no API change), and the four mods use it.
+  - **Audio:** the meter, the arrival rate, `SOA_WAV`, the mute and the report are every platform's.
+    waveOut is the Windows backend.
+- **Three fixes off Windows, found by the move** [V, code]:
+  - **The report's once-only guard** was a plain flag. A stop on the guest thread and a window's close
+    could both run it. It is now plat.h's compare-and-swap, as on Windows.
+  - **The frame-time lock** was a no-op off Windows. That is the race the 2026-09-25 review named. It
+    is now V8's `PlatLock`.
+  - **The wall clock** read `TIME_UTC`, so a clock change could move a run's seconds. It is now the
+    monotonic one. CPU time reads `getrusage`; it read `clock()`.
+- **`tools/tests/test_portability.py`** names every `_WIN32` conditional in `runtime/` by its function
+  and holds the set to a written list, each entry with its reason. The list adds the sites that came
+  after the spec: gxv.c's Vulkan loader name and Win32 surface, settings.c's Windows console, and
+  soa_mod.h's export macro. The renderer-only build's two mkdir pairs stay, because it links no
+  plat.c.
+- **Checked** [V]:
+  - **Windows:**
+    - `test_mods`, `test_settings`, `test_memguard`, `test_uncap`, `test_profiler`, `test_clock`
+      and `test_tick` pass (203);
+    - the self test reports 0 failures;
+    - replay matches 23 of 23;
+    - `title --check` holds 4 of 4, its audio still 128,000 bytes a second with 0 dropped and the
+      frame-time line naming CPU seconds;
+    - the three real mods load as `mod.dll`.
+  - **llvm-mingw:** `test_mod_library`, `test_memguard`, `test_audio_wav` and the settings test pass.
+  - **Linux, gcc 14 in a Docker container on this PC:**
+    - `test_mod_library`: map-log built as `mod.so` loads through the real loader, and the recording
+      names it `map-log@1.0`. A library exporting no `soa_mod_init` is refused with dlerror's words.
+    - `test_audio_wav`: seven blocks give a header of 4,480 bytes, the samples in order.
+    - `test_memguard`, `test_portability`, and the settings test: `soa.ini` is found at the root,
+      then beside the executable, never in the working directory.
+    - **The mutations:** the WAV writer put back inside `#ifdef _WIN32` fails `test_audio_wav` on
+      Linux. An `#ifdef _WIN32` added to another function of exi.c fails `test_portability`.
+    - Every runtime file compiles under gcc and clang. One new unused-function warning was fixed,
+      and a buffer was enlarged.
+  - **CI:** the gcc, clang and ARM64 legs run the three Linux checks with skips refused.
+- **What follows:** L10, native Linux with SDL3, whose prerequisites (L6, L7, L9) are now all done.
+  After it, L12.

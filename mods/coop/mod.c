@@ -146,7 +146,7 @@ static unsigned parse_slots(const char* v)
     }
 }
 
-__declspec(dllexport) int soa_mod_init(const SoaModApi* api, uint32_t version)
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
 {
     char v[64], line[160];
     int m, n;

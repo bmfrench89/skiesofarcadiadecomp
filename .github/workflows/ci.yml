@@ -366,6 +366,17 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_memguard.py -v
 
+      # portability L9: a mod's mod.so through the real loader (the recording
+      # names it; one with no soa_mod_init is refused in dlerror's words),
+      # SOA_WAV's file, and soa.ini's search order, built with this leg's
+      # compiler; a skip is a failure here
+      - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: ${{ matrix.cc }}
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
+
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}
         run: python tools/citest/threads_check.py --cc ${{ matrix.cc }}
@@ -472,6 +483,17 @@ jobs:
           SOA_CC: gcc
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_memguard.py -v
+
+      # portability L9: a mod's mod.so through the real loader (the recording
+      # names it; one with no soa_mod_init is refused in dlerror's words),
+      # SOA_WAV's file, and soa.ini's search order, built with this leg's
+      # compiler; a skip is a failure here
+      - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
 
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}

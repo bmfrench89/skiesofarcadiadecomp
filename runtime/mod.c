@@ -64,11 +64,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dirent.h>
-#endif
+#include "plat.h"
+
+/* A native mod's library beside its mod.ini: mod.dll on Windows, mod.so
+ * elsewhere (portability L9). */
+#define MOD_LIB "mod" PLAT_DL_SUFFIX
 
 #define MOD_MAX 32
 #define PATCH_MAX 1024
@@ -729,31 +729,31 @@ static void mod_safe_point(CpuState* s)
  * success, 0 (having said why) otherwise. */
 static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
 {
-#ifdef _WIN32
-    char full[MAX_PATH];
-    HMODULE h;
+    char full[1100], err[600];
+    void* h;
     SoaModInit init;
     int before[CB_KINDS], k, rc;
     size_t n = 0;
     char* bytes = slurp_text(path, &n);
-    if (!bytes) return -1; /* no mod.dll: nothing to load */
+    if (!bytes) return -1; /* no library: nothing to load */
     *dll_hash = fnv1a(2166136261u, bytes, n);
     free(bytes);
-    if (!GetFullPathNameA(path, sizeof full, full, NULL)) {
+    if (!plat_realpath(path, full, sizeof full)) {
         refuse(w, "cannot resolve %s%s", path, "");
         return 0;
     }
-    h = LoadLibraryExA(full, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    /* by its full path, so a library it needs beside it is found there too */
+    h = plat_dl_open(full, err, sizeof err);
     if (!h) {
-        char code[16];
-        snprintf(code, sizeof code, "%lu", (unsigned long)GetLastError());
-        refuse(w, "Windows would not load it (error %s)%s", code, "");
+        refuse(w, "the system would not load it: %s%s", err, "");
         return 0;
     }
-    init = (SoaModInit)(void (*)(void))GetProcAddress(h, "soa_mod_init");
+    init = (SoaModInit)(void (*)(void))plat_dl_sym(h, "soa_mod_init");
     if (!init) {
-        FreeLibrary(h);
-        refuse(w, "it exports no soa_mod_init%s%s", "", "");
+        char why[300];
+        snprintf(why, sizeof why, "%s", plat_dl_why());
+        plat_dl_close(h);
+        refuse(w, "it exports no soa_mod_init (%s)%s", why, "");
         return 0;
     }
     for (k = 0; k < CB_KINDS; k++) before[k] = g_cb_n[k];
@@ -766,24 +766,14 @@ static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
     if (rc != 0) {
         char code[16];
         for (k = 0; k < CB_KINDS; k++) g_cb_n[k] = before[k];
-        FreeLibrary(h);
+        plat_dl_close(h);
         snprintf(code, sizeof code, "%d", rc);
         refuse(w, "its soa_mod_init refused, returning %s%s", code, "");
         return 0;
     }
-    m->dll = (void*)h;
+    m->dll = h;
     for (k = 0; k < CB_KINDS; k++) m->callbacks += (unsigned)(g_cb_n[k] - before[k]);
     return 1;
-#else
-    size_t n = 0;
-    char* bytes = slurp_text(path, &n);
-    (void)m;
-    (void)dll_hash;
-    if (!bytes) return -1;
-    free(bytes);
-    refuse(w, "mod.dll needs Windows%s%s", "", "");
-    return 0;
-#endif
 }
 
 /* A manifest 2 id: lowercase letters, digits, '.', '_' and '-', a letter or
@@ -828,7 +818,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     snprintf(m.dir, sizeof m.dir, "%s", dir);
     snprintf(path, sizeof path, "%s/%s/mod.ini", root, dir);
     snprintf(ppath, sizeof ppath, "%s/%s/patches.txt", root, dir);
-    snprintf(dpath, sizeof dpath, "%s/%s/mod.dll", root, dir);
+    snprintf(dpath, sizeof dpath, "%s/%s/" MOD_LIB, root, dir);
     ini = slurp_text(path, &ini_n);
     if (!ini) return; /* not a mod: the caller only asks about folders */
     w.path = path;
@@ -936,7 +926,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         dll = load_dll(&w, dpath, &m, &dll_hash);
         if (dll < 0 && !patches) {
             w.path = path;
-            refuse(&w, "no patches.txt and no mod.dll beside it, so it would do nothing%s%s", "", "");
+            refuse(&w, "no patches.txt and no " MOD_LIB " beside it, so it would do nothing%s%s", "", "");
         }
     }
     if (w.failed) {
@@ -948,10 +938,10 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         g_mods[g_mod_n++] = m;
         if (m.id[0])
             fprintf(stderr, "[mod] loaded %s (%s/%s, %s@%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
-                    m.id, m.version, m.count, m.dll ? " and mod.dll" : "", MOD_API);
+                    m.id, m.version, m.count, m.dll ? " and " MOD_LIB : "", MOD_API);
         else
             fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
-                    m.count, m.dll ? " and mod.dll" : "", MOD_API);
+                    m.count, m.dll ? " and " MOD_LIB : "", MOD_API);
     }
     free(ini);
     free(patches);
@@ -961,6 +951,18 @@ static int cmp_name(const void* a, const void* b) { return strcmp((const char*)a
 
 /* One folder under SOA_MODS: kept for loading, or -- a name too long for the
  * table, or one folder past what it holds -- said so, never dropped quietly. */
+typedef struct {
+    char (*names)[64];
+    int* n;
+    const char* dir;
+} Folders;
+static void note_folder(char (*names)[64], int* n, const char* dir, const char* name);
+static void each_folder(const char* name, void* u)
+{
+    Folders* f = (Folders*)u;
+    note_folder(f->names, f->n, f->dir, name);
+}
+
 static void note_folder(char (*names)[64], int* n, const char* dir, const char* name)
 {
     if (strlen(name) >= 64)
@@ -977,34 +979,14 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     int n = 0, i;
     char sha[41];
     size_t used = 0;
-#ifdef _WIN32
-    char pattern[600];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
-    snprintf(pattern, sizeof pattern, "%s/*", dir);
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) {
+    Folders folders;
+    folders.names = names;
+    folders.n = &n;
+    folders.dir = dir;
+    if (plat_list_dirs(dir, each_folder, &folders) < 0) {
         fprintf(stderr, "[mod] SOA_MODS=%s is not a folder this port can read; no mods\n", dir);
         return 0;
     }
-    do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
-        note_folder(names, &n, dir, fd.cFileName);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-#else
-    DIR* d = opendir(dir);
-    struct dirent* e;
-    if (!d) {
-        fprintf(stderr, "[mod] SOA_MODS=%s is not a folder this port can read; no mods\n", dir);
-        return 0;
-    }
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.') continue;
-        note_folder(names, &n, dir, e->d_name);
-    }
-    closedir(d);
-#endif
     qsort(names, (size_t)n, sizeof names[0], cmp_name);
     sha1_hex(dol, dol_size, sha);
     g_s = s;
@@ -1115,7 +1097,7 @@ void mod_report(void)
             for (k = 0; k < CB_KINDS; k++)
                 for (c = 0; c < g_cb_n[k]; c++)
                     if (g_cb[k][c].mod == m) calls[k] += g_cb[k][c].calls;
-            fprintf(stderr, "[mod] %s mod.dll: %u callback(s); called at %llu frame end(s), %llu safe point(s), "
+            fprintf(stderr, "[mod] %s " MOD_LIB ": %u callback(s); called at %llu frame end(s), %llu safe point(s), "
                             "%llu map load(s), %llu scene change(s), %llu controller read(s), %llu projection(s), "
                             "%llu texture(s); %llu write(s)\n",
                     g_mods[m].dir, g_mods[m].callbacks, calls[CB_FRAME_END], calls[CB_SAFE_POINT],

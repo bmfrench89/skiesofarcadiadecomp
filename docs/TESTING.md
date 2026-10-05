@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1318 passed, 3 skipped in 647.86s
+1326 passed, 3 skipped in 657.72s
 ```
 
-1321 tests in 79 files, none of which reads the disc. The two FMA probes of
+1329 tests in 82 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode); the counts below include those three skips. CI's Windows runner
@@ -55,7 +55,7 @@ its own and run it, some of the C as well:
 | `test_soak.py` | 41 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, a field that comes back black after a battle is a question, and (GPU spec V7) gxv's pipelines are counted by where they were made, the longest of each and how many came after the landing map loaded |
 | `test_padrec.py` | 33 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing; the host buttons (`lb`, `view`, `ls`, `rs`) and their chords, which never reach the report, fire once a frame, and are comments in a recording; and a card under the port root named relative to it; `SOA_PAD2`, port 2 for mods, in the same grammar, apart from port 1, and never answering the game; 600 bytes of recorded settings and mods reach the `# config` line whole, and 800 are cut with a line that says so |
 | `test_decode.py` | 32 | the Gekko decoder, on encodings hand-derived from the 750CL manual |
-| `test_settings.py` | 27 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them; and M5b's root: relative paths in soa.ini under the port root, its defaults only with a file, the root found beside `runtime` from `gen` and `gen\clang`, and the console handed to a log only when it is the run's own; `coop` recorded only as party slots mods/coop takes; and README's list of soa.ini keys holding every key settings.c reads |
+| `test_settings.py` | 28 | `runtime/settings.c`, built alone: each `soa.ini` key sets its switch and `disc` names the directory, the environment wins and says so, an unknown key is named with its line, `SOA_SETTINGS=0` turns the file off, every scripted check sets it, and a setting that changes the game is recorded only when set -- as its owner says it is in effect, never half a value when the line is full; a setting a mod reads says it does nothing without that mod and is then not recorded, and one of a fixed set of values is recorded only as one of them; and M5b's root: relative paths in soa.ini under the port root, its defaults only with a file, the root found beside `runtime` from `gen` and `gen\clang`, and the console handed to a log only when it is the run's own; `coop` recorded only as party slots mods/coop takes; and README's list of soa.ini keys holding every key settings.c reads |
 | `test_emit.py` | 22 | the emitter; the last cases compile the emitted C with MSVC and run it |
 | `test_gxr_overlap.py` | 23 | the ordering around EFB copies (H14): with `SOA_GXR_STALL` holding one worker back before its draws, copies or clears, every thread count leaves the copied memory, screen, EFB, decoded textures and what the CPU reads after `GXDrawDone` that the one-worker run leaves, over frames that differ; the copies were fenced and not drained, each producer read (texture, palette, vertex array) waited for its own copy, the frame gate drained once a frame, and `SOA_GXR_DRAIN=1` and `SOA_GXR_TOKENWAIT=1` hold too. Nine deliberate breakages of the fences, waits and gate each turn it red. Copy images: a draw sampling a copy's own texture takes the image the workers decoded, held to the drains' decode from memory, through an overwritten image, an unfiltered copy, a drain then a CPU write, a hook's write and a token between copy and draw, with the producer's image counts pinned per protocol; seven more breakages each turn it red; and (GPU spec V6b) the same stream with the GPU as the consumer, unstalled, stalled and token-waited, leaves every hash its synchronous run leaves, the untextured copies the CPU's, and late-readback fails it (MSVC, `vendor/`, a Vulkan device) |
 | `test_dump.py` | 20 | whether the tree notices a dump that is not the build `config/` describes |
@@ -79,6 +79,9 @@ its own and run it, some of the C as well:
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
+| `test_portability.py` | 4 | where `runtime/` may say `_WIN32` (portability L9): every `#if`/`#ifdef`/`#ifndef`/`#elif` naming it is found and named by its function, comments and strings blanked first, and held to a written list -- the window, waveOut, the fibers, the profilers, the GPU's Win32 surface and loader name, the Windows console, the mods' export macro and the renderer-only build's mkdir pairs; a listed site that has gone fails too; an `#ifdef _WIN32` added to another function of exi.c is caught |
+| `test_mod_library.py` | 2 | a mod's native library on every system (portability L9), built with the profile `SOA_CC` names (CI's Linux legs: gcc and clang): examples/mods/map-log as `mod.dll` or `mod.so` loads through the real loader and the recording names it `map-log@1.0`; one exporting no `soa_mod_init` is refused in the loader's words (dlerror's) |
+| `test_audio_wav.py` | 1 | `SOA_WAV` on every system (portability L9), with `SOA_CC`'s profile: a driver pushes seven blocks to `audio_out.c` with no device, and the WAV's header holds 7 x 640 bytes, the samples left then right, and the report says so; with the writer back inside `#ifdef _WIN32` it fails on Linux |
 | `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
 | `test_disc_const.py` | 4 | `runtime/disc.c`'s `DISC_DOL_SHA1` is `config/GEAE8P/config.yml`'s hash and its `DISC_GAME_ID` the config directory's name; one hex digit changed, or another id, is refused by the same checker; both sit behind `#ifndef` for the fixture build |
@@ -135,17 +138,17 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1318 passed, 3 skipped` |
-| no capstone | `1299 passed, 4 skipped` |
-| no MSVC | `918 passed, 403 skipped` |
-| neither | `899 passed, 404 skipped` |
+| everything (MSVC + capstone) | `1326 passed, 3 skipped` |
+| no capstone | `1307 passed, 4 skipped` |
+| no MSVC | `922 passed, 407 skipped` |
+| neither | `903 passed, 408 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 400 MSVC-gated tests are the ones that build runtime
+Two things follow. The 404 compiler-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1426,7 +1429,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 403 of the 1321 skip here without a C compiler: 400 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 407 of the 1329 skip here without a C compiler: 404 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

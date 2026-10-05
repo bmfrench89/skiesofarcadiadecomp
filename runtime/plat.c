@@ -243,7 +243,10 @@ int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes)
 #ifdef _WIN32
 void* plat_dl_open(const char* path, char* err, size_t cap)
 {
-    HMODULE m = LoadLibraryExA(path, NULL, 0);
+    /* Given a path (a mod's library), the libraries it needs are looked for
+     * beside it first; a bare name (vulkan-1.dll) is the system's search. */
+    DWORD flags = strchr(path, '\\') || strchr(path, '/') ? LOAD_WITH_ALTERED_SEARCH_PATH : 0;
+    HMODULE m = LoadLibraryExA(path, NULL, flags);
     if (!m && err && cap) snprintf(err, cap, "LoadLibrary(%s) failed (error %lu)", path, GetLastError());
     return (void*)m;
 }
@@ -279,5 +282,109 @@ int plat_mkdir(const char* path)
 int plat_mkdir(const char* path)
 {
     return mkdir(path, 0755) == 0 || errno == EEXIST;
+}
+#endif
+
+/* ---- L9: the executable, paths, mods' folders, CPU time ------------------ */
+
+#ifdef _WIN32
+int plat_exe_path(char* out, size_t cap)
+{
+    DWORD n = GetModuleFileNameA(NULL, out, (DWORD)cap);
+    return n && n < cap;
+}
+int plat_realpath(const char* in, char* out, size_t cap)
+{
+    DWORD n = GetFullPathNameA(in, (DWORD)cap, out, NULL);
+    return n && n < cap;
+}
+static char g_dl_why[96];
+const char* plat_dl_why(void)
+{
+    snprintf(g_dl_why, sizeof g_dl_why, "error %lu", (unsigned long)GetLastError());
+    return g_dl_why;
+}
+int plat_list_dirs(const char* dir, void (*fn)(const char* name, void* u), void* u)
+{
+    char pattern[1100];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    int n = 0;
+    snprintf(pattern, sizeof pattern, "%s/*", dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+        fn(fd.cFileName, u);
+        n++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return n;
+}
+double plat_process_cpu(double* user, double* kernel)
+{
+    FILETIME c, e, k, us;
+    if (GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &us)) {
+        *user = (double)(((uint64_t)us.dwHighDateTime << 32) | us.dwLowDateTime) / 1e7;
+        *kernel = (double)(((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) / 1e7;
+        return *user + *kernel;
+    }
+    *user = *kernel = 0.0;
+    return 0.0;
+}
+#else
+#include <dirent.h>
+#include <dlfcn.h>
+#include <limits.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <unistd.h>
+int plat_exe_path(char* out, size_t cap)
+{
+    ssize_t n = cap ? readlink("/proc/self/exe", out, cap - 1) : -1;
+    if (n <= 0 || (size_t)n >= cap - 1) return 0;
+    out[n] = '\0';
+    return 1;
+}
+int plat_realpath(const char* in, char* out, size_t cap)
+{
+    char buf[PATH_MAX];
+    if (!realpath(in, buf) || strlen(buf) >= cap) return 0;
+    memcpy(out, buf, strlen(buf) + 1);
+    return 1;
+}
+const char* plat_dl_why(void)
+{
+    const char* e = dlerror();
+    return e ? e : "no reason given";
+}
+int plat_list_dirs(const char* dir, void (*fn)(const char* name, void* u), void* u)
+{
+    DIR* d = opendir(dir);
+    struct dirent* e;
+    int n = 0;
+    if (!d) return -1;
+    while ((e = readdir(d)) != NULL) {
+        char path[1100];
+        struct stat st;
+        if (e->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        fn(e->d_name, u);
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+double plat_process_cpu(double* user, double* kernel)
+{
+    struct rusage r;
+    if (getrusage(RUSAGE_SELF, &r) == 0) {
+        *user = (double)r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6;
+        *kernel = (double)r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6;
+        return *user + *kernel;
+    }
+    *user = *kernel = 0.0;
+    return 0.0;
 }
 #endif

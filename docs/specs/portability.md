@@ -1623,6 +1623,8 @@ did not list; with it the leg runs with no suppression. The `libm_check` line wa
 
 ### L9. POSIX layer, part 2: the comfort pack's and disc layer's files
 
+*Landed 2026-10-05 (FINDINGS "L9"), every Done line holding, the Linux ones run under gcc 14 in a Docker container on this PC and wired into CI's Linux legs. Where it differs from the text below: `plat_exe_path` (the executable itself) in place of `plat_exe_dir`, since settings.c wants both the root and the folder; no `PlatMutex`, since V8's `PlatLock` serves hle.c's frame-time lock; `plat_dl_why` and `plat_thread_detach` added; clock.c, tick.c, selftest.c and main.c's watchdog moved too; the mkdir pairs stay, since the renderer-only build links no plat.c; and the allowed list gains the sites that came after this spec: gxv.c's Vulkan loader name and Win32 surface, settings.c's Windows console, and soa_mod.h's `SOA_MOD_EXPORT`. The tests are `test_mod_library.py`, `test_audio_wav.py` and one in `test_settings.py`, compiler-aware, rather than all of `test_mods.py`.*
+
 *A day to several days. `--link`. Prerequisites: L7; and after M19, M5b and the disc layer's M3 slices (I1,
 I3, and I5a if it is agreed) have landed in these files. Files:*
 - *`runtime/plat.c`: the L9 functions of §3.3;*

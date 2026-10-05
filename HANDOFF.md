@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1321 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1329 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1321 |
+| Python tests | 1329 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -664,9 +664,12 @@ C5c) is now done.
    store, preferred in a folder, each 64 KiB block hashed at first touch
    (a damaged one stops the run, exit 9, naming the file);
    `SOA_DISC_VERIFY=iso` proved it against the ISO over title and hold;
-   `soa.exe --check-disc` checks a copied store whole. **Next:** L12,
-   the Android shell, to be specified in full (portability.md's L12 is
-   an outline), with R5 beside it. Still open for the owner, and not blocking: whether a
+   `soa.exe --check-disc` checks a copied store whole. **L9 is done**
+   (FINDINGS "L9"): settings.c, mod.c, hle.c and audio_out.c go through
+   plat.h; mods load as `mod.so` on Linux, `SOA_WAV` writes there, and
+   `tools/tests/test_portability.py` holds `_WIN32` to a written list of
+   sites. **Next:** L10, native Linux with SDL3 (a window, audio and
+   pads behind the existing seams), then L12, the Android shell, with R5. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

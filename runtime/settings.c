@@ -31,7 +31,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
+#include "plat.h"
+#ifdef _WIN32 /* settings_console_to_log: a Windows console's own window */
 #include <io.h>
 #include <windows.h>
 #endif
@@ -101,14 +102,7 @@ static const Setting k_settings[] = {
 static char g_disc[1024];
 static int g_loaded; /* a soa.ini was read: the root's defaults apply */
 
-static void set_env(const char* name, const char* value)
-{
-#ifdef _WIN32
-    _putenv_s(name, value);
-#else
-    setenv(name, value, 1);
-#endif
-}
+static void set_env(const char* name, const char* value) { plat_setenv(name, value); }
 
 static void trim(char* s)
 {
@@ -128,17 +122,7 @@ static char* last_sep(char* s)
     return a > b ? a : b;
 }
 
-static int is_dir(const char* p)
-{
-#ifdef _WIN32
-    DWORD a = GetFileAttributesA(p);
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
-#else
-    FILE* f = fopen(p, "r");
-    if (f) fclose(f);
-    return f != NULL;
-#endif
-}
+static int is_dir(const char* p) { return plat_path_kind(p, NULL) == PLAT_PATH_DIR; }
 
 static int file_exists(const char* p)
 {
@@ -201,14 +185,9 @@ const char* settings_root(void)
         const char* env = getenv("SOA_ROOT");
         if (env && *env) snprintf(g_root, sizeof g_root, "%s", env);
         else {
-#ifdef _WIN32
             char exe[1024];
-            DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
-            if (n && n < sizeof exe) settings_root_for(exe, g_root, sizeof g_root);
+            if (plat_exe_path(exe, sizeof exe)) settings_root_for(exe, g_root, sizeof g_root);
             else snprintf(g_root, sizeof g_root, ".");
-#else
-            snprintf(g_root, sizeof g_root, ".");
-#endif
         }
     }
     return g_root;
@@ -218,7 +197,7 @@ const char* settings_root(void)
 static void under_root(const char* rel, char* out, size_t cap)
 {
     if (is_absolute(rel)) snprintf(out, cap, "%s", rel);
-    else snprintf(out, cap, "%s\\%s", settings_root(), rel);
+    else snprintf(out, cap, "%s" PLAT_SEP "%s", settings_root(), rel);
 }
 
 /* Which soa.ini: SOA_SETTINGS naming a file (tests); else <root>\soa.ini,
@@ -226,26 +205,22 @@ static void under_root(const char* rel, char* out, size_t cap)
 static int settings_path(char* out, size_t cap)
 {
     const char* env = getenv("SOA_SETTINGS");
-    char beside[1024];
+    char beside[1040]; /* the exe's path and "soa.ini" */
     if (env && *env) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
-    snprintf(out, cap, "%s\\soa.ini", settings_root());
-#ifdef _WIN32
+    snprintf(out, cap, "%s" PLAT_SEP "soa.ini", settings_root());
     {
+        /* beside the executable -- never the working directory */
         char exe[1024];
         char* sep;
-        DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
-        if (!n || n >= sizeof exe) return file_exists(out);
+        if (!plat_exe_path(exe, sizeof exe)) return file_exists(out);
         sep = last_sep(exe);
         if (sep) sep[1] = '\0';
         else exe[0] = '\0';
         snprintf(beside, sizeof beside, "%ssoa.ini", exe);
     }
-#else
-    snprintf(beside, sizeof beside, "soa.ini");
-#endif
     if (file_exists(out)) {
         if (file_exists(beside) && !same_text(beside, out))
             fprintf(stderr, "[settings] %s is used; the one beside the exe, %s, is not\n", out, beside);
@@ -445,7 +420,7 @@ const char* settings_load(void)
         size_t i;
         int mod_key = 0;
         if (!getenv("SOA_CARD")) {
-            under_root("build\\cards\\slotA.raw", p, sizeof p);
+            under_root("build" PLAT_SEP "cards" PLAT_SEP "slotA.raw", p, sizeof p);
             set_env("SOA_CARD", p);
         }
         if (!g_disc[0]) under_root("extracted", g_disc, sizeof g_disc);

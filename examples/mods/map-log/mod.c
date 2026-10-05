@@ -40,7 +40,7 @@ static void on_scene_change(void* user, uint32_t from, uint32_t to)
     g_api->log(line);
 }
 
-__declspec(dllexport) int soa_mod_init(const SoaModApi* api, uint32_t version)
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
 {
     /* log is the last member this mod calls, so a port whose table reaches it
      * has everything the mod needs, whatever was appended since. */

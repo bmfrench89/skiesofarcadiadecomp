@@ -1,10 +1,11 @@
 /*
- * The native mod API (docs/PLAN-60FPS-MODS.md M3). Include this, build a DLL
- * that exports
+ * The native mod API (docs/PLAN-60FPS-MODS.md M3). Include this, build a shared
+ * library that exports
  *
- *     __declspec(dllexport) int soa_mod_init(const SoaModApi* api, uint32_t version);
+ *     SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version);
  *
- * and put it beside the mod's mod.ini as mod.dll. The port calls it once, after
+ * and put it beside the mod's mod.ini as mod.dll (Windows) or mod.so
+ * (elsewhere, portability L9). The port calls it once, after
  * the DOL is loaded and before the game's first instruction, with the API it
  * speaks: `version` is SOA_MOD_API_VERSION as the port was built, `api->size`
  * the size of the table it filled. Return 0 to load, anything else to refuse
@@ -30,6 +31,14 @@
 #include <stdint.h>
 
 #define SOA_MOD_API_VERSION 1u
+
+/* What makes soa_mod_init visible to the loader: additive, with no version
+ * change, since a mod built before it spelled the same thing out. */
+#if defined(_WIN32)
+#define SOA_MOD_EXPORT __declspec(dllexport)
+#else
+#define SOA_MOD_EXPORT __attribute__((visibility("default")))
+#endif
 
 /* Button bits, as si.c packs them. */
 #define SOA_PAD_LEFT 0x0001u

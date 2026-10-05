@@ -387,6 +387,7 @@ def clock_run(tmp_path: Path, speed: str) -> str:
             str(ROOT / "runtime" / "hle.c"),
             str(ROOT / "runtime" / "seed.c"),
             str(ROOT / "runtime" / "clock.c"),
+            *map(str, toolchain.runtime_support_sources()),  # plat.c (portability L9)
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),
         ],

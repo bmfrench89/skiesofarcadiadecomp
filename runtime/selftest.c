@@ -1901,9 +1901,7 @@ static int motor_selftest(CpuState* s, char* got, size_t cap)
     unsigned n, v, c, bad = 0;
 #define WANT(cond, what) do { if (!bad && !(cond)) { bad = 1; snprintf(got, cap, "%s (calls %u, speed %u)", what, n, v); } } while (0)
     if (was) snprintf(pad_was, sizeof pad_was, "%s", was);
-#ifdef _WIN32
-    _putenv_s("SOA_PAD", "");
-#endif
+    plat_setenv("SOA_PAD", "");
     si_set_motor_sink(count_sink);
     si_set_motor_window(1);
     si_set_motor_strength(100);
@@ -1949,13 +1947,11 @@ static int motor_selftest(CpuState* s, char* got, size_t cap)
     WANT(n == 1 && v == 0, "with no window the motor turned");
     motor_write(s, 0, 0, &v);
     si_set_motor_window(1);
-#ifdef _WIN32
-    _putenv_s("SOA_PAD", "100:a");
+    plat_setenv("SOA_PAD", "100:a");
     n = motor_write(s, 0, 1, &v);
     WANT(n == 1 && v == 0, "with a pad script driving the input the motor turned");
     motor_write(s, 0, 0, &v);
-    _putenv_s("SOA_PAD", pad_was);
-#endif
+    plat_setenv("SOA_PAD", pad_was);
 #undef WANT
     si_set_motor_window(0);
     si_set_motor_sink(NULL);

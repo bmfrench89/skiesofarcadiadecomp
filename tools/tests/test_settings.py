@@ -90,6 +90,7 @@ def driver(tmp_path):
         [
             *toolchain.CFLAGS,
             str(ROOT / "runtime" / "settings.c"),
+            *map(str, toolchain.runtime_support_sources()),  # plat.c (portability L9)
             str(tmp_path / "driver.c"),
             "/Fo" + str(tmp_path) + os.sep,
             "/Fe" + str(exe),
@@ -379,3 +380,67 @@ def test_the_console_goes_only_when_it_is_the_run_s_own(driver, tmp_path, procs,
     on the console is a terminal."""
     _, _, out, _ = at_root(driver, tmp_path, "hide", str(procs), str(kind))
     assert f"hide {hide}" in out, out
+
+
+# ---- on every system (portability L9) -------------------------------------
+
+
+@pytest.fixture
+def driver_cc(tmp_path):
+    """The same driver built with SOA_CC's profile (MSVC when unset, gcc on
+    CI's Linux legs), the build exe-relative lookups are made from."""
+    from soa import toolchain
+
+    p = toolchain.profile(os.environ.get("SOA_CC"))
+    if toolchain.compiler_path(p) is None:
+        pytest.skip(f"no {p.name}")
+    out = tmp_path / "bin"
+    out.mkdir()
+    (out / "driver.c").write_text(DRIVER, encoding="utf-8")
+    sources = [
+        ROOT / "runtime" / "settings.c",
+        *toolchain.runtime_support_sources(),
+        out / "driver.c",
+    ]
+    proc = toolchain.cc(
+        [
+            *p.cflags,
+            "/c",
+            "/I",
+            str(ROOT / "runtime"),
+            *map(str, sources),
+            "/Fo" + str(out) + os.sep,
+        ],
+        out,
+        p,
+    )
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    exe = out / ("settings" + p.exeext)
+    objs = [str(out / (s.stem + p.objext)) for s in sources]
+    proc = toolchain.cc([*p.cflags, *objs, "/Fe" + str(exe), *p.linker], out, p)
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    return exe
+
+
+def test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory(
+    driver_cc, tmp_path
+):
+    root, cwd = tmp_path / "root", tmp_path / "cwd"
+    root.mkdir()
+    cwd.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env["SOA_ROOT"] = str(root)
+
+    def which() -> str:
+        proc = subprocess.run(
+            [str(driver_cc)], capture_output=True, text=True, env=env, cwd=cwd, timeout=60
+        )
+        assert proc.returncode == 0, proc.stderr
+        return next((ln for ln in proc.stderr.splitlines() if "setting(s) applied" in ln), "")
+
+    (cwd / "soa.ini").write_text("render = 1\n", encoding="utf-8")
+    assert which() == "", "a soa.ini in the working directory is never read"
+    (driver_cc.parent / "soa.ini").write_text("render = 1\n", encoding="utf-8")
+    assert str(driver_cc.parent / "soa.ini") in which(), "beside the executable"
+    (root / "soa.ini").write_text("scale = 2\n", encoding="utf-8")
+    assert str(root / "soa.ini") in which(), "the root's first"

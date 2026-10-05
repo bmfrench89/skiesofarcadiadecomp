@@ -91,6 +91,7 @@ __declspec(dllimport) void __stdcall Sleep(unsigned long dwMilliseconds);
 __declspec(dllimport) int __stdcall QueryPerformanceCounter(union _LARGE_INTEGER* lpPerformanceCount);
 __declspec(dllimport) int __stdcall QueryPerformanceFrequency(union _LARGE_INTEGER* lpFrequency);
 __declspec(dllimport) unsigned long __stdcall GetActiveProcessorCount(unsigned short GroupNumber);
+__declspec(dllimport) int __stdcall CloseHandle(void* hObject);
 #ifdef _MSC_VER
 #pragma comment(lib, "Synchronization.lib") /* WaitOnAddress */
 #endif
@@ -398,6 +399,30 @@ void plat_dl_close(void* lib);
  * already (distribution R2: the pipeline cache under the port root). */
 int plat_mkdir(const char* path);
 
+/* ---- L9: what settings.c, mod.c and hle.c ask of the system ---------------
+ * PLAT_SEP joins the paths this port prints and opens (Windows takes '/'
+ * too, but its own is what a player sees); PLAT_DL_SUFFIX names a mod's
+ * library, mod.dll or mod.so. plat_exe_path is the running executable
+ * (GetModuleFileNameA / readlink of /proc/self/exe); plat_realpath an
+ * absolute, resolved path; plat_dl_why the loader's own words for the last
+ * plat_dl_open or plat_dl_sym that failed (GetLastError / dlerror);
+ * plat_list_dirs calls fn for each subfolder of dir not beginning with '.',
+ * returning how many, or -1 when dir cannot be read; plat_process_cpu the
+ * process's CPU seconds, user and kernel, and their sum. 0 is failure for
+ * the int ones. */
+#ifdef _WIN32
+#define PLAT_SEP "\\"
+#define PLAT_DL_SUFFIX ".dll"
+#else
+#define PLAT_SEP "/"
+#define PLAT_DL_SUFFIX ".so"
+#endif
+int plat_exe_path(char* out, size_t cap);
+int plat_realpath(const char* in, char* out, size_t cap);
+const char* plat_dl_why(void);
+int plat_list_dirs(const char* dir, void (*fn)(const char* name, void* u), void* u);
+double plat_process_cpu(double* user, double* kernel);
+
 /* ---- threads (L2) --------------------------------------------------------
  * plat_thread_start runs fn(arg) on a new thread and returns 1, or 0 if none
  * could be made; stack_bytes 0 is the platform's default. PlatThread.os is
@@ -461,6 +486,16 @@ static inline int plat_thread_start(PlatThread* t, void (*fn)(void*), void* arg,
         return 1;
     }
 #endif
+}
+
+/* A thread nobody will wait for: its handle let go on Windows (the POSIX
+ * thread is detached when it starts). */
+static inline void plat_thread_detach(PlatThread* t)
+{
+#ifdef _WIN32
+    if (t->os) CloseHandle(t->os);
+#endif
+    t->os = NULL;
 }
 
 static inline int plat_cpu_count(void) /* logical processors, at least 1 */

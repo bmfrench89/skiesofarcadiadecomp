@@ -583,9 +583,7 @@ static unsigned start_watchdog(CpuState* s, int windowed)
             fprintf(stderr, "[watchdog] cannot start the watchdog thread; nothing will time this run out\n");
             return 0;
         }
-#ifdef _WIN32
-        CloseHandle((HANDLE)t.os);
-#endif
+        plat_thread_detach(&t);
         g_watchdog_on = 1;
     }
     return secs;

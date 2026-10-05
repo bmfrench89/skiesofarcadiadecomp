@@ -208,6 +208,7 @@ def build_driver(tmp_path_factory, *defines: str):
             str(ROOT / "runtime" / "mod.c"),
             str(ROOT / "runtime" / "sha1.c"),  # disc-layer I1
             str(ROOT / "runtime" / "tick.c"),
+            *map(str, toolchain.runtime_support_sources()),  # plat.c (portability L9)
             str(out / "driver.c"),
             "/Fo" + str(out) + os.sep,
             "/Fe" + str(exe),

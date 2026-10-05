@@ -32,12 +32,8 @@
  *   it is the original, and selftest's twin case holds it to the recompiled
  *   one.
  */
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <time.h>
-#endif
 #include "cpu.h"
+#include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,14 +152,7 @@ void tick_set_hold(int (*held)(void))
 
 static void hold_while_paused(void)
 {
-    while (g_held && g_held()) {
-#ifdef _WIN32
-        Sleep(20);
-#else
-        struct timespec ts = {0, 20000000};
-        nanosleep(&ts, NULL);
-#endif
-    }
+    while (g_held && g_held()) plat_sleep_ms(20);
 }
 
 /* Let the frame end's spin go after one field, from frame `frame` on; 0
