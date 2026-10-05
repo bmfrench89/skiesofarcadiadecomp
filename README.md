@@ -121,9 +121,16 @@ deletes those that match, keeps and names any that differ, and never touches
 `sys/` or the image. `checkdump.py` is that same check on its own, for
 an `extracted/` that has been sitting around: it needs nothing but the files
 already on disk, and it refuses — naming both hashes — if the dump is not the
-build `config/` describes. Nothing downstream looks at the executable's
-identity again, so a wrong build translates, links, boots and is then wrong in
-ways no other check here can see.
+build `config/` describes. The port checks it again every time it starts
+(disc-layer I1): it opens only an image whose game id is `GEAE8P` and whose
+executable has that same SHA-1, and refuses any other by name, so a patched or
+other-revision image never runs under code translated from another.
+
+`gen\soa.exe` takes the folder holding `disc.iso` or the image itself, so
+`gen\soa.exe "D:\Dumps\Skies of Arcadia Legends (USA).iso"` runs straight from
+your own ISO or GCM with no copy (an RVZ is converted by `extract.py`, which
+says so). With no image it stops at once, exit 1, naming the command that makes
+one; it used to boot and read zeros.
 
 `recompile.py` translates the whole executable to C into `gen/` (also
 gitignored), compiles it with MSVC and links the runtime into `gen/soa.exe`.
@@ -191,7 +198,7 @@ is enough: relative paths in it mean the root folder, the card defaults to
 and the console's log goes to `build\logs\` instead of a window:
 
 ```ini
-disc = C:\Games\Skies\extracted   # the extracted disc, used when none is given
+disc = C:\Games\Skies\extracted   # a folder holding disc.iso, or the .iso; used when none is given
 render = 1
 scale = 3
 mods = C:\Games\Skies\mods
@@ -261,6 +268,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_PAD_RECORD=path` | write down every controller input the port reads, keyed by frame, one line per change; play in the window, then replay it. An existing file is never overwritten — the run records to `path.1` instead |
 | `SOA_PAD_FILE=path` | replay a recording instead of live or scripted input (it becomes the whole input; `SOA_PAD` is then ignored). **Replay in the configuration you recorded in**: the recording is keyed by frame, the game runs on guest time, and the two only keep step while frames arrive at the same rate, so `SOA_SPEED`, `SOA_RENDER`, the window, the thread count and the memory card all have to match. The run says what it was recorded with and how far it has drifted |
 | `SOA_PAD_STOP=n` | frames to keep running after a replayed recording runs out, then stop (default 120; 0 keeps going) |
+| `SOA_DISC_LOG=1` | one `[disc]` line per read of the drive: the frame, the offset, the length, the file the read starts in and how far past its end it reaches; `python tools/citest/disc_check.py --log <log> --data extracted` holds every line to the disc's file table (disc-layer I1) |
 | `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
 | `SOA_UNCAP=N` | from frame `N` on (`1` is from the start), let the frame end's spin go after one field instead of two: `runtime/tick.c` answers `VIGetRetraceCount` with the frame's start plus one at the spin's call site. The game's logic advances once a frame, so this runs the **whole game** up to twice as fast — it is not 60 fps. Start it after a pad script has reached its scene: disc loads run on the wall clock, so uncapped from boot the script's presses land somewhere else. For measuring how fast the port can go (`docs/PLAN-60FPS-MODS.md` H3), not for play. Every run's report also ends with a `[frametime]` line: frames a second, the median, 95th and 99th percentile and worst wall milliseconds per frame, and the process's CPU seconds; with an uncap, over the frames from `N` on. The `[tick]` line counts the main loop's safe points (one per frame, less the frame shown before the loop starts) and how often the spin was let go |
 | `SOA_GX_DLLOG=1` | a diagnostic: every move of the CPU FIFO away from the command processor's (the game recording a display list), the draws parsed while it was away, and each display-list call with its size; the report adds a table per buffer (PLAN C5a, FINDINGS "Recorded display lists"). Changes nothing drawn |
@@ -320,7 +328,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1284 tests; any that need a dump skip themselves
+python -m pytest                     # 1293 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

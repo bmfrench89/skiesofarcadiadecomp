@@ -33,8 +33,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 
 def run(exe, tmp_path, poke):
-    """One boot with no disc: main() parses SOA_POKE, then finds no
-    sys/main.dol and gives up, which is as far as this needs to get."""
+    """One boot with no disc: main() parses SOA_POKE, then finds no disc
+    image and stops, which is as far as this needs to get."""
     env = dict(os.environ)
     for name in ("SOA_POKE", "SOA_MEMPOKE"):
         env.pop(name, None)

@@ -175,6 +175,14 @@ jobs:
       - name: Renderer pixel checks
         run: python tools/citest/render_check.py
 
+      # The disc (disc-layer I1): runtime/disc.c built on its own and held to
+      # a synthetic image -- the system files it hands back, every read, the
+      # file names, and ten images refused in words of their own -- with no
+      # game data. --mutate fst-offset is the change that must fail it.
+      - name: The disc layer on a synthetic image
+        if: ${{ !cancelled() }}
+        run: python tools/citest/disc_check.py
+
       # The renderer's exp2f and log2f (runtime/crmath.h, CORE-MATH), held to
       # correct rounding over every input fog and texture LOD can give them,
       # and their outputs to config/libm.tsv, which every leg has to match
@@ -240,6 +248,10 @@ jobs:
       - name: Renderer pixel checks
         if: ${{ !cancelled() }}
         run: python tools/citest/render_check.py --cc clang-cl
+
+      - name: The disc layer on a synthetic image
+        if: ${{ !cancelled() }}
+        run: python tools/citest/disc_check.py --cc clang-cl
 
       - name: The renderer's exp2f and log2f, every input
         if: ${{ !cancelled() }}
@@ -358,6 +370,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/citest/threads_check.py --cc ${{ matrix.cc }}
 
+      # plat_path_kind's stat and plat_fseek64's fseeko: the POSIX half
+      - name: The disc layer on a synthetic image
+        if: ${{ !cancelled() }}
+        run: python tools/citest/disc_check.py --cc ${{ matrix.cc }}
+
       - name: The renderer's exp2f and log2f, every input
         if: ${{ !cancelled() }}
         run: python tools/citest/libm_check.py --cc ${{ matrix.cc }}
@@ -459,6 +476,10 @@ jobs:
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}
         run: python tools/citest/threads_check.py --cc gcc
+
+      - name: The disc layer on a synthetic image
+        if: ${{ !cancelled() }}
+        run: python tools/citest/disc_check.py --cc gcc
 
       - name: The renderer's exp2f and log2f, every input
         if: ${{ !cancelled() }}

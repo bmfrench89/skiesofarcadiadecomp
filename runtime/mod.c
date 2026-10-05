@@ -58,6 +58,7 @@
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
 #include "mod.h"
+#include "sha1.h"
 #include "soa_mod.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -113,43 +114,7 @@ static int g_patch_reload; /* a load state (3 or 5) seen at a frame end since th
 static char g_describe[300]; /* fits si.c's config line; later mods are left off */
 static unsigned long long g_maps_loaded;
 
-/* ---- SHA-1, for the DOL a mod names ------------------------------------ */
-
-static uint32_t rol(uint32_t x, int k) { return (x << k) | (x >> (32 - k)); }
-
-static void sha1_block(uint32_t h[5], const uint8_t* p)
-{
-    uint32_t w[80], a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f, k, t;
-    int i;
-    for (i = 0; i < 16; i++)
-        w[i] = (uint32_t)p[4 * i] << 24 | (uint32_t)p[4 * i + 1] << 16 | (uint32_t)p[4 * i + 2] << 8 | p[4 * i + 3];
-    for (; i < 80; i++) w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
-    for (i = 0; i < 80; i++) {
-        if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999u; }
-        else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
-        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
-        else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
-        t = rol(a, 5) + f + e + k + w[i];
-        e = d; d = c; c = rol(b, 30); b = a; a = t;
-    }
-    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
-}
-
-static void sha1_hex(const uint8_t* data, size_t n, char hex[41])
-{
-    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
-    uint8_t last[128];
-    size_t i, rem = n % 64, full = n - rem, pad = rem < 56 ? 64 : 128;
-    uint64_t bits = (uint64_t)n * 8;
-    for (i = 0; i < full; i += 64) sha1_block(h, data + i);
-    memset(last, 0, sizeof last);
-    memcpy(last, data + full, rem);
-    last[rem] = 0x80;
-    for (i = 0; i < 8; i++) last[pad - 1 - i] = (uint8_t)(bits >> (8 * i));
-    sha1_block(h, last);
-    if (pad == 128) sha1_block(h, last + 64);
-    for (i = 0; i < 5; i++) snprintf(hex + 8 * i, 9, "%08x", h[i]);
-}
+/* SHA-1, for the DOL a mod names, is sha1.c's (moved there by disc-layer I1). */
 
 static uint32_t fnv1a(uint32_t h, const char* p, size_t n)
 {

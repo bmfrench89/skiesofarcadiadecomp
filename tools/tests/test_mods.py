@@ -206,6 +206,7 @@ def build_driver(tmp_path_factory, *defines: str):
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "mod.c"),
+            str(ROOT / "runtime" / "sha1.c"),  # disc-layer I1
             str(ROOT / "runtime" / "tick.c"),
             str(out / "driver.c"),
             "/Fo" + str(out) + os.sep,

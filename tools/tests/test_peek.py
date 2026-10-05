@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 
 def run(exe, tmp_path, **env_set):
-    """One boot with no disc: main() parses the switches, finds no
-    sys/main.dol and stops, which is as far as this needs to go."""
+    """One boot with no disc: main() parses the switches, finds no disc
+    image and stops, which is as far as this needs to go."""
     env = dict(os.environ)
     for name in ("SOA_POKE", "SOA_PEEK", "SOA_WATCH", "SOA_WATCH_FROM", "SOA_MEMPOKE"):
         env.pop(name, None)

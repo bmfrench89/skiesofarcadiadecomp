@@ -46,6 +46,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h> /* plat_path_kind */
 #if PLAT_MSVC || (PLAT_X86_64 && defined(_MSC_VER))
 #include <intrin.h> /* MSVC's intrinsics, and clang-cl's __cpuid and __rdtsc */
 #elif PLAT_X86_64
@@ -484,6 +485,26 @@ static inline int plat_fseek64(FILE* f, int64_t off) /* from the start of the fi
 #else
     return fseeko(f, (off_t)off, SEEK_SET);
 #endif
+}
+
+/* What a path names, for disc.c (disc-layer I1), which takes a directory or
+ * an image: PLAT_PATH_NONE, _FILE (with its size in *size) or _DIR. The
+ * 64-bit stat on both, since a disc image is 1.4 GB and a 32-bit size would
+ * hold it only by luck. */
+enum { PLAT_PATH_NONE, PLAT_PATH_FILE, PLAT_PATH_DIR };
+static inline int plat_path_kind(const char* path, uint64_t* size)
+{
+#ifdef _WIN32
+    struct _stat64 st;
+    if (_stat64(path, &st) != 0) return PLAT_PATH_NONE;
+    if (st.st_mode & _S_IFDIR) return PLAT_PATH_DIR;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) return PLAT_PATH_NONE;
+    if (S_ISDIR(st.st_mode)) return PLAT_PATH_DIR;
+#endif
+    if (size) *size = (uint64_t)st.st_size;
+    return PLAT_PATH_FILE;
 }
 
 static inline int plat_setenv(const char* name, const char* value)

@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1281 passed, 3 skipped in 637.00s
+1290 passed, 3 skipped in 678.12s
 ```
 
-1284 tests in 75 files, none of which reads the disc. The two FMA probes of
+1293 tests in 77 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode); the counts below include those three skips. CI's Windows runner
@@ -79,6 +79,8 @@ its own and run it, some of the C as well:
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
+| `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
+| `test_disc_const.py` | 4 | `runtime/disc.c`'s `DISC_DOL_SHA1` is `config/GEAE8P/config.yml`'s hash and its `DISC_GAME_ID` the config directory's name; one hex digit changed, or another id, is refused by the same checker; both sit behind `#ifndef` for the fixture build |
 | `test_extract.py` | 17 | I2, on `tools/soa/discfixture.py`'s synthetic image (a test game id, no game bytes): the fixture holds every file where its FST says, each AKLZ file decodes, and each layout feature is there; `extract.py` writes `disc.iso` and the four `sys/` files, each equal to its slice, and no loose file, `--files` writes every file equal to its slice, `--iso` is accepted; `--prune-loose` deletes exactly the loose files equal to the image and keeps and names the ones altered (a byte flipped, a byte short), `--dry-run` deletes nothing; `sct.py`, `validate_assets.py` and `audio_check.py` each read a file present only in the image, and a container broken there fails. The `audio_check.py` case needs numpy, which CI does not install. (Count to be regenerated.) |
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
@@ -131,17 +133,17 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1281 passed, 3 skipped` |
-| no capstone | `1262 passed, 4 skipped` |
-| no MSVC | `882 passed, 402 skipped` |
-| neither | `863 passed, 403 skipped` |
+| everything (MSVC + capstone) | `1290 passed, 3 skipped` |
+| no capstone | `1271 passed, 4 skipped` |
+| no MSVC | `890 passed, 403 skipped` |
+| neither | `871 passed, 404 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 399 MSVC-gated tests are the ones that build runtime
+Two things follow. The 400 MSVC-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -327,6 +329,32 @@ the script holds that to `recompile.py`'s `/STACK` before it builds. Under gcc:
 On Windows the stack line says the main thread's is sized by the link. CI runs
 it on the three Linux legs, which are where the resume used to exit 6.
 
+**`disc_check.py`** — 2.8 s (disc-layer I1). Builds `runtime/disc.c` and
+`runtime/sha1.c` with `tools/citest/disc_driver.c` for a synthetic image
+(`tools/soa/discfixture.py`: a test game id and its own executable's SHA-1
+compiled in place of the real ones), and checks what disc.c hands back: the
+executable, boot.bin and file table are the image's exact slices, from a folder
+holding `disc.iso` and from the image named directly; every file read as the
+game reads it (its length rounded up to 32) is the image's bytes; a read past
+the end is the last bytes then zeros, and counted; each file is named at its
+first and last byte, and padding, junk and the system area by none. Then ten
+images refused, each in words of its own:
+
+```
+disc check: 81 passed, 0 failed (12 files, 1212416 bytes)
+  refused bad boot magic: broken0.iso is not a GameCube disc image (boot magic 00000000, not C2339F3D)
+  refused another game id: broken1.iso is GTSP01, not GTSE01: this port is the North American GameCube release only (European and Japanes
+  ...
+  refused no image: no disc image at empty/disc.iso; make one from your own disc with: python tools/extract.py <your disc dump> (w
+```
+
+`--mutate fst-offset` moves the image's file table by four bytes and must fail
+it. `--log <log> --data extracted` holds a live run's `SOA_DISC_LOG=1` lines to
+the file table as `tools/soa/disc.py` parses it: every read names the file that
+holds its offset, and how far past that file's end it reaches (title, 226 of
+226 on 2026-10-05). CI runs the first form on Windows under MSVC and clang-cl
+and on the three Linux legs, where it is the POSIX half's `stat` and `fseeko`.
+
 **`libm_check.py`** — 18 s (L6). The renderer's `exp2f` (fog) and `log2f`
 (texture LOD) are CORE-MATH's correctly rounded ones, `runtime/crmath.h`. This
 builds `tools/citest/libm_driver.c` and runs every input the renderer can give
@@ -369,10 +397,7 @@ which CI's Linux legs fire through `test_memguard.py`). The run then exits 1
 with
 
 ```
-cannot open nodisc/sys/main.dol
-cannot open nodisc/sys/boot.bin
-cannot open nodisc/sys/fst.bin
-[boot] nodisc does not look like an extracted disc (sys/main.dol, sys/boot.bin and sys/fst.bin live there); run: python tools/extract.py <your disc dump> --iso
+[boot] no disc image at nodisc; make one from your own disc with: python tools/extract.py <your disc dump> (which writes extracted/disc.iso), or name an .iso or .gcm file
 ```
 
 which is expected: `nodisc` is not a disc.
@@ -526,10 +551,7 @@ Without one you get the boot message and exit 1, not a self-test result:
 
 ```
 > $env:SOA_SELFTEST='1'; gen\soa.exe nodisc
-cannot open nodisc/sys/main.dol
-cannot open nodisc/sys/boot.bin
-cannot open nodisc/sys/fst.bin
-[boot] nodisc does not look like an extracted disc (sys/main.dol, sys/boot.bin and sys/fst.bin live there); run: python tools/extract.py <your disc dump> --iso
+[boot] no disc image at nodisc; make one from your own disc with: python tools/extract.py <your disc dump> (which writes extracted/disc.iso), or name an .iso or .gcm file
 ```
 
 That is the reason none of section 3 runs in CI.
@@ -1375,6 +1397,7 @@ perfectly the whole time.
 | `citest/dc_check.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/render_check.py` | no | yes | no | no | no | **yes**, Windows |
 | `citest/threads_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Linux and Linux ARM64 |
+| `citest/disc_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Windows, Linux and Linux ARM64 |
 | `citest/libm_check.py` | no | yes, or `--cc` | no | no | no | **yes**, Windows, Linux and Linux ARM64 |
 | `SOA_MEMPOKE` tripwire | no | — | no | **yes** | no | no |
 | `recompile.py --compile --link` | **yes** | yes | no | — | no | no |
@@ -1389,7 +1412,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 402 of the 1284 skip here without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 403 of the 1293 skip here without a C compiler: 400 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

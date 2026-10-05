@@ -33,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def boot(exe, tmp_path, **env_set):
-    """One boot with no disc: main() reads its switches, finds no
-    sys/main.dol and stops."""
+    """One boot with no disc: main() reads its switches, finds no disc
+    image and stops."""
     env = dict(os.environ)
     env.pop("SOA_UNCAP", None)
     env.update(env_set)

@@ -106,6 +106,18 @@ void gxr_set_texture_provider(int (*fn)(uint64_t, uint32_t, uint32_t, uint32_t, 
 void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }
+/* disc.c (disc-layer I1): an image that opens, and three buffers of zeroes --
+ * enough shape for the boot path to reach the guest, and nothing of the game. */
+static const uint8_t zero_dol[0x100], zero_boot[0x440], zero_fst[0x40];
+int disc_open(const char* w, char* why, size_t cap) { (void)w; (void)why; (void)cap; return 0; }
+int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const uint8_t** fst,
+                size_t* fst_n, char* why, size_t cap)
+{
+    (void)why; (void)cap;
+    *dol = zero_dol; *dol_n = sizeof zero_dol; *boot = zero_boot; *fst = zero_fst;
+    *fst_n = sizeof zero_fst;
+    return 0;
+}
 int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
 int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }
@@ -162,6 +174,7 @@ def build(tmp_path: Path) -> Path:
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "main.c"),
             str(ROOT / "runtime" / "mod.c"),
+            str(ROOT / "runtime" / "sha1.c"),  # disc-layer I1
             str(ROOT / "runtime" / "tick.c"),
             str(ROOT / "runtime" / "picture.c"),
             str(ROOT / "runtime" / "gxv.c"),  # the stub: no SOA_GXV
@@ -173,13 +186,9 @@ def build(tmp_path: Path) -> Path:
         cwd=tmp_path,
     )
     assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
-    # Three files of zeroes: enough shape for the boot path to reach the guest,
-    # and nothing of the game in them.
-    sys_dir = tmp_path / "disc" / "sys"
-    sys_dir.mkdir(parents=True, exist_ok=True)
-    (sys_dir / "main.dol").write_bytes(bytes(0x100))
-    (sys_dir / "boot.bin").write_bytes(bytes(0x440))
-    (sys_dir / "fst.bin").write_bytes(bytes(0x40))
+    # The disc is the stubs' (disc_open and disc_system above); the
+    # directory is only what the command line names.
+    (tmp_path / "disc").mkdir(exist_ok=True)
     return exe
 
 

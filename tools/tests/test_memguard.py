@@ -13,7 +13,8 @@ The second builds the real boot path out of ``runtime/main.c`` plus stubs
 synthesised here and runs it, to see that an address up there is reported once
 and that the run carries on afterwards. It needs a compiler, so it skips where
 there is none, and it needs no disc: ``SOA_MEMPOKE`` is handled before the
-first file is opened. ``SOA_CC`` picks the toolchain profile: CI's Linux leg
+disc is opened, and with none the boot stops (exit 1) naming tools/extract.py
+(disc-layer I1), which every run here asserts. ``SOA_CC`` picks the toolchain profile: CI's Linux leg
 runs this module with ``SOA_CC=gcc`` (portability L7), where the guard is
 ``runtime/plat.c``'s SIGSEGV handler rather than a vectored one.
 """
@@ -208,6 +209,7 @@ def build(tmp_path):
     runtime = ROOT / "runtime"
     sources = [
         *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c")),
+        *(runtime / f for f in ("disc.c", "sha1.c")),  # disc-layer I1
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",
     ]
@@ -235,7 +237,7 @@ def build(tmp_path):
 
 def run(exe, tmp_path, poke):
     """One boot, given a directory with no disc in it: main() pokes, then finds
-    no sys/main.dol and gives up, which is all this needs it to do."""
+    no disc image and stops, naming the fix, which is all this needs it to do."""
     env = dict(os.environ)
     env.pop("SOA_MEMPOKE", None)
     if poke:
@@ -248,4 +250,7 @@ def run(exe, tmp_path, poke):
         timeout=120,
         check=False,
     )
-    return proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    # disc.c's stop: no image, so exit 1 and the command that makes one
+    assert proc.returncode == 1 and "python tools/extract.py" in out, out
+    return out

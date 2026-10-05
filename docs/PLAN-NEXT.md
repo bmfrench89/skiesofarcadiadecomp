@@ -581,7 +581,7 @@ H17a, as C5b's Done says.
 
 | # | Slice | Size | Rebuild | Needs first | Owner |
 |---|---|---|---|---|---|
-| 1 | **I1** one seam for the disc (`runtime/disc.c`, `sha1.c`); system files from the image; the DOL-hash refusal; `SOA_DISC_LOG`. The drive's deadline is unchanged | a day to several days | `--link` | I2; M5b (its `aram_set_data_dir`) | — |
+| 1 | **I1** one seam for the disc (`runtime/disc.c`, `sha1.c`); system files from the image; the DOL-hash refusal; `SOA_DISC_LOG`. The drive's deadline is unchanged. **Done** 2026-10-05 (FINDINGS "I1"): runs from the player's ISO; ten images refused by name; every read of a title run names its file | a day to several days | `--link` | I2; M5b (its `aram_set_data_dir`) | — |
 | 2 | **I3** the executable built in (`disc_sys.c` in `--out`); `--no-embed`; the stale-link guard; guard suffixes 43 to 48 | a day | `--link` (the guard arms at the next `--compile`) | I1; **D-5** | **Owner** agrees first |
 | — | **I5a**, off the default path: the deadline from the command's start, with overruns counted in guest ticks. A deliberate change to every run's disc timing; built only if agreed, then alone | hours | `--link` | I1; **the implementation session agrees** to the change (disc impl Q1). Not before | — |
 

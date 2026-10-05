@@ -497,13 +497,15 @@ def test_missing_inputs_names_each_thing_that_is_missing(tmp_path):
     missing = scenario.missing_inputs(tmp_path / "soa.exe", tmp_path / "extracted")
     assert len(missing) == 2
     assert "recompile.py" in missing[0] and "extract.py" in missing[1]
+    # sys/ alone is not enough: the port boots from the image (disc-layer I1)
     (tmp_path / "extracted" / "sys").mkdir(parents=True)
-    for name in ("main.dol", "boot.bin"):
+    for name in ("main.dol", "boot.bin", "fst.bin"):
         (tmp_path / "extracted" / "sys" / name).write_bytes(b"")
     missing = scenario.missing_inputs(tmp_path / "soa.exe", tmp_path / "extracted")
-    assert len(missing) == 3  # the executable, then the two files still absent
-    assert "fst.bin" in missing[1] and "the boot path needs it" in missing[1]
-    assert "disc.iso" in missing[2] and "every asset read would return zeros" in missing[2]
+    assert len(missing) == 2  # the executable, then the image
+    assert "disc.iso" in missing[1] and "the port boots from it" in missing[1]
+    (tmp_path / "extracted" / "disc.iso").write_bytes(b"")
+    assert len(scenario.missing_inputs(tmp_path / "soa.exe", tmp_path / "extracted")) == 1
 
 
 # --------------------------------------------------------------------------

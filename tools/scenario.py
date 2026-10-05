@@ -126,7 +126,8 @@ DEFAULT_EXE = "gen/soa.exe"
 DEFAULT_DATA = "extracted"
 
 # What main() in main.c and dvd_init() in dvd.c need out of the extracted disc.
-NEEDED_FILES = ("sys/main.dol", "sys/boot.bin", "sys/fst.bin", "disc.iso")
+# The image is all the runtime reads since disc-layer I1; sys/ is for the tools.
+NEEDED_FILES = ("disc.iso",)
 
 # runtime/si.c button_named() -- the twelve buttons a script can name, plus the
 # four stick deflections script_init() understands.
@@ -437,12 +438,9 @@ def missing_inputs(exe: Path, data: Path) -> list[str]:
     else:
         for rel in NEEDED_FILES:
             if not (data / rel).exists():
-                why = (
-                    "every asset read would return zeros"
-                    if rel.endswith(".iso")
-                    else "the boot path needs it"
+                missing.append(
+                    f"{named(data / rel)}: missing -- the port boots from it (tools/extract.py)"
                 )
-                missing.append(f"{named(data / rel)}: missing -- {why} (tools/extract.py --iso)")
     return missing
 
 

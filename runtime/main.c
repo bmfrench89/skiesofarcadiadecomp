@@ -10,6 +10,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "disc.h"
 #include "gxr.h"
 #include "gxv.h"
 #include "mod.h"
@@ -39,7 +40,6 @@ static int run_guest(void* s)
 void hle_report(void);
 void hle_dump(CpuState* s, uint32_t pc);
 void threads_init(CpuState* s);
-void dvd_init(const char* path);
 int selftest(CpuState* s);
 int gx_replay(CpuState* s, const char* base);
 int gx_replay_pair(CpuState* s, const char* a, const char* b); /* H10: A, B and B.mid.png */
@@ -73,7 +73,6 @@ int tick_turbo_toggle(void);        /* tick.c, M11a */
 const char* settings_root(void); /* settings.c, M5b */
 int settings_console_to_log(char* path, size_t cap);
 void si_set_path_root(const char* root);
-void aram_set_data_dir(const char* dir);
 void aram_census_prepare(void); /* aram.c: its disc reads before the clock starts (M19) */
 void tick_set_hold(int (*held)(void)); /* tick.c; M19's pause */
 int clock_pause_requested(void);
@@ -1008,26 +1007,6 @@ static uint32_t be32(const uint8_t* p)
     return BSWAP32(v);
 }
 
-static uint8_t* slurp(const char* path, size_t* size)
-{
-    FILE* f = fopen(path, "rb");
-    uint8_t* buf;
-    long n;
-    if (!f) { fprintf(stderr, "cannot open %s\n", path); return NULL; }
-    fseek(f, 0, SEEK_END);
-    n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    /* A directory, or a file that cannot be seeked, gives a negative length,
-     * and malloc(0) may hand back nothing at all: either way the read below
-     * would run on a pointer this function never got. */
-    buf = n > 0 ? (uint8_t*)malloc((size_t)n) : NULL;
-    if (!buf) { fclose(f); fprintf(stderr, "cannot read %s\n", path); return NULL; }
-    if (fread(buf, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(buf); return NULL; }
-    fclose(f);
-    *size = (size_t)n;
-    return buf;
-}
-
 /* DOL header: 7 text + 11 data sections, then BSS and the entry point. */
 static int load_dol(uint8_t* mem, const uint8_t* dol, size_t size)
 {
@@ -1237,9 +1216,8 @@ static void gpu_start(void)
 int main(int argc, char** argv)
 {
     const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";
-    char path[1024];
-    uint8_t *dol, *boot, *fst;
-    size_t dol_size, boot_size, fst_size;
+    const uint8_t *dol, *boot, *fst;
+    size_t dol_size, fst_size;
     uint32_t fst_addr, fst_max;
     static CpuState s;
 
@@ -1282,7 +1260,6 @@ int main(int argc, char** argv)
         if (disc && !(argc > 1 && argv[1][0] != '-')) dir = disc;
         si_set_path_root(settings_root());
     }
-    aram_set_data_dir(dir);
     s.mem = mem_alloc(&s);
     if (!s.mem) { fprintf(stderr, "cannot allocate MEM1\n"); return 1; }
     mem_poke(&s);
@@ -1296,32 +1273,30 @@ int main(int argc, char** argv)
     watch_init(); /* here with the others, so SOA_WATCH is read before the disc is */
     gx_set_frame_hook(poke_at_frame);
 
-    snprintf(path, sizeof path, "%s/sys/main.dol", dir);
-    dol = slurp(path, &dol_size);
-    snprintf(path, sizeof path, "%s/sys/boot.bin", dir);
-    boot = slurp(path, &boot_size);
-    snprintf(path, sizeof path, "%s/sys/fst.bin", dir);
-    fst = slurp(path, &fst_size);
-    if (!dol || !boot || !fst) {
-        fprintf(stderr, "[boot] %s does not look like an extracted disc (sys/main.dol, sys/boot.bin and "
-                        "sys/fst.bin live there); run: python tools/extract.py <your disc dump> --iso\n", dir);
-        return 1;
+    {
+        /* The player's image, a directory holding disc.iso or the .iso
+         * itself, checked to be this port's disc before anything of it is
+         * believed (disc-layer I1). Here, after the switches above, so their
+         * diagnostics print even with no disc; without one, nothing would
+         * load but zeros, so the run stops and says how to make one. */
+        char why[1024];
+        if (disc_open(dir, why, sizeof why) != 0 ||
+            disc_system(&dol, &dol_size, &boot, &fst, &fst_size, why, sizeof why) != 0) {
+            fprintf(stderr, "[boot] %s\n", why);
+            return 1;
+        }
     }
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
 
     /* The apploader parks the FST at the top of memory, 32-byte aligned, and
      * ends the arena where it starts. Both files are bounded before they are
-     * believed: boot.bin's header is read as far as 0x430, and an FST larger
-     * than the arena would make the subtraction below underflow into an
-     * arbitrary destination offset -- this is the one write into the image
+     * believed: disc.c hands back the whole 0x440-byte header, and an FST
+     * larger than the arena would make the subtraction below underflow into
+     * an arbitrary destination offset -- this is the one write into the image
      * here that is not a device model's, so it carries its own bound. */
-    if (boot_size < 0x430) {
-        fprintf(stderr, "[boot] sys/boot.bin is %zu bytes; the disc header is 0x440\n", boot_size);
-        return 1;
-    }
     if (fst_size == 0 || fst_size > ARENA_HI - 0x80000000u) {
-        fprintf(stderr, "[boot] sys/fst.bin is %zu bytes, which does not fit under the arena at "
+        fprintf(stderr, "[boot] the disc's file table is %zu bytes, which does not fit under the arena at "
                         "%08X\n", fst_size, ARENA_HI);
         return 1;
     }
@@ -1386,8 +1361,6 @@ int main(int argc, char** argv)
 #elif defined(__GNUC__)
     fprintf(stderr, "[boot] built with gcc %s\n", __VERSION__);
 #endif
-    snprintf(path, sizeof path, "%s/disc.iso", dir);
-    dvd_init(path);
     threads_init(&s);
     if (getenv("SOA_SELFTEST")) return selftest(&s) ? 7 : 0;
     if (argc > 2 && strcmp(argv[1], "--replay") == 0) {

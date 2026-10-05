@@ -17,6 +17,7 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "disc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,21 +158,6 @@ static uint32_t src_be32(const uint8_t* p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
-#if defined(_MSC_VER)
-extern int __argc;
-extern char** __argv;
-#endif
-
-/* The extracted disc's directory, as main.c settled it -- the command line,
- * soa.ini's `disc`, or the default (M5b) -- so the census reads the disc the
- * run is using. Before main.c says, the old rule. */
-static char g_data_dir[1024];
-
-void aram_set_data_dir(const char* dir)
-{
-    snprintf(g_data_dir, sizeof g_data_dir, "%s", dir ? dir : "");
-}
-
 /* Build the census now rather than at the first ARAM DMA: it reads the
  * head of every file on the disc, 0.3-1.1 s under load, and main.c calls
  * this before the game starts, where no clock is running (M19). */
@@ -180,15 +166,6 @@ static void src_build(void);
 void aram_census_prepare(void)
 {
     if (!g_src_ready) src_build();
-}
-
-static const char* src_data_dir(void)
-{
-    if (g_data_dir[0]) return g_data_dir;
-#if defined(_MSC_VER)
-    if (__argc > 1 && __argv[1] && __argv[1][0] != '-') return __argv[1];
-#endif
-    return "extracted";
 }
 
 static int src_suffix(const char* name, const char* suf)
@@ -204,41 +181,21 @@ static int src_suffix(const char* name, const char* suf)
     return 1;
 }
 
+/* The disc's file table and each file's first 32 bytes, from disc.c: the
+ * image main.c opened, wherever the command line or soa.ini put it
+ * (disc-layer I1). */
 static void src_build(void)
 {
-    char path[1024];
-    FILE* fh;
-    uint8_t* tbl = NULL;
-    long size = 0;
+    size_t size = 0;
+    const uint8_t* tbl = disc_fst(&size);
     uint32_t n, i, strtab;
 
     g_src_ready = -1;
-    snprintf(path, sizeof path, "%s/sys/fst.bin", src_data_dir());
-    fh = fopen(path, "rb");
-    if (!fh) return;
-    if (fseek(fh, 0, SEEK_END) == 0) size = ftell(fh);
-    if (size > 12 && size < (16 << 20) && fseek(fh, 0, SEEK_SET) == 0) {
-        tbl = (uint8_t*)malloc((size_t)size);
-        if (tbl && fread(tbl, 1, (size_t)size, fh) != (size_t)size) {
-            free(tbl);
-            tbl = NULL;
-        }
-    }
-    fclose(fh);
-    if (!tbl) return;
-
+    if (!tbl || size <= 12) return;
     n = src_be32(tbl + 8);
+    if (n == 0 || n > size / 12u) return;
     strtab = n * 12u;
-    if (n == 0 || strtab >= (uint32_t)size) {
-        free(tbl);
-        return;
-    }
-    snprintf(path, sizeof path, "%s/disc.iso", src_data_dir());
-    fh = fopen(path, "rb");
-    if (!fh) {
-        free(tbl);
-        return;
-    }
+    if (strtab >= size) return;
     for (i = 1; i < n && g_src_files < SRC_FILES; i++) {
         const uint8_t* e = tbl + i * 12u;
         uint32_t noff = ((uint32_t)e[1] << 16) | ((uint32_t)e[2] << 8) | e[3];
@@ -247,25 +204,20 @@ static void src_build(void)
         uint8_t head[32];
         int dsp;
         if (e[0]) continue; /* a directory */
-        if (strtab + noff >= (uint32_t)size) continue;
+        if ((size_t)strtab + noff >= size) continue;
         name = (const char*)tbl + strtab + noff;
-        if (memchr(name, 0, (size_t)size - (strtab + noff)) == NULL) continue;
+        if (memchr(name, 0, size - (strtab + noff)) == NULL) continue;
         dsp = src_suffix(name, ".dsp");
-        if (len < sizeof head || off > 0x7FFF0000u) continue;
-        if (fseek(fh, (long)off, SEEK_SET) != 0 || fread(head, 1, sizeof head, fh) != sizeof head)
-            continue;
+        if (len < sizeof head || disc_peek(off, head, sizeof head) != sizeof head) continue;
         snprintf(g_src_file[g_src_files].name, sizeof g_src_file[0].name, "%s", name);
         g_src_file[g_src_files].size = len;
         g_src_file[g_src_files].stream = dsp;
         src_hash_put(src_hash32(head), g_src_files);
         /* a stream's first refill may begin past the .dsp header */
-        if (dsp && len >= 128 && fseek(fh, (long)off + 96, SEEK_SET) == 0 &&
-            fread(head, 1, sizeof head, fh) == sizeof head)
+        if (dsp && len >= 128 && disc_peek((uint64_t)off + 96, head, sizeof head) == sizeof head)
             src_hash_put(src_hash32(head), g_src_files);
         g_src_files++;
     }
-    fclose(fh);
-    free(tbl);
     g_src_ready = g_src_files ? 1 : -1;
 }
 

@@ -27,8 +27,9 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
+| 5f | `python tools/citest/disc_check.py` | 2.8 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (399 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (400 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -336,19 +337,19 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1281 passed, 3 skipped in 637.00s
+1290 passed, 3 skipped in 678.12s
 ```
 
-1284 tests in 75 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1262 passed, 4 skipped` without
+1293 tests in 77 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1271 passed, 4 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `882 passed, 402 skipped` without MSVC. The three
+into one module-level skip), `890 passed, 403 skipped` without MSVC. The three
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 399 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 400 MSVC-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`
@@ -463,11 +464,11 @@ gen\soa.exe nodisc
 [mem] a store from block 00000000 reached 81800000, past the console's 24 MB of RAM; the port keeps zeroed scratch up there so that it does not reach the host heap. An address up there means the port is not modelling something. Reported once.
   backtrace from r1:
 [mem] SOA_MEMPOKE: 81800000 <- DEADBEEF, reads back DEADBEEF
-cannot open nodisc/sys/main.dol
+[boot] no disc image at nodisc; make one from your own disc with: python tools/extract.py <your disc dump> (which writes extracted/disc.iso), or name an .iso or .gcm file
 ```
 
-That is the MEM1 out-of-range tripwire firing on purpose. The `cannot open`
-lines and exit 1 are expected: `nodisc` is not a disc. (In PowerShell, do not
+That is the MEM1 out-of-range tripwire firing on purpose. The `[boot] no disc
+image` line and exit 1 are expected: `nodisc` is not a disc. (In PowerShell, do not
 pipe the port's output through `2>&1` — it wraps every stderr line in a
 NativeCommandError and reports failure even on exit 0.)
 

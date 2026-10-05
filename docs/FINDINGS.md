@@ -6865,3 +6865,69 @@ the driver's.** 2026-10-04.
   - the file dialog in the player's hands (the disc was given with `--disc`).
   These are for the owner's run on the Ally X, R4's second Done line, which is still to come. A Steam
   Deck run follows if one exists.
+
+**I1: one seam for the disc, and the system files from the image.** 2026-10-05.
+
+- **What it is:** `runtime/disc.c` now owns every byte the game gets from its disc.
+  - **Opening:** `disc_open` takes a folder holding `disc.iso`, or an `.iso`/`.gcm` file itself, so
+    `gen\soa.exe "D:\...\Skies.iso"` runs from the player's own image with no copy.
+  - **Refusals:** before anything is believed, it refuses bad boot magic, a game id other than
+    `GEAE8P`, a revision other than 0, an executable whose SHA-1 is not the one the code was
+    translated from, and a file table or executable section past the image's end. Each refusal is a
+    sentence that names the fix. An RVZ is named as Dolphin's format, with `extract.py` as the way to
+    convert it.
+  - **What it hands out:** `main.c` gets the executable, boot.bin and the file table; `dvd.c`'s
+    reads go through `disc_serve` (zeros past the end, counted); the census gets names and 32-byte
+    heads.
+  - **No image:** the run stops at boot, exit 1, naming `python tools/extract.py`. It used to boot
+    and read zeros.
+  - **Other changes:**
+    - SHA-1 moved from `mod.c` to `runtime/sha1.c`, unchanged.
+    - `plat.h` gained `plat_path_kind`, a 64-bit `stat`.
+    - `aram.c` lost MSVC's `__argv` and its `(long)` seek.
+    - `dvd_init`, `aram_set_data_dir` and `main.c`'s `slurp` are gone.
+    - The drive's timing is unchanged: I5a is still not built.
+- **New:**
+  - `SOA_DISC_LOG=1` writes a `[disc] frame F read 0xOFFSET +LEN file[, N past its end]` line per
+    read.
+  - The `[disc]` open line gives the image's size and three SHA-1s.
+  - At the end of a run: `[disc] backend iso; N reads past the image's end`.
+- **Checked** [V]:
+  - **The open line:** `$env:SOA_SETTINGS='0'; $env:SOA_FRAMES='300'; gen\soa.exe extracted` names
+    DOL `8c0e2781...`, boot.bin `d7b9c3f0...` and FST `8d8757eb...`, the spec's three hashes. The
+    `[boot]` line is byte for byte `test_scenario.py`'s. The ISO named directly boots the same.
+  - **`tools/citest/disc_check.py`, 81 of 81** under MSVC, clang-cl and llvm-mingw (2.8 s):
+    - the three system files are the synthetic image's exact slices, from the folder and from the
+      file;
+    - every file read as the game reads it (rounded up to 32) is the image's bytes, and a read past
+      the end is the last bytes then zeros, counted and said once;
+    - every file is named at its first and last byte, and padding, junk gaps, the system area and
+      the tail by none;
+    - ten images are refused, each in different words. That is the spec's six, plus another
+      revision, a malformed file table, an RVZ and no image.
+    The mutation `--mutate fst-offset` fails it.
+  - **The live read log:** `SOA_DISC_LOG=1` then `disc_check.py --log` gave 68 reads in 300 frames
+    and 226 over `title`. Each named the file `tools/soa/disc.py`'s own parse puts at its offset,
+    with the right count past its end, and none named no file. `test_disc_check.py` refuses a line
+    naming the neighbouring file, a read naming no file, a wrong overrun, and a log with no reads.
+  - **No disc:** `gen\soa.exe build\citest\no-disc` exits 1 naming `python tools/extract.py`.
+    `test_memguard` now asserts that on every one of its boots, under gcc in CI too.
+  - **The census:** `title --check` passes, and its `[aram] census sources` line still says 5,552
+    disc files indexed.
+  - **The constants:** `test_disc_const.py` holds `DISC_DOL_SHA1` to `config.yml`'s hash and
+    `DISC_GAME_ID` to the folder's name, and refuses one hex digit changed.
+  - **The contract:**
+    - `scenario.py replay` matched 23 of 23 at 1, 2, 3 and 8 threads;
+    - the self test reported 0 failures;
+    - `title --check` held 4 of 4;
+    - `decomp.py` is untouched;
+    - `test_mods.py`, whose hashlib agreement check now runs on `sha1.c`, passes;
+    - the boot-path builds (`test_memguard`, `test_peek`, `test_poke`, `test_uncap`,
+      `test_profiler`) pass with `disc.c`, `sha1.c` or the disc stubs added.
+- **CI:** `disc_check.py` runs in the MSVC and clang-cl jobs and on the three Linux legs, which are
+  `disc.c`'s first runs through `stat` and `fseeko`.
+- **What follows:**
+  - **I3** waits for D-5, the owner's yes or no on `soa.exe` holding their executable.
+  - **The store** (I4, I5) is next in M3, since §0's G5 default now applies.
+  - **The player's package** could now read an ISO where it lies, not copy it (distribution §3.7).
+    `player_build.py` still copies it, because Setup's Rebuild reads `extracted\disc.iso`.
