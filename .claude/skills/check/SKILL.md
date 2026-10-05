@@ -336,13 +336,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1269 passed, 3 skipped in 688.41s
+1281 passed, 3 skipped in 637.00s
 ```
 
-1272 tests in 74 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1250 passed, 4 skipped` without
+1284 tests in 75 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1262 passed, 4 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `870 passed, 402 skipped` without MSVC. The three
+into one module-level skip), `882 passed, 402 skipped` without MSVC. The three
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
 

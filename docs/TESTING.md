@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1269 passed, 3 skipped in 688.41s
+1281 passed, 3 skipped in 637.00s
 ```
 
-1272 tests in 74 files, none of which reads the disc. The two FMA probes of
+1284 tests in 75 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode); the counts below include those three skips. CI's Windows runner
@@ -66,7 +66,8 @@ its own and run it, some of the C as well:
 | `test_gxv_copyimage.py` | 3 | a copy sampled in its own frame (GPU spec V7), through `gpuspike.py copyimage`: sixteen cells copied to an RGBA8 texture and sampled in the same frame give the CPU's hash and all sixteen cells on the GPU, one sampler served from the copy's image in the GPU's pool and no readback wait of its own; `--mutate cimg-cpu` (the producer's image sampled before it lands) and `--mutate land-at-copy` (V6's wait at every copy) each fail it. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_logicop.py` | 1 | logic ops without `logicOp` (GPU spec V10), through `gpuspike.py logictest`: 0x55 ORed into 0xAA gives 0xFF from the CPU, native, a snapshot, the interlock and `SOA_GPU_FEATURES=core`'s route, and 198 from the forced blend; two overlapping triangles XORed onto black come back black in the overlap from the CPU and native, and with `SOA_GPU_FEATURES=nologicop` the draw is routed to the interlock and drawn as native draws it, while `core` routes it to a snapshot, named in a line, never to a blend. It skips without MSVC, `vendor/` or a Vulkan device |
 | `test_package.py` | 4 | `tools/package.py` (distribution R3): the licence texts it copies come from the folders `guard.py --tree` allows to hold third parties, it never copies `src/`, `include/` or build output, its downloads are pinned by exact version and hash, and a stage refuses a folder that already holds something |
-| `test_player_build.py` | 12 | the player's build (distribution R2): the 12 bindings `decomp_swap.c` answers are the ones `hle.txt` notes as decompiled, an adapter added without its note is seen, `--no-decomp`'s link builds no native unit and defines `SOA_NO_DECOMP`, and the runtime keeps that branch; `player_build.py` refuses a disc of another game by name, an executable whose SHA-1 differs, an image that is not a disc and a config it cannot read, each exit 2 and a `[build] refused:` line; a changed input retranslates and an unchanged one relinks, and without the check a changed `cpu.h` would only relink; a synthetic RVZ reads back as its disc, and under the embedded CPython, which fails it with `_zstd.pyd` taken out (skipped without `vendor/`'s zip) |
+| `test_setup.py` | 11 | the setup window (distribution R4), `Setup.exe --check` as `package.py` builds it: a whole package in a plain folder passes and keeps nothing; Setup.exe opened alone (from inside the zip) and each package file missing, a path with a non-ASCII letter, a root one character too long for the deepest file, both Program Files folders (the short name too, not a name that only starts the same) and a folder denied writes are each refused in words; `package.deepest` measures a tree; formats but ISO, GCM and RVZ name Dolphin's Convert File; the exit codes are `setup.c`'s; one source builds one file, holding its manifest; python and the game are started with `CREATE_NO_WINDOW` (skipped off Windows and without `vendor/llvm-mingw`) |
+| `test_player_build.py` | 13 | the player's build (distribution R2): the 12 bindings `decomp_swap.c` answers are the ones `hle.txt` notes as decompiled, an adapter added without its note is seen, `--no-decomp`'s link builds no native unit and defines `SOA_NO_DECOMP`, and the runtime keeps that branch; `player_build.py` refuses a disc of another game by name, an executable whose SHA-1 differs, an image that is not a disc and a config it cannot read, each exit 2 and a `[build] refused:` line; a changed input retranslates and an unchanged one relinks, and without the check a changed `cpu.h` would only relink; Setup's Rebuild (`--rebuild`, R4) translates again when nothing moved; a synthetic RVZ reads back as its disc, and under the embedded CPython, which fails it with `_zstd.pyd` taken out (skipped without `vendor/`'s zip) |
 | `test_mingw.py` | 7 | `soa.exe` with no Microsoft compiler (distribution R1): `fetch_mingw.py` keeps the x86-64 target alone, its `--verify` finds a byte changed and a file missing, and the Linux archive unpacks files and links and skips the rest (where the OS makes links); the `mingw` profile's flags, libraries and stack are the spec's, a `SOA_MINGW` naming no compiler finds none, and its plan writes only under `gen/mingw`, each `mod.dll` under `gen/mingw/mods`; and, with `vendor/llvm-mingw` and the disc's executable, the whole build runs with `msvc_env` made to raise and the exe imports no `fma`, `exp2f` or `log2f` |
 | `test_gxv_present.py` | 5 | the window's picture from the GPU (GPU spec V8), through `gpuspike.py present`: two synthetic screen copies through the presenter's pass into eight target sizes at both layouts give `picture_scale`'s picture in every pixel's colour, 32 of 32, and `--mutate present` (one column over) gives 0 of 32; and (V8b) `present --filters`, P5a's filters on the GPU, at scale 1 and 3: eight filter sets and a two-frame flash-limiter blend give `picture_filter`'s, `picture_blend`'s and the scaler's bytes in 24 of 24 cases, and one colour coefficient changed (`--mutate filter`) 12 of 24. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_scale.py` | 6 | the EFB at three times the console's size (GPU spec V9a): `copydiff --scale 3`, on an EFB whose samples are alike within each pixel, gives the CPU's bytes, image and screen, with the pool's image and the full screen the native ones replicated, and `--mutate taps` (the copy filter's taps one sample apart) fails it; `copyimage --scale 3` gives the CPU's frame from a copy sampled at scale, and `--mutate copy-scale` (the scaled image sampled as if native) fails it; `present --scale 3` gives `picture_scale_area`'s picture, 32 of 32, and `--mutate present` 0 of 32. The oracle at scale is `gpuspike.py oracle --scale 3`, too long for here. They skip without MSVC, `vendor/` or a Vulkan device |
@@ -130,10 +131,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1269 passed, 3 skipped` |
-| no capstone | `1250 passed, 4 skipped` |
-| no MSVC | `870 passed, 402 skipped` |
-| neither | `851 passed, 403 skipped` |
+| everything (MSVC + capstone) | `1281 passed, 3 skipped` |
+| no capstone | `1262 passed, 4 skipped` |
+| no MSVC | `882 passed, 402 skipped` |
+| neither | `863 passed, 403 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -1388,7 +1389,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 402 of the 1272 skip here without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 402 of the 1284 skip here without a C compiler: 399 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

@@ -6782,3 +6782,86 @@ the driver's.** 2026-10-04.
 - **Found by that download:** the `.sha256` file was written with CRLF on Windows, which
   `sha256sum -c` reads as part of the file name. It is now written with LF on every host.
 - **Q-D4 stays the owner's:** each release is a draft until the owner publishes it.
+
+**R4: the setup window.** 2026-10-04.
+
+- **What it is:** `tools/setup/setup.c` builds `Setup.exe`, which sits at the top of the package.
+  `tools/package.py` compiles it last, with the package's own llvm-mingw, and `windres` adds
+  `setup.manifest`: common controls 6, the system's DPI, `asInvoker`. The result is 97,792 bytes.
+- **Before anything is written,** it checks the folder it sits in (§3.7):
+  - a plain ASCII path;
+  - a path short enough for the package's deepest file. `package.py` measures that file when it
+    builds Setup: 90 characters, a libc++ header under `toolchain/`, so roots of 169 characters or
+    more are refused;
+  - not inside Program Files, asked of the shell (`SHGetKnownFolderPath`);
+  - the whole package: its python, the build script and the compiler. Opening Setup.exe from inside
+    the zip, where Explorer extracts it alone to a temporary folder, is refused, with Extract All named;
+  - write access, by a probe file deleted on close;
+  - 2 GB free, until a build is there;
+  - Smart App Control, read from `VerifiedAndReputablePolicyState` (1 is on). This PC reads 0.
+  Each refusal says why and what to do. Any image format but ISO, GCM or RVZ names Dolphin's Convert
+  File.
+- **Build** runs `python\python.exe -X utf8 source\tools\player_build.py` with `CREATE_NO_WINDOW`:
+  - its output goes through a pipe to the log pane and to `build\setup.log`, and the `[build]` lines
+    drive the progress bar;
+  - exit 2 shows the refusal in words, and any other failure says where the log is saved;
+  - its processes run in a job object, so closing Setup mid-build asks first and then ends them all.
+- **Play** starts `soa.exe` with `CREATE_NO_WINDOW` and the root as its working directory, then closes
+  Setup. The game's console is hidden, so M5b's rule sends its log to `build\logs`.
+- **A built folder** offers Play and Rebuild. Rebuild runs `player_build.py --rebuild` (new), which
+  translates again from scratch, as §3.8 says.
+- **When `soa.exe` has gone** at Play or after a build (risk 7), the window names Windows Security's
+  Protection history and its Restore.
+- **For checks with no hands:** `--disc <image> --build --play`, and `--check [--root <folder>]`,
+  which exits with what the checks found and opens no window.
+- **In the release workflow:** `test_setup.py` runs once llvm-mingw is fetched, and there a skip fails
+  the step. Then `Setup.exe --check` must pass in the package as unzipped, beside the guard.
+- **Checked** [V]:
+  - **The Done line, on this PC, with the final Setup.exe:**
+    - `package.py --out` made the zip from this tree, and it was extracted into a fresh folder.
+      `guard.py --tree` passed its 5,519 files, and `Setup.exe --check` passed there.
+    - `Setup.exe --disc extracted\disc.iso --build --play` opened the game 54 s after Setup's window
+      appeared. Its `soa.exe` is 8e5d246f..., the same as every build.
+    - The game reached the title screen, seen in a capture of its window 40 s after it opened.
+    - A watcher listed every new visible top-level window for the whole run. It saw two: Setup's
+      (`SoaSetup`) and the game's (`SoaWindow`). There was no console window, and the game's log says
+      "started without a terminal". An earlier build of Setup gave the same result.
+  - **The mutation:** Setup built with `SETUP_MUTATE_CONSOLE`, which passes 0 for the flag. The watcher
+    saw a Windows Terminal window for python at 0.5 s, a `PseudoConsoleWindow`, and a second Terminal
+    window for `soa.exe` at 26 s.
+  - **Closing mid-build:** at 15 s, 2 python and 32 compiler processes were running from the folder.
+    After Setup's question was answered Yes, none were left. `setup.log` stops at
+    `[build] 1/19 dispatch.c`.
+  - **A folder whose path holds a space** (`...\sp ace\soa-...`, 161 characters) built the same
+    `soa.exe` through Setup in 58 s.
+  - **`test_setup.py` (11):**
+    - `--check` passes a whole package in a plain folder, and leaves nothing behind;
+    - it refuses, each in words: Setup.exe alone in Explorer's kind of temporary folder, and each of
+      the three package files missing in turn; a path holding `ï`; a root one character too long, while
+      one character shorter passes that check; both Program Files folders (`C:\PROGRA~1` too, but not
+      `C:\Program Files2`); a folder denied writes by `icacls` (the same folder passes again once
+      allowed); and `.wbfs`, `.ciso`, `.gcz` and a file with no extension, naming Convert File;
+    - two builds of one source are one file, which holds the manifest;
+    - `package.deepest` measures a tree.
+    Six mutations of `setup.c` were each built and run against it, and each failed its own test: the
+    ASCII check removed, the length check removed, Program Files matched by prefix alone, the package
+    check removed, the write probe removed, and `.wbfs` accepted.
+  - **`test_player_build.py`:** `--rebuild` translates again when the record matches.
+- **Found:**
+  - **The ProgramFiles variable cannot test the Program Files check.** Windows sets it afresh in each
+    64-bit process it starts, whatever the parent's environment says. A test that set it saw the
+    check pass. The check now asks the shell, and the tests name the real folders through `--root`.
+  - **Windows' 260-character limit applies to the whole package.** Extracting it under a 178-character
+    root failed on a libc++ header at 262 characters, before Setup could run. A player's
+    `Downloads\<zip name>\<zip name>` is about 70 characters, well inside the limit. Pruning
+    `toolchain/include/c++`, which a C build never reads, would give 7 more characters and some
+    megabytes. That is for R1's fetch to weigh.
+  - **A screen copy of the game's window is plain grey.** The GPU presents through a flip-model swap
+    chain, which `BitBlt` and `ImageGrab` do not see. `PrintWindow` with `PW_RENDERFULLCONTENT` does.
+    Any later grab of the live window needs it.
+- **Not checked:**
+  - the free-space refusal (no drive here is that full);
+  - Smart App Control turned on;
+  - the file dialog in the player's hands (the disc was given with `--disc`).
+  These are for the owner's run on the Ally X, R4's second Done line, which is still to come. A Steam
+  Deck run follows if one exists.

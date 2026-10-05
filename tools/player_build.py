@@ -15,7 +15,8 @@ folder that plays:
 3. **Never a stale gen/:** every input the translated C bakes in is hashed
    into <root>/gen/build-inputs.txt. When any differs from the last build's,
    the old translation is thrown away and the game is translated again, and
-   the log says which input moved.
+   the log says which input moved. --rebuild translates again whatever the
+   record says: the setup window's Rebuild (3.8).
 4. **The build:** recompile.py with the bundled compiler (the mingw profile:
    SOA_MINGW, the package's toolchain/, or vendor/), --no-decomp (no src/ in
    a package, 3.1) and --reproducible, on every core.
@@ -200,6 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--disc", type=Path, required=True, help="the player's disc image")
     ap.add_argument("--root", type=Path, required=True, help="the folder to build into")
+    ap.add_argument(
+        "--rebuild", action="store_true", help="translate again from scratch (Setup's Rebuild)"
+    )
     args = ap.parse_args(argv)
     root = args.root.resolve()
     gen = root / "gen"
@@ -215,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     if not (extracted / IMAGE_NAME).exists():
         extract(args.disc, extracted)
     now = inputs_record()
-    moved = stale(gen, now)
+    moved = ["Rebuild asked for"] if args.rebuild else stale(gen, now)
     retranslate = bool(moved)
     if retranslate:
         say(f"translate: {', '.join(moved[:4])}{' and more' if len(moved) > 4 else ''}")

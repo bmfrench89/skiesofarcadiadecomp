@@ -117,9 +117,9 @@ def test_a_refusal_is_a_build_line_and_exit_2(fixture_disc, tmp_path, capsys):
     assert not (tmp_path / "extracted").exists()
 
 
-def run_main(monkeypatch, root, source):
+def run_main(monkeypatch, root, source, *extra):
     """player_build.main with the disc's checks, extraction and the build
-    itself stood in for: what it asks the build to do, and its record."""
+    itself stood in for: whether it asks the build to translate again."""
     asked = []
     monkeypatch.setattr(player_build, "SOURCE", source)
     monkeypatch.setattr(player_build, "check_disc", lambda image: None)
@@ -131,7 +131,7 @@ def run_main(monkeypatch, root, source):
         return 0
 
     monkeypatch.setattr(player_build, "build", build)
-    assert player_build.main(["--disc", "x.iso", "--root", str(root)]) == 0
+    assert player_build.main(["--disc", "x.iso", "--root", str(root), *extra]) == 0
     return asked[0]
 
 
@@ -152,6 +152,18 @@ def test_a_changed_input_retranslates_and_an_unchanged_one_relinks(monkeypatch, 
     monkeypatch.setattr(player_build, "stale", lambda gen, now: [])
     (source / "runtime" / "cpu.h").write_text("runtime/cpu.h, two bytes on", encoding="utf-8")
     assert run_main(monkeypatch, root, source) is False
+
+
+def test_setups_rebuild_translates_again_when_nothing_moved(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "source"
+    (source / "runtime").mkdir(parents=True)
+    (source / "runtime" / "cpu.h").write_text("cpu.h", encoding="utf-8")
+    root = tmp_path / "root"
+    assert run_main(monkeypatch, root, source) is True
+    assert run_main(monkeypatch, root, source) is False  # the record matches
+    capsys.readouterr()
+    assert run_main(monkeypatch, root, source, "--rebuild") is True  # 3.8: Rebuild retranslates
+    assert "[build] translate: Rebuild asked for" in capsys.readouterr().out
 
 
 def test_an_rvz_reads_back_as_the_disc(fixture_disc, tmp_path):

@@ -11,6 +11,8 @@ else `git describe`. A package holds no
 translated or decompiled game code and no game data (SPEC section 2 rule 5;
 3.6), only what builds the game on the player's machine from their own disc:
 
+    Setup.exe   the setup window (R4), built here from tools/setup/ with the
+                package's own compiler
     python/     CPython's embeddable distribution for Windows x64, pinned and
                 hashed (3.5), which runs the build's tools
     toolchain/  llvm-mingw, as tools/fetch_mingw.py keeps it (3.2)
@@ -40,9 +42,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import fetch_gpu  # noqa: E402
 import fetch_mingw  # noqa: E402
+from soa import toolchain  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor"
+SETUP = ROOT / "tools" / "setup"
 PYTHON_VERSION = "3.14.8"
 PYTHON_ZIP = f"python-{PYTHON_VERSION}-embed-amd64.zip"
 PYTHON_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/{PYTHON_ZIP}"
@@ -94,6 +98,34 @@ def python_zip() -> Path:
     return path
 
 
+def build_setup(out: Path, defines: tuple[str, ...] = ()) -> Path:
+    """Setup.exe from tools/setup/, with llvm-mingw (the package's compiler)
+    and its manifest; no timestamp and no symbols, so one source makes one
+    file. ``defines`` are -D flags, for the mutations."""
+    cc = toolchain.compiler_path(toolchain.MINGW)
+    if cc is None:
+        raise SystemExit("error: no llvm-mingw; python tools/fetch_mingw.py fetches it")
+    windres = Path(cc).with_name(Path(cc).name.replace("clang", "windres"))
+    res = out.with_suffix(".res")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(windres), "setup.rc", "-O", "coff", "-o", str(res)], cwd=SETUP, check=True)
+    cmd = [cc, "-std=c17", "-O2", "-Wall", "-mwindows", "-municode", "-s"]
+    cmd += [f"-D{d}" for d in defines]
+    cmd += [str(SETUP / "setup.c"), str(res), "-o", str(out), "-Wl,--no-insert-timestamp"]
+    cmd += ["-lcomctl32", "-lcomdlg32", "-lshell32", "-ladvapi32", "-lole32", "-luuid"]
+    subprocess.run(cmd, check=True)
+    res.unlink()
+    return out
+
+
+def deepest(folder: Path) -> int:
+    """The longest path under ``folder`` as Windows spells it from there, and
+    never less than the build's own outputs under it (gen/, build/, mods/:
+    34 at most, measured 2026-10-04): what Setup.exe leaves room for."""
+    paths = (len(str(f.relative_to(folder))) for f in folder.rglob("*") if f.is_file())
+    return max(max(paths, default=0), 40)
+
+
 def copy_tree(src: Path, dest: Path, suffixes: tuple[str, ...] | None = None) -> int:
     """Every file under src into dest, skipping NEVER's names; only `suffixes`
     when given. The answer is how many."""
@@ -138,6 +170,8 @@ def stage(dest: Path) -> None:
         shutil.copytree(VENDOR / name, source / "vendor" / name)
     shutil.copyfile(VENDOR / fetch_gpu.RECORD, source / "vendor" / fetch_gpu.RECORD)
     licenses(dest)
+    # last, so it knows the deepest path it must leave room for
+    build_setup(dest / "Setup.exe", (f"SETUP_DEEPEST={deepest(dest)}",))
     print(f"staged {dest}")
 
 

@@ -331,6 +331,16 @@ its DOL check reads offset 0 of every file and every 32-byte step of the package
 - **Owner:** the same on the Ally X, and on a Steam Deck under Proton if one is available (portability's
   Proton question is still open). The owner's notes are filed.
 
+*Built 2026-10-04 (FINDINGS "R4"). The first Done line holds on this PC; the owner's run is to come. As
+built: `package.py` compiles `Setup.exe` with the package's own llvm-mingw and adds `setup.manifest`
+through `windres`, last, with the deepest path it staged (90 characters), so Setup refuses a root
+too long to hold it, and refuses a folder missing the package's python, build script or compiler
+(Setup.exe opened from inside the zip). The Program Files check asks the shell, because Windows resets the `ProgramFiles`
+variable in every process it starts. Rebuild passes `player_build.py --rebuild`, which translates again
+from scratch (§3.8). The build runs in a job object, so closing Setup ends it. `--check [--root
+<folder>]` exits with what the checks found, and `--disc --build --play` drives the window with no
+hands.*
+
 ### R5. Android: a runtime-only APK and a game library from the PC
 
 *Specified with L12; recorded here so L12 does not miss what route C2 needs. Prerequisites: L12, R2.*

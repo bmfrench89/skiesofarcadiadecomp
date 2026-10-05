@@ -47,13 +47,29 @@ jobs:
       - name: Every runtime file under llvm-mingw
         run: python tools/citest/compile_runtime.py --cc mingw --require-gxv
 
+      # R4: Setup.exe built as the package builds it, and its checks; the
+      # first step's run skipped these, having no llvm-mingw yet, and here a
+      # skip is a failure.
+      - name: Setup.exe's checks
+        run: |
+          $out = python -m pytest tools/tests/test_setup.py -q -rs
+          $out
+          if ($LASTEXITCODE -ne 0 -or ($out -match "skipped")) { exit 1 }
+
       - name: The package
         run: python tools/package.py --out dist
 
-      - name: The guard, over the package unzipped
+      # Then Setup.exe's own checks in that folder, which must pass: they
+      # look for the package's python, build script and compiler, so a
+      # package laid out otherwise is refused before a player sees it.
+      - name: The guard, over the package unzipped, and Setup's checks there
         run: |
           python -c "import glob, zipfile; zipfile.ZipFile(glob.glob('dist/*.zip')[0]).extractall('dist/check')"
-          python tools/guard.py --tree (Get-ChildItem dist/check -Directory)[0].FullName
+          $pkg = (Get-ChildItem dist/check -Directory)[0].FullName
+          python tools/guard.py --tree $pkg
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$pkg\Setup.exe" --check | Write-Output
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: A draft release, for the owner to publish
         env:
@@ -62,5 +78,5 @@ jobs:
           $zip = (Get-ChildItem dist/*.zip)[0]
           $sum = Get-Content "$($zip.FullName).sha256"
           $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "draft-$("${{ github.sha }}".Substring(0, 7))" }
-          $notes = "The player's package: build the game from your own disc with Setup (or tools/player_build.py). $($zip.Length) bytes; sha256 $sum"
+          $notes = "The player's package: extract it to a folder such as C:\Games\Skies, run Setup.exe there and pick your own disc image. $($zip.Length) bytes; sha256 $sum"
           gh release create $tag --draft --target "${{ github.sha }}" --title "$($zip.BaseName)" --notes $notes $zip.FullName "$($zip.FullName).sha256"
