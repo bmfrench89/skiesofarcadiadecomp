@@ -202,10 +202,13 @@ def build(
     game_id: str = TEST_GAME_ID,
     seed: int = 0x50A,
     extra: dict[str, bytes] | None = None,
+    tail: int = 0x1000,
 ) -> Fixture:
     """Write a synthetic image to `dest` and return what it holds. `extra`
     adds files (path -> the bytes the disc should hold), placed after the
-    defaults; a path the defaults use is replaced."""
+    defaults; a path the defaults use is replaced. `tail` is how much lies past
+    the last file, rounded up to 32 KiB: past a mebibyte, a store keeps less
+    than the whole image (disc-layer I4)."""
     if game_id == REAL_GAME_ID:
         raise ValueError(
             f"the fixture never carries {REAL_GAME_ID}: the guard refuses a binary file "
@@ -268,7 +271,7 @@ def build(
         gaps.append((gap, end, filler))
         pos = end + len(filler)
     last_end = pos
-    size = align(last_end + 0x1000, FILES_ALIGN)
+    size = align(last_end + tail, FILES_ALIGN)
 
     fst, dirs = make_fst(paths, place)
     assert len(fst) == fst_len

@@ -590,7 +590,8 @@ H17a, as C5b's Done says.
 | — | **I5a**, off the default path: the deadline from the command's start, with overruns counted in guest ticks. A deliberate change to every run's disc timing; built only if agreed, then alone | hours | `--link` | I1; **the implementation session agrees** to the change (disc impl Q1). Not before | — |
 
 **Later:**
-- **The store,** only if gate G5 says to build it: **I4** (several days, none) and **I5** (several
+- **The store,** only if gate G5 says to build it (its default, "when Android or the Deck is firm", holds):
+  **I4** (**done** 2026-10-05, FINDINGS "I4": the importer, the checks and `disc.yml`) and **I5** (several
   days, `--link`), about 2 weeks. It adds integrity checks and one file to copy to a Deck or phone. It
   saves about 28 MB, not space.
 - **I6 and I7** (T1: mods that replace, add, alias and delta disc files) land in gameplay milestone 2,

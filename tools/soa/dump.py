@@ -37,6 +37,11 @@ from .disc import BOOT_HEADER_SIZE, parse_boot
 # the person most likely to need it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "GEAE8P" / "config.yml"
+# The whole disc's pinned hashes (disc-layer I4): four hashes and a size, the
+# same class of fact as config.yml's DOL hash, which the store's importer
+# judges a dump against.
+DEFAULT_DISC_PINS = REPO_ROOT / "config" / "GEAE8P" / "disc.yml"
+DISC_PIN_KEYS = ("image_size", "image_sha1", "fst_sha1", "files_sha1")
 
 # The disc header the extractor writes beside the executable. Optional: it
 # only ever sharpens the diagnosis, never decides it.
@@ -127,8 +132,9 @@ class Verdict:
         )
 
 
-def read_project(config: Path) -> Project:
-    """Read `object:` and `hash:` out of a decomp-toolkit config.yml."""
+def read_fields(config: Path) -> dict[str, str]:
+    """Every `key: value` of a file in this narrow form; an error naming the
+    line for anything else."""
     try:
         text = Path(config).read_text(encoding="utf-8")
     except OSError as exc:
@@ -151,7 +157,29 @@ def read_project(config: Path) -> Project:
         if not m:
             raise ProjectError(f"{config}:{n}: not `key: value`: {line!r}")
         fields[m["key"]] = m["value"].strip().strip("'\"")
+    return fields
 
+
+def read_disc_pins(path: Path = DEFAULT_DISC_PINS) -> dict[str, str]:
+    """disc.yml's pinned hashes: `image_size` in bytes, and the image's, the
+    file table's and the files' SHA-1 (disc-layer section 3.7.3), each checked for
+    its form, so a mistyped pin refuses rather than mismatching every dump."""
+    fields = read_fields(path)
+    for key in DISC_PIN_KEYS:
+        if key not in fields:
+            raise ProjectError(f"{path}: no `{key}:` line")
+    if not fields["image_size"].isdigit():
+        raise ProjectError(f"{path}: `image_size: {fields['image_size']}` is not a byte count")
+    for key in DISC_PIN_KEYS[1:]:
+        fields[key] = fields[key].lower()
+        if not _SHA1.match(fields[key]):
+            raise ProjectError(f"{path}: `{key}: {fields[key]}` is not a 40-digit sha1")
+    return {k: fields[k] for k in DISC_PIN_KEYS}
+
+
+def read_project(config: Path) -> Project:
+    """Read `object:` and `hash:` out of a decomp-toolkit config.yml."""
+    fields = read_fields(config)
     for key in ("object", "hash"):
         if key not in fields:
             raise ProjectError(f"{config}: no `{key}:` line, so there is nothing to check against")

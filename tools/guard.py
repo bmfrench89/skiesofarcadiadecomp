@@ -81,6 +81,8 @@ FORBIDDEN_SUFFIXES = {
     ".pdb",
     ".so",
     ".apk",
+    # The disc store (disc-layer I4): the whole disc, checked.
+    ".soadisc",
 }
 BUILD_SUFFIXES = {".exe", ".obj", ".pdb", ".so", ".apk"}
 # The first line of a gen/disc_sys.c that holds the player's system files
@@ -142,6 +144,7 @@ SIGNATURES = (
     (b"OggS", "Ogg audio"),
     (b"fLaC", "FLAC audio"),
     (b"ID3", "MP3 audio"),
+    (b"SOADISC1", "a disc store (tools/soa/store.py): the whole disc"),
 )
 
 # A memory card image begins with its scrambled serial, which no signature can

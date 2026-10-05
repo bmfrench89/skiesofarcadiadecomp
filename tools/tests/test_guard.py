@@ -691,3 +691,13 @@ def test_a_file_holding_the_embed_marker_is_refused_by_its_content(tmp_path):
     (root / "source" / "runtime" / "disc_sys.c").write_text(text, encoding="utf-8")
     problems = "\n".join(guard.tree_problems(root))
     assert "source/runtime/disc_sys.c: holds a build's copy of the player's executable" in problems
+
+
+def test_a_disc_store_is_refused_by_its_name_and_by_its_content():
+    """Disc-layer I4: GEAE8P.soadisc is the whole disc, so a tracked .soadisc is
+    refused, and so is a binary file that begins as one under any name."""
+    assert guard.forbidden_suffix("GEAE8P.soadisc") == ".soadisc"
+    assert guard.forbidden_suffix("backup.soadisc.part") == ".soadisc"
+    head = b"SOADISC" + b"1" + bytes(4096)  # the magic, built here as the store writes it
+    problem = guard.content_problem(Path("notes/innocent.dat2"), head, set())
+    assert problem and "a disc store" in problem

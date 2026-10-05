@@ -77,7 +77,7 @@ python tools/guard.py
 guard: 161 tracked files, no game data
 ```
 
-Catches game data about to enter the repository: 48 forbidden extensions
+Catches game data about to enter the repository: 49 forbidden extensions
 wherever they sit in a name (`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`,
 `.gci`, …, and `slotA.raw.bak`), eighteen directory
 names that must never be tracked (`extracted/`, `gen/`, `build/`, `vendor/`,
@@ -337,13 +337,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1299 passed, 3 skipped in 715.16s
+1317 passed, 3 skipped in 651.81s
 ```
 
-1302 tests in 78 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1280 passed, 4 skipped` without
+1320 tests in 79 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1298 passed, 4 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `899 passed, 403 skipped` without MSVC. The three
+into one module-level skip), `917 passed, 403 skipped` without MSVC. The three
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`), and
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode).
 

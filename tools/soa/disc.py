@@ -32,6 +32,8 @@ FST_ENTRY_SIZE = 12
 
 # An extraction: the image, and the system files beside it (`Disc.system_files`).
 IMAGE_NAME = "disc.iso"
+# The checked store (disc-layer I4, tools/soa/store.py), preferred to the image.
+STORE_NAME = "GEAE8P.soadisc"
 SYSTEM_DIR = "sys"
 
 EXTRACT_HINT = "python tools/extract.py <your disc dump>"
@@ -162,8 +164,14 @@ class Disc:
 
     @classmethod
     def from_file(cls, path) -> Disc:
-        """A `Disc` over a flat image, its file closed again if it is not one."""
-        reader = ImageFile(path)
+        """A `Disc` over a flat image or a store, its file closed again if it is
+        not one."""
+        if Path(path).suffix.lower() == ".soadisc":
+            from .store import Store
+
+            reader = Store(path)
+        else:
+            reader = ImageFile(path)
         try:
             return cls(reader)
         except BaseException:
@@ -304,11 +312,13 @@ class LooseTree:
 
 
 def find_image(root) -> Path | None:
-    """The disc image an extraction at `root` reads from, or None. `root` may
-    be the image itself. (I4 puts the store ahead of disc.iso here.)"""
+    """The disc image an extraction at `root` reads from, or None: its store
+    first (I4), then disc.iso. `root` may be the image or the store itself."""
     root = Path(root)
     if root.is_file():
         return root
+    if (root / STORE_NAME).is_file():
+        return root / STORE_NAME
     if (root / IMAGE_NAME).is_file():
         return root / IMAGE_NAME
     return None

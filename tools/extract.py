@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Extract a Skies of Arcadia Legends disc image into a working directory.
 
-    python tools/extract.py <disc.rvz|disc.iso> [--out extracted/] [--files]
+    python tools/extract.py <disc.rvz|disc.iso> [--out extracted/] [--files] [--store [--iso]]
     python tools/extract.py --prune-loose [--dry-run] [--out extracted/]
+    python tools/extract.py --check <store>
+    python tools/extract.py --compare <store> <disc.iso> [--flip OFFSET]
+    python tools/extract.py --sys-only <store> [--out extracted/]
 
 Writes `<out>/disc.iso`, the flat image the runtime reads, and `<out>/sys/`
 (boot.bin, bi2.bin, main.dol, fst.bin: 3.3 MB) for the tools, then checks the
@@ -17,11 +20,23 @@ another 1.42 GB, for browsing; nothing reads them.
 prune empties are removed; `sys/` and the image are never touched.
 `--dry-run` compares and reports without deleting anything.
 
+`--store` writes `<out>/GEAE8P.soadisc` instead of disc.iso (disc-layer I4;
+`--iso` writes both): every byte of the disc to a mebibyte past its last file,
+a table of its extents and a SHA-1 of every 64 KiB block, judged against the
+whole disc's pinned hashes in config/GEAE8P/disc.yml. A dump whose files
+differ is refused (`--force` accepts it); one whose files match and padding
+does not is accepted with a warning. `--check` re-hashes a store, `--compare`
+holds it to an ISO byte for byte (`--flip` corrupts one byte of the store's
+side in memory, the mutation), and `--sys-only` writes `sys/` from it. NKit,
+GCZ, WIA, CISO and WBFS images are named and refused: Dolphin converts each
+to ISO or RVZ.
+
 You must supply your own dump of a disc you own. Nothing extracted here is
 redistributable; the output directory is gitignored.
 """
 
 import argparse
+import hashlib
 import os
 import sys
 import time
@@ -29,8 +44,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from soa import store  # noqa: E402
 from soa.disc import IMAGE_NAME, SYSTEM_DIR, Disc, ImageFile  # noqa: E402
-from soa.dump import ProjectError, verify  # noqa: E402
+from soa.dump import (  # noqa: E402
+    DEFAULT_CONFIG,
+    DEFAULT_DISC_PINS,
+    ProjectError,
+    read_disc_pins,
+    read_project,
+    verify,
+)
 from soa.rvz import RVZ  # noqa: E402
 
 EXPECTED_GAME_ID = "GEAE8P"
@@ -45,8 +68,8 @@ def check_build(out: Path, force: bool = False) -> int:
     question later, when an `extracted/` has been sitting around and nobody
     remembers which dump made it. A mismatch is fatal without --force: every
     address in `config/` belongs to one build, and nothing downstream of here
-    -- the recompiler, dtk, the decompilation match, the port itself -- looks
-    at the executable's identity again.
+    -- the recompiler, dtk, the decompilation match -- looks at the
+    executable's identity again until the port refuses it at boot.
     """
     try:
         verdict = verify(dol=out / "sys" / "main.dol")
@@ -66,6 +89,179 @@ def open_image(path: Path):
     if path.suffix.lower() == ".rvz":
         return RVZ(str(path))
     return ImageFile(path)
+
+
+# Formats Dolphin reads and this does not (section 3.7.3): each named, with the way out.
+UNSUPPORTED = (
+    (0, b"\x01\xc0\x0b\xb1", "GCZ"),
+    (0, b"WIA\x01", "WIA"),
+    (0, b"CISO", "CISO"),
+    (0, b"WBFS", "WBFS"),
+    (0x200, b"NKIT", "NKit"),
+)
+
+
+def unsupported(path: Path) -> str | None:
+    """Why the image at `path` cannot be read here, or None."""
+    with open(path, "rb") as f:
+        head = f.read(0x210)
+    for at, magic, name in UNSUPPORTED:
+        if head[at : at + len(magic)] == magic:
+            return (
+                f"{path} is a {name} image, which this does not read: Dolphin converts it "
+                "(right-click the game, Convert File) to ISO or RVZ"
+            )
+    if ".nkit." in path.name.lower():
+        return f"{path} is named as an NKit image: Dolphin converts it to ISO or RVZ"
+    return None
+
+
+def import_store(
+    image: Path,
+    out: Path,
+    force: bool = False,
+    pins_path: Path = DEFAULT_DISC_PINS,
+    config: Path = DEFAULT_CONFIG,
+    game_id: str = EXPECTED_GAME_ID,
+) -> int:
+    """The store from a dump (section 3.7.3): checked as a disc of this game, written
+    beside its destination, read back, and judged against the pinned hashes.
+    0 when it is written; 1 when refused, with nothing left behind."""
+    why = unsupported(image)
+    if why:
+        print(f"error: {why}", file=sys.stderr)
+        return 1
+    reader = open_image(image)
+    try:
+        try:
+            disc = Disc(reader, source=str(image))
+        except ValueError as exc:
+            print(f"error: {exc}: not a GameCube disc image", file=sys.stderr)
+            return 1
+        b = disc.boot
+        if (b.game_id, b.disc_number, b.version) != (game_id, 0, 0):
+            print(
+                f"error: {image} is {b.game_id} disc {b.disc_number} revision {b.version}; this port is "
+                f"{game_id} disc 0 revision 0, the North American release (European and Japanese "
+                "discs are not supported)",
+                file=sys.stderr,
+            )
+            return 1
+        want = read_project(config).sha1
+        got = hashlib.sha1(disc.read_dol(), usedforsecurity=False).hexdigest()
+        if got != want and not force:
+            print(
+                f"error: {image}'s executable has SHA-1 {got}, not config/'s {want}: another revision "
+                "or a patched dump (--force imports it anyway)",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            pins = read_disc_pins(pins_path)
+        except ProjectError as exc:
+            pins = None
+            print(f"note: no pinned hashes to judge it by ({exc})")
+        dest = out / f"{game_id}{store.STORE_SUFFIX}"
+        part = dest.with_name(dest.name + ".part")
+        if part.exists():
+            print(f"deleting {part}, an unfinished import")
+            part.unlink()
+        out.mkdir(parents=True, exist_ok=True)
+        size = getattr(reader, "iso_size", None) or reader.size
+        kind = store.SOURCE_RVZ if isinstance(reader, RVZ) else store.SOURCE_ISO
+        started = time.time()
+        try:
+            w = store.write(reader, size, dest, kind, "tools/extract.py (disc-layer I4)", pins)
+        except store.StoreError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        if hasattr(reader, "close"):  # an RVZ reader holds no file open
+            reader.close()
+    h = w.header
+    print(
+        f"{dest.name}: {dest.stat().st_size:,} bytes in {time.time() - started:.1f}s; "
+        f"{h.extent_count:,} extents, {h.block_count:,} blocks, covered to 0x{h.covered_end:X} "
+        f"of 0x{h.image_size:X}"
+    )
+    print(
+        f"  image {w.image_sha1}\n  FST   {w.fst_sha1}\n  files {w.files_sha1}\n  DOL   {w.dol_sha1}"
+    )
+    if pins is None:
+        print("verdict: imported; config/GEAE8P/disc.yml pins nothing to compare with")
+        return 0
+    if str(size) != pins["image_size"]:
+        print(
+            f"note: the image is {size:,} bytes, and the pinned size is {int(pins['image_size']):,}"
+        )
+    files_ok, image_ok = w.files_sha1 == pins["files_sha1"], w.image_sha1 == pins["image_sha1"]
+    if files_ok and image_ok and w.fst_sha1 == pins["fst_sha1"]:
+        print(
+            "verdict: a verified dump: the image, its file table and its files are the pinned ones"
+        )
+        return 0
+    if files_ok:
+        print(
+            "verdict: accepted, with a warning: the files are the game's, and the padding between them "
+            "is not the pinned image's (a scrubbed or trimmed dump), so a read past a file's end gets "
+            "other bytes than a drive would"
+        )
+        return 0
+    if force:
+        print(
+            "verdict: accepted under --force: the files are not the pinned ones (a bad or patched dump)"
+        )
+        return 0
+    dest.unlink()
+    print(
+        "error: the files are not the pinned ones: a bad or patched dump, refused (--force imports it). "
+        "Which file differs cannot be named without a per-file list.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def check_store(path: Path) -> int:
+    try:
+        problems = store.check(path)
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for line in problems:
+        print(f"  {line}", file=sys.stderr)
+    with store.Store(path) as st:
+        h = st.header
+        print(
+            f"{path}: {h.extent_count:,} extents and {h.block_count:,} blocks re-hashed, "
+            f"{len(problems)} differ; flags {h.flags} (1 image, 2 files matched their pins at import)"
+        )
+    return 1 if problems else 0
+
+
+def compare_store(path: Path, iso: Path, flip: int | None) -> int:
+    try:
+        differ, where = store.compare(path, iso, flip)
+        with store.Store(path) as st:
+            end = st.covered_end
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    flipped = f" (one byte flipped at 0x{flip:X})" if flip is not None else ""
+    print(f"{path} against {iso} over [0, 0x{end:X}){flipped}: {differ:,} bytes differ")
+    if where:
+        print("  first at " + ", ".join(f"0x{w:X}" for w in where))
+    return 1 if differ else 0
+
+
+def sys_only(path: Path, out: Path) -> int:
+    try:
+        with store.Store(path) as st, Disc(st, source=str(path)) as disc:
+            written = disc.write_system_files(out)
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {', '.join(p.name for p in written)} in {out / SYSTEM_DIR}/ from {path}")
+    return 0
 
 
 def _key(p: Path) -> str:
@@ -118,8 +314,28 @@ def extract(args) -> int:
     if not args.image.exists():
         print(f"error: {args.image} not found", file=sys.stderr)
         return 1
-    if args.iso:
+    if args.store:
+        status = import_store(args.image, args.out, force=args.force)
+        if status:
+            return status
+        if not args.iso:
+            # sys/ for the tools; the port reads the store from disc-layer I5
+            with (
+                store.Store(args.out / f"{EXPECTED_GAME_ID}{store.STORE_SUFFIX}") as st,
+                Disc(st) as disc,
+            ):
+                disc.write_system_files(args.out)
+            print(
+                f"system files in {args.out / SYSTEM_DIR}/; until I5 the port reads {IMAGE_NAME}: "
+                "add --iso to write it too"
+            )
+            return check_build(args.out, force=args.force)
+    elif args.iso:
         print(f"note: --iso is now the default: {IMAGE_NAME} is always written")
+    why = unsupported(args.image)
+    if why:
+        print(f"error: {why}", file=sys.stderr)
+        return 1
     with Disc(open_image(args.image), source=str(args.image)) as disc:
         status = unpack(disc, args)
     return status or check_build(args.out, force=args.force)
@@ -344,7 +560,38 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--dry-run", action="store_true", help="with --prune-loose: compare and report only"
     )
+    ap.add_argument(
+        "--store",
+        action="store_true",
+        help="write <out>/GEAE8P.soadisc, the checked store (disc-layer I4), with --iso disc.iso too",
+    )
+    ap.add_argument(
+        "--check", type=Path, metavar="STORE", help="re-hash a store's every extent and block"
+    )
+    ap.add_argument(
+        "--compare",
+        type=Path,
+        nargs=2,
+        metavar=("STORE", "ISO"),
+        help="a store against an ISO, byte for byte",
+    )
+    ap.add_argument(
+        "--flip",
+        type=lambda v: int(v, 0),
+        metavar="OFFSET",
+        help="with --compare: one store byte corrupted",
+    )
+    ap.add_argument("--sys-only", type=Path, metavar="STORE", help="write <out>/sys/ from a store")
     args = ap.parse_args(argv)
+
+    if args.check:
+        return check_store(args.check)
+    if args.compare:
+        return compare_store(args.compare[0], args.compare[1], args.flip)
+    if args.flip is not None:
+        ap.error("--flip goes with --compare")
+    if args.sys_only:
+        return sys_only(args.sys_only, args.out)
 
     if args.prune_loose:
         if args.image is not None or args.files or args.iso:

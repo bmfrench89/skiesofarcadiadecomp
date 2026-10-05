@@ -33,7 +33,7 @@ jobs:
           bad=$(git rev-list --objects --all \
             | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' \
             | awk '$1=="blob"' \
-            | grep -Ei '\.(rvz|iso|gcm|ciso|wbfs|nkit|dol|rel|elf|gvr|tpl|mld|mlk|mll|sml|samp|dsp|sct|std|sst|tec|enp|ect|evp|lmt|bnr|map|bin|raw|fifo|regs|ram|wav|png|gci|gcs|sav|dds|dat|ogg|flac|mp3|opus|exe|obj|pdb|so|apk)(\.[^/]*)?$' \
+            | grep -Ei '\.(rvz|iso|gcm|ciso|wbfs|nkit|dol|rel|elf|gvr|tpl|mld|mlk|mll|sml|samp|dsp|sct|std|sst|tec|enp|ect|evp|lmt|bnr|map|bin|raw|fifo|regs|ram|wav|png|gci|gcs|sav|dds|dat|ogg|flac|mp3|opus|exe|obj|pdb|so|apk|soadisc)(\.[^/]*)?$' \
             || true)
           if [ -n "$bad" ]; then
             echo "::error::game data found in git history"

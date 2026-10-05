@@ -13,7 +13,7 @@ Nothing runs off Windows yet. What is next, in order, is
 [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) §0, which overrides the rest of that file. Before
 choosing or starting work, use the `orient` skill.
 
-**No game data enters this repository, ever.** `tools/guard.py` refuses 48 extensions,
+**No game data enters this repository, ever.** `tools/guard.py` refuses 49 extensions,
 18 directory names, a binary file that begins as game data whatever its name, and
 anything in a mod folder that is not text; CI rescans all history: a later commit cannot
 undo a leak.

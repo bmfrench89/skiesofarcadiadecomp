@@ -600,7 +600,7 @@ Order: **I2, then I1, then I3.** [../PLAN-NEXT.md](../PLAN-NEXT.md) places I2 as
   - In the contract's `python tools/scenario.py run title --check` run: `[dvd] 0 reads outlasted their modelled time`. (The ISO backend is an `fread` from the file cache; a nonzero count here is the finding this line exists to surface.)
   - The contract.
 
-**I4. The store: format, importer and checker** — *several days, none.*
+**I4. The store: format, importer and checker** — *several days, none. Landed 2026-10-05 (FINDINGS "I4"), every Done line holding, `config/GEAE8P/disc.yml` pinned as a first bless the owner approved. Where it differs from the text below: the owner's image is an ISO, so the real import is from `disc.iso` (the RVZ path is the fixture's); the image's Redump hashes were read from libretro-database's mirror of the Redump list, since redump.org refused the connection, and its CRC32 and MD5 match too; `--store` writes the store and `sys/`, with `--iso` disc.iso as well, since the port reads the store only from I5.*
 - *Prerequisites:* I2.
 - *Files:* `tools/soa/store.py` (new), `tools/soa/disc.py` (`open_data` prefers a store), `tools/extract.py` (`--store`, `--check`, `--compare`, `--flip`, `--sys-only`; unsupported formats named), `tools/soa/dump.py` (reads `disc.yml`), `config/GEAE8P/disc.yml` (new), `tools/soa/discfixture.py` (RVZ writer), `tools/tests/test_store.py` (new); `tools/guard.py` (`.soadisc`; a `SIGNATURES` row for `SOADISC1`), `.github/workflows/ci.yml` (regex), `.gitignore`, `tools/tests/test_guard.py`; every copy of the suffix count.
 - *What:* §3.7.1–§3.7.3, with the block table.

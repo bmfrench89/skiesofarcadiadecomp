@@ -1,0 +1,19 @@
+# The whole disc's pinned hashes (docs/specs/disc-layer.md section 3.7.3, I4): four
+# hashes and a size, the same class of fact as config.yml's DOL hash. The store's
+# importer (python tools/extract.py <dump> --store) judges a dump against them:
+# all equal is a verified dump; the files equal and the image not is a scrubbed or
+# trimmed one, accepted with a warning; the files not equal is refused.
+#
+# Pinned 2026-10-05, a first bless the owner approved. How each was checked:
+# - image_size and image_sha1 are Redump's for "Skies of Arcadia - Legends (USA)"
+#   (serial DL-DOL-GEAE-USA), read from libretro-database's mirror of the Redump
+#   GameCube list (metadat/redump/Nintendo - GameCube.dat), where its CRC32
+#   23E347B6 and MD5 3E7FA5033C4A2704434FB6BA98195ECD also equal the owner's image;
+#   redump.org itself refused the connection.
+# - fst_sha1 is the SHA-1 of the disc's file table; files_sha1 is the SHA-1 over
+#   every file entry's 20-byte SHA-1, in table order. Each was computed twice,
+#   independently: the spec's read-only pass of 2026-09-25 and tools/soa/store.py.
+image_size: 1459978240
+image_sha1: 46105320553c858f25fafc5fd357566b505a4940
+fst_sha1: 8d8757eb2bc312b279665a634eb5d4dc7b039eab
+files_sha1: 7f185565fdb2f4180d3ed893319f6e1482dc50a3

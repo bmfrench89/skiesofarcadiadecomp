@@ -118,7 +118,15 @@ default. An `extracted/` from before this still holds 5,552 loose files:
 `python tools/extract.py --prune-loose --dry-run` compares each one with its
 slice of `disc.iso` and says what it would delete, and without `--dry-run` it
 deletes those that match, keeps and names any that differ, and never touches
-`sys/` or the image. `checkdump.py` is that same check on its own, for
+`sys/` or the image. `--store` writes `extracted/GEAE8P.soadisc` instead:
+every byte of the disc to a mebibyte past its last file, with a SHA-1 of every
+64 KiB block, judged against the whole disc's hashes pinned in
+`config/GEAE8P/disc.yml` (a dump whose files differ is refused). It is an
+integrity format for copying the game to another device, not a space saving
+(2%), and the port reads it from disc-layer I5; until then add `--iso`.
+`--check <store>` re-hashes one, `--compare <store> <iso>` holds it to the ISO
+byte for byte, and `--sys-only <store>` writes `sys/` from it.
+`checkdump.py` is that same check on its own, for
 an `extracted/` that has been sitting around: it needs nothing but the files
 already on disk, and it refuses — naming both hashes — if the dump is not the
 build `config/` describes. The port checks it again every time it starts
@@ -333,7 +341,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1302 tests; any that need a dump skip themselves
+python -m pytest                     # 1320 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

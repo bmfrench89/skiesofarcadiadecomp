@@ -7003,3 +7003,54 @@ the driver's.** 2026-10-04.
 - **What follows:** M3 is done: I1 and I3. The store (I4, I5) is G5's to start. Its default, "build
   it when Android or the Deck is firm", now holds. I5 needs I5a (the deadline change, off the
   default path until agreed) or a re-specification, so I4, the importer, comes first.
+
+**I4: the store, its importer and its checks.** 2026-10-05.
+
+- **What it is:**
+  - **`tools/soa/store.py`** writes and reads `GEAE8P.soadisc`, in §3.7.2's format. It holds every
+    byte of the disc to a mebibyte past its last file, rounded to 32 KiB, in disc order. A table
+    names each extent: the system area, each file, each padding gap, and the tail. A SHA-1 of every
+    64 KiB block follows, and a header SHA-1 covers both tables.
+  - **One pass:** the writer hashes the whole image while it writes the covered part, to a `.part`
+    that is read back, re-hashed and only then renamed. `Store` reads like the other image readers,
+    so `Disc(Store(...))` serves every tool, and `open_data` prefers a store to `disc.iso`.
+  - **`tools/extract.py <dump> --store`** checks the dump first: the game id, disc and revision; the
+    executable against `config.yml` (`--force` waives that); and that its files lie inside the image
+    and none overlap.
+  - **The verdict** comes from `config/GEAE8P/disc.yml`. All four pins equal is a verified dump.
+    Files equal but image not is a scrubbed or trimmed dump, accepted with a warning. Files that
+    differ are refused unless forced, and the store is deleted.
+  - **Other formats:** NKit, GCZ, WIA, CISO and WBFS are named, with Dolphin's converter.
+  - **Commands:** `--check`, `--compare` (`--flip` is its mutation) and `--sys-only`.
+  - **The guard** refuses `.soadisc` (49 suffixes, in CI's grep too) and any binary beginning
+    `SOADISC1`.
+- **The baseline,** `config/GEAE8P/disc.yml`, a first bless the owner approved:
+  - **image_size and image_sha1** are Redump's for "Skies of Arcadia - Legends (USA)". They were
+    read from libretro-database's mirror of the Redump GameCube list, because redump.org refused the
+    connection and GameTDB returned 403. The owner's image also matches that entry's CRC32
+    (23E347B6) and MD5 (3E7FA503...ECD), which settles the one-digit MD5 doubt the spec recorded.
+  - **fst_sha1 and files_sha1** were computed twice, independently: the spec's read-only pass of
+    2026-09-25, and the importer. They agree.
+- **Checked** [V]:
+  - **The owner's disc:** `extract.py extracted/disc.iso --store` wrote 1,431,490,560 bytes in
+    5 s. It has 8,769 extents and 21,828 blocks, covers to 0x55438000 of 0x57058000, and the hashes
+    are image `46105320...`, FST `8d8757eb...`, files `7f185565...`. Each is the spec's figure, and
+    against `disc.yml` the verdict is "a verified dump", flags 3.
+  - **The checks on it:** `--check` re-hashed it all with 0 differing. `--compare` against
+    `disc.iso` found 0 bytes differing over [0, 0x55438000), and exactly 1, at 0x348000, with
+    `--flip 0x348000`.
+  - **`test_store.py` (17):**
+    - an ISO and an RVZ import, and each read back is exhaustive;
+    - the mutations: a flipped payload byte fails exactly one block and one extent and is named by
+      its file;
+    - refused: a truncated store, an unfinished `.part`, a changed header, another game, another
+      executable, and files that differ;
+    - accepted with a warning: a padding-only difference;
+    - `--compare`'s 0 and 1, `--sys-only`, the five unsupported formats, overlapping and
+      out-of-image tables, the pins' form, and a store preferred in a folder.
+  - **`test_guard.py`** (+1): the name and the magic.
+- **Not done here:** the owner's image is an ISO, so the RVZ import is checked only on the
+  fixture's RVZ.
+- **What follows:** I5, which makes the port read the store. It needs I5a (the deadline counted
+  from a command's start, which changes every run's disc timing) or a re-specification that keeps
+  today's double count. The implementation session's "accept" for I5a is the question before it.
