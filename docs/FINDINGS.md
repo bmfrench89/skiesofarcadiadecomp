@@ -6744,3 +6744,41 @@ the driver's.** 2026-10-04.
     - medians 41.8 and 39.3, so no cost shows above the noise, and 3.1's plain-C equivalents are not
       needed.
 - **Not yet:** R3 (the zip, the guard over it, the release workflow) and R4 (the setup window).
+
+**R3: the package, its guard, and the release workflow.** 2026-10-04.
+
+- **What it does:**
+  - **`tools/package.py --out <dir>`** stages the player's package and adds `licenses/`. That folder
+    holds eight texts: those for what the package carries (CPython, LLVM, mingw-w64, winpthreads,
+    Vulkan-Headers), and llvm-mingw's and glslang's, fetched at their tags and pinned. It then zips
+    the package and writes the zip's SHA-256.
+  - **`guard.py --tree <dir>`** scans a folder by the package's rules:
+    - the third-party folders (`toolchain/`, `python/`, `source/vendor/`) may pass the size limit
+      and the folder names;
+    - every other rule holds everywhere;
+    - `src/` and `include/` are refused by name;
+    - a DOL is found by its header, at offset 0 of any file and on any 32-byte step of the package's
+      own files.
+  - **`.github/workflows/release.yml`** runs, in order: the tests, R1's llvm-mingw compile, the
+    package, and the guard over the package unzipped. Only then does it draft a release, for the owner
+    to publish.
+- **Checked** [V]:
+  - **The first run** (37256223377, `gh workflow run release.yml --ref main`, 6 min) passed every
+    step and drafted `soa-ff0926d-windows-x64`:
+    - 128,712,356 bytes, 488,165,904 unpacked;
+    - the guard passed 5,518 files.
+  - **The mutations**, each on a scratch branch (deleted after), failed at the guard and drafted
+    nothing:
+    - a synthetic DOL planted as `source/config/notes.txt` ("holds a DOL's header at offset 0x0");
+    - `src/sdk/msl/string.c` copied in ("under 'src/', the decompiled code a package never holds").
+  - **That draft's zip, downloaded to this PC** into a new folder (its SHA-256 the draft's):
+    - built the owner's disc with `PATH` holding only its `python/`, in 78 s;
+    - made the same `soa.exe` as every build here, byte for byte (8e5d246f...), so the package CI
+      makes on GitHub's machine and the tree here agree;
+    - and passed R2's checks: the self test (case 73 named as skipped), `replay` 23 of 23 at 1, 2, 3
+      and 8 threads, and `title --check`.
+  - **The guard by tests:** a clean package passes; a DOL is found under an innocent name, inside a
+    file, and in a third party's folder; random bytes and text hold none.
+- **Found by that download:** the `.sha256` file was written with CRLF on Windows, which
+  `sha256sum -c` reads as part of the file name. It is now written with LF on every host.
+- **Q-D4 stays the owner's:** each release is a draft until the owner publishes it.

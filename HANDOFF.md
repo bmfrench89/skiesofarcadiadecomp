@@ -633,9 +633,13 @@ C5c) is now done.
    `tools/player_build.py --disc <image> --root <folder>` builds a folder
    that plays with nothing of Microsoft's, from `tools/package.py stage`'s
    package too, with `PATH` bare; the exe is the same byte for byte in any
-   folder, and a changed `cpu.h` retranslates. **Next:** R3, the zip, the
-   guard over it and the release workflow, then R4, the setup window,
-   before L12. Still open for the owner, and not blocking: whether a
+   folder, and a changed `cpu.h` retranslates. **R3 is done** (FINDINGS
+   "R3"): `tools/package.py --out` zips the package (129 MB),
+   `guard.py --tree` holds it to the package's rules, and
+   `.github/workflows/release.yml` (`gh workflow run release.yml --ref
+   main`) tests, packages, guards and leaves a draft release for the owner
+   to publish; its zip, downloaded, builds the game here byte for byte.
+   **Next:** R4, the setup window, before L12. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

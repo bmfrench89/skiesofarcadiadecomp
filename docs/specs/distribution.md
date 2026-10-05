@@ -281,6 +281,8 @@ skipped, by name, with no bindings), `tools/package.py` (R3's staging, used here
 
 ### R3. The package, its guard, and the workflow that makes it
 
+*Landed 2026-10-04 (FINDINGS "R3"), every Done line holding.*
+
 *As built, 2026-10-04: `tools/package.py --out` stages, adds `licenses/` (eight texts: those the
 package carries, and llvm-mingw's and glslang's fetched at their tags, pinned), zips and hashes;
 `guard.py --tree` also allows `python/`, the embeddable CPython, whose DLLs pass the size limit;

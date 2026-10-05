@@ -190,7 +190,8 @@ def build_zip(out: Path, ver: str) -> Path:
             if f.is_file():
                 z.write(f, f"{name}/{f.relative_to(staged).as_posix()}")
     digest = hashlib.sha256(zpath.read_bytes()).hexdigest()
-    (out / f"{name}.zip.sha256").write_text(f"{digest}  {zpath.name}\n", encoding="utf-8")
+    # LF on every host: sha256sum -c takes a CR for part of the file's name
+    (out / f"{name}.zip.sha256").write_bytes(f"{digest}  {zpath.name}\n".encode())
     unpacked = sum(f.stat().st_size for f in staged.rglob("*") if f.is_file())
     print(
         f"package {zpath.name}: {zpath.stat().st_size:,} bytes, {unpacked:,} unpacked, sha256 {digest}"

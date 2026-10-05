@@ -129,7 +129,7 @@ The owner answered four questions, with the research behind them summarised in t
       - R1, `soa.exe` built by a fetched llvm-mingw with no Microsoft compiler, which may go
         early as a gap filler (**done** 2026-10-04, FINDINGS "R1");
       - R2, one command from disc image to install folder (**done** 2026-10-04, FINDINGS "R2");
-      - R3, the package and a release workflow that drafts it;
+      - R3, the package and a release workflow that drafts it (**done** 2026-10-04, FINDINGS "R3");
       - R4, the setup window;
       - R5, Android's runtime-only APK, recorded for L12.
       Its Q-D1 (the bundled compiler) is asked before R1 starts.
