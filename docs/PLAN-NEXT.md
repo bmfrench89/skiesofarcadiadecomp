@@ -591,7 +591,8 @@ H17a, as C5b's Done says.
 
 **Later:**
 - **The store,** only if gate G5 says to build it (its default, "when Android or the Deck is firm", holds):
-  **I4** (**done** 2026-10-05, FINDINGS "I4": the importer, the checks and `disc.yml`) and **I5** (several
+  **I4** (**done** 2026-10-05, FINDINGS "I4": the importer, the checks and `disc.yml`) and **I5** (**done**
+  2026-10-05 without I5a, FINDINGS "I5": the port reads the store, each block checked at first touch) (several
   days, `--link`), about 2 weeks. It adds integrity checks and one file to copy to a Deck or phone. It
   saves about 28 MB, not space.
 - **I6 and I7** (T1: mods that replace, add, alias and delta disc files) land in gameplay milestone 2,

@@ -1112,6 +1112,7 @@ static void usage(void)
 {
     fprintf(stderr,
             "soa.exe [extracted-dir]             run the game (default directory: extracted)\n"
+            "soa.exe --check-disc [store]        hash every block of a disc store and say if it is whole\n"
             "soa.exe --replay build/fifo/0000    render one captured frame to <base>.png\n"
             "soa.exe --replay A B                render consecutive captures A and B, and the image\n"
             "                                    between them to B.mid.png (SOA_PAIR_T, SOA_PAIR_LIST)\n"
@@ -1231,6 +1232,13 @@ int main(int argc, char** argv)
             usage();
             return 0;
         }
+        if (strcmp(argv[1], "--check-disc") == 0) {
+            /* a store just copied to a Deck or a phone, checked whole before
+             * a run depends on it (disc-layer I5): exit 0, or 9 */
+            const char* disc = argc > 2 ? argv[2] : NULL;
+            if (!disc && !getenv("SOA_SELFTEST")) disc = settings_load();
+            return disc_check_store(disc ? disc : "extracted");
+        }
         if (replay && argc > 4) {
             fprintf(stderr, "--replay takes one capture, or two consecutive ones\n");
             usage();
@@ -1287,6 +1295,7 @@ int main(int argc, char** argv)
          * file table is not the build's. */
         char why[1024];
         int no_disc = getenv("SOA_SELFTEST") || (argc > 2 && strcmp(argv[1], "--replay") == 0);
+        disc_set_stop_hook(hle_report); /* a damaged store stops the run with its report (I5) */
         built_in = disc_builtin(why, sizeof why);
         if (built_in < 0 || (!(built_in && no_disc) && disc_open(dir, why, sizeof why) != 0) ||
             disc_system(&dol, &dol_size, &boot, &fst, &fst_size, why, sizeof why) != 0) {

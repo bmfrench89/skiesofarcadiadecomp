@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1317 passed, 3 skipped in 651.81s
+1318 passed, 3 skipped in 647.86s
 ```
 
-1320 tests in 79 files, none of which reads the disc. The two FMA probes of
+1321 tests in 79 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, and `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode); the counts below include those three skips. CI's Windows runner
@@ -49,7 +49,7 @@ its own and run it, some of the C as well:
 |---|---|---|
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
-| `test_scenario.py` | 101 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; a sweep refuses a replay the GPU drew, and a replay cannot see `SOA_GPU` or a `soa.ini` (V5); and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
+| `test_scenario.py` | 102 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; a sweep refuses a replay the GPU drew, and a replay cannot see `SOA_GPU` or a `soa.ini` (V5); and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
 | `test_guard.py` | 83 | the game-data guard (and, distribution R3, `--tree` over a player's package: a clean package passes with its third-party binaries over the size limit; `src/` and `include/` are refused by name, and a DOL by its header -- named innocently, inside a file on a 32-byte step, and in a third party's folder; size, folder names, suffixes and mod-folder text still hold outside those folders; random bytes and text hold no DOL): its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 41 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, a field that comes back black after a battle is a question, and (GPU spec V7) gxv's pipelines are counted by where they were made, the longest of each and how many came after the landing map loaded |
@@ -79,7 +79,7 @@ its own and run it, some of the C as well:
 | `test_fifopair.py` | 17 | the H4 pair analyser, on captures built byte by byte: an identical pair matches all its area, a changed texture unmatches its draw, a moved draw lands in the displacement histogram, list and direct draws are counted apart, and the area estimate clips and culls as the renderer does |
 | `test_disasm.py` | 17 | `tools/disasm.py`'s address notes: an update form moves its base, `ori` reads rD and writes rA, and rA=0 is the number zero |
 | `test_uncap.py` | 17 | `SOA_UNCAP=N` and `SOA_FRAMETIME_FROM=N` are read at startup and refuse a value that is not a frame; the `[frametime]` percentiles tell a hitch from a steady run, and an uncap restarts the record at its frame |
-| `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
+| `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
 | `test_disc_const.py` | 4 | `runtime/disc.c`'s `DISC_DOL_SHA1` is `config/GEAE8P/config.yml`'s hash and its `DISC_GAME_ID` the config directory's name; one hex digit changed, or another id, is refused by the same checker; both sit behind `#ifndef` for the fixture build |
 | `test_store.py` | 17 | the disc store (disc-layer I4), `tools/soa/store.py` and `extract.py --store`, on a synthetic image whose tail runs past the store's mebibyte: an ISO and an RVZ import and read back as the image below the covered end and zeros above, every block digest hashlib's; a flipped payload byte names its file and fails exactly one block and one extent; a truncated store, an unfinished `.part` (and a stale one the importer deletes), a changed header, another game id and an executable that is not `config/`'s are refused; files not the pinned ones are refused unless forced, and a padding-only difference is accepted with a warning; `--compare` finds 0 bytes and exactly the flipped one; `--sys-only` writes the four system files; GCZ, WIA, CISO, WBFS and NKit are named; a table whose files overlap or run past the image is refused; the committed `disc.yml` reads in its form and a mistyped pin is refused; a folder holding a store is read through it |
@@ -135,10 +135,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1317 passed, 3 skipped` |
-| no capstone | `1298 passed, 4 skipped` |
-| no MSVC | `917 passed, 403 skipped` |
-| neither | `898 passed, 404 skipped` |
+| everything (MSVC + capstone) | `1318 passed, 3 skipped` |
+| no capstone | `1299 passed, 4 skipped` |
+| no MSVC | `918 passed, 403 skipped` |
+| neither | `899 passed, 404 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -331,7 +331,7 @@ the script holds that to `recompile.py`'s `/STACK` before it builds. Under gcc:
 On Windows the stack line says the main thread's is sized by the link. CI runs
 it on the three Linux legs, which are where the resume used to exit 6.
 
-**`disc_check.py`** — 4 s (disc-layer I1, I3). Builds `runtime/disc.c` and
+**`disc_check.py`** — 6 s (disc-layer I1, I3, I5). Builds `runtime/disc.c` and
 `runtime/sha1.c` with `tools/citest/disc_driver.c` for a synthetic image
 (`tools/soa/discfixture.py`: a test game id and its own executable's SHA-1
 compiled in place of the real ones), and checks what disc.c hands back: the
@@ -345,10 +345,17 @@ its own (`--no-embed`'s `disc_sys.c`); a second has the fixture's built in
 (I3), hands them back with no image open, opens their image saying the table
 matches, and refuses an image whose table differs by one byte as not the
 build's; a third, whose built-in table misses its own SHA-1, is refused before
-anything is handed out:
+anything is handed out. Then a store `tools/soa/store.py` writes from a
+long-tailed fixture (I5): the image's bytes at every offset below its covered
+end and zeros above, preferred in a folder; every touched block hashed;
+`SOA_DISC_VERIFY=all` finding nothing; a flipped byte caught twice -- the ISO
+comparison names its offset, and the hash check stops the driver with exit 9
+naming the file; a header that misses its SHA-1, a truncated payload and
+format 2 refused at open; a hash check asked of an ISO refused; and
+`--check-disc`'s check passing the store and failing the flip:
 
 ```
-disc check: 92 passed, 0 failed (12 files, 1212416 bytes)
+disc check: 108 passed, 0 failed (12 files, 1212416 bytes)
   refused bad boot magic: broken0.iso is not a GameCube disc image (boot magic 00000000, not C2339F3D)
   refused another game id: broken1.iso is GTSP01, not GTSE01: this port is the North American GameCube release only (European and Japanes
   ...
@@ -1419,7 +1426,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 403 of the 1320 skip here without a C compiler: 400 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
+² 403 of the 1321 skip here without a C compiler: 400 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, and `test_mingw.py`'s archive test wants symbolic links.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

@@ -111,6 +111,8 @@ void dvd_init(const char* p) { (void)p; }
 static const uint8_t zero_dol[0x100], zero_boot[0x440], zero_fst[0x40];
 int disc_open(const char* w, char* why, size_t cap) { (void)w; (void)why; (void)cap; return 0; }
 int disc_builtin(char* why, size_t cap) { (void)why; (void)cap; return 0; } /* I3: built without */
+void disc_set_stop_hook(void (*fn)(void)) { (void)fn; } /* I5 */
+int disc_check_store(const char* w) { (void)w; return 0; }
 int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const uint8_t** fst,
                 size_t* fst_n, char* why, size_t cap)
 {

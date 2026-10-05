@@ -8,8 +8,10 @@
  *
  * I1 is the ISO backend: an .iso or .gcm file, or a directory holding
  * disc.iso. I3 builds the executable, boot.bin and the file table into
- * soa.exe. The store (I5) and mods' files (I6-I8) come later, behind these
- * same calls.
+ * soa.exe. I5 is the store backend: GEAE8P.soadisc, preferred in a
+ * directory, each 64 KiB block checked against its SHA-1 at first touch
+ * (SOA_DISC_VERIFY). Mods' files (I6-I8) come later, behind these same
+ * calls.
  */
 #ifndef SOA_DISC_H
 #define SOA_DISC_H
@@ -55,5 +57,12 @@ const char* disc_name_at(uint64_t offset, uint64_t* start, uint32_t* size);
 const uint8_t* disc_fst(size_t* n); /* the file table the game sees */
 void disc_report(void);             /* end-of-run lines, from dvd_report */
 void disc_close(void);              /* back to nothing open (the checks open several) */
+/* I5. What runs before exit 9 when the disc layer stops a run (main.c gives
+ * hle_report, so the report still prints). */
+void disc_set_stop_hook(void (*fn)(void));
+/* soa.exe --check-disc: every block and extent of the store at `where` (a
+ * folder holding one, or the file) hashed, one line said; 0, or 9 when any
+ * differs or it is not a store. */
+int disc_check_store(const char* where);
 
 #endif

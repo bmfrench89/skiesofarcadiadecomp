@@ -10,6 +10,7 @@
  *   name <off>           "name <path> <start> <size>", or "name -"
  *   builtin              "builtin <1|0|-1> <why>": the build's own system files (I3)
  *   system               disc_system with or without an image open: as open's three lines
+ *   checkstore <path>    "checkstore <0|9>": disc_check_store, soa.exe --check-disc's (I5)
  *   report               disc_report's lines, on stdout
  *
  * Offsets and lengths are decimal. No guest, no clock: disc.c needs only the
@@ -96,6 +97,10 @@ int main(void)
                 sha1_hex(fst, fst_n, hex);
                 printf("fst %zu %s\n", fst_n, hex);
             }
+        } else if (!strcmp(cmd, "checkstore")) {
+            snprintf(arg, sizeof arg, "%s", line + 11);
+            fflush(stdout);
+            printf("checkstore %d\n", disc_check_store(arg));
         } else if (!strcmp(cmd, "report")) {
             fflush(stdout);
             disc_report();

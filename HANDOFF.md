@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1320 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1321 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1320 |
+| Python tests | 1321 |
 | Self-test cases | 83 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -659,9 +659,14 @@ C5c) is now done.
    `extract.py <dump> --store` writes `GEAE8P.soadisc`, checked block by
    block and judged against `config/GEAE8P/disc.yml` (pinned 2026-10-05,
    Redump's image hash, the owner approving); the owner's disc is "a
-   verified dump". **Next:** I5, the port reading the store, which needs
-   I5a (a deliberate change to every run's disc timing) or a
-   re-specification first; then L12, which specifies R5. Still open for the owner, and not blocking: whether a
+   verified dump". **I5 is done** (FINDINGS "I5", without I5a: the
+   implementation session kept today's disc timing): the port reads the
+   store, preferred in a folder, each 64 KiB block hashed at first touch
+   (a damaged one stops the run, exit 9, naming the file);
+   `SOA_DISC_VERIFY=iso` proved it against the ISO over title and hold;
+   `soa.exe --check-disc` checks a copied store whole. **Next:** L12,
+   the Android shell, to be specified in full (portability.md's L12 is
+   an outline), with R5 beside it. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

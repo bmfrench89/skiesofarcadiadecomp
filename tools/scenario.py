@@ -126,8 +126,10 @@ DEFAULT_EXE = "gen/soa.exe"
 DEFAULT_DATA = "extracted"
 
 # What main() in main.c and dvd_init() in dvd.c need out of the extracted disc.
-# The image is all the runtime reads since disc-layer I1; sys/ is for the tools.
+# The image is all the runtime reads since disc-layer I1 -- the store or the
+# ISO, the store first since I5 -- and sys/ is for the tools.
 NEEDED_FILES = ("disc.iso",)
+STORE_FILE = "GEAE8P.soadisc"
 
 # runtime/si.c button_named() -- the twelve buttons a script can name, plus the
 # four stick deflections script_init() understands.
@@ -149,6 +151,7 @@ EXIT_MEANINGS = {
     6: "the guest thread model gave up (threads.c)",
     7: "SOA_SELFTEST failed (main.c)",
     8: "SOA_STRICT: an MMIO access outside the modelled range (note, hle.c)",
+    9: "the disc layer stopped the run (runtime/disc.c)",
 }
 
 KEYS = ("name", "summary", "frames", "pad", "env", "shows", "evidence", "note")
@@ -431,15 +434,18 @@ def missing_inputs(exe: Path, data: Path) -> list[str]:
         missing.append(
             f"{named(exe)}: the port is not built -- python tools/recompile.py --compile --link"
         )
-    if not data.is_dir():
+    if data.is_file():
+        pass  # a store or an image named directly (disc-layer I5)
+    elif not data.is_dir():
         missing.append(
             f"{named(data)}/: no extracted disc -- python tools/extract.py <your disc dump> --iso"
         )
-    else:
+    elif not (data / STORE_FILE).exists():
         for rel in NEEDED_FILES:
             if not (data / rel).exists():
                 missing.append(
-                    f"{named(data / rel)}: missing -- the port boots from it (tools/extract.py)"
+                    f"{named(data / rel)}: missing -- the port boots from it, or from "
+                    f"{STORE_FILE} (tools/extract.py)"
                 )
     return missing
 

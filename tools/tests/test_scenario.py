@@ -506,6 +506,16 @@ def test_missing_inputs_names_each_thing_that_is_missing(tmp_path):
     assert "disc.iso" in missing[1] and "the port boots from it" in missing[1]
     (tmp_path / "extracted" / "disc.iso").write_bytes(b"")
     assert len(scenario.missing_inputs(tmp_path / "soa.exe", tmp_path / "extracted")) == 1
+    # I5: a store in place of the image, or either named directly
+    (tmp_path / "extracted" / "disc.iso").unlink()
+    (tmp_path / "extracted" / scenario.STORE_FILE).write_bytes(b"")
+    assert len(scenario.missing_inputs(tmp_path / "soa.exe", tmp_path / "extracted")) == 1
+    named = tmp_path / "extracted" / scenario.STORE_FILE
+    assert len(scenario.missing_inputs(tmp_path / "soa.exe", named)) == 1
+
+
+def test_exit_9_is_the_disc_layers_stop():
+    assert scenario.EXIT_MEANINGS[9] == "the disc layer stopped the run (runtime/disc.c)"
 
 
 # --------------------------------------------------------------------------

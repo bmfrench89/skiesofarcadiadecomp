@@ -123,7 +123,9 @@ every byte of the disc to a mebibyte past its last file, with a SHA-1 of every
 64 KiB block, judged against the whole disc's hashes pinned in
 `config/GEAE8P/disc.yml` (a dump whose files differ is refused). It is an
 integrity format for copying the game to another device, not a space saving
-(2%), and the port reads it from disc-layer I5; until then add `--iso`.
+(2%). The port prefers it to `disc.iso` in the same folder, or takes it named directly, and
+checks each 64 KiB block the first time it is read (`SOA_DISC_VERIFY`); `gen\soa.exe --check-disc
+<store>` hashes all of it at once, exit 0 or 9 -- for a store just copied to a Deck or a phone.
 `--check <store>` re-hashes one, `--compare <store> <iso>` holds it to the ISO
 byte for byte, and `--sys-only <store>` writes `sys/` from it.
 `checkdump.py` is that same check on its own, for
@@ -281,6 +283,8 @@ an unquoted path with a space in it is two arguments.
 | `SOA_PAD_RECORD=path` | write down every controller input the port reads, keyed by frame, one line per change; play in the window, then replay it. An existing file is never overwritten — the run records to `path.1` instead |
 | `SOA_PAD_FILE=path` | replay a recording instead of live or scripted input (it becomes the whole input; `SOA_PAD` is then ignored). **Replay in the configuration you recorded in**: the recording is keyed by frame, the game runs on guest time, and the two only keep step while frames arrive at the same rate, so `SOA_SPEED`, `SOA_RENDER`, the window, the thread count and the memory card all have to match. The run says what it was recorded with and how far it has drifted |
 | `SOA_PAD_STOP=n` | frames to keep running after a replayed recording runs out, then stop (default 120; 0 keeps going) |
+| `SOA_DISC_VERIFY=hash\|iso[:path]\|all[:path]\|0` | how a disc store is checked as it is read (disc-layer I5): `hash`, the store's default, hashes each 64 KiB block the first time a read touches it and stops the run (exit 9) naming the file if it is not what was imported; `iso` reads every read again from `disc.iso` (or `path`) and names each one that differs; `all` both; `0` neither. An ISO has no hashes, so asking it is refused |
+| `SOA_DISC_FLIP=<path>\|0x<offset>` | a check's knob: one byte of a store, a file's first or the offset, read with its low bit inverted, as damage on the disk would be; both checks must catch it, and the report says if it was never read |
 | `SOA_DISC_LOG=1` | one `[disc]` line per read of the drive: the frame, the offset, the length, the file the read starts in and how far past its end it reaches; `python tools/citest/disc_check.py --log <log> --data extracted` holds every line to the disc's file table (disc-layer I1) |
 | `SOA_SPEED=n` | run guest time n times faster than the wall clock (headless exploration; sound will not keep up) |
 | `SOA_UNCAP=N` | from frame `N` on (`1` is from the start), let the frame end's spin go after one field instead of two: `runtime/tick.c` answers `VIGetRetraceCount` with the frame's start plus one at the spin's call site. The game's logic advances once a frame, so this runs the **whole game** up to twice as fast — it is not 60 fps. Start it after a pad script has reached its scene: disc loads run on the wall clock, so uncapped from boot the script's presses land somewhere else. For measuring how fast the port can go (`docs/PLAN-60FPS-MODS.md` H3), not for play. Every run's report also ends with a `[frametime]` line: frames a second, the median, 95th and 99th percentile and worst wall milliseconds per frame, and the process's CPU seconds; with an uncap, over the frames from `N` on. The `[tick]` line counts the main loop's safe points (one per frame, less the frame shown before the loop starts) and how often the spin was let go |
@@ -341,7 +345,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1320 tests; any that need a dump skip themselves
+python -m pytest                     # 1321 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

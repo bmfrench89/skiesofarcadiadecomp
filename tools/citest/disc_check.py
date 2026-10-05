@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import hashlib
+import os
 import re
 import struct
 import subprocess
@@ -48,8 +49,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import discfixture, embed, toolchain  # noqa: E402
-from soa.disc import Disc  # noqa: E402
+from soa import discfixture, embed, store, toolchain  # noqa: E402
+from soa.disc import Disc, ImageFile  # noqa: E402
 
 PROF = toolchain.MSVC  # --cc sets it
 
@@ -111,12 +112,25 @@ def build(
     return exe
 
 
-def drive(exe: Path, cmds: list[str]) -> tuple[list[str], str]:
+def drive(
+    exe: Path, cmds: list[str], env: dict[str, str] | None = None, code: int = 0
+) -> tuple[list[str], str]:
+    """The driver's answers to `cmds`, with the disc layer's switches only as
+    `env` gives them; it must exit `code` (9 is the disc layer's stop)."""
+    full = {k: v for k, v in os.environ.items() if not k.startswith("SOA_DISC_")}
+    full.update(env or {})
     proc = subprocess.run(
-        [str(exe)], input="\n".join(cmds) + "\n", capture_output=True, text=True, timeout=120
+        [str(exe)],
+        input="\n".join(cmds) + "\n",
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=full,
     )
-    if proc.returncode != 0:
-        raise RuntimeError(f"the driver exited {proc.returncode}: {proc.stderr[-2000:]}")
+    if proc.returncode != code:
+        raise RuntimeError(
+            f"the driver exited {proc.returncode}, not {code}: {proc.stderr[-2000:]}"
+        )
     return proc.stdout.splitlines(), proc.stderr
 
 
@@ -244,6 +258,106 @@ def check_built_in(c: Checks, fx: discfixture.Fixture, out: Path, cflags: list[s
         c.check(lines[1:2] != [] and lines[1].startswith("refused "), "and nothing is handed out")
 
 
+def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> None:
+    """I5: the store backend, on a store tools/soa/store.py writes from the
+    fixture with a long tail. The C reader gives the image's bytes at every
+    offset below the covered end, zeros above, and is preferred in a folder;
+    every block a read touches is hashed; SOA_DISC_VERIFY=all compares each
+    read with the ISO and finds nothing; a flipped byte is caught by both
+    checks -- the ISO comparison names its offset, and the hash check stops
+    the run, exit 9, naming the file; three broken stores are refused at
+    open; --check-disc's check passes the store and fails the flip."""
+    sfx = discfixture.build(out / "store" / "disc.iso", tail=3 << 20)
+    c.check(sfx.dol_sha1 == fx.dol_sha1, "the long-tailed fixture has the same executable")
+    path = out / "store" / f"{sfx.game_id}{store.STORE_SUFFIX}"
+    path.unlink(missing_ok=True)
+    reader = ImageFile(sfx.path)
+    try:
+        st = store.write(reader, len(sfx.image), path, store.SOURCE_ISO, "disc_check.py").header
+    finally:
+        reader.close()
+    folder, img, covered = path.parent, sfx.image, st.covered_end
+    c.check(covered < len(img), f"the store covers less than the image ({covered} of {len(img)})")
+    reads = []
+    for name, off in sorted(sfx.offsets.items(), key=lambda kv: kv[1]):
+        n = (len(sfx.files[name]) + 31) & ~31
+        reads.append((name, off, n))
+    serve = [f"serve {off} {n}" for _, off, n in reads]
+    want = [f"serve {sha1(img[off : off + n])}" for _, off, n in reads]
+
+    lines, err = drive(
+        exe, [f"open {folder}", f"peek 0 {covered}", f"peek {covered} 4096", *serve, "report"]
+    )
+    c.check(
+        lines[:1] == ["open ok"] and " store v1" in err, f"the folder opens its store: {lines[:1]}"
+    )
+    c.check(
+        lines[4:5] == [f"peek {covered} {sha1(img[:covered])}"],
+        "every offset below the covered end",
+    )
+    c.check(lines[5:6] == [f"peek 0 {sha1(bytes(4096))}"], "zeros above it")
+    c.check(lines[6 : 6 + len(want)] == want, "each file read as the game reads it")
+    c.check(
+        "[disc] hashed " in err and "[disc] backend store;" in err,
+        "the report names the store and its hashing",
+    )
+
+    lines, err = drive(exe, [f"open {folder}", *serve, "report"], {"SOA_DISC_VERIFY": "all"})
+    c.check(
+        f"[disc] verify: {len(reads)} reads compared with" in err and ", 0 differ, 0 past" in err,
+        f"every read compared with the ISO, none differing: {err.strip()[-200:]!r}",
+    )
+
+    victim, at, n = reads[3]
+    env = {"SOA_DISC_VERIFY": "iso", "SOA_DISC_FLIP": victim}
+    lines, err = drive(exe, [f"open {folder}", f"serve {at} {n}", "report"], env)
+    c.check(
+        "differs from" in err and f"first at disc offset 0x{at:X}" in err and ", 1 differ," in err,
+        f"the ISO comparison finds the flipped byte: {err.strip()[-300:]!r}",
+    )
+    lines, err = drive(
+        exe, [f"open {folder}", f"serve {at} {n}"], {"SOA_DISC_FLIP": victim}, code=9
+    )
+    c.check(
+        "does not match its SHA-1" in err and victim in err and "re-import" in err,
+        f"the hash check stops the run, exit 9, naming the file: {err.strip()[-300:]!r}",
+    )
+
+    data = path.read_bytes()
+    broken = {
+        "header hash": (
+            bytes(data[:0x30]) + bytes([data[0x30] ^ 1]) + data[0x31:],
+            "do not match their SHA-1",
+        ),
+        "truncated payload": (data[:-1], "truncated"),
+        "format 2": (data[:8] + (2).to_bytes(4, "little") + data[12:], "store format 2"),
+    }
+    for what, (blob, words) in broken.items():
+        bad = out / "store" / f"broken-{what.replace(' ', '-')}.soadisc"
+        bad.write_bytes(blob)
+        lines, _ = drive(exe, [f"open {bad}"])
+        c.check(
+            lines[:1] != [] and lines[0].startswith("refused ") and words in lines[0],
+            f"{what}: {lines[:1]}",
+        )
+    lines, _ = drive(exe, [f"open {sfx.path}"], {"SOA_DISC_VERIFY": "hash"})
+    c.check(
+        lines[:1] != [] and "is an ISO" in lines[0],
+        f"a hash check of an ISO is refused: {lines[:1]}",
+    )
+
+    lines, err = drive(exe, [f"checkstore {path}"])
+    c.check(
+        lines[-1:] == ["checkstore 0"] and ", 0 and 0 differ;" in err,
+        f"--check-disc passes: {err.strip()[-200:]!r}",
+    )
+    lines, err = drive(exe, [f"checkstore {path}"], {"SOA_DISC_FLIP": f"0x{at:X}"})
+    c.check(
+        lines[-1:] == ["checkstore 9"] and victim in err,
+        f"--check-disc fails the flip: {err.strip()[-200:]!r}",
+    )
+
+
 def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     fx = discfixture.build(out / "good" / "disc.iso")
@@ -327,6 +441,7 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
         said[name] = line
     c.check(len(set(said.values())) == len(said), "every refusal says something different")
     check_built_in(c, fx, out, cflags)
+    check_store(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
 
     print(
         f"disc check: {c.passed} passed, {c.failed} failed ({len(fx.offsets)} files, {size} bytes)"

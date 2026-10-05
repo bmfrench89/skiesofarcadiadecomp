@@ -7054,3 +7054,63 @@ the driver's.** 2026-10-04.
 - **What follows:** I5, which makes the port read the store. It needs I5a (the deadline counted
   from a command's start, which changes every run's disc timing) or a re-specification that keeps
   today's double count. The implementation session's "accept" for I5a is the question before it.
+
+**I5: the port reads the store, and proves it against the ISO.** 2026-10-05, without I5a.
+
+- **The decision first:** the implementation session's question 1 asked whether to count the
+  drive's deadline from a command's start (I5a), which would change every run's disc timing. The
+  answer is "keep", the recorded default, so I5 was re-specified around today's timing. A block's
+  hashing stalls the game, as a read's host time always has, and counts toward the read's
+  completion. The 1% hashing budget bounds it, and I5a's overrun line is dropped.
+- **What it is:**
+  - **`runtime/disc.c` reads the store.** It takes `GEAE8P.soadisc`, preferred in a folder holding
+    both, or the file named directly.
+  - **The checks at open:** its header and tables (the version, every size and offset bounded, the
+    header's SHA-1 over both tables, a truncated payload), then the same disc checks as an ISO. The
+    `[disc]` line says "store v1" and whether the dump was verified at import.
+  - **`SOA_DISC_VERIFY`:**
+    - `hash`, the store's default, hashes each 64 KiB block the first time a drive read touches it.
+      A block that differs stops the run with exit 9, naming the files in it, before the game sees
+      a byte;
+    - `iso[:path]` reads every read again from the ISO and names each read that differs, with its
+      first differing byte;
+    - `all` does both; `0` neither;
+    - asking it of an ISO is refused: a check that silently does not run is worse than none.
+  - **`SOA_DISC_FLIP`** inverts one bit of the store as it is read: a file's first byte, or an
+    offset.
+  - **`soa.exe --check-disc [store]`** hashes every block and extent: exit 0, or 9 naming what
+    differs.
+  - **Exit 9** is the disc layer's stop. scenario.py knows it and takes a store or an image as
+    `--data`.
+- **Checked** [V], on the owner's disc through a store made by `--store`:
+  - **Verify run 1:** `scenario.py run title --check --data <store> --env SOA_DISC_VERIFY=all:<iso>`
+    held 4 of 4. It compared 226 reads with the ISO, the same as `[dvd]`'s 226, with 0 differing and
+    0 past the stored image. It hashed 227 blocks in 35.8 ms of 69.9 s, 0.05% against the 1% budget.
+  - **Verify run 2:** `hold` the same way (16,500 frames at `SOA_SPEED=3`) held 4 of 4. It compared
+    449 reads, equal to `[dvd]`'s 449, with 0 differing and 0 past, and hashed 437 blocks in
+    79.4 ms of 210 s.
+  - **The mutation, ISO comparison:** title with `SOA_DISC_VERIFY=iso` and
+    `SOA_DISC_FLIP=sound/tone.info` (its first read). Exactly one read differed, the first at
+    0x5502E8E8, that file's first byte, and no other offset. The game, which iso mode serves, then
+    hung on the corrupt sound header; the watchdog stopped it, exit 5, after 6 reads. That is why
+    `hash` is the default.
+  - **The mutation, hash check:** the same flip under the default check stopped the run at first
+    touch, exit 9. The message named block 21762 and the two files in it, `sound/stv73.samp` and
+    `sound/tone.info`, before the game had a read (`[dvd] 0 reads`).
+  - **`--check-disc`:** the clean store passed, exit 0, in 7.0 s, "a verified dump". With
+    `SOA_DISC_FLIP=0x348000` it exited 9, naming `battle/btlcursor.mld` with exactly one block and
+    one extent differing.
+  - **`disc_check.py`, 108 of 108** under MSVC, clang-cl and llvm-mingw, adding the store's half on
+    a long-tailed fixture. A mutation that removes the block check fails it (the driver exited 0
+    where 9 was due).
+  - **The contract on both backends:**
+    - the store: title above, and hold;
+    - the ISO: `title --check` 4 of 4, replay 23 of 23 at 1, 2, 3 and 8 threads, and the self test
+      0 failures, the last two opening no disc (I3);
+    - `decomp.py` is unchanged.
+- **Not changed:** `extract.py` still writes `disc.iso` by default, and the store is `--store`.
+  The player's build and Setup's Rebuild read `extracted/disc.iso`; moving them to the store is the
+  player package's change to make.
+- **What follows:** M3 and the store are done, I1 to I5. Next on §0's Android path is L12, the
+  Android shell, which is to be specified in full when its gates open, and they now have; it
+  specifies R5 with it.
