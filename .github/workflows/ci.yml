@@ -98,7 +98,7 @@ jobs:
   # the owner's machine -- and a runtime that several agents had edited was
   # found broken by a local build, not by CI.
   #
-  # COVERED: every runtime/*.c (28 files today), each compiled on its own with
+  # COVERED: every runtime/*.c (39 files today), each compiled on its own with
   # /c and the flags in tools/soa/toolchain.py, plus the handful of warnings
   # that mean a call does not match the function it names (an implicit
   # declaration first among them) promoted to errors, since nothing here
@@ -403,6 +403,18 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_seam.py -k "not a_real_split_build" -v
 
+      # specs/android.md L12d: the import's portable half (runtime/import.c),
+      # built with this leg's compiler and handed real descriptors -- files,
+      # pipes, sockets: what is read in place and what is copied, and the copy
+      # checked as it comes, held to its size, kept off a full disk, cancelled
+      # and put in place. A skip is a failure here
+      - name: The import's copy, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: ${{ matrix.cc }}
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_import.py -v
+
       # specs/android.md L12b: the game library for Android, built with the
       # NDK the runner image carries (ANDROID_NDK_HOME): a game of two functions
       # as recompile.py builds the real one, checked by tools/soa/elfcheck.py and
@@ -565,6 +577,14 @@ jobs:
           SOA_CC: gcc
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_seam.py -k "not a_real_split_build" -v
+
+      # specs/android.md L12d, on AArch64, the machine a phone is
+      - name: The import's copy, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_import.py -v
 
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}

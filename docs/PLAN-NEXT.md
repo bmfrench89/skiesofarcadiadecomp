@@ -152,6 +152,12 @@ The owner answered four questions, with the research behind them summarised in t
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
+  - **Since L12d (2026-10-06): which slice comes first while L12's Done waits for the owner and the
+    Thor.** Two need neither: R5's own Android sysroot, so Setup can build the phone's library without the
+    NDK (D-31), and L12g, mods on the emulator (specs/android.md §4). This plan does not order them. Card
+    import and export through the picker is proposed as its own slice, L12h, for the owner to name and
+    place, and so is a small one L12d found missing: a box saying why when a run stops mid-play (exit 9, a
+    damaged block or the disc's storage gone), which today closes the app with the reason in the log alone.
 - **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
 
 ---
@@ -661,7 +667,10 @@ count kept before it starts.
   bytes twice. **L12c is done** (FINDINGS "L12c"): the APK runs the port on the x86-64 emulator; the self
   test, the replay 23/23 at 1-8 threads, the title from a script and from the keyboard, Home and back,
   and the MEM1 guard under ART pass, and five faults no desktop had shown were found and fixed there.
-  **Next: L12d,** the import on the emulator, then L12's Done on the Thor.
+  **L12d is done** (FINDINGS "L12d"): on the emulator the first run imports the game library and the disc
+  through the app's own picker, each refusal in the player's words, the disc read in place through its
+  descriptor. **Next: L12's Done on the Thor,** which needs the owner; without the owner, R5's own Android
+  sysroot or L12g (mods on the emulator), whose order §0 leaves to the owner.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

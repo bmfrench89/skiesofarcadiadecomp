@@ -10,7 +10,8 @@ broken here first, with its reason attached, because one without its reason is a
 **The owner's goal is any Windows or Android device** (2026-09-30): x86-64 PCs and
 handhelds (this machine is their ROG Ally X), the Steam Deck, and Android flagships.
 Linux runs natively since L10 (2026-10-05; no owner session there yet), and Android on the x86-64
-emulator since L12c (2026-10-06; no phone yet). What is next, in order, is
+emulator since L12c, where since L12d it imports the game library and the disc through the file
+picker (2026-10-06; no phone yet). What is next, in order, is
 [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) §0, which overrides the rest of that file. Before
 choosing or starting work, use the `orient` skill.
 
@@ -21,7 +22,7 @@ undo a leak.
 
 ## Before you push
 
-In this order, cheapest first — about a minute in total:
+In this order, cheapest first — about 13 minutes in total, nearly all of it the last:
 
 ```
 python tools/guard.py
@@ -47,7 +48,7 @@ Then, only if you touched the matching thing:
 | `config/hle.txt` | `--compile --optimize --link`, then the self test | see below; selftest case 73 is what checks the swap |
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
 | `runtime/game.c`, `elfcheck.c`, `soa_game.h`, `tools/soa/seam.py`, `config/seam.txt` | in a Linux container: `recompile.py --cc gcc --split --compile --optimize --link`, the self test, replay and title on `gen/linux-split/soa`, and `test_seam.py` | single-file builds never load a game library; only the split build and CI's Linux legs exercise the seam |
-| `runtime/android.c`, `android/`, `tools/android.py` | `python tools/android.py build`, `python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk`, then with `SOA_ADB_SERIAL=emulator-5556`: `install`, `push-game`, `selftest` | nothing else builds the APK, CI included, and the guard is what keeps game code out of it |
+| `runtime/android.c`, `import.c`, `android/`, `tools/android.py` | `python tools/android.py build`, `python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk`, then with `SOA_ADB_SERIAL=emulator-5556`: `install`, `push-game`, `selftest`, and, for the import, the L12d recipe in `docs/TESTING.md`; for `import.c`, also `test_import.py` with `SOA_CC=gcc` in a Linux container | nothing else builds the APK, CI included, and the guard is what keeps game code out of it; the picker, the boxes and the grants exist only on a device, and Windows compiles `import.c` to stubs and skips `test_import.py` |
 | `runtime/window_sdl.c`, `audio_sdl.c`, `tools/fetch_sdl.py` | in a Linux container: `compile_runtime.py --cc gcc --require-sdl`, and `test_window_sdl.py` under Xvfb (`docs/TESTING.md` section 2) | Windows compiles them to nothing; only Linux, and CI's Linux legs, ever build them |
 
 The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only enforcer.

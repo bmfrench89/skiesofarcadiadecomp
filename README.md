@@ -96,14 +96,21 @@ mods' `mod.so` under `gen/linux/mods`, and `SOA_RENDER=1 gen/linux/soa extracted
 window, X11 or Wayland. Without `vendor/sdl3` the same build is headless: the self test, the replay
 and `title --check` (all three pass, the replay 23 of 23 against the same manifest), and `SOA_WAV`.
 
-**Android** is under way (specs/android.md). With the Android NDK installed (Android Studio's SDK
-manager, or `SOA_ANDROID_NDK`), `python tools/recompile.py --cc android-arm64 --compile --optimize --link`
-builds the game library a phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and
-checks it as the phone would; `--cc android-x86_64` builds it for the emulator. The app that loads it
-runs on the x86-64 emulator (L12c): `python tools/android.py build` makes the APK, which holds the runtime
-and no game code, and `install`, `push-game` and `push-disc` put it and your files on a device you name
-(`--serial` or `SOA_ADB_SERIAL`); docs/TESTING.md has the whole recipe. Picking the disc and the library
-on the phone itself is L12d's, and no phone has run it yet.
+**Android** is under way (specs/android.md). With the Android NDK installed (Android Studio's SDK manager,
+or `SOA_ANDROID_NDK`), `python tools/recompile.py --cc android-arm64 --compile --optimize --link` builds
+the game library a phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and checks it
+much as the phone will: its machine, page size, build record and the runtime functions it needs (only the
+phone also holds it to Android's own C libraries and to the disc's executable); `--cc android-x86_64`
+builds it for the emulator. `python tools/android.py build` makes the app, an APK holding the runtime and
+no game code, and `install` puts it on a device you name (`--serial` or `SOA_ADB_SERIAL`); docs/TESTING.md
+has the whole recipe. Then copy two files to the phone (its Download folder is where the app's file picker
+opens): that library, and the disc. For the disc, the store `extract.py --store` makes, `GEAE8P.soadisc`,
+is better than an ISO or GCM image, which the app also takes, since only the store can tell when a copy is
+damaged. Open the app and pick each when it asks, the library first. The library is checked, copied into
+the app's own storage and loaded before it replaces the one there; the disc is checked and then read where
+it is, at every launch, so leave it there. With the app closed, its launcher shortcut "Choose the game
+files again" asks for both again. All of this runs on the x86-64 emulator (L12c, L12d), and no phone has
+run it yet.
 
 **cmd.exe** — the same commands, except for the line that sets the variable:
 
@@ -185,7 +192,7 @@ $env:SOA_SELFTEST = '1'
 gen\soa.exe extracted
 ```
 
-That runs 86 checks over the translated C library, the device models, the card
+That runs 87 checks over the translated C library, the device models, the card
 and SRAM, the AX mixer and the software renderer — including the 12
 hand-decompiled functions the port runs natively, compared against their
 recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
@@ -296,7 +303,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). With `SOA_GPU=vulkan` the GPU presents its own picture through a Vulkan swap chain, paced the same way, unless `SOA_PRESENTER` is `dxgi` or `gdi`; P5a's picture filters run on the GPU at the size it draws, the flash limiter deciding its blend on the CPU (V8b). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
-| `SOA_GAME=path` | a split build only (`recompile.py --cc gcc --split`, Android's arrangement on Linux; specs/android.md L12a): the game library to load, in place of `libsoa_game.so` beside the launcher. It is checked before it is loaded, and refused in words if it was built for another machine, another page size or other sources |
+| `SOA_GAME=path` | a split build only (`recompile.py --cc gcc --split`, Android's arrangement on Linux; specs/android.md L12a): the game library to load, in place of `libsoa_game.so` beside the launcher. It is checked before it is loaded, and refused in words if it was built for another machine, another page size or other sources, or made from another disc's executable |
 | `SOA_SNAP=n` / `SOA_SNAP=n@A-B` | write `build/frames/NNNN.png` every n frames, or every nth from frame A to B; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
 | `SOA_PAD2=frame:buttons,...` | a script for controller port 2 in `SOA_PAD`'s grammar, for checks: port 2 is read by mods (`read_pad` in `runtime/soa_mod.h`, for couch co-op) and never by the game, which still sees one controller. In play, port 2 is the next connected XInput pad after port 1's (P10a) |
@@ -366,7 +373,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1370 tests; any that need a dump skip themselves
+python -m pytest                     # 1435 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

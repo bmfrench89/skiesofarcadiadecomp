@@ -14,37 +14,39 @@ Windows 11, 16 logical CPUs, Python 3.14.0, VS 2022 Build Tools (MSVC
 
 | Question | Section | Wall time here |
 |---|---|---|
-| Did I break the tooling? | [1. No disc needed](#1-the-checks-that-need-no-disc) | 1 min |
+| Did I break the tooling? | [1. No disc needed](#1-the-checks-that-need-no-disc) | 13 min |
 | Does it build? | [2. The build](#2-the-build) | minutes |
-| Is the runtime still sane? | [3. The self test](#3-the-self-test-75-cases) | 0.1 s |
+| Is the runtime still sane? | [3. The self test](#3-the-self-test-87-cases) | 0.1 s |
 | Does the game still run? | [4. The scenarios](#4-the-scenario-library) | 71 s to 26 min |
 | Does it still draw the same pixels? | [5. The frame hashes](#5-the-frame-hash-corpus) | 18 s |
 | Do the decompiled units still match? | [6. The match check](#6-the-decompilation-check) | 4 s |
 | What can CI do for me? | [7. What needs what](#7-what-needs-what) | — |
-| I am about to push | [8. Before you push](#8-before-you-push) | ~1 min |
+| I am about to push | [8. Before you push](#8-before-you-push) | ~13 min |
 
 ---
 
 ## 1. The checks that need no disc
 
-These are the whole of what CI can run, and between them they take about a
-minute. Nothing here reads `extracted/`; every fixture is synthesised in
-memory.
+These are the whole of what CI can run, and between them they take about 13
+minutes here, nearly all of it the Python tests. Nothing here reads
+`extracted/`; every fixture is synthesised in memory.
 
 ### `python -m pytest tools/tests -q`
 
 ```
-1357 passed, 13 skipped in 723.93s
+1394 passed, 41 skipped in 755.08s
 ```
 
-1370 tests in 87 files, none of which reads the disc. The two FMA probes of
+1435 tests in 89 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
-SDL build, and `test_seam.py`'s nine wherever there is no ELF system, as on every Windows run;
-the counts below include those 13 skips, and this machine has the Android NDK that
-`test_android_build.py` wants. CI's Windows runner ships LLVM, so the FMA probes run there, and
-CI's Linux legs run the SDL window (gcc, under Xvfb), the seam and the Android build. They cover the Python
+SDL build, `test_seam.py`'s 17 wherever there is no ELF system and `test_import.py`'s 20
+wherever there is no Linux, as on every Windows run; the counts below include those 41 skips,
+and this machine has the Android NDK that `test_android_build.py` wants and the record
+`android.py build` wrote, which one `test_android_tool.py` case reads. CI's Windows runner
+ships LLVM, so the FMA probes run there, and CI's Linux legs run the SDL window (gcc, under
+Xvfb), the seam, the import's copy and the Android build. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -86,9 +88,11 @@ its own and run it, some of the C as well:
 | `test_mod_library.py` | 6 | a mod's native library on every system (portability L9), built with the profile `SOA_CC` names (CI's Linux legs: gcc and clang): examples/mods/map-log as `mod.dll` or `mod.so` loads through the real loader and the recording names it `map-log@1.0`; one exporting no `soa_mod_init` is refused in the loader's words (dlerror's); and (L10) each of the three shipped mods builds as this system's library, loads, and reads its switch from the environment, which every shipped mod must have listed. On Linux, autotext as it was before L10 (`windows.h`) fails to build, and with its `getenv` finding nothing fails its switch |
 | `test_audio_wav.py` | 1 | `SOA_WAV` on every system (portability L9), with `SOA_CC`'s profile: a driver pushes seven blocks to `audio_out.c` with no device, and the WAV's header holds 7 x 640 bytes, the samples left then right, and the report says so; with the writer back inside `#ifdef _WIN32` it fails on Linux |
 | `test_fetch_sdl.py` | 8 | SDL3 for the window and sound off Windows (portability L10): an archive that is not the pinned one is refused and nothing unpacked, and the pinned one is unpacked once and its headers found; `--verify` finds a changed byte and a missing file of this host's build, and with none recorded says how to make one; the build config's drivers are read without their features; what a static `libSDL3.a` needs comes from `sdl3.pc`, either way SDL writes it; with a build in `vendor/sdl3` the Linux link compiles every runtime file with `SOA_SDL` and links the library after the objects and before the profile's libraries, and without one the link is as it was; on Windows the build is refused (D2) |
-| `test_seam.py` | 9 | the seam between the runtime and a split game library (specs/android.md L12a), with `SOA_CC`'s profile (CI's Linux legs: gcc, clang, ARM64): a game of two functions, built from the real `game_table.c` template, loads through the real launcher, `runtime/game.c` and `runtime/elfcheck.c` -- its entry calls the runtime, the table's record is the one written into it -- and exports `soa_game` alone; a library is refused before dlopen, in the player's words, for an import the runtime lacks, another build's record, the decompiled code's record, no table, 4 KB pages and no record; with a real split build in `gen/linux-split`, its libraries cross exactly `config/seam.txt` (CI leaves that case out). With `elfcheck.c`'s import check or its record comparison removed, the matching cases fail. Skips without an ELF system, as on Windows |
-| `test_android_build.py` | 9 | the game library from the PC for Android (specs/android.md L12b), with the NDK `tools/soa/toolchain.py` finds: a mistyped `SOA_ANDROID_NDK` is no NDK, never the next one, and the places looked are named; a game of two functions, built as `recompile.py --cc android-arm64` builds the real one, is what the phone loads by `tools/soa/elfcheck.py` (AArch64, `libsoa_game.so`, 16 KB pages, needing `libsoa_runtime.so`, `soa_game` alone, the record written into it), and two builds are the same bytes; a library with 4 KB pages, its functions not hidden, an import the runtime lacks, another build's record, or built for x86-64 draws its refusal; and `runtime/elfcheck.c`, built for this machine with `SOA_CC`'s profile, gives every one the Python's verdict in the same words. With `elfcheck.py`'s page limit at 4 KB, or `elfcheck.c`'s wording changed, it fails. Skips without an NDK; the C half without a compiler for this machine |
-| `test_android_tool.py` | 9 | `tools/android.py` without a device (specs/android.md L12c): the runtime's side of the seam the APK is built from exports exactly the seam's runtime names, the bindings a build with no `src/` leaves to the runtime (none of the decompiled ones), `soa_run` and `SDL_main`, under the record a game library built now carries, with a forwarder for every twin; a check with neither `--serial` nor `SOA_ADB_SERIAL` is refused; a run's status is the log's `[exit] N` line alone; a launch starts from a stopped app, passes its environment and arguments, and waits for two empty `pidof` answers in a row, not one; a run that outlasts its time is stopped with its log kept; Gradle is the pinned archive or nothing; and every exit function a runtime file calls is wrapped in the APK's link and answered by `runtime/android.c`. With one `--wrap` taken out, or the wait ended by one empty answer, it fails |
+| `test_seam.py` | 17 | the seam between the runtime and a split game library (specs/android.md L12a, L12d), with `SOA_CC`'s profile (CI's Linux legs: gcc, clang, ARM64): a game of two functions, built from the real `game_table.c` template, loads through the real launcher, `runtime/game.c` and `runtime/elfcheck.c` -- its entry calls the runtime, the table's record is the one written into it, naming the executable this runtime plays -- and exports `soa_game` alone, and one with that executable's system files built in loads too; a library is refused before dlopen, in the player's words, for an import the runtime lacks, another release's record, the decompiled code's record, another disc's executable or none named, no table, 4 KB pages, no record, or being a Windows program, and after dlopen when the system files built into it are another executable's; `runtime/game.h`'s calls as `runtime/android.c` makes them: a check loads nothing, a library refused before dlopen leaves the process free to load another, one refused after it is still the process's one dlopen and leaves nothing to run, and `soa_run` runs the library already loaded; a library handed over as `/proc/self/fd/N` is checked through N though its file cannot be read by name, and N's offset moves; with a real split build in `gen/linux-split`, its libraries cross exactly `config/seam.txt` (CI leaves that case out). With `elfcheck.c`'s import check or its record comparison removed, the matching cases fail; so they do with `game.c`'s one dlopen counted before the check or only on success, or its table left set after a refusal, and with `elfcheck.c` opening the path again by name (as root too, through N's offset). Skips without an ELF system and gcc or clang (`SOA_CC`), as on Windows |
+| `test_android_build.py` | 17 | the game library from the PC for Android (specs/android.md L12b, L12d), with the NDK `tools/soa/toolchain.py` finds: a mistyped `SOA_ANDROID_NDK` is no NDK, never the next one, and the places looked are named; a game of two functions, built as `recompile.py --cc android-arm64` builds the real one (`tools/soa/gamefixture.py`), is what the phone loads by `tools/soa/elfcheck.py` (AArch64, `libsoa_game.so`, 16 KB pages, needing `libsoa_runtime.so` and the C libraries by bionic's own names, `soa_game` alone, the record written into it, naming the executable the app plays), and two builds are the same bytes; twelve libraries, each wrong in one way, draw that refusal first: 4 KB pages, its functions not hidden, an import the runtime lacks, another release's record, another disc's executable or none named, built for x86-64 or for 32-bit ARM, a Linux library needing glibc's `libc.so.6`, a Windows program or DLL (made in code: this repository refuses `.exe` and `.dll`), and a section-name table that does not end; `runtime/elfcheck.c`, built for this machine with `SOA_CC`'s profile, gives every one of them, four files that are no library for this system and five records only a damaged note would hold, the Python's verdict in the same words, as the phone's runtime, a desktop split build and `recompile.py`'s post-link check each hold them; and the ten libraries `android.py mutants` gives a device (`gamefixture.android_mutants`) each draw the words predicted for them. With `elfcheck.py`'s page limit at 4 KB, or `elfcheck.c`'s wording changed, it fails; so it does with each L12d rule broken in `elfcheck.c` or `elfcheck.py`: the class read before the machine, the machine in the wrong byte order, PE files or the DLL bit ignored, the Android names, `dol=` or its absence, the section names' end, the printable record. Skips without an NDK; the C half without a compiler for this machine |
+| `test_android_tool.py` | 34 | `tools/android.py` without a device (specs/android.md L12c, L12d): the runtime's side of the seam the APK is built from exports exactly the seam's runtime names, the bindings a build with no `src/` leaves to the runtime (none of the decompiled ones), `soa_run` and `SDL_main`, under the record a game library built now carries, with a forwarder for every twin; a check with neither `--serial` nor `SOA_ADB_SERIAL` is refused; a run's status is the log's `[exit] N` line alone; a launch starts from a stopped app, passes its environment and arguments, and waits for two empty `pidof` answers in a row, not one; a run that outlasts its time is stopped with its log kept; Gradle is the pinned archive or nothing; and every exit function a runtime file calls is wrapped in the APK's link and answered by `runtime/android.c`. And for the import, on fake devices whose screens change a few dumps after a press: `push-game` writes `no_backup/`, and a file goes into `files/` or `no_backup/` and nowhere else; `provide` puts one where the debug provider serves it, and `stage` one in Download only when `df` leaves its size and 512 MiB on both storages; the picks go in one quoted extra, in order; `reboot` restarts the AVD `soa_x86_64` and no other, and only a new boot id ends its wait; `grants` counts the app's own grants, never another app's; uiautomator's dump is read for a picker's file and a box's button, never a word inside a longer text; the mutants are built against the record `generated/runtime_seam.c` gave the APK and `config.yml`'s executable, and pushed for the device's ABI; a kill before the tap is followed into the process the pick starts; font scales come in order with the taps, and the device's own comes back; a step waits for the screen by the clock, never past the run's end; a run or a player whose app ended before its steps were done says which never happened; Back is pressed until the picker goes; and `player` taps through the boxes and the picker with no check extras, waiting for each box to go. With one `--wrap` taken out, or the wait ended by one empty answer, it fails; so it does with each change its builder and reviewer made to the import's half, and with Back pressed only once (`BACK_TRIES` at 1). One case skips where no APK has been built, as on CI |
+| `test_import.py` | 20 | the import's portable half (specs/android.md L12d), `runtime/import.c` built into a driver with `SOA_CC`'s profile (CI's Linux legs: gcc, clang, ARM64) and handed real descriptors -- files, pipes fed by a thread, sockets, a named FIFO: a file, a pipe and a socket told apart; only a regular file from the phone's own three providers, not served from `/mnt/appfuse` and with its grant kept, read in place, every other naming its reason; a pipe copied byte for byte, its first MiB checked while the `.tmp` holds exactly that, a refusal there stopping the copy before the rest is read and a stream shorter than that checked at its end; a file copied from its start wherever its offset was left; a stream that ends short of its size refused, as is one that sends more than its size or its limit, and one said to hold 0 bytes copied as one of no size; the 512 MiB margin kept free to the byte, with a size and without; a full disk (ENOSPC) and a file-size limit (EFBIG) refused with the `.tmp` gone and the old file kept; a cancel at a byte, while the stream is silent and while it trickles; a 0444 file replaced with the old one kept as `.old`, stale `.tmp` files swept and nothing else, a small file written whole or not at all; what a file is, and its copy's name, from its first bytes; a message naming the picked file, never the descriptor; the free space the filesystem's; and the reopen probe's line. Each change to `import.c`'s behaviour its builder and reviewer tried, the design's own among them (no size comparison fails the cut-short case), fails the case meant for it as an ordinary user, as CI runs it; as root one passes, the probe asking the descriptor rather than opening the path by name, since root opens any path. Skips without Linux, the phone's kernel, and gcc or clang (`SOA_CC`), as on every Windows run |
+| `test_android_jni.py` | 4 | the import's Java and C agree (specs/android.md L12d), read from the three files, since CI never builds the Java and a mismatch compiles everywhere, giving an APK whose every launch stops at `android.c`'s `java_init` before the import asks for anything: each member `runtime/android.c` looks up from SDL's thread is declared in `SoaActivity.java` with that name and JNI signature; the `messageboxShowMessageBox` override has exactly the signature `SDL_android.c` calls, so SDL reaches it rather than its own box; and `app/proguard-rules.pro` keeps exactly those members, with those signatures, for the day a release is shrunk. Seven changes, one at a time, each fail it: a signature `android.c` asks for, a method renamed or a parameter's type changed in Java, a keep rule dropped or given the wrong signature, the box override's colours as `long[]`, and `destroyed` as an `int` |
 | `test_window_sdl.py` | 1 | the SDL3 window and sound run for real (L10), built with `SOA_CC`'s profile against `vendor/sdl3` with a driver standing in for the renderer, on an X display (CI's gcc leg: Xvfb): the frame read back with xwd is the driver's, whole pixels and its colours in order; a key typed with xdotool is port 1's A, and let go nothing; `SOA_WINDOW_TEST`'s size gives a 1000x700 client with the frame at 1x, centred, in window.c's words; the presents are counted, none failed; 200 blocks of sound at once keep waveOut's 24 and drop the rest. Red and blue swapped, the key sent as B, the queue a hundred times deeper and the resize not asked each fail it. Skips without gcc or clang, SDL, a display, xwd or xdotool, as everywhere on Windows |
 | `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
@@ -140,23 +144,23 @@ its own and run it, some of the C as well:
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine on 2026-10-05 by hiding one at a time, with a pytest plugin that
+this machine on 2026-10-06 by hiding one at a time, with a pytest plugin that
 makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 "L3a's review"); there is no clang here, so every row has the two FMA skips:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1357 passed, 13 skipped` |
-| no capstone | `1338 passed, 14 skipped` |
-| no MSVC | `949 passed, 421 skipped` |
-| neither | `930 passed, 422 skipped` |
+| everything (MSVC + capstone) | `1394 passed, 41 skipped` |
+| no capstone | `1375 passed, 42 skipped` |
+| no MSVC | `985 passed, 450 skipped` |
+| neither | `966 passed, 451 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 408 compiler-gated tests are the ones that build runtime
+Two things follow. The 409 compiler-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -199,7 +203,7 @@ local version can disagree about a line nobody touched.
 ### `python tools/guard.py`
 
 ```
-guard: 161 tracked files, no game data
+guard: 351 tracked files, no game data
 ```
 
 Refuses game data in the tree: 49 forbidden extensions, wherever they sit in a
@@ -227,7 +231,7 @@ Each takes `--cc clang-cl` (portability L3a) to build with the clang-cl profile
 instead, into its own `build/citest/<check>-clang-cl`; `SOA_CLANG_CL` names the
 compiler, or it is looked for on PATH, in LLVM's folder and in Visual Studio's.
 Since L2a all three pass under the NDK's clang-cl 19.0.1: `compile_runtime.py
---cc clang-cl` compiles every file, 37 of 37 on 2026-10-05 (29 of 29 at L7's `plat.c`; until then `gxr_tev.c` failed with clang's
+--cc clang-cl` compiles every file, 39 of 39 on 2026-10-06 (29 of 29 at L7's `plat.c`; until then `gxr_tev.c` failed with clang's
 SSE4.1 always_inline error, portability.md 2.2's). CI runs all three that way
 on every push, in the clang-cl job (L4a, section 7), which is what reports the
 day a runtime change compiles under MSVC and not under clang.
@@ -247,7 +251,7 @@ ok   window.c
 ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 38/38 runtime translation units
+compiled 39/39 runtime translation units
 gxv.c: compiled as the backend too
 the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
@@ -352,7 +356,7 @@ the script holds that to `recompile.py`'s `/STACK` before it builds. Under gcc:
 On Windows the stack line says the main thread's is sized by the link. CI runs
 it on the three Linux legs, which are where the resume used to exit 6.
 
-**`disc_check.py`** — 6 s (disc-layer I1, I3, I5). Builds `runtime/disc.c` and
+**`disc_check.py`** — 7 s (disc-layer I1, I3, I5; specs/android.md L12d). Builds `runtime/disc.c` and
 `runtime/sha1.c` with `tools/citest/disc_driver.c` for a synthetic image
 (`tools/soa/discfixture.py`: a test game id and its own executable's SHA-1
 compiled in place of the real ones), and checks what disc.c hands back: the
@@ -373,10 +377,36 @@ end and zeros above, preferred in a folder; every touched block hashed;
 comparison names its offset, and the hash check stops the driver with exit 9
 naming the file; a header that misses its SHA-1, a truncated payload and
 format 2 refused at open; a hash check asked of an ISO refused; and
-`--check-disc`'s check passing the store and failing the flip:
+`--check-disc`'s check passing the store and failing the flip.
+
+Then the phone's cases (L12d). The ten refusals again in a phone's words
+(`disc_set_phone_words`), each different, and the three broken stores, the hash
+check's stop and the refusal of a hash check of an ISO too, none of them naming
+`python tools/`, `soa.exe` or `recompile.py`; a store with one byte of its
+executable changed refused as another executable, in both word sets;
+`disc_refused_by_build` set by the one-byte table refusal and by no other, and
+`disc_port_dol_sha1`; a build as a phone's runtime is built (`SOA_SPLIT`), which
+takes the system files through the game library's table, refuses a disc opened
+before that library is loaded, and names "this game library" where the PC names
+"this soa.exe"; `disc_identify` on a copy's first mebibyte, taking the ISO's and
+the store's and refusing another game id, an RVZ and a file too short in
+`disc_open`'s own words, and leaving an open disc as it was; an ISO cut after
+its file table refused at the open, naming the first file past its end; and a
+file cut short while it is open, an ISO's or a store's, stopping the run with
+exit 9 in words of its own, never zeros and never a damaged store. Off Windows
+it also takes a disc handed over open as `/proc/self/fd/N`: read through N after
+its file is made unreadable by name, where an open by name is refused with the
+system's reason; a store with no suffix known by its contents and identified
+through N; a pipe refused as a stream, by `disc_open` and `disc_identify` alike;
+`SOA_DISC_VERIFY=iso` or `all` on a descriptor refused, naming the fix
+(`SOA_DISC_VERIFY=iso:<path>`), with which it opens and compares; and a file cut
+short under its descriptor, exit 9. So it counts 156 on Windows (MSVC, clang-cl
+and mingw), 169 on Linux as an ordinary user, and 168 as root, where opening the
+path again is not refused, so the case that wants it refused is left out, and
+the run says so:
 
 ```
-disc check: 108 passed, 0 failed (12 files, 1212416 bytes)
+disc check: 156 passed, 0 failed (12 files, 1212416 bytes)
   refused bad boot magic: broken0.iso is not a GameCube disc image (boot magic 00000000, not C2339F3D)
   refused another game id: broken1.iso is GTSP01, not GTSE01: this port is the North American GameCube release only (European and Japanes
   ...
@@ -384,11 +414,15 @@ disc check: 108 passed, 0 failed (12 files, 1212416 bytes)
 ```
 
 `--mutate fst-offset` moves the image's file table by four bytes and must fail
-it. `--log <log> --data extracted` holds a live run's `SOA_DISC_LOG=1` lines to
-the file table as `tools/soa/disc.py` parses it: every read names the file that
-holds its offset, and how far past that file's end it reaches (title, 226 of
-226 on 2026-10-05). CI runs the first form on Windows under MSVC and clang-cl
-and on the three Linux legs, where it is the POSIX half's `stat` and `fseeko`.
+it, and a build whose `plat.h` opens a descriptor's path again by name fails the
+descriptor case as an ordinary user: `FAIL an image read through its descriptor:
+['refused cannot open /proc/self/fd/3']` (2026-10-06, in section 2's Linux
+container). `--log <log> --data extracted` holds a live run's `SOA_DISC_LOG=1`
+lines to the file table as `tools/soa/disc.py` parses it: every read names the
+file that holds its offset, and how far past that file's end it reaches (title,
+226 of 226 on 2026-10-05). CI runs the first form on Windows under MSVC and
+clang-cl and on the three Linux legs, as an ordinary user, where it is the POSIX
+half's `stat` and `fseeko` and the descriptor cases.
 
 **`libm_check.py`** — 18 s (L6). The renderer's `exp2f` (fog) and `log2f`
 (texture LOD) are CORE-MATH's correctly rounded ones, `runtime/crmath.h`. This
@@ -570,8 +604,17 @@ The build takes about three minutes on this PC, the replay 23 s.
 `soa`, which loads the game library from beside it after
 `runtime/elfcheck.c` has passed it. The same three checks run on it with
 `--exe gen/linux-split/soa`, and `SOA_CC=gcc python3 -m pytest
-tools/tests/test_seam.py` then holds its libraries to `config/seam.txt`. For the
-window and sound, install the packages `python3 tools/fetch_sdl.py` names
+tools/tests/test_seam.py` then holds its libraries to `config/seam.txt`.
+`test_import.py` (L12d) wants Linux itself, and the disc check's descriptor
+cases an ordinary user, since root opens a file made unreadable. As one
+(`useradd -m tester`), `su tester -c "cd /work && python3
+tools/citest/disc_check.py --cc gcc --out /tmp/dc_l12d"` printed
+`disc check: 169 passed, 0 failed` on 2026-10-06 (168 as root, where opening the
+path again is not refused, so the case that wants it refused is left out, as the
+run says), and `su tester -c "cd /work && SOA_CC=gcc PYTHONPATH=tools/citest
+python3 -m pytest -p noskip -p no:cacheprovider tools/tests/test_import.py -q"`
+20 passed.
+For the window and sound, install the packages `python3 tools/fetch_sdl.py` names
 (Debian's), and `xvfb x11-apps xdotool` for a display with no screen, run
 it (about a minute), `--link` again, and give the run a display:
 `Xvfb :99 -screen 0 1920x1080x24 &`, then `DISPLAY=:99 SOA_RENDER=1
@@ -617,6 +660,16 @@ AAR are in `vendor/`. On the device the self test takes 2 s, the replay at
 four thread counts about 8 minutes, and the title 3 min 40 s, because the
 emulator runs the game at about 9 frames a second.
 
+`push-game` puts the library where L12d's import keeps it,
+`no_backup/libsoa_game.so`, read-only. A library L12c's `push-game` left in
+`files/` is moved there by the app's next launch, which says so: `[android]
+library moved from /data/data/io.github.bmfrench89.soa.dev/files/libsoa_game.so
+to /data/user/0/io.github.bmfrench89.soa.dev/no_backup/libsoa_game.so`. Each run
+above passes check extras (an environment or arguments), which a debuggable
+build takes as a check run, and a check run with no `SOA_IMPORT` is L12c's
+but for the library's new home, the phone's words and L12d's stricter check of
+the library (check 14 below).
+
 - **That speed is the emulator's clock.** Its kernel boots with
   `clocksource=pit`, so every read of the clock is a system call of 8 to
   17 us, against well under a microsecond on a phone. A run spends nearly
@@ -641,6 +694,266 @@ emulator runs the game at about 9 frames a second.
   are for the owner's own devices. The guard over the APK is what keeps game
   code out of anything that could be published.
 - `adb root` is needed only for `debuggerd -b`, the stacks of a running app.
+
+**The import on Android (L12d).** On a player's phone nothing is pushed: the
+app's first launch asks for the game library, then the disc, each picked with
+Android's file picker, checked before it is copied or read where it lies, and
+refused in the player's words. The checks run that flow on the same AVD (Android
+14, `UE1A.230829.050`, userdebug) as a check run with `SOA_IMPORT` set: `1` runs
+it, `library` or `disc` forces that pick, and `forget` releases the permission
+to read the disc `no_backup/disc.txt` names. A check run logs each prompt as
+`[import] box: …` and answers it with its first button, never showing it, and a
+refusal or a cancel ends it `[exit] 1`. A pick is answered either by the debug
+build's own provider, with no picker and no permission to keep (`--pick
+content://io.github.bmfrench89.soa.dev.testfiles/file/NAME`, or `pipe/NAME` for
+the same bytes through a pipe, `?truncate=N` to stop after N), or by the
+system's picker (DocumentsUI) itself, which opens in Download and is driven from
+uiautomator's dump of the screen by `--tap TEXT` and `--key KEYCODE`. Every run
+passes `SOA_SETTINGS=0` but the player's (check 10).
+
+Build and install over L12c's state, run check 14 while L12c's ISO is still on
+the device, then stage the inputs, the ISO removed first for room (`push-disc`
+puts it back at the end):
+
+```
+python tools/android.py build
+python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk
+python tools/android.py install
+# check 14: L12c's checks again, over L12c's state
+python tools/android.py run --env SOA_SELFTEST=1 --env SOA_SETTINGS=0
+python tools/android.py replay --threads 1,2,3,8
+python tools/android.py run --timeout 900 --env SOA_PAD=1600:start,1640:a --env SOA_FRAMES=2000 --env SOA_RENDER=1 --env SOA_SNAP=50 --env SOA_STRICT=1 --env SOA_SETTINGS=0 > build/android-title.log
+python tools/scenario.py check build/android-title.log --name title
+python tools/android.py run --env SOA_MEMPOKE=0x81800000 --env SOA_RENDER=1 --env SOA_FRAMES=30 --env SOA_SETTINGS=0
+# the inputs
+python tools/extract.py extracted/disc.iso --store --out build/store
+adb -s emulator-5556 shell run-as io.github.bmfrench89.soa.dev rm -f files/extracted/disc.iso
+python tools/android.py mutants --profile android-x86_64 --push
+python tools/android.py provide build/citest/disc/store/GTSE01.soadisc
+python tools/android.py stage build/store/GEAE8P.soadisc
+python tools/android.py stage gen/android-x86_64/libsoa_game.so
+```
+
+`mutants` builds ten libraries into `build/android-mutants/`, each wrong in one
+way (`tools/soa/gamefixture.py`), against the record `build` gave the APK and
+the executable `config.yml` names, prints each with the line it must draw, and
+with `--push` provides them all. `GTSE01.soadisc` is `disc_check.py`'s fixture
+store (section 1 writes it): a test game id, no game data. `stage` puts a file
+in `/sdcard/Download`, where the picker opens, only when `df` leaves its size
+and 512 MiB more on both the shared storage and the app's. Then the checks, in
+the order they ran on 2026-10-06; what each must print is below the block:
+
+```
+# checks 1-4 and 5b: each <name>.so that mutants printed, through file/, then pipe/
+python tools/android.py run --env SOA_IMPORT=library --env SOA_SETTINGS=0 --pick content://io.github.bmfrench89.soa.dev.testfiles/file/<name>.so
+# their mutation: the real library
+python tools/android.py provide gen/android-x86_64/libsoa_game.so --as real.so
+python tools/android.py run --env SOA_IMPORT=library --env SOA_SETTINGS=0 --pick content://io.github.bmfrench89.soa.dev.testfiles/file/real.so
+# check 5a; check 7 and its mutation
+python tools/android.py run --env SOA_IMPORT=disc --env SOA_SETTINGS=0 --pick content://io.github.bmfrench89.soa.dev.testfiles/file/GTSE01.soadisc
+python tools/android.py run --env SOA_IMPORT=disc --env SOA_SETTINGS=0 --pick content://io.github.bmfrench89.soa.dev.testfiles/pipe/GTSE01.soadisc
+python tools/android.py run --env SOA_IMPORT=disc --env SOA_SETTINGS=0 --pick "content://io.github.bmfrench89.soa.dev.testfiles/pipe/GTSE01.soadisc?truncate=65536"
+# check 6
+python tools/android.py run --timeout 900 --env SOA_IMPORT=disc --env SOA_FRAMES=300 --env SOA_SETTINGS=0 --tap GEAE8P.soadisc
+python tools/android.py grants
+# check 9 and its mutation
+python tools/android.py run --timeout 900 --env SOA_IMPORT=1 --env SOA_DISC_FLIP=sound/tone.info --env SOA_FRAMES=1000 --env SOA_SETTINGS=0
+python tools/android.py run --timeout 900 --env SOA_IMPORT=1 --env SOA_DISC_FLIP=sound/tone.info --env SOA_DISC_VERIFY=0 --env SOA_FRAMES=1000 --env SOA_SETTINGS=0
+# check 8, 15 s or more after check 6's pick
+python tools/android.py reboot
+python tools/android.py grants
+python tools/android.py run --timeout 900 --env SOA_IMPORT=1 --env SOA_FRAMES=300 --env SOA_SETTINGS=0
+# its mutation; then check 6 again, to restore the grant
+python tools/android.py run --env SOA_IMPORT=forget --env SOA_SETTINGS=0
+sleep 20
+python tools/android.py reboot
+python tools/android.py grants
+python tools/android.py run --timeout 600 --env SOA_IMPORT=1 --env SOA_FRAMES=300 --env SOA_SETTINGS=0
+# check 11
+python tools/android.py run --timeout 300 --env SOA_IMPORT=disc --env SOA_SETTINGS=0 --key KEYCODE_BACK
+# check 12
+python tools/android.py run --timeout 900 --env SOA_IMPORT=disc --env SOA_FRAMES=300 --env SOA_SETTINGS=0 --kill-before-tap --tap GEAE8P.soadisc
+# check 13; its mutation is the same run, with --timeout 600, on an APK whose configChanges lacks fontScale
+python tools/android.py run --timeout 900 --env SOA_IMPORT=disc --env SOA_FRAMES=600 --env SOA_SETTINGS=0 --font-scale 1.15 --tap GEAE8P.soadisc --font-scale 1.3
+# check 10, the player's path: at font scale 1.0, at 1.3, then the shortcut's launch
+python tools/android.py player --timeout 900 --fresh --tap Pick --key KEYCODE_BACK --tap Pick --tap libsoa_game.so --tap Pick --tap GEAE8P.soadisc --out build/android-player/font-1.0
+python tools/android.py player --timeout 900 --fresh --font-scale 1.3 --tap Pick --key KEYCODE_BACK --tap Pick --tap libsoa_game.so --tap Pick --tap GEAE8P.soadisc --out build/android-player/font-1.3
+python tools/android.py player --timeout 900 --reimport --tap "Keep this one" --tap "Keep this one" --out build/android-player/reimport
+```
+
+- **Check 14, L12c unchanged.** The first launch over L12c's state must print
+  `[android] library moved from
+  /data/data/io.github.bmfrench89.soa.dev/files/libsoa_game.so to
+  /data/user/0/io.github.bmfrench89.soa.dev/no_backup/libsoa_game.so`, then
+  `[selftest] 0 failure(s)` and `[exit] 0` (a `run`, since `selftest` prints
+  only its `[selftest]`, `[game]`, `[boot]` and `[exit]` lines). Then the
+  replay, 23 of 23 at 1, 2, 3 and 8 threads; the title,
+  `4 of 4 invariants hold`; the tripwire, reported once, and `[exit] 0`; and
+  Home and back as above, Home at frame 300 of `run --timeout 900 --env
+  SOA_WINDOW=1 --env SOA_RENDER=1 --env SOA_FRAMES=900 --env SOA_SNAP=50 --env
+  SOA_SETTINGS=0` and back about 15 s later: the frames held at 300 while away,
+  7.6% CPU in `top` there, `[run] … 1 clock gap(s), 16.3 s excluded` and
+  `[exit] 0`. Its mutation, the move left out, was not run.
+- **Checks 1-4 and 5b, the ten mutants.** Each must print exactly the line
+  `mutants` printed for it and `[exit] 1`, and leave the installed library as it
+  was (`adb -s emulator-5556 shell run-as io.github.bmfrench89.soa.dev sha256sum
+  no_backup/libsoa_game.so`) and no `.tmp` beside it. All ten did;
+  `other-dol.so`'s, for one, is `[import] refused other-dol.so: this game
+  library was made from another disc's executable (32e08744cd28, this app plays
+  8c0e278126fa): rebuild it with Setup from your own disc`. Through `pipe/` all
+  ten are refused too: the two ARM ones
+  `the copy was stopped after 64 of N bytes: <the same words>`, the two Windows
+  files after 152 of 512 bytes, and the rest copied whole, then refused in the
+  same words. **Mutation:** the real library, provided as `real.so`, is
+  `[import] copied 34428504 of 34428504 bytes to
+  /data/user/0/io.github.bmfrench89.soa.dev/no_backup/libsoa_game.so.tmp`,
+  loaded from there, then `[import] library real.so: installed as
+  /data/user/0/io.github.bmfrench89.soa.dev/no_backup/libsoa_game.so`.
+- **Check 5a, another game's store,** through `file/`: `[import] refused
+  GTSE01.soadisc: GTSE01.soadisc is GTSE01, not GEAE8P: this app plays the North
+  American GameCube release only (European and Japanese discs are not
+  supported)`, `[exit] 1`, and no copying line. Its mutation is check 6, where
+  the real store is taken.
+- **Check 7, a pipe is copied.** The same store through `pipe/`: `[android] disc
+  GTSE01.soadisc:
+  content://io.github.bmfrench89.soa.dev.testfiles/pipe/GTSE01.soadisc, a stream
+  (a pipe or a socket): copying to
+  /data/user/0/io.github.bmfrench89.soa.dev/no_backup/copy/disc.soadisc.tmp`,
+  then `[import] refused GTSE01.soadisc: the copy was stopped after 1048576 of
+  2236416 bytes: GTSE01.soadisc is GTSE01, not GEAE8P: …` and `[exit] 1`, with
+  `no_backup/copy/` left empty. **Mutation:** `?truncate=65536` is `the copy
+  stopped at 65536 of 2236416 bytes: GTSE01.soadisc ended early; pick it again`.
+- **Check 6, the real picker, read in place.** DocumentsUI opens in Download and
+  the store is tapped: `[android] disc GEAE8P.soadisc:
+  content://com.android.externalstorage.documents/document/primary%3ADownload%2FGEAE8P.soadisc,
+  grant kept, read in place as /proc/self/fd/104` (the number varies), `[import]
+  reopen probe: /storage/emulated/0/Download/GEAE8P.soadisc, f_type 0xef53, open
+  by name: Permission denied`, `[disc] /proc/self/fd/104: GEAE8P rev 0 store v1,
+  … verified dump; …`, `[disc] hashed 137 blocks (8.6 MB) in 87.7 ms` and
+  `[exit] 0`; `grants` then lists that URI `kept` and `[android] 1 grant(s) held
+  by io.github.bmfrench89.soa.dev on emulator-5556`. The probe stands in for the
+  mutation: it makes the open by name that a build without the descriptor
+  reading would make, and Android 14 refuses it (an ext4 descriptor, with
+  `persist.sys.fuse.passthrough.enable` unset), so reading through the
+  descriptor is necessary there. Off the device the mutation is
+  `disc_check.py`'s (section 1): a build that opens the path again fails its
+  descriptor case.
+- **Check 9, a damaged block.** Exactly one `[disc] flip armed: one byte of the
+  store at 0x5502E8E8 (sound/tone.info) reads with its low bit inverted`, since
+  the disc's check before the run is made without the switch, then `[disc] block
+  21762 of /proc/self/fd/97 (0x55020000) does not match its SHA-1:
+  sound/stv73.samp, sound/tone.info; the store is damaged: copy it to this phone
+  again, or make it again on your PC` and `[exit] 9`. **Mutation:** with
+  `SOA_DISC_VERIFY=0` as well there is no block line, and the game hangs until
+  the watchdog's `[exit] 5`.
+- **Check 8, the grant outlives a restart.** `reboot` took 39 s and must print
+  `[android] emulator-5556 (soa_x86_64) restarted, unlocked, and its screen held
+  on`; it refuses any device but the AVD `soa_x86_64`, and only a new boot id
+  ends its wait. `grants` must still list the grant `kept`, and the run must
+  read in place again and end `[exit] 0`. **Mutation:** the `forget` run
+  (`[import] released the permission to read GEAE8P.soadisc (…); disc.txt is
+  kept`), 20 s, the restart, and `grants` says `[android] 0 grant(s) held by …`;
+  the run then prints `[import] box: GEAE8P.soadisc cannot be read now: the
+  permission to read it is gone / …`, `[import] cancelled (disc)` and
+  `[exit] 1`, and check 6 again restores the grant. **Trap:** a take or a
+  release reaches the system's `urigrants.xml` about 10 s after it is made. The
+  mutation's first try restarted within seconds of the `forget`, and the grant
+  came back; let 15 s pass after a pick or a release before a restart.
+- **Check 11, Back in the picker.** `[android] sent KEYCODE_BACK` twice, then
+  `[import] cancelled (disc)` and `[exit] 1`, with `no_backup/disc.txt`
+  unchanged. **Trap:** DocumentsUI opened in Download takes the first Back as up
+  a folder (to `Files on sdk_gphone64_x86_64`) and only the second closes it,
+  measured by hand with `adb shell input keyevent KEYCODE_BACK` and a screen
+  dump after each, so `--key KEYCODE_BACK` is pressed until the picker goes,
+  four times at most (`BACK_TRIES`). A picker that never opened leaves the same
+  log and exit; only the report's last line, naming the steps never done, tells
+  it apart. The run with `--tap GEAE8P.soadisc` instead is check 6.
+- **Check 12, the process killed with the picker up.** `[android] killed the
+  app's process (<pid>) with the picker up`, the tap,
+  `[android] the app came back as process <pid>`, then from the new process
+  `[import] pending disc pick from an earlier process:
+  content://com.android.externalstorage.documents/document/primary%3ADownload%2FGEAE8P.soadisc`,
+  the read-in-place line and `[exit] 0`; `grants` lists one. Its mutation, an
+  APK whose `onActivityResult` only wakes the waiter and writes no
+  `no_backup/pending_disc`, was not run.
+- **Check 13, a configuration change.** With `font_scale` at 1.15 while the
+  picker is up, at 1.3 once the store is tapped, and the device's own put back
+  after, the run reads in place, reaches `[boot] 600 frames done (SOA_FRAMES)`
+  and `[exit] 0`, and logs no `[import] the app was closed during the import`.
+  **Mutation:** an APK built with `fontScale` taken out of `configChanges` in
+  `android/app/src/main/AndroidManifest.xml`: the activity is recreated during
+  the pick. The `soa.log` the run pulls is the next process's, which reaches
+  neither the read-in-place line nor `[exit]` and is stopped at its limit
+  (`[android] the run did not end within 600 s, so it was stopped`) with the
+  picker showing again. The first process's end is in logcat, so clear it
+  first (`adb -s emulator-5556 logcat -c`) and read `logcat -d -s soa SDL
+  ActivityManager` after: `[import] the app was closed during the import`,
+  `[exit] 0` and SDL's `onDestroy()` in the same millisecond, and
+  `ActivityManager` saying the process died 21 ms later. That is the destroy
+  path, `SoaActivity.onDestroy` waking the pick. Build and install the real
+  APK afterwards.
+- **Check 10, the player's path,** with no check extras, as a player launches
+  the app. `--fresh` first removes what an import leaves and `soa.ini`; each
+  step's screen is captured, then the game's 30 s after the last step, and
+  `soa.log` and `soa.ini` are pulled beside them. The log must show the first
+  box answered `Pick`, the picker backed out of (`[import] cancelled (library)`)
+  and the box again, the library copied (34428504 of 34428504 bytes) and
+  installed, the store read in place, then `[import] wrote
+  /data/data/io.github.bmfrench89.soa.dev/files/soa.ini: render = 1`,
+  `[settings] /data/data/io.github.bmfrench89.soa.dev/files/soa.ini: 1
+  setting(s) applied, 0 overridden by the environment; …` and `[window] open at
+  2x, presenting with SDL3's opengles2 renderer (video android), each frame held
+  2 refresh(es)`. At font scale 1.3 the captures show the box's text scrolling
+  and its buttons on screen. The shortcut's launch (`--reimport`, as
+  `am start … --ez soa.reimport true`) answers both boxes `Keep this one`, and
+  the game runs (`[window] open at 2x`). Its mutation, an APK without the
+  `soa.ini` write, which should open no window, was not run. **Trap:** the one
+  capture of the game can fall in the opening's own black: while the game
+  boots, and for 22 to 25 s after the Overworks logo, and when each comes
+  varies from run to run. On 2026-10-06 it was black at 1.3 and after the
+  re-import; captures every second or two, run again, showed the picture after
+  both (FINDINGS "L12d").
+- **Once each.** `adb -s emulator-5556 shell cmd shortcut get-shortcuts --user 0
+  io.github.bmfrench89.soa.dev` lists `id=reimport` and `shortLabel=Game files`.
+  With `no_backup/disc.txt.tmp` made a folder (`run-as … mkdir`), check 6's run
+  still plays in place and ends `[exit] 0`, the grant kept, logging `[import]
+  cannot create
+  /data/user/0/io.github.bmfrench89.soa.dev/no_backup/disc.txt.tmp: Is a
+  directory; disc.txt is as it was, naming this disc`, and the next launch (`run
+  --env SOA_IMPORT=1`) plays it in place with no box. With `disc.txt` removed
+  first, the line ends `with no disc.txt, the next launch asks for the disc
+  again`, and the next launch shows the disc's box (which a check run answers
+  and then cancels, `[exit] 1`). `rmdir` the folder, then check 6 again puts
+  `disc.txt` back. Pad A on a box (a launch with `--ez soa.reimport true`, then
+  `adb shell input keyevent KEYCODE_BUTTON_A`) is `[import] answered: Pick a new
+  one`, its default; two Backs leave the picker, and pad B on the box again is
+  `[import] answered: Quit` and `[exit] 0`. A pick whose name holds an accented
+  letter and an emoji reaches its refusal line with no CheckJNI abort; `provide`
+  refuses a name that is not plain letters, digits, `.`, `_` and `-`, so that
+  file itself was never served.
+- **The destroy path is check 13's mutation's.** A run after `adb -s
+  emulator-5556 shell settings put global always_finish_activities 1`, with
+  `--env SOA_IMPORT=disc --env SOA_IMPORT_PICKER=1 --env SOA_SETTINGS=0`, saw
+  SoaActivity stopped behind DocumentsUI and not destroyed for its whole 300 s
+  (logcat: `onPause`, `onStop`, no `onDestroy`), which shows nothing:
+  ActivityManager reads that setting at boot or from Developer Options' switch
+  [I, AOSP's source], and a `settings put` is neither. Put it back to 0.
+
+Left on the AVD afterwards: the store in Download, which `disc.txt` names and
+the app reads in place; the library in `no_backup/`, and staged in Download;
+the ISO back at `files/extracted/disc.iso` (`push-disc`); the corpus in
+`files/fifo`; the provider's ten mutants, the real library and the GTSE01
+fixture in `files/provider`; 1.3 GB free. Not done by any of this: a phone
+(L12's Done waits for the owner's AYN Thor, then the Fold 8); the owner's look
+at the boxes' and the refusals' words, a draft until then (CLAUDE.md's first
+bless: tests pin the checker's, the disc layer's and some of the copy's
+refusals, and nothing but the code the boxes and `android.c`'s own; a page for
+that look is at `build/android-review/index.html`); a whole disc copied and
+then played, and a Cancel during a copy; the box an app update opens when the
+library no longer fits; three of the design's mutations (FINDINGS "L12d"); a
+box for a run stopped mid-play (exit 9 closes the app with its reason in the
+log alone); card import and export through the picker (proposed as L12h); a
+CI build of the APK; and a cloud provider's files.
 
 If MSVC cannot be found, every step says so on stderr — `MSVC not found;
 skipping compile` — and returns 1 rather than pretending it did the work.
@@ -1539,6 +1852,8 @@ perfectly the whole time.
 | `scenario.py replay` | **yes**³ | — | no | **yes** | **yes** | no |
 | `android.py build`, then `guard.py --apk` | no | no; the NDK, an Android SDK and a JDK | no | no | no | no |
 | `android.py selftest`, `run`, `replay` | **yes**, pushed to the device | no; the NDK for the library | no | no; the device's game library | `replay` only | no |
+| `android.py mutants` (L12d) | no | no; the NDK, and the record `android.py build` wrote | no | no | no | no; `test_android_build.py` makes such a set on the Linux gcc leg |
+| `android.py provide`, `stage`, `run` with `SOA_IMPORT`, `player`, `reboot`, `grants` (L12d) | **yes** for `stage`: your store, in Download | no; the NDK for the library | no | no; the game library, staged or pushed | no | no |
 | `imgdiff.py refs` and `mutate` | **yes**³ | — | no | **yes** | **yes** | no |
 | `gpuspike.py selftest`, `tevdiff`, `copydiff`, `loddiff` | no | yes | no | no | no | no⁴ |
 | `gpuspike.py oracle`, `time` | no | yes | no | no | **yes** | no⁴ |
@@ -1547,7 +1862,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 421 of the 1370 skip here without a C compiler: 408 build runtime files or the GPU spike with MSVC and run them (one, `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, and `test_seam.py`'s nine an ELF system, which no Windows run has.
+² 450 of the 1435 skip here without MSVC: 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;
@@ -1635,8 +1950,9 @@ python -m ruff format --check tools
 python -m pytest tools/tests -q
 ```
 
-About a minute all told (`ruff ...` and `python -m ruff ...` are the same
-thing; the second works whether or not the shim is on `PATH`).
+About 13 minutes all told, nearly all of it pytest (`ruff ...` and `python -m
+ruff ...` are the same thing; the second works whether or not the shim is on
+`PATH`).
 
 **Run the format check as its own command.** `ruff check` passing feels like it
 covered formatting; it does not, and that is what broke CI both times.

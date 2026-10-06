@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1370 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1435 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,8 +171,8 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1370 |
-| Self-test cases | 86 |
+| Python tests | 1435 |
+| Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 
@@ -419,15 +419,33 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-06)
 
-**The state at the stop (2026-10-06, after L12c):** L10 (d6d64aa), L12a
-(75d5ce2), L12b (316e50d) and L12c (with this paragraph) are pushed; read
-CI for the last. The SOA emulator was shut down; TESTING.md's Android
-recipe starts it again, and its data image keeps the debug APK, the x86-64
-library, the disc and the captures. The Docker container `soa-l10`
-(python:3.14-slim, gcc, SDL3 built in `/work/vendor`) is kept for the next
-Linux check, with L12c's split build in `/work/gen/linux-split`; its layer
-holds a copy of the captures, so it stays on this machine, and `docker rm -f
-soa-l10` removes it. The next step is in the numbered list below (L12d).
+**The state at the stop (2026-10-06, after L12d):** L10 (d6d64aa), L12a
+(75d5ce2), L12b (316e50d) and L12c (64bcd85) are pushed. L12d is two
+commits: 6e39f13, the disc read through its descriptor, and the rest
+(with this section), pushed; read CI for the last. The SOA emulator was
+shut down; TESTING.md's Android recipe starts it again. Its data image
+keeps the final debug APK; the store staged in Download, which
+`no_backup/disc.txt` names and which is read in place; the x86-64 library
+in `no_backup/` (and staged in Download); the ISO back at
+`files/extracted/disc.iso` (`push-disc`); the captures in `files/fifo`;
+and the debug provider's ten mutants, the real library and the GTSE01
+fixture in `files/provider`, with 1.3 GB free.
+The Docker container `soa-l10` (python:3.14-slim, gcc, SDL3 built in
+`/work/vendor`) is kept for the next Linux check, with L12d's split
+build in `/work/gen/linux-split`; its layer holds a copy of the
+captures, so it stays on this machine, and `docker rm -f soa-l10`
+removes it. **L12d's words wait for the owner's look:**
+`build/android-review/index.html` (local) shows the boxes the emulator
+drew at font scale 1.0 and 1.3, the refusals its check runs printed,
+with what causes each, and every other box and refusal as the code words
+it. Until the owner has looked they are a draft (CLAUDE.md's first
+bless): tests pin the checker's, the disc layer's and some of the copy's
+refusals, and nothing but the code the boxes and `android.c`'s own. Two
+of `player`'s three single captures of the game after the import came
+out black; captures every second or two after a re-import and a first
+run at font scale 1.3, run again, showed the picture each time (FINDINGS
+"L12d").
+What is next, and why, is item 2 of the list below.
 
 Everything below this section is older and still true. Landed in the last
 stretch, newest first, each with a FINDINGS entry of its name: **L6**
@@ -719,9 +737,24 @@ C5c) is now done.
    (docs/TESTING.md has the recipe); `emulator-5554` is another
    project's, never touch it. It runs the game at about 9 frames a second
    because its kernel reads the clock through the PIT: measure no speed
-   there. **Next: L12d,** the import on the emulator (the disc and the
-   library picked on the device, each refusal in the player's words),
-   then L12's Done on the AYN Thor. D-33 (the package name and release
+   there. **L12d is done** (FINDINGS "L12d"): the first run asks for the
+   game library, then the disc, through the app's own picker, checks each
+   before keeping it, and says every refusal in the player's words. The
+   disc is read in place through the picked descriptor (Android 14 refuses
+   to open the file again by name, so this is necessary), or copied when
+   it cannot be, as a pipe is; its grant survives a reboot; and a damaged
+   block stops the run with exit 9, though on a phone no box says why yet
+   (FINDINGS "L12d", not built). The activity destroyed during a pick came
+   with check 13's mutation: the run ends at once. **Next: L12's Done on
+   the AYN Thor,** as specs/android.md §4 orders it (the self test, the
+   replay and `title` on the phone, the frame rate at the Dangral base,
+   and the owner's session with a pad), which needs the owner and the
+   phone. Without them, two slices need neither: R5's own Android sysroot,
+   so Setup can build the phone's library without the NDK, and L12g, mods
+   on the emulator. Which comes first is an order question, so it is
+   PLAN-NEXT §0's, and §0 leaves it to the owner; this session did not
+   choose. Card import and export through the picker is proposed as L12h,
+   for the owner to name and place. D-33 (the package name and release
    key) is still the owner's, and comes before anyone else installs it.
    Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run

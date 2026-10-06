@@ -13,8 +13,8 @@ are independent; inside a track, order matters.
 | Functions recompiled | 7,144, at 100% instruction coverage |
 | Hand-decompiled and byte-matching | 100 symbols across 21 units — 83 functions (8,084 bytes, 0.29% of `.text`) and 17 data |
 | Of those, running in the port | 12, of the 26 bindings in `config/hle.txt` |
-| Python tests | 1370 in 87 files (408 need MSVC and skip without it) |
-| Native code compiled by CI | all 28 `runtime/*.c`, twelve decompiled MSL routines from six units against libc, and a renderer-only binary (A1), under MSVC, clang-cl, gcc and clang |
+| Python tests | 1435 in 89 files (409 need MSVC and skip without it) |
+| Native code compiled by CI | all 39 `runtime/*.c` (also under llvm-mingw, and for Android's arm64), twelve decompiled MSL routines from six units against libc, and a renderer-only binary (A1), under MSVC, clang-cl, gcc and clang |
 | Frame or audio check CI can run | the renderer's two pixel checks, on a synthetic frame; audio still needs a built binary and a dump |
 | Captured frames usable as a corpus | 23 in `build/fifo`, all pinned in `config/fifo_manifest.tsv` |
 | `field/` files any saved run has opened | 347 of 1,862 stems in `extracted/field`, 242 of them root maps (every warpable map was warped to; the 15 world-map warps share the files of the story stage the game picks) -- 21 and 5 before 2026-09-22; only with `SOA_TRACE` on |
@@ -74,10 +74,11 @@ confident statements in the history are wrong and it lists them.
 
 **A1. Compile the runtime in CI, then the render self-tests** — *built.*
 **Built.** The `native` job in `.github/workflows/ci.yml` runs three steps on
-windows-latest, each of which fails loudly rather than skipping when there is
-no `cl.exe`: `tools/citest/compile_runtime.py` compiles all 28 `runtime/*.c`
-with `/c` and the flags in `tools/soa/toolchain.py`, plus nine warnings
-promoted to errors (C4013 first: nothing links here, so an implicit
+windows-latest (more since: the Vulkan headers' fetch, V5; `disc_check.py`, I1;
+`libm_check.py`, L6), each of which fails loudly rather than skipping when
+there is no `cl.exe`: `tools/citest/compile_runtime.py` compiles all 39
+`runtime/*.c` with `/c` and the flags in `tools/soa/toolchain.py`, plus nine
+warnings promoted to errors (C4013 first: nothing links here, so an implicit
 declaration is the only sign a rename left a caller behind);
 `tools/citest/dc_check.py` builds the six units `units.txt` marks native with the
 `/Ddc_*` renames `recompile.py` derives, links them to

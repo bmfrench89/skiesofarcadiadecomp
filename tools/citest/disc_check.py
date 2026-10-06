@@ -25,7 +25,14 @@ that id and that executable's SHA-1 in place of the real ones, and checks:
     built with the fixture's in its disc_sys.c, it hands them back with no
     image open, opens their image saying the table matches, refuses an image
     whose table differs by one byte as not the build's, and a built-in copy
-    that misses its own SHA-1 is refused before anything is handed out.
+    that misses its own SHA-1 is refused before anything is handed out;
+  - for the phone (specs/android.md L12d): the refusals again in a phone's
+    words, none naming python tools/, soa.exe or recompile.py; built as a
+    phone's runtime is (SOA_SPLIT), the system files read through the game
+    library's table; disc_identify on a copy's first mebibyte; an ISO cut
+    after its file table refused; and a file cut short while it is open,
+    by name or under its descriptor, stopping the run with exit 9 in words
+    of its own.
 
 --mutate fst-offset moves the fixture's file-table offset by 4, which must
 fail it. The second form checks a live run's SOA_DISC_LOG=1 lines against the
@@ -38,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import errno
 import hashlib
 import os
 import re
@@ -59,10 +67,20 @@ RUNTIME = ROOT / "runtime"
 LOG_LINE = re.compile(
     r"^\[disc\] frame (\d+) read 0x([0-9A-Fa-f]+) \+(\d+) (.+?)(?:, (\d+) past its end)?$"
 )
+# What a phone's refusals never name (disc_set_phone_words; specs/android.md
+# L12d): a phone has no Python, no soa.exe and no recompile.py.
+PC_ONLY = ("python tools/", "soa.exe", "recompile.py")
+# A refusal's words in a phone's set, where the PC's name the port instead.
+PHONE_KEY = {"executable with one byte changed": "executable is not the one this app plays"}
 
 
 def sha1(b: bytes) -> str:
     return hashlib.sha1(b, usedforsecurity=False).hexdigest()
+
+
+def pc_words(text: str) -> list[str]:
+    """Which of the PC's commands `text` names."""
+    return [w for w in PC_ONLY if w in text]
 
 
 def run_cl(what: str, args: list[str]) -> bool:
@@ -83,10 +101,13 @@ def build(
     cflags: list[str],
     system: dict[str, bytes] | None = None,
     disc_sys: str | None = None,
+    split: bool = False,
 ) -> Path | None:
     """disc.c with the fixture's id and executable hash, sha1.c, the driver,
     and a disc_sys.c: `system` built in (I3), or none, as --no-embed; or
-    `disc_sys` as given, for a broken one."""
+    `disc_sys` as given, for a broken one. `split` builds it as a phone's
+    runtime has it (SOA_SPLIT): the system files through soa_game_table,
+    which the driver's `table` sets."""
     out.mkdir(parents=True, exist_ok=True)
     wrapper = out / "disc_fixture.c"
     wrapper.write_text(
@@ -98,9 +119,15 @@ def build(
     text = disc_sys if disc_sys is not None else embed.disc_sys_c(system)
     (out / "disc_sys.c").write_text(text, encoding="utf-8")
     sources = [wrapper, RUNTIME / "sha1.c", HERE / "disc_driver.c", out / "disc_sys.c"]
+    extra = ["/DSOA_SPLIT=1"] if split else []
+    if split and PROF.style == "gnu":
+        # cpu.h, which soa_game.h includes, writes gen/*.c inside its first
+        # comment, which -Wall's -Wcomment flags; clang-cl's profile already
+        # turns that one warning off
+        extra.append("-Wno-comment")
     if not run_cl(
         "compiling disc.c",
-        [*PROF.cflags, *cflags, "/c", f"/I{RUNTIME}", f"/Fo{out}/", *map(str, sources)],
+        [*PROF.cflags, *cflags, *extra, "/c", f"/I{RUNTIME}", f"/Fo{out}/", *map(str, sources)],
     ):
         return None
     exe = out / f"disc_driver{PROF.exeext}"
@@ -151,6 +178,19 @@ class Checks:
         else:
             self.failed += 1
             print(f"FAIL {what}")
+
+
+def drive_checked(
+    c: Checks, what: str, exe: Path, cmds: list[str], code: int = 0, **kw
+) -> tuple[list[str], str]:
+    """drive(), where a driver that exits otherwise than `code` -- one that
+    goes on where it must stop, or crashes -- is a failed check, not a crash
+    of this one."""
+    try:
+        return drive(exe, cmds, code=code, **kw)
+    except RuntimeError as e:
+        c.check(False, f"{what}: {str(e)[-300:]}")
+        return [], ""
 
 
 def broken_images(fx: discfixture.Fixture, out: Path) -> dict[str, tuple[Path, str]]:
@@ -214,9 +254,15 @@ def broken_images(fx: discfixture.Fixture, out: Path) -> dict[str, tuple[Path, s
 def check_built_in(c: Checks, fx: discfixture.Fixture, out: Path, cflags: list[str]) -> None:
     """I3: the fixture's system files built in. disc_system hands them back
     with no image open; the image they came from opens and is said to match;
-    one whose file table differs by a byte is refused as not the build's; a
-    built-in copy that does not hash to its own SHA-1 is refused at once.
-    And the --no-embed build (the checks above) has none to give."""
+    one whose file table differs by a byte is refused as not the build's,
+    which disc_refused_by_build says (on a phone, the library may be the
+    wrong half), in a phone's words without the PC's command; a built-in
+    copy that does not hash to its own SHA-1 is refused at once, and so is
+    every disc. And the --no-embed build (the checks above) has none to give.
+    Then the same as a phone's runtime builds it (SOA_SPLIT), through
+    soa_game_table: no disc opens before the table is set, though
+    disc_identify, which needs no library, answers; and "this game library"
+    where the PC says "this soa.exe"."""
     want = [
         "system ok",
         f"dol {len(fx.system['main.dol'])} {sha1(fx.system['main.dol'])}",
@@ -250,18 +296,114 @@ def check_built_in(c: Checks, fx: discfixture.Fixture, out: Path, cflags: list[s
         refusal.startswith("refused this disc image is not the one this build was made from"),
         f"embedded, an image whose table differs by one byte: {refusal!r}",
     )
+    nothing = out / "embedded" / "nothing-here.iso"
+    lines, _ = drive(
+        exe,
+        [f"open {fx.path}", "bybuild", f"open {other}", "bybuild", "portdol", "words phone"]
+        + [f"open {other}", "bybuild", f"open {nothing}", "bybuild"],
+    )
+    c.check(
+        lines[4:5] == ["bybuild 0"] and lines[6:7] == ["bybuild 1"],
+        f"disc_refused_by_build: 0 after its own image, 1 after the other: {lines[4:7]}",
+    )
+    c.check(lines[7:8] == [f"portdol {fx.dol_sha1}"], f"disc_port_dol_sha1: {lines[7:8]}")
+    phone = lines[9] if len(lines) > 9 else ""
+    c.check(
+        phone.startswith("refused this disc image is not the one this game library was made from")
+        and "Setup" in phone
+        and not pc_words(phone),
+        f"the same, in a phone's words: {phone!r}",
+    )
+    tail = lines[10:13]
+    c.check(
+        len(tail) == 3
+        and tail[0] == "bybuild 1"
+        and tail[1].startswith("refused no disc image at")
+        and tail[2] == "bybuild 0",
+        f"and 0 after a refusal for another reason: {tail}",
+    )
 
     # a built-in copy that is not what its own SHA-1 says: a generator fault
     bad = embed.disc_sys_c(fx.system).replace(sha1(fx.system["fst.bin"]), "0" * 40)
     exe = build(out / "broken-embed", fx.game_id, fx.dol_sha1, cflags, disc_sys=bad)
     c.check(exe is not None, "the broken embedding build compiles")
     if exe is not None:
-        lines, _ = drive(exe, ["builtin", "system"])
+        lines, err = drive(
+            exe,
+            ["builtin", "system", f"open {fx.path}", "words phone", "builtin", f"open {fx.path}"],
+        )
         c.check(
             lines[:1] != [] and lines[0].startswith("builtin -1 the file table built into"),
             f"a built-in table that misses its SHA-1: {lines[:1]}",
         )
         c.check(lines[1:2] != [] and lines[1].startswith("refused "), "and nothing is handed out")
+        # by disc_open itself, which prints no [disc] line: the driver's open
+        # also asks disc_system, which would refuse anyway, and a phone's
+        # check of a picked disc asks disc_open alone
+        c.check(
+            lines[2:3] != []
+            and lines[2].startswith("refused the file table built into this soa.exe hashes to")
+            and "[disc] " not in err,
+            f"and disc_open refuses its own image with it: {lines[2:3]}, {err.strip()[:200]!r}",
+        )
+        said = lines[4:6] if len(lines) > 5 else ["", ""]
+        c.check(
+            said[0].startswith("builtin -1 the file table built into this game library hashes to")
+            and said[1].startswith("refused the file table built into this game library hashes to")
+            and all("Setup" in s and not pc_words(s) for s in said),
+            f"in a phone's words: {said}",
+        )
+
+    # a phone's runtime: the same files through soa_game_table
+    exe = build(out / "split", fx.game_id, fx.dol_sha1, cflags, fx.system, split=True)
+    c.check(exe is not None, "the split build compiles")
+    if exe is not None:
+        # an open before the table is set is refused by disc_open, not a crash
+        # through NULL (and not the driver's disc_system refusing after it);
+        # disc_identify, which checks a copy's first MiB, needs no library
+        lines, err = drive_checked(
+            c,
+            "split, a disc opened before the library is loaded",
+            exe,
+            [f"identify {fx.path}", f"open {fx.path}"],
+        )
+        c.check(
+            lines[:1] == ["identify ok"],
+            f"split, disc_identify before the library is loaded: {lines[:1]}",
+        )
+        c.check(
+            lines[1:2] != []
+            and lines[1].startswith("refused no game library is loaded yet")
+            and "[disc] " not in err,
+            f"split, a disc opened before the library is loaded: {lines[1:2]}",
+        )
+        lines, err = drive(exe, ["table", "builtin", f"open {fx.path}", f"open {other}", "bybuild"])
+        c.check(
+            lines[0:3] == ["table ok", "builtin 1 ", "open ok"]
+            and "; FST matches this build" in err,
+            f"split, with it: {lines[0:3]}",
+        )
+        c.check(
+            lines[6:8] != []
+            and lines[6].startswith(
+                "refused this disc image is not the one this build was made from"
+            )
+            and lines[7:8] == ["bybuild 1"],
+            f"split, the other image: {lines[6:8]}",
+        )
+    exe = build(
+        out / "split-broken-embed", fx.game_id, fx.dol_sha1, cflags, disc_sys=bad, split=True
+    )
+    c.check(exe is not None, "the split broken embedding build compiles")
+    if exe is not None:
+        lines, err = drive(exe, ["table", f"open {fx.path}"])
+        c.check(
+            lines[1:2] != []
+            and lines[1].startswith("refused the file table built into this game library hashes to")
+            and not pc_words(lines[1])
+            and "[disc] " not in err,
+            f"split, a built-in table that misses its SHA-1: {lines[1:2]}",
+        )
 
 
 def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> None:
@@ -272,7 +414,10 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
     read with the ISO and finds nothing; a flipped byte is caught by both
     checks -- the ISO comparison names its offset, and the hash check stops
     the run, exit 9, naming the file; three broken stores are refused at
-    open; --check-disc's check passes the store and fails the flip."""
+    open; --check-disc's check passes the store and fails the flip. The stop
+    and the refusals again in a phone's words, which name no PC command; and
+    a store with one byte of its executable changed is refused as another
+    executable in both sets (specs/android.md L12d)."""
     sfx = discfixture.build(out / "store" / "disc.iso", tail=3 << 20)
     c.check(sfx.dol_sha1 == fx.dol_sha1, "the long-tailed fixture has the same executable")
     path = out / "store" / f"{sfx.game_id}{store.STORE_SUFFIX}"
@@ -328,6 +473,22 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
         "does not match its SHA-1" in err and victim in err and "re-import" in err,
         f"the hash check stops the run, exit 9, naming the file: {err.strip()[-300:]!r}",
     )
+    lines, err = drive_checked(
+        c,
+        "the hash check, in a phone's words",
+        exe,
+        ["words phone", f"open {folder}", f"serve {at} {n}"],
+        code=9,
+        env={"SOA_DISC_FLIP": victim},
+    )
+    stopped = [ln for ln in err.splitlines() if "does not match its SHA-1" in ln]
+    c.check(
+        stopped != []
+        and victim in stopped[0]
+        and "copy it to this phone again" in stopped[0]
+        and not pc_words(stopped[0]),
+        f"and in a phone's words: {stopped[:1]}",
+    )
 
     data = path.read_bytes()
     broken = {
@@ -341,15 +502,48 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
     for what, (blob, words) in broken.items():
         bad = out / "store" / f"broken-{what.replace(' ', '-')}.soadisc"
         bad.write_bytes(blob)
-        lines, _ = drive(exe, [f"open {bad}"])
+        lines, _ = drive(exe, [f"open {bad}", "words phone", f"open {bad}"])
         c.check(
             lines[:1] != [] and lines[0].startswith("refused ") and words in lines[0],
             f"{what}: {lines[:1]}",
         )
-    lines, _ = drive(exe, [f"open {sfx.path}"], {"SOA_DISC_VERIFY": "hash"})
+        c.check(
+            lines[2:3] != []
+            and lines[2].startswith("refused ")
+            and words in lines[2]
+            and not pc_words(lines[2]),
+            f"{what}, in a phone's words: {lines[2:3]}",
+        )
+    lines, _ = drive(
+        exe, [f"open {sfx.path}", "words phone", f"open {sfx.path}"], {"SOA_DISC_VERIFY": "hash"}
+    )
     c.check(
         lines[:1] != [] and "is an ISO" in lines[0],
         f"a hash check of an ISO is refused: {lines[:1]}",
+    )
+    c.check(
+        lines[2:3] != [] and "is an ISO" in lines[2] and not pc_words(lines[2]),
+        f"and in a phone's words: {lines[2:3]}",
+    )
+
+    # One byte of the executable changed in the payload: the header's SHA-1
+    # does not cover it, so the open is what refuses it, as another executable.
+    dol_at = struct.unpack_from("<Q", data, 0x20)[0] + sfx.slices["main.dol"][0] + 0x180
+    changed = out / "store" / "dol-changed.soadisc"
+    changed.write_bytes(data[:dol_at] + bytes([data[dol_at] ^ 1]) + data[dol_at + 1 :])
+    lines, _ = drive(exe, [f"open {changed}", "words phone", f"open {changed}"])
+    c.check(
+        lines[:1] != []
+        and lines[0].startswith("refused ")
+        and "executable is not the one this port was built for" in lines[0],
+        f"a store with one byte of its executable changed: {lines[:1]}",
+    )
+    c.check(
+        lines[2:3] != []
+        and lines[2].startswith("refused ")
+        and PHONE_KEY["executable with one byte changed"] in lines[2]
+        and not pc_words(lines[2]),
+        f"and in a phone's words: {lines[2:3]}",
     )
 
     lines, err = drive(exe, [f"checkstore {path}"])
@@ -370,8 +564,13 @@ def check_descriptors(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) 
     may open again). The image is read through the descriptor itself: once it
     is open its file is made unreadable by name, so code that opened the path
     again would be refused (for anyone but root, which reads it anyway: then
-    that half is said to be unproven). A store with no suffix is known by its
-    contents, and a pipe is refused as a stream."""
+    that half is said to be unproven), and opening it by name is refused with
+    the system's reason. A store with no suffix, made unreadable by name the
+    same way, is known by its contents, and opened and identified through its
+    descriptor; a pipe is refused as a stream, by disc_open and disc_identify
+    alike. SOA_DISC_VERIFY=iso or all, which compares a store with the
+    disc.iso beside it, is refused for a descriptor, which has nothing beside
+    it, naming the fix: the ISO named, with which it opens."""
     if os.name == "nt":
         return
     folder = out / "fd"
@@ -383,21 +582,29 @@ def check_descriptors(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) 
     }
 
     image = folder / "picked-image"
+    image.unlink(missing_ok=True)  # a run killed mid-way leaves it unreadable
     image.write_bytes(fx.image)
     fd = os.open(image, os.O_RDONLY)
     try:
         image.chmod(0)
+        root = True
         try:
             os.close(os.open(f"/proc/self/fd/{fd}", os.O_RDONLY))
             print("  the descriptor cases run as root: opening the path again is not refused here")
         except PermissionError:
-            pass
+            root = False
         lines, err = drive(exe, [f"open /proc/self/fd/{fd}"], pass_fds=(fd,))
         c.check(lines[:1] == ["open ok"], f"an image read through its descriptor: {lines[:1]}")
         c.check(lines[1:4] == list(want.values()), "and its system files are the image's")
         c.check(
             f"[disc] /proc/self/fd/{fd}: " in err, "the [disc] line names the descriptor's path"
         )
+        if not root:  # by name it cannot be opened, and the refusal says why
+            lines, _ = drive(exe, [f"open {image}"])
+            c.check(
+                lines[:1] == [f"refused cannot open {image}: {os.strerror(errno.EACCES)}"],
+                f"an image that cannot be opened by name: {lines[:1]}",
+            )
     finally:
         image.chmod(0o644)
         os.close(fd)
@@ -405,13 +612,39 @@ def check_descriptors(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) 
     store_path = out / "store" / f"{fx.game_id}{store.STORE_SUFFIX}"
     if store_path.exists():
         picked = folder / "picked-store"
+        picked.unlink(missing_ok=True)
         picked.write_bytes(store_path.read_bytes())
         fd = os.open(picked, os.O_RDONLY)
         try:
+            picked.chmod(0)  # as the image's: only the descriptor reads it now
             lines, err = drive(exe, [f"open /proc/self/fd/{fd}"], pass_fds=(fd,))
             c.check(lines[:1] == ["open ok"], f"a store with no suffix, by descriptor: {lines[:1]}")
             c.check(" store v1" in err, "and it is read as the store it is")
+            lines, _ = drive(exe, [f"identify /proc/self/fd/{fd}"], pass_fds=(fd,))
+            c.check(lines == ["identify ok"], f"and identified through it: {lines}")
+            for mode in ("iso", "all"):
+                lines, _ = drive(
+                    exe, [f"open /proc/self/fd/{fd}"], {"SOA_DISC_VERIFY": mode}, pass_fds=(fd,)
+                )
+                c.check(
+                    lines[:1] != []
+                    and lines[0].startswith(f"refused SOA_DISC_VERIFY={mode} ")
+                    and f"name the ISO, as SOA_DISC_VERIFY={mode}:<path>" in lines[0],
+                    f"SOA_DISC_VERIFY={mode} of a descriptor: {lines[:1]}",
+                )
+            iso = out / "store" / "disc.iso"
+            lines, err = drive(
+                exe,
+                [f"open /proc/self/fd/{fd}", "report"],
+                {"SOA_DISC_VERIFY": f"iso:{iso}"},
+                pass_fds=(fd,),
+            )
+            c.check(
+                lines[:1] == ["open ok"] and f"compared with {iso}" in err,
+                f"and with the ISO named, it opens and compares: {lines[:1]}",
+            )
         finally:
+            picked.chmod(0o644)
             os.close(fd)
     else:
         c.check(False, f"no store at {store_path} to pick")
@@ -421,15 +654,203 @@ def check_descriptors(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) 
         os.write(w, fx.image[:4096])
         os.close(w)
         w = -1
-        lines, _ = drive(exe, [f"open /proc/self/fd/{r}"], pass_fds=(r,))
+        lines, _ = drive(
+            exe, [f"open /proc/self/fd/{r}", f"identify /proc/self/fd/{r}"], pass_fds=(r,)
+        )
         c.check(
             lines[:1] != [] and lines[0].startswith("refused ") and "is a stream" in lines[0],
             f"a pipe is refused as a stream: {lines[:1]}",
         )
+        c.check(lines[1:2] == lines[:1], f"by disc_identify in the same words: {lines[1:2]}")
     finally:
         os.close(r)
         if w >= 0:
             os.close(w)
+
+
+def check_identify(
+    c: Checks, fx: discfixture.Fixture, out: Path, exe: Path, broken: dict[str, tuple[Path, str]]
+) -> None:
+    """disc_identify (specs/android.md L12d), on as much of a file as a copy
+    holds after its first mebibyte: the ISO's and the store's are this port's
+    disc; another game id is refused in disc_open's own words, from an ISO's
+    boot.bin and from a store's header; an RVZ and a file too short are
+    refused as disc_open refuses them, in a phone's words too; and a disc
+    already open stays open and readable."""
+    folder = out / "identify"
+    folder.mkdir(parents=True, exist_ok=True)
+    mib = 1 << 20
+    head = (out / "store" / f"{fx.game_id}{store.STORE_SUFFIX}").read_bytes()[:mib]
+    other, _ = broken["another game id"]
+    rvz, _ = broken["an RVZ"]
+    other_id = other.read_bytes()[:6].decode()
+    heads = {
+        "the ISO's first MiB": (fx.image[:mib], "identify ok"),
+        "the store's first MiB": (head, "identify ok"),
+        "another game id's first MiB": (
+            other.read_bytes()[:mib],
+            f"is {other_id}, not {fx.game_id}",
+        ),
+        f"a store whose header says {other_id}": (
+            head[:0x40] + other_id.encode() + head[0x46:],
+            f"is {other_id}, not {fx.game_id}",
+        ),
+        "an ISO's first 256 bytes": (fx.image[:0x100], "too short to be a GameCube disc image"),
+    }
+    paths = []
+    for n, (blob, _) in enumerate(heads.values()):
+        p = folder / f"head{n}"
+        p.write_bytes(blob)
+        paths.append(p)
+    lines, _ = drive(exe, [f"identify {p}" for p in [*paths, rvz]])
+    for (what, (_, words)), line in zip(heads.items(), lines, strict=False):
+        c.check(
+            line == words
+            if words == "identify ok"
+            else line.startswith("refused ") and words in line,
+            f"disc_identify, {what}: {line!r}",
+        )
+    c.check(
+        lines[len(paths) : len(paths) + 1] != [] and "RVZ/WIA format" in lines[len(paths)],
+        f"disc_identify, an RVZ: {lines[len(paths) :]}",
+    )
+
+    # the same words as disc_open's, of the same file, in both sets
+    for words in ("pc", "phone"):
+        lines, _ = drive(
+            exe,
+            [
+                f"words {words}",
+                f"identify {other}",
+                f"open {other}",
+                f"identify {rvz}",
+                f"open {rvz}",
+            ],
+        )
+        c.check(
+            len(lines) == 5
+            and lines[1] == lines[2]
+            and lines[3] == lines[4]
+            and lines[1] != lines[3],
+            f"disc_identify and disc_open say the same of a file, in {words} words: {lines[1:]}",
+        )
+        if words == "phone":
+            c.check(
+                not any(pc_words(ln) for ln in lines),
+                f"and a phone's words name no PC command: {lines[3:4]}",
+            )
+
+    # its own file: a disc that is open stays open
+    first, at = min(fx.offsets.items(), key=lambda kv: kv[1])
+    n = len(fx.files[first])
+    lines, _ = drive(exe, [f"open {fx.path}", f"identify {other}", f"serve {at} {n}", f"name {at}"])
+    c.check(
+        lines[4:5] != []
+        and lines[4].startswith("refused ")
+        and lines[5:7] == [f"serve {sha1(fx.image[at : at + n])}", f"name {first} {at} {n}"],
+        f"an identify between reads leaves the open disc as it was: {lines[4:7]}",
+    )
+
+
+def check_truncated(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> None:
+    """A disc cut short (specs/android.md L12d). Cut after its file table, an
+    ISO is refused at the open, naming the first file past its end. Cut while
+    it is open -- as storage pulled out, or a picked file shortened under its
+    descriptor, would leave it -- the next read that reaches the cut stops the
+    run, exit 9, in words of its own: never zeros handed to the game, never a
+    store called damaged."""
+    folder = out / "truncated"
+    folder.mkdir(parents=True, exist_ok=True)
+    size = len(fx.image)
+    by_offset = sorted(fx.offsets.items(), key=lambda kv: kv[1])
+    (first, at0), (_, at1) = by_offset[0], by_offset[-1]
+    fst_off, fst_len = fx.slices["fst.bin"]
+    cut = folder / "cut-after-fst.iso"
+    cut.write_bytes(fx.image[: fst_off + fst_len])
+    lines, _ = drive(exe, [f"open {cut}"])
+    line = lines[0] if lines else ""
+    c.check(
+        line.startswith("refused ")
+        and f"puts {first} at 0x{at0:X}" in line
+        and "a truncated dump or copy?" in line,
+        f"an ISO cut after its file table: {line!r}",
+    )
+
+    pulled = folder / "pulled.iso"
+    keep = at0  # the first file and everything after it gone
+    said = (
+        f"cannot read {pulled} at 0x{at1:X} (+{min(32, size - at1)} bytes): it is {keep} bytes "
+        f"now, and was {size} when it was opened; was its storage removed?"
+    )
+    for reader in ("serve", "peek"):  # the drive's read, and the census's
+        pulled.write_bytes(fx.image)
+        lines, err = drive_checked(
+            c,
+            f"{reader} past a cut made while open",
+            exe,
+            [
+                f"open {pulled}",
+                f"serve {at0} 32",
+                f"truncate {keep} {pulled}",
+                f"{reader} {at1} 32",
+            ],
+            code=9,
+        )
+        c.check(
+            lines[4:6] == [f"serve {sha1(fx.image[at0 : at0 + 32])}", "truncate ok"],
+            f"{reader}: read, then cut: {lines[4:6]}",
+        )
+        c.check(
+            said in err and "bytes of zeros" not in err,
+            f"{reader}: a read past the cut stops the run, exit 9: {err.strip()[-300:]!r}",
+        )
+
+    if os.name != "nt":
+        pulled.write_bytes(fx.image)
+        fd = os.open(pulled, os.O_RDONLY)
+        try:
+            lines, err = drive_checked(
+                c,
+                "a read past a cut made under its descriptor",
+                exe,
+                [f"open /proc/self/fd/{fd}", f"truncate {keep} {pulled}", f"serve {at1} 32"],
+                code=9,
+                pass_fds=(fd,),
+            )
+            c.check(
+                said.replace(str(pulled), f"/proc/self/fd/{fd}") in err,
+                f"cut under its descriptor, exit 9: {err.strip()[-300:]!r}",
+            )
+        finally:
+            os.close(fd)
+
+    # A store's disc offsets start at its payload, so the words give the
+    # file's offset, in which its sizes are measured, and the disc's beside
+    # it. The cut falls inside the block the read hashes first, so the file
+    # still reaches the read's disc offset: said alone, that offset would
+    # contradict the size the line gives.
+    data = (out / "store" / f"{fx.game_id}{store.STORE_SUFFIX}").read_bytes()
+    pulled = folder / "pulled.soadisc"
+    pulled.write_bytes(data)
+    payload = struct.unpack_from("<Q", data, 0x20)[0]
+    covered = struct.unpack_from("<Q", data, 0x38)[0]
+    at = 5 * store.BLOCK_SIZE
+    keep = payload + at + 4096
+    n = min(store.BLOCK_SIZE, covered - at)  # the whole block, hashed before a byte is served
+    lines, err = drive_checked(
+        c,
+        "a store's block past a cut made while open",
+        exe,
+        [f"open {pulled}", f"truncate {keep} {pulled}", f"serve {at} 32"],
+        code=9,
+    )
+    c.check(
+        f"cannot read {pulled} at 0x{payload + at:X} (+{n} bytes, disc offset 0x{at:X}): it is "
+        f"{keep} bytes now, and was {len(data)} when it was opened; was its storage removed?"
+        in err
+        and "does not match its SHA-1" not in err,
+        f"a store cut while open, at a block not yet hashed: {err.strip()[-300:]!r}",
+    )
 
 
 def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
@@ -506,7 +927,8 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
 
     # the refusals, each in its own words
     said: dict[str, str] = {}
-    for name, (path, words) in broken_images(fx, out / "broken").items():
+    broken = broken_images(fx, out / "broken")
+    for name, (path, words) in broken.items():
         lines, _ = drive(exe, [f"open {path}"])
         line = lines[0] if lines else ""
         c.check(
@@ -514,9 +936,28 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
         )
         said[name] = line
     c.check(len(set(said.values())) == len(said), "every refusal says something different")
+    # and in a phone's words (specs/android.md L12d): the same fault named,
+    # and no PC command, which the PC's words for two of them do name
+    phone: dict[str, str] = {}
+    for name, (path, words) in broken.items():
+        lines, _ = drive(exe, ["words phone", f"open {path}"])
+        line = lines[1] if len(lines) > 1 else ""
+        words = PHONE_KEY.get(name, words)
+        c.check(
+            line.startswith("refused ") and words in line and not pc_words(line),
+            f"{name}, in a phone's words: {line!r} (wanted {words!r}, and none of {PC_ONLY})",
+        )
+        phone[name] = line
+    c.check(len(set(phone.values())) == len(phone), "every phone refusal says something different")
+    c.check(
+        all(pc_words(said[name]) for name in ("an RVZ", "no image")),
+        "the PC's words for an RVZ and for no image name a PC command",
+    )
     check_built_in(c, fx, out, cflags)
     check_store(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
     check_descriptors(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
+    check_identify(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}", broken)
+    check_truncated(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
 
     print(
         f"disc check: {c.passed} passed, {c.failed} failed ({len(fx.offsets)} files, {size} bytes)"

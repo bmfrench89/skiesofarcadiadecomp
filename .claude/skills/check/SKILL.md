@@ -27,9 +27,9 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5c | `python tools/citest/render_check.py` | 3.1 s | MSVC |
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
-| 5f | `python tools/citest/disc_check.py` | 4 s | MSVC |
+| 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 724 s | nothing (408 tests want a C compiler) |
+| 7 | `python -m pytest tools/tests -q` | 755 s | nothing (409 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -74,7 +74,7 @@ unquoted `#` as a comment and several pad scripts contain one.
 python tools/guard.py
 ```
 ```
-guard: 161 tracked files, no game data
+guard: 351 tracked files, no game data
 ```
 
 Catches game data about to enter the repository: 49 forbidden extensions
@@ -174,7 +174,7 @@ ok   window.c
 ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 38/38 runtime translation units
+compiled 39/39 runtime translation units
 gxv.c: compiled as the backend too
 the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
@@ -244,7 +244,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 38/38 runtime translation units
+compiled 39/39 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...
@@ -287,7 +287,7 @@ python tools/fetch_mingw.py
 python tools/citest/compile_runtime.py --cc mingw
 ```
 ```
-compiled 38/38 runtime translation units
+compiled 39/39 runtime translation units
 ```
 
 ## 6. The decompilation check
@@ -339,21 +339,22 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1357 passed, 13 skipped in 723.93s
+1394 passed, 41 skipped in 755.08s
 ```
 
-1370 tests in 87 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1338 passed, 14 skipped` without
+1435 tests in 89 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1375 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `949 passed, 421 skipped` without MSVC. The 13
+into one module-level skip), `985 passed, 450 skipped` without MSVC. The 41
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
 `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),
-and `test_seam.py`'s nine, which want an ELF system (CI's Linux legs run them).
+`test_seam.py`'s 17, which want an ELF system, and `test_import.py`'s 20, which want
+Linux (CI's Linux legs run both).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 408 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 409 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

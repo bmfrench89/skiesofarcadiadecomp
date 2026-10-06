@@ -7467,3 +7467,203 @@ the driver's.** 2026-10-04.
   `--apk` case), and `test_android_tool.py` is new, with 9.
 - **What follows:** L12d, the import on the emulator; then L12's Done on the AYN Thor. D-33 (the package name
   and the release key) is the owner's, before anyone else installs it.
+
+**L12d: the import.** 2026-10-06.
+
+- **What it is:** the phone's first run, on L12c's emulator. It asks for the game library, then the disc,
+  through SoaActivity's own picker opening in Download; checks each before keeping it; and says each refusal
+  in the player's words, none naming `python tools/`, `soa.exe` or `recompile.py` (specs/android.md L12d).
+  - **The disc** is read through the picked descriptor when it is a regular file on this phone's own storage
+    whose grant was kept, and copied into `no_backup/copy/` otherwise. Since 6e39f13 a `/proc/self/fd/N` path
+    is read through N, and a pipe or a socket is refused as a stream. A read that fails inside the image after
+    the open stops the run with exit 9 ("cannot read <p> at 0x..: <the reason>; was its storage removed?"),
+    never served as zeros, and a file table that runs past the image's end is refused ("a truncated dump or
+    copy?").
+  - **The library** is checked through its descriptor before it is copied, and loaded from the copy before it
+    replaces the one installed. The checker, `runtime/elfcheck.c` and `tools/soa/elfcheck.py` word for word,
+    now names a Windows program or DLL as one; on Android accepts only bionic's C library names, so a library
+    needing `libc.so.6` is "built for Linux"; checks the machine before the class, so the 32-bit names print;
+    calls another record "different releases"; and holds the record's `dol=` to the executable the app plays.
+  - **`runtime/import.c`** (new; Linux only, refusing stubs elsewhere) is the portable half: the copy (checked
+    from its first bytes, held to its size, 512 MiB kept free, cancellable, then `fsync`, 0444, `rename` and
+    the folder's `fsync`), the rule for reading in place, and the sweep of unfinished copies.
+    `runtime/android.c` is the flow and the calls into SoaActivity.
+  - **SoaActivity** draws the boxes (`SDL_ShowMessageBox`, overridden: a ScrollView, the DeviceDefault theme,
+    a pad's buttons); takes the persistable grant in `onActivityResult` before it writes
+    `no_backup/pending_<kind>`, so a pick outlives its process; shows a copy's progress with Cancel; and
+    publishes the launcher shortcut "Choose the game files again". `configChanges` gains density, fontScale,
+    fontWeightAdjustment, grammaticalGender, touchscreen and colorMode, and the app is a game
+    (`appCategory`). The first run writes `soa.ini` with `render = 1`; the library moves from `files/` to
+    `no_backup/`.
+  - **For checking it:** `SOA_IMPORT=1|library|disc|forget` and `SOA_IMPORT_PICKER`, from extras only a
+    debuggable build reads, each box then answered in C; a debug-only provider (`<pkg>.testfiles`: `file/`,
+    `pipe/`, `?truncate=N`), absent from a release APK; `tools/soa/gamefixture.py`'s ten libraries, each
+    wrong in one way, with the words predicted for each; and `android.py`'s `provide`, `stage`, `mutants`,
+    `player`, `reboot` (the port's AVD only) and `grants`, with `run --pick`, `--tap`, `--key`,
+    `--kill-before-tap` and `--font-scale`.
+- **Checked on the PC and in the container** [V]:
+  - **The PC:** `dc_check` and `render_check` pass; the self test 87 cases, 0 failures; replay 23/23 at 1, 2,
+    3 and 8 threads; `title` 4 of 4.
+  - **`disc_check.py`:** 156 passed under MSVC, clang-cl and llvm-mingw; 169 under gcc in the container as an
+    ordinary user, and 168 as root, which reads a file made unreadable, so the by-name refusal is left out.
+  - **`compile_runtime.py`:** 39 of 39 under MSVC, clang-cl, llvm-mingw, android-x86_64 and android-arm64;
+    `import.c` is the 39th. MSVC's C4996 on `plat_fopen_rb` is silenced in `plat.h` itself.
+  - **The Linux split build:** `recompile.py --cc gcc --split --link`; the self test 0 failures, its `[game]`
+    record carrying `dol=8c0e278126fa3b0173400fdb632038172743cc13 profile=gcc`; replay 23/23 at 1 and 8
+    threads; `title` 4 of 4; `test_seam.py` 17 passed, the real-build case included; `test_import.py` 20
+    passed (`-p noskip`, as an ordinary user). CI's gcc, clang and ARM64 legs run `test_import.py` with skips
+    refused.
+  - **CI, before the push:** the code ran green on the scratch branch `l12d-ci` (run 37521297619):
+    `test_import.py` 20 of 20 and the disc check 169 on the gcc, clang and ARM64 legs, 156 under MSVC and
+    clang-cl, and 39 of 39 compiled on every leg. Only Android builds compile the two later changes to
+    `android.c`'s message (below).
+- **Checked on the emulator** [V], the AVD `soa_x86_64` (Android 14, `UE1A.230829.050`, userdebug, port 5556):
+  - **The ten wrong libraries through `file/`:** each drew exactly its predicted line,
+    `[import] refused <name>: <words>`, and `[exit] 1`; the installed library's sha256 was unchanged
+    (`c0046416…`), and no `.tmp` was left. They are the spec's refusals: another ABI (arm64, arm32, two
+    Windows files, a library needing `libc.so.6`), 4 KB pages, another `cpu.h` (another build's record), an
+    import the runtime lacks, and another disc (another `dol=`, or none). The mutation: the real library,
+    picked as `file/real.so`, was copied (34,428,504 bytes), loaded from the `.tmp` and installed.
+  - **The same ten through `pipe/`:** all refused: arm32 and arm64 with "the copy was stopped after 64 of N
+    bytes: <the same words>", the two Windows files "after 152 of 512 bytes: …"; the rest were copied whole
+    and refused in the same words as through `file/`.
+  - **Another game's store through `file/`:** "GTSE01.soadisc is GTSE01, not GEAE8P: this app plays the North
+    American GameCube release only (European and Japanese discs are not supported)", `[exit] 1`, no copy.
+  - **The same store through `pipe/`:** "a stream (a pipe or a socket): copying to
+    …/no_backup/copy/disc.soadisc.tmp", then "the copy was stopped after 1048576 of 2236416 bytes:
+    GTSE01.soadisc is GTSE01, not GEAE8P: …", `[exit] 1`, `copy/` empty. The mutation: `?truncate=65536`
+    gives "the copy stopped at 65536 of 2236416 bytes: GTSE01.soadisc ended early; pick it again".
+  - **The real picker, read in place:** DocumentsUI driven by uiautomator, the store staged in
+    `/sdcard/Download`. "[android] disc GEAE8P.soadisc:
+    content://com.android.externalstorage.documents/document/primary%3ADownload%2FGEAE8P.soadisc,
+    grant kept, read in place as /proc/self/fd/104";
+    `[disc] /proc/self/fd/104: GEAE8P rev 0 store v1 … verified dump`; 137 blocks hashed (8.6 MB) in 87.7 ms;
+    `[exit] 0`; one grant, kept. Its mutation is the re-open probe (found, 1): the open by name that a build
+    without 6e39f13 would make is refused there. On Linux, `disc_check.py`'s unreadable-file case is the same
+    test, and 6e39f13 showed it refusing a build that opens the path again.
+  - **A damaged block:** `SOA_DISC_FLIP=sound/tone.info` gives exactly one "flip armed … 0x5502E8E8
+    (sound/tone.info)" line, then "[disc] block 21762 of /proc/self/fd/97 (0x55020000) does not match its
+    SHA-1: sound/stv73.samp, sound/tone.info; the store is damaged: copy it to this phone again, or make it
+    again on your PC" and `[exit] 9`. The mutation: with `SOA_DISC_VERIFY=0` there is no block line, and the
+    game hangs until the watchdog's exit 5.
+  - **The grant survives a reboot:** `android.py reboot` takes 39 s; the grant is still kept, and the next run
+    reads in place (fd 102) and ends `[exit] 0`. The mutation, with 20 s between `forget` and the reboot
+    (found, 3): 0 grants after it, then "GEAE8P.soadisc cannot be read now: the permission to read it is
+    gone", `[import] cancelled (disc)` and `[exit] 1`. A pick restored the grant.
+  - **Back in the picker:** two Backs (found, 2), then `[import] cancelled (disc)`, `[exit] 1`, `disc.txt`
+    unchanged.
+  - **The process killed with the picker up:** `--kill-before-tap` killed it, the file was tapped, and the app
+    came back as a new process: "[import] pending disc pick from an earlier process: <uri>", read in place,
+    `[exit] 0`, one grant.
+  - **A configuration change:** `font_scale` 1.15 while the picker was up and 1.3 during the run: 600 frames,
+    `[exit] 0`. The mutation: with `fontScale` taken out of `configChanges`, the activity was recreated
+    during the pick; the next process, whose `soa.log` the run pulled, never read in place or reached `[exit]`,
+    and was stopped at the 600 s limit with the picker showing again. In a re-run (found, 4), logcat
+    showed the first process end `[exit] 0`.
+  - **The player's path, with no extras:** Pick; Back (twice); Pick; `libsoa_game.so` (34 MB copied,
+    installed); Pick; `GEAE8P.soadisc` (read in place). Then `[import] wrote …/files/soa.ini: render = 1`,
+    `[settings] … 1 setting(s) applied` and `[window] open at 2x`. The screen captures, at font scale 1.0 and
+    1.3, are in `build/android-player/`: at 1.3 the text scrolls and the buttons stay on screen. The
+    re-import, `am start --ez soa.reimport true` then "Keep this one" twice, starts the game.
+  - **The game after the import** [V, looked at for this entry]: the capture 30 s after the last step shows
+    the opening's Overworks logo at 2x at font scale 1.0, and is black at 1.3 and after the re-import. Captured
+    again after the last step, every 0.3-1.1 s for 100 s after a first run at font scale 1.3 and every 0.4-4.6 s
+    after a re-import, the picture came after both: black while the game boots, then "Presented by SEGA", a
+    fade, "Created by Overworks", 22 to 25 s of black while it loads, and the opening's narration ("The age of
+    exploration has dawned upon the …"). After a launch with nothing to ask, every 0.5-8.7 s for 120 s from the
+    launch, SEGA came at 36.0 s and Overworks was fading at the end. The first logo came 6.7 s after the first
+    run's last step with the PC quiet, 7.0 s after the re-import's with the test suite running beside it, and
+    36.0 s after the plain launch, also with the suite running. In both stepped series a capture at 30 s would
+    have shown Overworks, so the two black captures were not reproduced. [I] They fell in the opening's own
+    black, whose timing varies from run to run.
+  - **L12c unchanged:** the first launch logs "[android] library moved from
+    /data/data/<pkg>/files/libsoa_game.so to /data/user/0/<pkg>/no_backup/libsoa_game.so"; the self test 0
+    failures; replay 23/23 at 1, 2, 3 and 8; `title` 4 of 4; `SOA_MEMPOKE=0x81800000` reported once,
+    `[exit] 0`; Home and back with the frames held at 300 while away, 16.3 s excluded, 7.6% CPU away,
+    `[exit] 0`.
+  - **Also:** `cmd shortcut` shows the shortcut, id `reimport`. With `no_backup/disc.txt.tmp` made a folder, the
+    run still plays in place and ends `[exit] 0`, the grant kept (its message, see below). Pad B on a box answers
+    Quit, `[exit] 0`. A name with an accented letter and a character outside the Basic Multilingual Plane
+    (`pagés-` and U+1F600) reached the refusal line without a CheckJNI abort; `android.py provide` refuses names
+    that are not plain, so that file itself was not served.
+  - **The final APK, after the fact checks.** That run logged "cannot create …/disc.txt.tmp: Is a directory; the
+    next launch asks for the disc again", but the `disc.txt` before still named the same disc, so the next launch
+    would play it without asking; no next launch had been run. What the next launch finds depends on the
+    `disc.txt` left and the permission and copy let go, so `android.c` now says what stays rather than what
+    comes: "disc.txt is as it was, naming this disc"; "disc.txt is as it was, naming <name> as copied before"
+    or "… as read in place before", for another disc or this one read another way; and, with none, "with no
+    disc.txt, the next launch asks for the disc again". On the APK built with it (`4f8cb81f…`): the self test
+    0 failures; the unwritable `disc.txt` with this disc named before, `[exit] 0`, and the next launch read in
+    place with no box, `[exit] 0`; the same with no `disc.txt` before, `[exit] 0`, and the next launch asking for
+    the disc (`[import] box: Now the disc: …`, which a check run answers and cancels, `[exit] 1`); a real pick
+    putting `disc.txt` back as it was, with one grant; and pad A on the re-import's box answered "Pick a new
+    one", its default, then two Backs and pad B answered Quit, `[exit] 0`. Every other emulator check ran on the
+    APK before these two changes to that message.
+- **What the emulator found:**
+  1. **Android 14 refuses to open the picked file again by name.** The probe:
+     "/storage/emulated/0/Download/GEAE8P.soadisc, f_type 0xef53, open by name: Permission denied", an ext4
+     descriptor from the lower filesystem, with `persist.sys.fuse.passthrough.enable` unset. The spec's first
+     plan, that `disc.c` would open `/proc/self/fd/N` again, fails there, so reading through the descriptor
+     (6e39f13) is necessary. The design review had predicted EACCES from AOSP's source; this is the
+     measurement.
+  2. **DocumentsUI takes two Backs to close.** Opened in Download, it takes the first Back as "up a folder"
+     (Download to the device's root), and only the second closes it (by hand, twice).
+     `android.py run --key KEYCODE_BACK` now presses Back until the picker goes, at most 4 times
+     (`BACK_TRIES`).
+  3. **A reboot can beat the write of a grant.** `forget` followed by a reboot within seconds brought the
+     grant back, and with 20 s between them the release held: a release, like a take, reaches
+     `urigrants.xml` only after a delay, about 10 s by the design's P3 (AOSP's source, for a take). [I] So a
+     phone restarted within about 10 s of a disc pick asks for the disc again.
+  4. **The destroy path is reached by check 13's mutation.** Without `fontScale` in `configChanges`, the font
+     change makes Android remake the activity when the pick comes back, which destroys the one waiting in it.
+     The run's pulled `soa.log` is the next process's, so the first time nobody saw it. Run again with logcat
+     cleared first, logcat shows `[import] the app was closed during the import`, `[exit] 0` and SDL's
+     `onDestroy()`, all at 16:49:39.037, and the process gone 21 ms later. So `onDestroy` wakes a waiting pick,
+     and `android.c` ends the run well inside the second SDL gives its thread; a box, a copy's dialog or an open
+     left waiting is woken the same way, and was not tried. The first attempt, `settings put global
+     always_finish_activities 1` before a run, saw the activity stopped behind DocumentsUI and never destroyed
+     in 5 minutes; but ActivityManager reads that setting at boot or from the Developer Options switch [I,
+     AOSP's ActivityManagerService], and the run did neither, so it showed nothing.
+- **What the design review found,** before any of it was built [V, code]:
+  - **SDL's own file dialog does not fit** (SDL 3.4.18, `vendor/sdl3`, re-read for this entry). It runs one
+    dialog at a time and cannot cancel it (`SDL_android.c:3347, 3418`); its intent has no start folder and
+    no local-only flag (`SDLActivity.java:2092-2105`); a new process drops its result, because the dialog's
+    state is a static set when it opened (`:229, 747`); `SDLActivity.java` never takes a persistable grant,
+    so no pick would outlive a reboot; and it starts the picker from SDL's thread (`:2108`). So SoaActivity
+    has its own.
+  - **"Another disc needs no new check" was refuted.** `disc_open` holds the disc's executable to the app's
+    (`DISC_DOL_SHA1`), and `disc_builtin` the copy built into the library, but nothing held the executable
+    the library's code was translated from: `--no-embed` builds no copy in, and `--force` builds in a
+    disc's whatever `--dol` was. The record's `dol=` is that executable's SHA-1 (`recompile.py:638, 700`),
+    and the checker now holds it to the app's before `dlopen`: "this game library was made from another
+    disc's executable (32e08744cd28, this app plays 8c0e278126fa): rebuild it with Setup from your own
+    disc".
+- **Not measured:**
+  - **An installed library refused after an app update,** shown in the first box; and three of the design's
+    mutations: an APK that writes no `soa.ini`, an `onActivityResult` that only notifies, and the library
+    left unmoved.
+  - **The real store copied through a pipe, and a Cancel during a copy,** on the emulator. `test_import.py`
+    cancels a copy at a byte on CI's Linux legs.
+  - **A cloud provider's file:** none was picked here.
+  - **A phone.** L12's Done is on the AYN Thor, then the Fold 8.
+- **Not built:** card import and export through the picker (proposed as slice L12h), a CI build of the APK, and
+  a box for a run stopped mid-play. A damaged block or a disc whose storage went (exit 9) closes the app, and
+  the reason is in the log alone (`finish()` in `android.c` shows nothing), in lines that name the disc by its
+  descriptor's path: a box would need words of its own.
+- **The words are not blessed.** Tests pin the checker's and the disc layer's refusals (`test_android_build.py`,
+  `test_seam.py`, `disc_check.py`) and some of the copy's (`test_import.py`); nothing but the code pins the
+  boxes or the refusals `android.c` words itself. The owner has looked at none of them, so under CLAUDE.md's
+  first-bless rule they are a draft. `build/android-review/index.html` (local) shows the boxes as the emulator
+  drew them at font scale 1.0 and 1.3 (the re-import's at 1.0), the refusals its check runs printed with what
+  causes each, and every other box and refusal as the code words it.
+- **The modules:** `test_android_build.py` has 17 tests (was 9), `test_seam.py` 17 (was 9),
+  `test_android_tool.py` 34 (was 9) and `test_guard.py` 84 (unchanged). New: `test_import.py` (20), and
+  `test_android_jni.py` (4), which holds `android.c`'s JNI lookups to `SoaActivity.java` and
+  `proguard-rules.pro`.
+- **The tests** are 1435 in 89 files, measured four ways: 1394 passed and 41 skipped here; 1375 and 42
+  without capstone; 985 and 450 without MSVC, 409 of them the tests that need MSVC, counted by their skip
+  reasons; 966 and 451 without either. The full run took 755.08 s.
+- **What follows:** L12's Done on the AYN Thor, which needs the owner and the phone. Without them, two slices
+  need neither: R5's own Android sysroot, so Setup builds the phone's library without the NDK, and L12g, mods
+  on the emulator. Which comes first is the owner's (PLAN-NEXT §0). D-33 (the package name and the release
+  key) is still the owner's, before anyone else installs it.

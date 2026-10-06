@@ -38,7 +38,10 @@ Vulkan** (D-17, G1). **The owner's answers of 2026-10-05** (§6):
 | 4 | Phone | Plays | With a controller, or the touch overlay (L12e) |
 
 A rebuilt library (a new package version, or a new disc revision) is picked again from the first-run screen,
-which a long press reopens. Saves are the card image, which Dolphin, the PC build and the phone share (§3.8).
+which the launcher shortcut "Choose the game files again" reopens (a long press on the app's icon): the app asks
+for both files again, offering "Keep this one" for each it already has (§3.6). An app update that the library no
+longer fits opens that screen by itself, saying why. Saves are the card image, which Dolphin, the PC build and
+the phone share (§3.8).
 
 **Out of scope:**
 - building on the phone (route C1);
@@ -124,7 +127,7 @@ which a long press reopens. Saves are the card image, which Dolphin, the PC buil
 | Library | Built by | Holds | Loaded by |
 |---|---|---|---|
 | `libSDL3.so` | SDL (the pinned AAR, §3.5) | SDL3 | `SDLActivity` |
-| `libsoa_runtime.so` | the APK build | `runtime/*.c` with `SOA_SDL` and `SOA_NO_DECOMP`, and `SDL_main` (`runtime/android.c`) | `SDLActivity`, which calls its `SDL_main` (`getMainSharedObject()` overridden) |
+| `libsoa_runtime.so` | the APK build | `runtime/*.c` with `SOA_SDL` and `SOA_NO_DECOMP`, and `SDL_main` (`runtime/android.c`) | `SDLActivity`, which calls its `SDL_main` (the last of `getLibraries()`, where SDL's own `getMainSharedObject()` looks) |
 | `libsoa_game.so` | the player's PC (§3.4) | the translated code and the player's system files | the runtime, by `dlopen` (§3.3) |
 
 - **Which libraries `SDLActivity` loads:** `getLibraries()` returns `{"SDL3", "soa_runtime"}`. There is no
@@ -132,8 +135,8 @@ which a long press reopens. Saves are the card image, which Dolphin, the PC buil
 - **`SOA_NO_DECOMP` always.** The APK holds no decompiled code (distribution §3.1).
 - **`runtime/android.c`** is inside `#ifdef __ANDROID__`, since every `runtime/*.c` goes into every desktop
   link (`recompile.py:286, :335`) and `compile_runtime.py`.
-- **What the runtime library exports:** the seam (§3.2), plus `SDL_main` and the JNI entry points its Java glue
-  calls (§3.6).
+- **What the runtime library exports:** the seam (§3.2), plus `SDL_main`. Nothing for the Java glue: it sets the
+  environment through SDL's own `nativeSetenv`, and `runtime/android.c` calls it through JNI, by name (§3.6).
 
 ### 3.2 The seam: `DT_NEEDED` one way, one table the other
 
@@ -188,24 +191,67 @@ rewritten):
 
 ### 3.3 Loading the game library
 
-1. **The pick:** `SDL_ShowOpenFileDialog` returns a `content://` URI (research §3).
-2. **The copy:** streamed into `noBackupFilesDir/libsoa_game.so.tmp`, renamed into place, then `chmod 0444`
-   (research §1).
-3. **Before any `dlopen`,** from the file's own headers, `runtime/elfcheck.c` checks:
-   - AArch64 (x86_64 on the emulator) and `ET_DYN`;
+1. **The pick:** SoaActivity's own `ACTION_OPEN_DOCUMENT`, of any type (`*/*`) and opening in the shared Download
+   folder (`EXTRA_INITIAL_URI`), returns a `content://` URI. Not SDL's `SDL_ShowOpenFileDialog`, which this text
+   first named: nothing cancels an SDL dialog but its result, it cannot open in a chosen folder or ask for local
+   files only, and it starts the picker off the UI thread [V].
+   - `runtime/android.c` calls `pick` through JNI from SDL's thread, which waits on a lock of the glue's own, never
+     on the activity's own monitor, which SDL uses for itself.
+   - `onActivityResult` keeps the grant, then writes the pick to `no_backup/pending_library`, and only then wakes
+     the waiter: a pick that comes back to a new process, the one that asked having been killed, is still used
+     [V L12d].
+   - Back in the picker is a cancel, and the prompt comes back. Opened in Download, the picker takes the first
+     Back as "up a folder" and closes at the second [V L12d].
+2. **Checked, copied, loaded, and only then put in place,** so a pick that will not load never costs the player
+   the library they had [V L12d]:
+   - before a byte is copied, through its descriptor: a disc picked as the library is refused by its first bytes,
+     and a regular file goes through step 3 as `/proc/self/fd/N`;
+   - copied by `runtime/import.c` into `noBackupFilesDir/libsoa_game.so.tmp`: at most 256 MiB, with room for it
+     and 512 MiB more, made `0444` (research §1) and synced. A stream (a pipe or a socket) cannot be checked whole
+     first: its first 64 bytes are held to this device's ELF header before the rest comes (for a Windows file, as
+     far as the header that names it), and any other refusal is step 3's, on the whole copy;
+   - loaded from the copy (step 4), then renamed over the installed one, its mapping still good;
+   - one `dlopen` per process: a library picked once one is loaded (from the disc's "Pick another library") is
+     checked as a file, put in place with the old one kept as `.old`, and the run ends asking the player to open
+     the app again.
+3. **Before any `dlopen`,** from the file's own headers, `runtime/elfcheck.c` checks, as `tools/soa/elfcheck.py`
+   does word for word:
+   - a Windows file (`MZ`, then `PE`), named as one, with its machine and whether it is a library;
+   - the machine, AArch64 (x86_64 on the emulator), before the class, so a 32-bit library is named for what it
+     was built for; then 64-bit, little-endian and `ET_DYN`;
    - every `PT_LOAD` aligned to at least 16384;
    - no `DT_TEXTREL`;
-   - `DT_NEEDED` including `libsoa_runtime.so`, and nothing outside it, `libc.so`, `libm.so` and `libdl.so`;
-   - the `.note.soa` record against the runtime's;
+   - `DT_NEEDED` including `libsoa_runtime.so`, and nothing outside it, `libc.so`, `libm.so` and `libdl.so`, on
+     Android by exactly those names, so a Linux library (`libc.so.6`) is refused as one;
+   - the `.note.soa` record against the runtime's (`abi`, `mode`, `baked`), then its `dol=` (step 4);
    - **every undefined dynamic symbol against the runtime's own export list.** Otherwise `dlopen(RTLD_NOW)` would
      fail first, with the linker's words.
-   Each failure is refused in the player's words:
-   - "this library was built for x86-64 Windows, not this phone";
-   - "this library was built for 4 KB pages; rebuild it with this package";
-   - "this library was built by package 1.2 and this app is 1.3: rebuild it with Setup".
+   Each failure is refused in the player's words, these among them as the emulator's check runs printed them; a
+   box puts the picked file's name and "cannot be used:" before them, with that name in place of any path:
+   - "pe-program.so is a Windows program for x86-64, not a game library for this device: pick the libsoa_game.so
+     that Setup makes for this device" ("a Windows library" for a DLL);
+   - "this library was built for 64-bit ARM (AArch64), not this device (x86-64): rebuild it for this device with
+     Setup";
+   - "this library was built for Linux (it needs libc.so.6), not Android: rebuild it for this device with Setup";
+   - "this library was built for 4096-byte pages, and devices may use 16 KB ones: rebuild it with this package's
+     Setup";
+   - "this game library and this app come from different releases (its build is 954c63907bf6, the app's
+     705f401d4dcd): install the app and run Setup from the same release";
+   - "this game library was made from another disc's executable (32e08744cd28, this app plays 8c0e278126fa):
+     rebuild it with Setup from your own disc";
+   - "this library needs …, which this app's runtime does not have: rebuild it with this package's Setup".
+   On the emulator each of `android.py mutants`' ten libraries drew exactly its predicted line [V L12d]. The words
+   wait for the owner's look; until then only tests pin them.
 4. **`dlopen(path, RTLD_NOW | RTLD_LOCAL)` from native code,** never `System.load`. Android 17's read-only rule
-   binds `System.load`, and the file is read-only anyway (research §1). Then `soa_game` is checked for its `abi`,
-   and the disc's DOL SHA-1 against the record.
+   binds `System.load`, and the file is read-only anyway (research §1). Then `soa_game`'s table is held to the
+   runtime's `abi`, and the system files built into it to their SHA-1s ("the system files built into this game
+   library are damaged: rebuild it with Setup"). The library is loaded before any disc is opened, and **the two
+   are held to each other by a chain:**
+   - `elf_check` holds the record's `dol=`, the SHA-1 of the executable the library was translated from, to the
+     one this app plays, before `dlopen`; a record with no `dol=` is refused too;
+   - `disc_open` holds the disc's executable to the same SHA-1, at the pick and at every launch;
+   - with the system files built in, `disc_open` also holds the disc's file table to the library's (I3). That
+     refusal offers "Pick another library", since either may be the wrong one.
 5. **Precedent:** the RPCSX app does steps 1 and 4 at target SDK 37 today (research §1).
 
 ### 3.4 The game library on the player's PC (R5)
@@ -250,11 +296,32 @@ rewritten):
   - target 37 waits until it is installed. Its rule for audio in the background does not bind a game that pauses
     there (research §8).
 - **ABIs:** `arm64-v8a` alone in a release; `x86_64` too in a debug build, for the emulator.
-- **The Java glue,** `SoaActivity extends SDLActivity`:
-  - `getLibraries()` and `getMainSharedObject()` (§3.1);
-  - persisting the picker's grants;
-  - the streamed copies;
-  - the check mode's extras (§3.14).
+- **The Java glue,** `SoaActivity extends SDLActivity`, as L12d built it. `runtime/android.c` calls it through JNI,
+  by name, from SDL's thread, and each call waits there: never on the UI thread, which draws what it waits for, nor
+  on the activity's own monitor, which SDL uses for itself:
+  - `getLibraries()` (§3.1), and `getArguments()` from the check mode's `args`;
+  - `onCreate`: `SOA_NOBACKUP` in every build (§3.8); the check mode's extras in a debuggable one (§3.14); and the
+    launcher shortcut "Choose the game files again" (§1; id `reimport`, short label "Game files"), dynamic since
+    the package name is still a working one (Q-A4). Its extra, `soa.reimport`, which any build reads, sets
+    `SOA_REIMPORT`, so both files are asked for again. Used once the app is running, it brings a toast saying to
+    close the app first, since SDL ignores a new intent once `SDL_main` runs;
+  - `pick` and `onActivityResult` (§3.3 step 1);
+  - `openFd`, a detached descriptor whose open can be cancelled; `describe`: the name (never used as a path), the
+    size, the provider and whether the grant is kept; `release`; and `tidyGrants`, which releases every grant that
+    neither `disc.txt` nor a pending pick names;
+  - `status`: a copy's progress, with a Cancel, since Back reaches no app that targets Android 16, and the screen
+    held on while it shows;
+  - `messageboxShowMessageBox`, SDL's message box overridden: the message in a ScrollView, so a long refusal
+    scrolls and the buttons stay on screen at a large font [V L12d, font scale 1.3]; the system's DeviceDefault
+    dialog; a pad's A for the default button and B for Quit [V L12d]; and, once the activity has gone, an answer
+    at once, which `android.c` takes as the end of the run;
+  - `onDestroy`: every waiter woken before SDL's own teardown, so that `android.c` ends the run inside the second
+    SDL waits for it. A pick waiting is [V L12d, through check 13's mutation: `[import] the app was closed during
+    the import`, `[exit] 0` and SDL's `onDestroy()` in one millisecond]; a box, a copy's dialog or an open waiting
+    is woken the same way, and was not tried.
+  The copies are not the glue's: `runtime/import.c` makes them, in C (§3.7). `app/proguard-rules.pro` keeps every
+  member `android.c` reaches (minify is off today), and `test_android_jni.py` holds `android.c`'s lookups to the
+  Java and to the keep rules, since CI never builds the Java.
 - **What the APK holds:** SDL3, the runtime, the glue, the shaders' SPIR-V (L12f) and the licences. No translated
   or decompiled game code, and no game data.
 - **The guard over it:** `tools/guard.py --apk <file>` runs `--tree`'s deny scan over the APK's entries. It also
@@ -269,15 +336,55 @@ rewritten):
 ### 3.7 The disc on the phone: read in place, or copied
 
 - **By default, read in place.**
-  - The picked URI's grant is persisted, by the Java glue, since SDL never does it (research §3).
-  - On each launch the glue opens a file descriptor. It must be a regular file that seeks (research §7).
-  - The glue passes it to `main()` as `argv[1] = /proc/self/fd/N`, which `fopen` and `plat_path_kind` read as
-    the file. So `disc.c` and `main.c:1298` need no change.
-- **Otherwise, copied** into `noBackupFilesDir`: a cloud provider, a pipe, or a grant that is gone. Free space is
-  checked first, and the copy says how big it is.
+  - The picked URI's grant is kept by the Java glue, in `onActivityResult`, since SDL never keeps one (research
+    §3). Android writes kept grants to `urigrants.xml` 10 s later (AOSP's `UriGrantsManagerService`) [V]: on the
+    emulator one outlived a reboot, and a release followed by a reboot within seconds was undone [V L12d].
+  - At the pick, and at every launch after it while `no_backup/disc.txt` says the disc is read in place, the glue
+    opens a descriptor N, and `android.c` passes it to `main()` as `argv[1] = /proc/self/fd/N` (`main.c:1303`
+    unchanged). A grant gone since is said ("GEAE8P.soadisc cannot be read now: the permission to read it is
+    gone"), and the disc asked for again [V L12d].
+  - **`disc.c` reads that path through N itself** (`plat.h`: `plat_path_kind` `fstat`s N, `plat_fopen_rb` reads a
+    `dup` of it; `elfcheck.c` the same), and `[disc]` still names `/proc/self/fd/N`. This text had `fopen` open
+    the path again, and on Android 14 that is refused: a check run's probe of the picked store logged
+    "/storage/emulated/0/Download/GEAE8P.soadisc, f_type 0xef53, open by name: Permission denied", an ext4
+    lower-filesystem descriptor, with `persist.sys.fuse.passthrough.enable` unset [V L12d]. A pipe or a socket is
+    refused there as a stream, to be copied first.
+  - **Only when all four hold** (`import_in_place`); otherwise it is copied, and the `[android]` line says why:
+    - a regular file that seeks (research §7; "a stream (a pipe or a socket)");
+    - from the phone's own storage, one of `com.android.externalstorage.documents`,
+      `com.android.providers.downloads.documents` and `com.android.providers.media.documents`, compared whole
+      ("not this phone's storage"), since a cloud's would be asked for 1.4 GB at every launch;
+    - not served from `/mnt/appfuse`, where Android puts a provider's descriptors made on demand ("a proxy
+      (/mnt/appfuse)");
+    - its grant kept ("the permission could not be kept").
+  - **Checked before anything is copied,** through its descriptor, by `disc_open`: the id, the revision, the
+    executable (§3.3 step 4), the file table, and every file in it inside the image ("a truncated dump or copy?").
+    `disc.txt` is written only once `disc_open` has accepted the disc; when it cannot be written, the run plays all
+    the same and the `disc.txt` before stays as it was, which the next launch takes; the log says which disc it
+    names. With this disc named, read the same way, the next launch plays it, and with none it asks for the disc
+    [V L12d, both].
+  - **A read that fails inside the image once it is open stops the run** with `[exit] 9` and
+    `[disc] cannot read <path> at 0x<offset> (+<n> bytes[, disc offset 0x<o>]): <why>; was its storage removed?`,
+    the why being the system's words, or "it is N bytes now, and was M when it was opened". It is never served as
+    zeros. On a phone the app then closes, as it does when a damaged block stops the run (below): no box says why
+    yet, and these lines name the disc by its descriptor's path (not built, L12d).
+- **Otherwise, copied** by `runtime/import.c` into `noBackupFilesDir/copy/`, as `disc.soadisc` or `disc.iso`,
+  named by its content, never by its provider's name:
+  - it needs its size and 512 MiB more free, kept for the card's next write, and takes the space first
+    (`fallocate`); it is capped at 2 GiB, and held to the size its provider gave ("the copy stopped at 65536 of
+    2236416 bytes: GTSE01.soadisc ended early; pick it again" [V L12d]);
+  - a stream's first MiB is checked (`disc_identify`: the boot magic, RVZ or WIA, the game id, the revision) before
+    the rest is read [V L12d];
+  - its progress shows with a Cancel, the screen held on; it is synced and made `0444`, checked again as the disc
+    the port will read, renamed into place (its folder synced too), and then its grant is released;
+  - a refused pick leaves no copy and no grant, and the disc before goes, copy and grant, once a new one is
+    accepted.
+  The disc's picker offers files on the phone only (`EXTRA_LOCAL_ONLY`), so a player whose disc is in a cloud
+  downloads it to the phone first: one 1.4 GB copy rather than two [I]. No cloud provider was tried (L12d).
 - **The I4 store is the recommended thing to pick.** It is one file, it says if a copy damaged it (I5's block
-  hashes), and it is 2% smaller. An ISO or GCM works as on the PC. An RVZ is refused, naming the PC command that
-  converts it.
+  hashes, which stop the run with `[exit] 9` through the descriptor as on the PC [V L12d]), and it is 2% smaller.
+  An ISO or GCM works as on the PC. An RVZ is refused, saying how to make an ISO of it on the PC (Dolphin's Convert
+  File): no refusal on a phone names `python tools/`, `soa.exe` or `recompile.py` (`disc_set_phone_words`).
 
 ### 3.8 One data root, and the logs
 
@@ -286,10 +393,16 @@ rewritten):
     cache and the recordings (§2).
   - `chdir` moves the raw relative defaults.
   - `plat_exe_path` is never asked on Android.
-  - The first-run screen writes `soa.ini` there, with `render = 1`. Without it, `SOA_RENDER` is never defaulted
-    (`settings.c:432`), and no window opens.
-- **The card:** `build/cards/slotA.raw` under the root. It is exported and imported through the picker, since
-  the format is Dolphin's.
+  - The first run writes `soa.ini` there, with `render = 1`, once the import is done and only when there is none;
+    a check run never writes it. Without it, `SOA_RENDER` is never defaulted (`settings.c:433`), and no window
+    opens [V L12d: `[import] wrote …/files/soa.ini: render = 1`, then `[window] open at 2x`].
+- **The import's files are in `noBackupFilesDir`,** which SoaActivity passes as `SOA_NOBACKUP` and which neither a
+  backup nor a move to a new phone carries: the library (`libsoa_game.so`, 0444), `disc.txt` (`uri=`, `name=`,
+  `authority=`, `copy=`), the pending picks (`pending_library`, `pending_disc`) and the disc's copy (`copy/`). A
+  library L12c left in `files/` is moved there at the first launch [V L12d], and the `.tmp` files a stopped copy
+  left are swept at every launch.
+- **The card:** `build/cards/slotA.raw` under the root. Its export and import through the picker, since the format
+  is Dolphin's, are not built: they are proposed as their own slice, L12h.
 - **The logs:** stderr goes to `soa.log` in the root (the last two runs kept) and to logcat (tag `soa`), through
   a pipe and a thread. The report lines are the PC's, so `scenario.py check` can read a log pulled from the
   phone.
@@ -362,9 +475,26 @@ read from the `[audio]` line of a pulled log.
 ### 3.14 Checking it without a person
 
 - **The check mode.** The debug APK takes the run's environment as an intent extra:
-  `--es env "SOA_SELFTEST=1;SOA_SETTINGS=0"`, plus `--es args "..."`. The glue `setenv`s each variable before
-  `SDL_main`. Only a debuggable build reads them [V L12c]: the activity is exported, and a release must not let
-  another app choose what the port loads or how it runs.
+  `--es env "SOA_SELFTEST=1;SOA_SETTINGS=0"`, plus `--es args "..."` and, since L12d, `--es pick "..."`: the
+  `content://` URIs, `;` apart, that answer the import's picks in order, without the picker. The glue `setenv`s
+  each variable before `SDL_main`, and any of the three sets `SOA_CHECK_RUN=1`. Only a debuggable build reads them
+  [V L12c]: the activity is exported, and a release must not let another app choose what the port loads or how it
+  runs. A check run without `SOA_IMPORT` is L12c's, but for the library's new home (§3.8), the phone's words
+  (`disc_set_phone_words`, §3.7) and L12d's checks of the library (§3.3 step 3).
+- **The import's check runs** (L12d):
+  - `SOA_IMPORT=1` runs the import as a player's launch does; `library` or `disc` forces that pick; `forget`
+    releases the disc's kept grant and keeps `disc.txt`, as a lost permission would leave them. Any other value
+    ends the run with 1;
+  - no box is shown: each is logged (`[import] box: …`) and answered with its first button. A refusal
+    (`[import] refused <name>: <words>`) or a cancel ends the run with `[exit] 1`, and `soa.ini` is never written;
+  - an empty `pick` queue is a cancel, unless `SOA_IMPORT_PICKER=1`, which opens the system's picker for
+    `android.py` to drive;
+  - only a check run logs §3.7's probe of opening `/proc/self/fd/N` by name.
+- **The test provider,** in `android/app/src/debug/`, so a release has none: `<package>.testfiles`, not exported, so
+  only the app opens it, through the `pick` extra. `content://<package>.testfiles/file/NAME` is a regular
+  descriptor on `files/provider/NAME`, as the phone's storage gives one; `.../pipe/NAME` the same bytes through a
+  pipe and a writer thread, as a cloud's provider may give them; `?truncate=N` on either stops after N bytes, while
+  `query()` still says the whole size.
 - **The end of a check run.** It writes `[exit] N` as its last log line and then `_exit(N)`s after flushing,
   whether `main()` returned or the runtime left by `exit`, `_exit` or `_Exit` (linked with `--wrap`, L12c).
   This matters for two reasons:
@@ -373,11 +503,24 @@ read from the `[audio]` line of a pulled log.
     the first run's statics.
 - **`tools/android.py`** drives it over adb:
   - `install`;
-  - `push`: the corpus and a library, through `run-as` into the debug app's storage;
-  - `run NAME`: launch, then wait for `[exit]`;
-  - `replay`: one launch per capture and thread count, 23 x 4, as `scenario.py replay` runs one process each,
-    compared with the manifest by `scenario.py`'s own comparison;
-  - `logs`.
+  - `push-game`, `push-corpus` and `push-disc`: a library (into `no_backup/` since L12d), the corpus, and an image
+    or a store into `files/extracted/`, where `main.c` looks by default, through `run-as` into the debug app's
+    storage;
+  - `run`: launch, then wait for `[exit]`. Since L12d it takes `--pick` (a `content://` URI, or `file/NAME` or
+    `pipe/NAME` for a file `provide` put there); `--tap TEXT`, `--key KEYCODE` and `--kill-before-tap`, which drive
+    the system's picker from uiautomator's dump of the screen and set `SOA_IMPORT_PICKER=1`; and `--font-scale X`.
+    `--key KEYCODE_BACK` is pressed until the picker goes, at most 4 times: opened in Download, the picker takes
+    the first Back as "up a folder" [V L12d];
+  - `selftest`, and `replay`: one launch per capture and thread count, 23 x 4, as `scenario.py replay` runs one
+    process each, compared with the manifest by `scenario.py`'s own comparison;
+  - `logs`;
+  - since L12d: `provide`, a file for the test provider; `stage`, a file into `/sdcard/Download`, where the picker
+    opens, once `df` says the shared storage and the app's both have room for it and 512 MiB more; `mutants`, the
+    ten libraries the import must refuse, built against the APK's record and the executable it plays, each with
+    the line it must draw (`--push` provides them); `player`, the player's own path with no extras, its boxes and
+    files tapped by their text and each step's screen captured (`--fresh`, `--reimport`, `--font-scale`, `--out`);
+    `reboot`, of the AVD `soa_x86_64` and no other device, its new boot awaited, then unlocked and its screen held
+    on; and `grants`, the URI grants the app holds, each kept or not.
 - **The emulator:** the installed android-34 x86_64 image, with an x86_64 game library (§3.4), is the first
   target of every slice.
 - **The phones:** the AYN Thor first, since its Snapdragon 8 Gen 2 is the target's floor
@@ -515,11 +658,47 @@ paused guest spinning a core (§3.11, `irq.c`).*
 
 ### L12d. The import
 
+*Built 2026-10-06 (FINDINGS "L12d"). The picks are SoaActivity's own `ACTION_OPEN_DOCUMENT`, not SDL's file
+dialog, which nothing cancels but its result, which cannot open in a chosen folder or ask for local files only,
+and which starts the picker off the UI thread (§3.3). The disc is read through its descriptor: on Android 14
+opening `/proc/self/fd/N` again by name, as this text had `fopen` do, is refused (§3.7). Its design review refuted
+"another disc needs no new check": a library made from another disc's executable is now refused by its record's
+`dol=`, the first link of a chain that ends at the disc's own executable (§3.3 step 4). The way back to the
+first-run screen, which this text left to "a long press", is a launcher shortcut, "Choose the game files again"
+(§1). The rules for a picked descriptor and the copy itself are C, in `runtime/import.c`, where CI's Linux legs
+test them, since CI never builds the Java (§3.6). Beyond its Done, the emulator ran the player's own path with no
+extras, Back in the picker, the process killed with the picker up, a font change mid-pick, and L12c's emulator
+checks again; the destroy path came with that font change's mutation (§3.6). Not measured: a whole disc copied and
+then played, a Cancel during a copy on the device, the box an app update opens when the library no longer fits,
+three of the design's mutations, and any cloud provider (FINDINGS "L12d"). The card's transfer is not built
+(§3.8), and the words of the boxes and refusals wait for the owner's look.*
+
 *Files:*
-- `runtime/android.c`: the first-run screen, with SDL's message boxes and pickers;
-- `runtime/elfcheck.c`;
-- `SoaActivity.java`: the persisted grants, the copies, the descriptor passed as `/proc/self/fd/N`;
-- tests.
+- `runtime/android.c`: the first-run flow, the library before the disc; SDL's message boxes, drawn by
+  SoaActivity; the glue's calls through JNI; the pending picks and `disc.txt`; `soa.ini` on the first run; the
+  library moved from `files/` to `no_backup/`; the check mode (§3.14);
+- `runtime/import.c`, `import.h` (new): what is read in place and what is copied, the copy, the sweep and the
+  names (§3.7). Its body is Linux's (`#ifdef __linux__`); elsewhere it compiles to stubs that refuse;
+- `runtime/disc.c`, `disc.h` and `plat.h`: a `/proc/self/fd/N` path read through N, and a stream refused; a read
+  that fails inside the image stops the run, exit 9; a file table that runs past the image's end refused, and a
+  broken set of built-in system files at the open; the phone's words; `disc_identify`, `disc_port_dol_sha1` and
+  `disc_refused_by_build`;
+- `runtime/elfcheck.c`, `.h` and `tools/soa/elfcheck.py`, word for word alike: `ElfWant`'s `android` and `dol`,
+  and what §3.3 step 3 gained;
+- `runtime/game.c`, and `runtime/game.h` (new, the runtime's alone): `soa_check_game`, `soa_load_game` (one
+  `dlopen` per process) and `soa_game_dlopened`;
+- `android/`: `SoaActivity.java` (§3.6); `AndroidManifest.xml`, whose `configChanges` gains density, fontScale,
+  fontWeightAdjustment, grammaticalGender, touchscreen and colorMode, since SDL ends the process when its activity
+  is made again (without fontScale, a font change mid-pick kept the run from ever ending [V L12d]), and which
+  gains `appCategory="game"`, which keeps Android 16 from ignoring landscape on a screen 600 dp wide or more, the
+  Fold's inner one; `app/build.gradle.kts` and `app/proguard-rules.pro`, a release type with minify off and the
+  members `android.c` reaches kept; `app/src/debug/`, the test provider (§3.14); `CMakeLists.txt`, whose runtime
+  glob is asked again at every build, so a file added later, as `import.c` was, is built;
+- `tools/android.py` (§3.14), and `tools/soa/gamefixture.py` (new): `android_mutants()`, the ten libraries each
+  wrong in one way, with the words each must draw;
+- `tools/citest/disc_check.py` and `disc_driver.c`; `tools/tests/test_import.py` (new; CI's Linux legs run it with
+  no skips), `test_android_jni.py` (new), `test_android_build.py`, `test_seam.py` and `test_android_tool.py`;
+- docs.
 
 *Done, on the emulator:*
 - **Each of §3.3's refusals in the player's words:**
@@ -608,7 +787,8 @@ the CMake that builds the shaders into the runtime library, docs.
 6. **Thermal throttling** changes timing, not results. The replay is exact at every thread count, and the frame
    rates say which run they came from.
 7. **The process freezer** suspends a cached app 10 s after it goes to the background (research §8). The guest is
-   parked by then: asleep, since L12c, where it had been spinning (§3.11).
+   parked by then: asleep, since L12c, where it had been spinning (§3.11). An import's copy (§3.3, §3.7) stops
+   with the app and goes on when it is back: L12d gave it no job or foreground service [I, not measured].
 8. **The sysroot of §3.4** is new work, and its headers must agree with the bionic each phone runs. The savepoint's
    `jmp_buf` belongs to the runtime (`guest_savepoint`), which the APK builds against the NDK, so the game
    library's view of `setjmp.h` matters only for the declaration [V `cpu.h:111`].
@@ -632,7 +812,8 @@ One review on 2026-10-05, read-only against the code at d6d64aa. What it changed
 6. **`libmain.so`** could not have called the runtime under an exact export list. `SDL_main` moved into the
    runtime library. §3.1.
 7. **A file descriptor passed to `disc.c`** would have been closed by `main.c:1298`'s `disc_open`. §3.7 passes
-   `/proc/self/fd/N` as the path instead.
+   `/proc/self/fd/N` as the path instead. L12d then found that opening the path again is refused on Android 14, so
+   `disc.c` reads it through N (§3.7).
 8. **The count** of runtime symbols was 23, not 22.
 9. **Mods** were neither covered nor deferred. §3.15, L12g.
 10. **L12a's paths and tests:** `--split` had the single-file build's path; the stand-ins in four tests were
