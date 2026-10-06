@@ -30,26 +30,32 @@ typedef struct {
 
 /* Open a directory holding disc.iso, or an .iso/.gcm file, and check it is
  * this port's disc (§3.3): GameCube boot magic, the game id and revision
- * this port was built for, and an executable whose SHA-1 is the one the
- * translated code came from. 0 when open, printing the [disc] line;
- * otherwise nonzero with the reason in `why`, which names the fix. */
+ * this port was built for, an executable whose SHA-1 is the one the
+ * translated code came from, and every file in its table inside the image.
+ * 0 when open, printing the [disc] line; otherwise nonzero with the reason in
+ * `why`, which names the fix. A build whose own system files are broken
+ * (disc_builtin < 0) refuses every disc. */
 int disc_open(const char* where, char* why, size_t cap);
 const DiscInfo* disc_info(void); /* NULL until disc_open succeeds */
 /* The system files built into this soa.exe (I3, <--out>/disc_sys.c): 1 when
  * there and each matches its SHA-1, 0 for a --no-embed build, -1 when they do
- * not match (the reason in `why`). With them, disc_open refuses an image
- * whose file table is not the build's, and nothing needs an image open to
- * have the executable: the self test and --replay open none. */
+ * not match (the reason in `why`), and in a split build -1 until a game
+ * library is loaded. With them, disc_open refuses an image whose file table
+ * is not the build's, and nothing needs an image open to have the
+ * executable: the self test and --replay open none. */
 int disc_builtin(char* why, size_t cap);
 /* The executable, boot.bin (0x440 bytes) and fst.bin: the build's own when
  * built in, else the open image's. */
 int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const uint8_t** fst,
                 size_t* fst_n, char* why, size_t cap);
 /* The drive's read: the image's bytes, zeros past its end. Counted, and with
- * SOA_DISC_LOG=1 one [disc] line each. */
+ * SOA_DISC_LOG=1 one [disc] line each. A read that fails inside the image --
+ * its storage gone, the file shorter than it was at the open -- stops the
+ * run, exit 9, saying why; it is never served as zeros. */
 void disc_serve(uint64_t offset, uint8_t* dst, uint32_t length);
 /* The same bytes for diagnostics (the census): not counted or logged. The
- * answer is how many came from the image; the rest of dst is zeros. */
+ * answer is how many came from the image; the rest of dst is zeros. A failed
+ * read stops the run as disc_serve's does. */
 uint32_t disc_peek(uint64_t offset, uint8_t* dst, uint32_t length);
 /* The file whose extent holds offset, as its full path on the disc; NULL for
  * padding and the system area. */

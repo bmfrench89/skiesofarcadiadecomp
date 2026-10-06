@@ -11,7 +11,10 @@ project(soa C)
 
 set(SOA_TREE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(SOA_GENERATED ${CMAKE_CURRENT_SOURCE_DIR}/generated)
-file(GLOB SOA_RUNTIME ${SOA_TREE}/runtime/*.c)
+# Asked again at every build: a glob is otherwise read once, when the build
+# tree is first made, and a runtime file added after it (L12d's import.c) is
+# left out of the library until the link fails on its names.
+file(GLOB SOA_RUNTIME CONFIGURE_DEPENDS ${SOA_TREE}/runtime/*.c)
 
 find_package(SDL3 REQUIRED CONFIG)
 

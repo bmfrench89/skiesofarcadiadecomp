@@ -569,6 +569,10 @@ static inline int plat_path_kind(const char* path, uint64_t* size)
     return PLAT_PATH_FILE;
 }
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996) /* fopen: fopen_s would open the file unshared, and a header cannot rely on its includer's _CRT_SECURE_NO_WARNINGS */
+#endif
 /* A file to read, from its start: by name, or for a /proc/self/fd/N path
  * through a duplicate of N, so that closing the FILE leaves N to whoever
  * opened it. The duplicate shares N's offset, so the reader seeks before
@@ -586,6 +590,9 @@ static inline FILE* plat_fopen_rb(const char* path)
 #endif
     return fopen(path, "rb");
 }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 static inline int plat_setenv(const char* name, const char* value)
 {

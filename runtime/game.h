@@ -21,7 +21,9 @@ int soa_check_game(const char* path, char* why, size_t cap);
  * once in a process: a second call after any dlopen is refused. */
 int soa_load_game(const char* path, char* why, size_t cap);
 
-/* 1 once any library has been dlopened in this process, accepted or not. */
+/* 1 once dlopen has been called in this process, whatever it answered and
+ * whether or not the library was then accepted: what a load may have done
+ * cannot be undone, so the next library waits for the next launch. */
 int soa_game_dlopened(void);
 
 #endif

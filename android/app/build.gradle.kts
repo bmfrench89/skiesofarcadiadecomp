@@ -23,6 +23,19 @@ android {
         }
     }
 
+    // A release is never shrunk today, and says so rather than rest on a
+    // default: runtime/android.c calls SoaActivity's import methods by name,
+    // through JNI, and nothing in Java calls them, so a shrinker would drop
+    // them and the first pick would fail in a release alone. proguard-rules.pro
+    // keeps them for the day R8 is turned on. The checks' document provider
+    // is in src/debug, which a release never builds.
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
     buildFeatures {
         prefab = true
     }

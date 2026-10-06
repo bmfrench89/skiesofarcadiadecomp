@@ -2,8 +2,18 @@
 <!-- The APK (specs/android.md 3.6): one activity, SDL's, landscape and with
      no title bar (SDL would show the window's title in one). No
      permissions: the disc and the game library come through the system file
-     picker (L12d). allowBackup off: the imported library and the disc are the
-     player's, and too large to back up. -->
+     picker, which grants the app each file the player picks (L12d).
+     allowBackup off: the imported library and the disc are the player's, and
+     too large to back up; they live in noBackupFilesDir, which a move to a
+     new phone does not carry either. A game (appCategory), which is what
+     keeps Android 16 from ignoring the landscape orientation on a screen
+     600 dp wide or more, the Fold's inner one. configChanges names every
+     change the activity takes without being made again: SDL ends the process
+     when its activity is recreated, so an unnamed one (a font size changed
+     in Settings while the player looks for the files, a fold changing the
+     density) would close the app mid-import or mid-game. singleInstance
+     stays, as SDL's own template has it. The debug build adds the checks'
+     document provider (src/debug/AndroidManifest.xml). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:glEsVersion="0x00020000" />
@@ -13,6 +23,7 @@
     <application
         android:label="SoA port"
         android:allowBackup="false"
+        android:appCategory="game"
         android:hasCode="true"
         android:extractNativeLibs="false"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
@@ -22,7 +33,7 @@
             android:exported="true"
             android:launchMode="singleInstance"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|fontScale|fontWeightAdjustment|grammaticalGender|touchscreen|colorMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
