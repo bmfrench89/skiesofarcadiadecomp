@@ -2174,6 +2174,67 @@ static int call_guest_selftest(CpuState* s, char* got, size_t cap)
     return check("a mod's call into the game", got, "strlen 16, every register as it was");
 }
 
+/* ---- the game's table (specs/android.md 3.2) ------------------------------
+ * A split build reaches the translated code only through soa_game's table
+ * (runtime/game.c); a single-file build calls it directly. Here the table is
+ * held to what this build calls: the entry, dispatch and its question, the
+ * system files, the record's abi and mode, and every twin the checks above
+ * run (config/seam.txt's). In a split build those names are the table's own
+ * forwarders, so it asks only that a table is loaded and is this runtime's. */
+#include "soa_game.h"
+void fn_80003140(CpuState* s);
+int dispatch_known(uint32_t addr);
+
+static int game_table_selftest(CpuState* s, char* got, size_t cap)
+{
+#ifdef SOA_SPLIT
+    const SoaGame* g = soa_game_table;
+    (void)s;
+    snprintf(got, cap, "%s", g && g->abi == SOA_GAME_ABI && g->size >= sizeof(SoaGame) ? "loaded, this abi" : "none");
+#else
+    extern const uint32_t disc_sys_dol[];
+    static const struct {
+        uint32_t addr;
+        SoaFn fn;
+    } twins[] = {
+        {0x80005434u, recomp_fn_80005434}, {0x80005520u, recomp_fn_80005520}, {0x801EF7E0u, fn_801EF7E0},
+        {0x80232E38u, recomp_fn_80232E38}, {0x80232E64u, recomp_fn_80232E64}, {0x80232E94u, recomp_fn_80232E94},
+        {0x80232EC4u, recomp_fn_80232EC4}, {0x80232EF0u, recomp_fn_80232EF0}, {0x8023851Cu, fn_8023851C},
+        {0x8023F704u, recomp_fn_8023F704}, {0x8025C710u, recomp_fn_8025C710}, {0x8025C73Cu, recomp_fn_8025C73C},
+        {0x8025ECBCu, fn_8025ECBC},        {0x8025ED74u, recomp_fn_8025ED74}, {0x8025EF18u, recomp_fn_8025EF18},
+        {0x8025EF48u, recomp_fn_8025EF48}, {0x8025EF88u, recomp_fn_8025EF88}, {0x8025F0B0u, recomp_fn_8025F0B0},
+        {0x8025F0DCu, recomp_fn_8025F0DC}, {0x8025F120u, recomp_fn_8025F120}, {0x8025F1D8u, recomp_fn_8025F1D8},
+    };
+#ifdef SOA_NO_DECOMP
+    const char* mode = "mode=no-decomp";
+#else
+    const char* mode = "mode=decomp";
+#endif
+    const SoaGame* g = soa_game();
+    unsigned i, n = (unsigned)(sizeof twins / sizeof twins[0]);
+    (void)s;
+    snprintf(got, cap, "%u twins, entry, dispatch, files, record", n);
+    if (g->abi != SOA_GAME_ABI || g->size != sizeof(SoaGame)) snprintf(got, cap, "abi %u, size %u", g->abi, g->size);
+    else if (g->entry != fn_80003140) snprintf(got, cap, "the entry is not fn_80003140");
+    else if (g->dispatch != dispatch || g->dispatch_known != dispatch_known) snprintf(got, cap, "dispatch differs");
+    else if (g->dol != disc_sys_dol) snprintf(got, cap, "the system files differ");
+    else if (!strstr(g->record, "abi=1 ") || !strstr(g->record, mode)) snprintf(got, cap, "record \"%s\"", g->record);
+    else
+        for (i = 0; i < n; i++)
+            if (g->twin(twins[i].addr) != twins[i].fn) {
+                snprintf(got, cap, "twin %08X differs", twins[i].addr);
+                break;
+            }
+#endif
+    return check("the game's table", got,
+#ifdef SOA_SPLIT
+                 "loaded, this abi"
+#else
+                 "21 twins, entry, dispatch, files, record"
+#endif
+    );
+}
+
 int selftest(CpuState* s)
 {
     char got[256];
@@ -2302,6 +2363,7 @@ int selftest(CpuState* s)
     failures += rearm_selftest(s, got, sizeof got);
     failures += call_guest_selftest(s, got, sizeof got);
     failures += fused_selftest(s, got, sizeof got);
+    failures += game_table_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

@@ -391,6 +391,18 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
 
+      # specs/android.md L12a: the seam between the runtime and a split game
+      # library -- a game of two functions loaded through the real loader and
+      # checks, and each refusal before dlopen in the player's words. The case
+      # that needs a real split build (gen/, the disc) is left out; a skip of
+      # any other is a failure here
+      - name: The seam to a split game library, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: ${{ matrix.cc }}
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_seam.py -k "not a_real_split_build" -v
+
       # portability L10: SDL3 built from its pinned source with the packages
       # tools/fetch_sdl.py names, then the window and sound run on an X
       # display (Xvfb, no window manager); xwd reads the screen back and
@@ -530,6 +542,14 @@ jobs:
           SOA_CC: gcc
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
+
+      # specs/android.md L12a, on AArch64, the machine a phone's library is for
+      - name: The seam to a split game library, no skips
+        if: ${{ !cancelled() }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_seam.py -k "not a_real_split_build" -v
 
       - name: A guest thread parks and resumes, on the guest's stack
         if: ${{ !cancelled() }}

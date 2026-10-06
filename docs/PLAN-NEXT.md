@@ -655,7 +655,9 @@ count kept before it starts.
     sysroot (D-31);
   - **the floor:** Android 13 (D-32);
   - **the app's package name and release key:** the owner asked for an explanation first (D-33).
-  **Next: L12a,** the seam on Linux in a container.
+  **L12a is done** (FINDINGS "L12a"): a split build loads the game through one table on Linux, and the
+  self test, replay 23/23 and `title --check` pass on it. **Next: L12b,** the game library from the PC for
+  Android.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

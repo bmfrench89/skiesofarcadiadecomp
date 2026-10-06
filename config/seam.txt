@@ -1,0 +1,67 @@
+# The seam between the runtime and a split game library (specs/android.md 3.2).
+# tools/soa/seam.py reads it; tools/recompile.py --split builds from it, and
+# runtime/elfcheck.c holds a game library to it before dlopen.
+#
+# runtime NAME  a runtime function or global the translated code calls or reads
+#               directly (nm of the translated objects, 2026-10-05). The
+#               bindings config/hle.txt names cross too, as fn_XXXXXXXX.
+# libc NAME     a C library symbol the game library may import, beside them
+# twin ADDR     a translated function the self test runs by address
+#               (runtime/selftest.c); the table's twin() answers it
+runtime dec_read
+runtime dec_write
+runtime g_watch_addr
+runtime g_watch_len
+runtime guest_resumed
+runtime guest_savepoint
+runtime guest_syscall
+runtime guest_timebase_hi
+runtime guest_timebase_lo
+runtime guest_trap
+runtime gx_pipe_write
+runtime hook_80237BA8
+runtime irq_poll
+runtime mmio_read8
+runtime mmio_read16
+runtime mmio_read32
+runtime mmio_read64
+runtime mmio_write8
+runtime mmio_write16
+runtime mmio_write32
+runtime mmio_write64
+runtime trace_hit
+runtime watch_hit
+libc _setjmp
+libc setjmp
+libc fma
+libc sqrt
+libc nearbyint
+libc nearbyintf
+libc memcpy
+libc memmove
+libc memset
+libc __stack_chk_fail
+libc __cxa_finalize
+libc __cxa_atexit
+libc __register_atfork
+twin 0x80005434
+twin 0x80005520
+twin 0x801EF7E0
+twin 0x80232E38
+twin 0x80232E64
+twin 0x80232E94
+twin 0x80232EC4
+twin 0x80232EF0
+twin 0x8023851C
+twin 0x8023F704
+twin 0x8025C710
+twin 0x8025C73C
+twin 0x8025ECBC
+twin 0x8025ED74
+twin 0x8025EF18
+twin 0x8025EF48
+twin 0x8025EF88
+twin 0x8025F0B0
+twin 0x8025F0DC
+twin 0x8025F120
+twin 0x8025F1D8

@@ -176,7 +176,7 @@ $env:SOA_SELFTEST = '1'
 gen\soa.exe extracted
 ```
 
-That runs 83 checks over the translated C library, the device models, the card
+That runs 86 checks over the translated C library, the device models, the card
 and SRAM, the AX mixer and the software renderer — including the 12
 hand-decompiled functions the port runs natively, compared against their
 recompiled twins on random inputs — and ends in `[selftest] 0 failure(s)`.
@@ -287,6 +287,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). With `SOA_GPU=vulkan` the GPU presents its own picture through a Vulkan swap chain, paced the same way, unless `SOA_PRESENTER` is `dxgi` or `gdi`; P5a's picture filters run on the GPU at the size it draws, the flash limiter deciding its blend on the CPU (V8b). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
+| `SOA_GAME=path` | a split build only (`recompile.py --cc gcc --split`, Android's arrangement on Linux; specs/android.md L12a): the game library to load, in place of `libsoa_game.so` beside the launcher. It is checked before it is loaded, and refused in words if it was built for another machine, another page size or other sources |
 | `SOA_SNAP=n` / `SOA_SNAP=n@A-B` | write `build/frames/NNNN.png` every n frames, or every nth from frame A to B; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
 | `SOA_PAD2=frame:buttons,...` | a script for controller port 2 in `SOA_PAD`'s grammar, for checks: port 2 is read by mods (`read_pad` in `runtime/soa_mod.h`, for couch co-op) and never by the game, which still sees one controller. In play, port 2 is the next connected XInput pad after port 1's (P10a) |
@@ -356,7 +357,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1342 tests; any that need a dump skip themselves
+python -m pytest                     # 1351 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

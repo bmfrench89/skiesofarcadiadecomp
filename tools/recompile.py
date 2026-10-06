@@ -35,6 +35,7 @@ passes to the setup window.
 import argparse
 import collections
 import concurrent.futures
+import dataclasses
 import hashlib
 import os
 import re
@@ -48,9 +49,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 # no-pip CI job that imports this file still needs nothing installed).
 import fetch_gpu  # noqa: E402
 import fetch_sdl  # noqa: E402
+import player_build  # noqa: E402
 from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
-from soa import embed, shaders, toolchain  # noqa: E402
+from soa import embed, seam, shaders, toolchain  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa.hle import load_hle  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
@@ -282,6 +284,7 @@ def gnu_link_command(
         f"/Fe{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
         str(out / "disc_sys.c"),
+        str(out / "game_table.c"),
         *map(str, objs),
         *([] if reproducible or not windows else [f"-Wl,--pdb={out / 'soa.pdb'}"]),
         *(sdl[1] if sdl else []),
@@ -334,6 +337,9 @@ def link_command(
         f"/Fe:{out / ('soa' + p.exeext)}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
         str(out / "disc_sys.c"),  # the player's system files (disc-layer I3), compiled every link
+        str(
+            out / "game_table.c"
+        ),  # the game's table (specs/android.md 3.2), held to these by the self test
         *map(str, objs),
         *p.linker,
         "/link",
@@ -342,6 +348,76 @@ def link_command(
         "/OPT:ICF",
         "/STACK:33554432",  # guest call depth becomes host call depth
     ]
+
+
+def split_link_plan(
+    p: toolchain.Profile,
+    out: Path,
+    gxv: bool = False,
+    defines: tuple[str, ...] = (),
+    sdl: tuple[list[str], list[str]] | None = None,
+) -> list[tuple[list[str], Path]]:
+    """--split's links (specs/android.md L12a), Android's arrangement on Linux:
+    libsoa_runtime.so (every runtime file with SOA_SPLIT, and runtime_seam.c),
+    exporting exactly runtime.map's names; libsoa_game.so (the translated
+    objects, disc_sys.c and game_table.c, hidden but for soa_game), which
+    needs the runtime by name and may not leave a symbol it does not have
+    (--no-undefined); and the launcher. Both libraries are laid out for 16 KB
+    pages, as Android's must be. Then the mods, as the single-file build's."""
+    objs = sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
+    runtime = [
+        *p.cflags,
+        "-fPIC",
+        "-shared",
+        "/DSOA_SPLIT=1",
+        *defines,
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        *(["/DSOA_GXV=1", f"/I{out / 'gxv'}", f"/I{shaders.HEADERS}"] if gxv else []),
+        *(sdl[0] if sdl else []),
+        f"/Fe{out / seam.RUNTIME_SONAME}",
+        *map(str, sorted(RUNTIME.glob("*.c"))),
+        str(out / "runtime_seam.c"),
+        f"-Wl,-soname,{seam.RUNTIME_SONAME}",
+        f"-Wl,--version-script={out / 'runtime.map'}",
+        "-Wl,-z,max-page-size=16384",
+        *(sdl[1] if sdl else []),
+        *p.linker,
+        "-ldl",
+    ]
+    game = [
+        *p.cflags,
+        "-fPIC",
+        "-fvisibility=hidden",
+        "-shared",
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        f"/Fe{out / seam.GAME_SONAME}",
+        str(out / "disc_sys.c"),
+        str(out / "game_table.c"),
+        *map(str, objs),
+        f"-Wl,-soname,{seam.GAME_SONAME}",
+        "-Wl,-z,max-page-size=16384",
+        "-Wl,--no-undefined",
+        f"-L{out}",
+        f"-l:{seam.RUNTIME_SONAME}",
+        "-lm",
+    ]
+    launcher = [
+        *p.cflags,
+        f"/Fe{out / ('soa' + p.exeext)}",
+        str(out / "launcher.c"),
+        f"-L{out}",
+        f"-l:{seam.RUNTIME_SONAME}",
+        "-Wl,-rpath,$ORIGIN",
+        *p.linker,
+    ]
+    plan = [(runtime, Path(".")), (game, Path(".")), (launcher, Path("."))]
+    plan += [
+        (gnu_mod_dll_command(p, src, mod_out_dir(p, out, src)), mod_out_dir(p, out, src))
+        for src in mod_dll_sources()
+    ]
+    return plan
 
 
 def builds_mods(p: toolchain.Profile) -> bool:
@@ -489,8 +565,20 @@ def main() -> int:
         action="store_true",
         help="the player's build, with no src/: the translated MSL runs (distribution 3.1)",
     )
+    ap.add_argument(
+        "--split",
+        action="store_true",
+        help="gcc or clang: libsoa_runtime.so, libsoa_game.so and a launcher, as Android loads them "
+        "(specs/android.md L12a), into <the profile's directory>-split; implies --no-decomp",
+    )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
+    if args.split:
+        if prof.name not in ("gcc", "clang"):
+            ap.error("--split builds Android's arrangement on Linux: --cc gcc or --cc clang")
+        args.no_decomp = True  # the player's build, and the APK's runtime: no src/
+        if args.out is None:
+            args.out = Path(prof.out + "-split")
     # A clang build goes to its own directory, so it can never be linked into
     # gen/soa.exe: --link globs whatever objects --out holds.
     try:
@@ -559,6 +647,23 @@ def main() -> int:
     (args.out / "functions.h").write_text(em.prototypes(), encoding="utf-8")
     (args.out / "dispatch.c").write_text(em.dispatch_c(), encoding="utf-8")
     (args.out / "disc_sys.c").write_text(embed.disc_sys_c(system), encoding="utf-8")
+    # The game's table and record (specs/android.md 3.2), in every build; the
+    # runtime's side of the seam, its version script and the launcher for a
+    # split one.
+    the_seam = seam.read_seam(args.config / "seam.txt")
+    baked = seam.baked_digest(player_build.inputs_record(RUNTIME.parent))
+    (args.out / "game_table.c").write_text(
+        seam.game_table_c(
+            the_seam, hle, entries, seam.record(args.no_decomp, baked, dol_sha1, prof.name)
+        ),
+        encoding="utf-8",
+    )
+    if args.split:
+        (args.out / "runtime_seam.c").write_text(
+            seam.runtime_seam_c(the_seam, hle, seam.record(True, baked)), encoding="utf-8"
+        )
+        (args.out / "runtime.map").write_text(seam.version_script(the_seam, hle), encoding="utf-8")
+        (args.out / "launcher.c").write_text(seam.LAUNCHER_C, encoding="utf-8")
     print(
         "system files: built in (disc_sys.c; never share this build)"
         if system is not None
@@ -599,12 +704,19 @@ def main() -> int:
             return 1
         units = [args.out / "dispatch.c", *chunks]
         level = opt_level(prof, args.optimize)
+        # A split build's game library is a shared object, every function in
+        # it hidden but the table (specs/android.md 3.2).
+        cprof = (
+            dataclasses.replace(prof, cflags=(*prof.cflags, "-fPIC", "-fvisibility=hidden"))
+            if args.split
+            else prof
+        )
         print(f"\ncompiling {len(units)} translation units with {shown} ({level}){into} ...")
         t0 = time.time()
 
         def build(path: Path):
             return path, toolchain.cc(
-                compile_command(prof, args.out, path, args.optimize), args.out, prof
+                compile_command(cprof, args.out, path, args.optimize), args.out, prof
             )
 
         failures = collections.Counter()
@@ -693,7 +805,12 @@ def main() -> int:
                 )
         failed_mods = 0
         defines = ("/DSOA_NO_DECOMP=1",) if args.no_decomp else ()
-        plan = link_plan(prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible, sdl)
+        if args.split:
+            plan = split_link_plan(prof, args.out, gxv, defines, sdl)
+        else:
+            plan = link_plan(
+                prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible, sdl
+            )
         exe_flags = (f"/Fe:{exe}", f"/Fe{exe}")
         for cmd, cwd in plan:
             if args.progress:
@@ -731,6 +848,9 @@ def main() -> int:
                 return 1
             if any(a in exe_flags for a in cmd):
                 print(f"linked {exe} ({time.time() - t0:.1f}s)")
+            elif args.split:
+                made = next(a[3:] for a in cmd if a.startswith("/Fe"))
+                print(f"linked {made} ({time.time() - t0:.1f}s)")
         if failed_mods:
             return 1
     return 0

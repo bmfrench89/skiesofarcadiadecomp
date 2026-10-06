@@ -1213,6 +1213,11 @@ static void gpu_start(void)
     if (!gxv_start(why, sizeof why)) fprintf(stderr, "[gxv] fallback: %s; the CPU draws\n", why);
 }
 
+#ifdef SOA_SPLIT
+/* A split build's launcher loads the game library first, then calls this
+ * (runtime/game.c's soa_run; specs/android.md 3.2). */
+#define main soa_main
+#endif
 int main(int argc, char** argv)
 {
     const char* dir = argc > 1 && argv[1][0] != '-' ? argv[1] : "extracted";

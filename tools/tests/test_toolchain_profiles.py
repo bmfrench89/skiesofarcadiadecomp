@@ -123,6 +123,7 @@ def test_the_msvc_command_lines_are_the_golden_copy():
         f"/Fe:{Path('gen') / 'soa.exe'}",
         *map(str, sorted(RUNTIME.glob("*.c"))),
         str(Path("gen") / "disc_sys.c"),  # the player's system files (disc-layer I3)
+        str(Path("gen") / "game_table.c"),  # the game's table (specs/android.md L12a)
         *map(str, objs),
         "/link",
         "/DEBUG",

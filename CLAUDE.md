@@ -45,6 +45,7 @@ Then, only if you touched the matching thing:
 | `src/`, `include/`, `config/GEAE8P/units.txt` | `python tools/decomp.py` (4 s) | 83 functions across 21 units still match byte for byte |
 | `config/hle.txt` | `--compile --optimize --link`, then the self test | see below; selftest case 73 is what checks the swap |
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
+| `runtime/game.c`, `elfcheck.c`, `soa_game.h`, `tools/soa/seam.py`, `config/seam.txt` | in a Linux container: `recompile.py --cc gcc --split --compile --optimize --link`, the self test, replay and title on `gen/linux-split/soa`, and `test_seam.py` | single-file builds never load a game library; only the split build and CI's Linux legs exercise the seam |
 | `runtime/window_sdl.c`, `audio_sdl.c`, `tools/fetch_sdl.py` | in a Linux container: `compile_runtime.py --cc gcc --require-sdl`, and `test_window_sdl.py` under Xvfb (`docs/TESTING.md` section 2) | Windows compiles them to nothing; only Linux, and CI's Linux legs, ever build them |
 
 The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only enforcer.

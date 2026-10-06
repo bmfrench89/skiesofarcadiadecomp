@@ -7261,3 +7261,63 @@ the driver's.** 2026-10-04.
   windowed minutes, which need a Linux desktop: a WSL distribution, which brings WSLg (`wsl --install -d
   Ubuntu`; this PC has only Docker Desktop's, without it), a Linux PC or the Deck.
 - **What follows:** L12, the Android shell, to be specified in full, with R5.
+
+**L12a: the seam on the desktop.** 2026-10-05.
+
+- **What it is:** Android's arrangement, built on Linux. `tools/recompile.py --cc gcc --split` builds three
+  files into `gen/linux-split`:
+  - `libsoa_runtime.so`: every runtime file with `SOA_SPLIT` and `SOA_NO_DECOMP`, plus the generated
+    `runtime_seam.c`;
+  - `libsoa_game.so`: the translated objects, `disc_sys.c` and `game_table.c`, every function hidden but
+    `soa_game`;
+  - `soa`, a launcher that needs the runtime.
+  - **The runtime reaches the game only through one table** (specs/android.md 3.2). `game_table.c` is written
+    into every build from `config/seam.txt` by `tools/soa/seam.py`. A single-file build links it and calls
+    directly, and the self test's new case holds the table to those calls. In a split build, `runtime_seam.c`
+    gives the runtime forwarders under the names it already calls, so only `main.c` (renamed `soa_main`) and
+    `disc.c` (the system files, which are arrays) change. This differs from the spec's first text, which
+    rewrote every reference.
+  - **The game library carries its build record** in an ELF note: the table's abi, the decomp mode, and one
+    digest of `player_build.BAKED`.
+  - **`runtime/elfcheck.c`** reads the library's own headers before `dlopen`:
+    - the machine, a shared object, 16 KB pages, no text relocations;
+    - the libraries it needs;
+    - the record;
+    - every symbol it imports, against the runtime's export list;
+    - its one export.
+    Each failure is refused in the player's words. `runtime/game.c` then `dlopen`s the library, checks the
+    table's abi, and runs `main`.
+- **Checked** [V], in the Docker container on this PC unless named:
+  - **The split build** links, exit 0, in 219 s (the 19 units at -O2 with `-fPIC`, 187 s):
+    - `libsoa_game.so` is 25.7 MB and exports `soa_game` alone;
+    - it imports the 23 runtime symbols, the 13 bindings of a build with no `src/`, five C library functions
+      and weak ones;
+    - it needs `libsoa_runtime.so` by name, every `PT_LOAD` is aligned 0x4000, and its `.note.soa` holds the
+      record;
+    - `libsoa_runtime.so` exports exactly 37 names: 23, 13 and `soa_run`.
+  - **On `gen/linux-split/soa`:**
+    - the self test reports 0 failures, the table loaded;
+    - replay matches 23/23 at 1, 2, 3 and 8 threads against the same manifest;
+    - `title --check` holds 4 of 4.
+  - **No cost.** Interleaved `title` runs, single-file then split, twice: 93.8 and 95.0 CPU seconds against
+    96.4 and 94.9, at 28.1 and 28.0 fps against 27.9 and 28.0. The single-file runs differ from each other by as
+    much.
+  - **The savepoint:** about 47,000 `setjmp`s over `title`'s 71 s (2,000 context saves, about 44,800 interrupts
+    delivered), about 660 a second. A system call each on Android costs under a millisecond a second, so it
+    stays `setjmp` (android.md 3.12).
+  - **`tools/tests/test_seam.py`** (9 tests) passes under gcc and clang:
+    - a game of two functions loads through the real loader and checks, and its entry calls the runtime;
+    - it exports the table alone;
+    - six libraries with one thing wrong are each refused before `dlopen`, in words;
+    - the real split build crosses only `seam.txt`.
+    - **The mutations:** with `elfcheck.c`'s import check removed, or its record compared on nothing, the
+      matching cases fail.
+  - **The self test's new case** ("the game's table": entry, dispatch, files, record, 21 twins) passes in
+    `soa.exe` on Windows and in `gen/linux/soa`. MSVC, clang-cl and llvm-mingw compile all 37 runtime files.
+- **The self test counted 85 cases before this, not the 83 the docs said:** R1's two fused multiply-add cases
+  were never added to them. It is 86 now, and every copy says so. The tests are 1351 in 85 files, measured four
+  ways: 1338 passed and 13 skipped here (`test_seam.py`'s nine want an ELF system).
+- **CI:** the gcc, clang and ARM64 legs run `test_seam.py` with skips refused. They leave out the real-build
+  case, which needs the disc.
+- **What follows:** L12b, the game library built on the PC for Android, with the NDK here until Q-A2's own
+  sysroot exists.

@@ -174,7 +174,7 @@ ok   window.c
 ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 35/35 runtime translation units
+compiled 37/37 runtime translation units
 gxv.c: compiled as the backend too
 the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
@@ -244,7 +244,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 35/35 runtime translation units
+compiled 37/37 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...
@@ -287,7 +287,7 @@ python tools/fetch_mingw.py
 python tools/citest/compile_runtime.py --cc mingw
 ```
 ```
-compiled 35/35 runtime translation units
+compiled 37/37 runtime translation units
 ```
 
 ## 6. The decompilation check
@@ -339,16 +339,17 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1338 passed, 4 skipped in 756.76s
+1338 passed, 13 skipped in 678.63s
 ```
 
-1342 tests in 84 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1319 passed, 5 skipped` without
+1351 tests in 85 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1319 passed, 14 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `931 passed, 411 skipped` without MSVC. The four
+into one module-level skip), `931 passed, 420 skipped` without MSVC. The 13
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
-and `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb).
+`test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),
+and `test_seam.py`'s nine, which want an ELF system (CI's Linux legs run them).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
@@ -442,7 +443,7 @@ gen\soa.exe extracted
 [selftest] 0 failure(s)
 ```
 
-**0.31 s, 95 lines, 83 cases** — the cheapest real check in the project and the
+**0.31 s, 100 lines, 86 cases** — the cheapest real check in the project and the
 one to run after every `--link`. It calls the recompiled library, the device
 models, the AX mixer and the software renderer directly, outside the game's
 control flow, so a wrong answer is a bug with a two-line repro. Every case

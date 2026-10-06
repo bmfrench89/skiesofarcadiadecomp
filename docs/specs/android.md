@@ -163,17 +163,20 @@ The runtime carries the same record for what it was built against, and refuses a
 A different `hooks.txt` or `savepoints.txt` changes what the game does, so it is refused like a different
 `cpu.h`.
 
-**Every build goes through the table.**
-- `recompile.py` writes `gen/game_table.c`. In `soa.exe` and every other single-file build it is linked in and
-  called directly. In a split build it is the only export. So there is one code path, and Windows tests it on
-  every run [I].
-- The runtime's direct references change to go through it: the entry (`main.c:25`), `dispatch`, `dispatch_known`,
-  `disc_sys_*` and the twins (§2's list).
-- So do the stand-ins that define those symbols for tests that link runtime files alone:
-  - `test_memguard.py:39,58-59,211`;
-  - `test_mods.py:84-85`;
-  - `test_profiler.py:69,102-103`;
-  - `tools/citest/threads_driver.c:37`.
+**How the runtime reaches the table** (as L12a built it, where this spec first had every reference
+rewritten):
+- **Every build links the table.** `recompile.py` writes `<out>/game_table.c` into every build.
+  - A single-file build (`soa.exe`, `gen/linux/soa`) links it and calls the translated code directly.
+  - The self test's case "the game's table" holds the one to the other: the entry, `dispatch`, the system
+    files, the record's abi and mode, and all 21 twins. So Windows checks the table on every run.
+- **A split build** (`--split`) also writes `<out>/runtime_seam.c` into the runtime library. It holds
+  forwarders, under the names the runtime calls, through the loaded table: `dispatch`, `dispatch_known`,
+  `fn_80003140` and the 21 twins.
+  - So `irq.c`, `mod.c`, `threads.c` and `selftest.c` do not change, and neither do the tests' stand-ins.
+  - Only `main.c` (its `main` is `soa_main` under `SOA_SPLIT`) and `disc.c` change. A function cannot stand in
+    for an array, so `disc.c` reads the system files from the table.
+- **No forwarder clashes with the game's own names:** they are hidden in both libraries (§2: no function pointer
+  crosses).
 
 **Visibility.**
 - The game library is compiled `-fvisibility=hidden`, with `soa_game` alone visible. The 7,144 functions call
@@ -335,9 +338,10 @@ read from the `[audio]` line of a pulled log.
   affinity pinning (research §9).
 - **The render pool:** the default worker count (`gxr.c:2087`) on Android counts the cores whose `cpu_capacity`
   (`/sys/devices/system/cpu/*/cpu_capacity`) is above the smallest [I; L12c measures it].
-- **The savepoint:** on Android, `cpu.h`'s savepoint uses `_setjmp` and `runtime/threads.c` and `irq.c` use
-  `_longjmp`. Bionic's `setjmp` saves the signal mask, a system call at every interrupt (`irq.c:285`) [I].
-  L12a measures both on Linux, where glibc's `setjmp` is already `_setjmp`.
+- **The savepoint stays `setjmp`.** Bionic's `setjmp` saves the signal mask, a system call each time [I]. But
+  L12a counted about 47,000 savepoints over `title`'s 71 s on Linux: 2,000 context saves, and every interrupt
+  delivered (about 44,800 of all kinds), so about 660 a second. At a microsecond each that is under a
+  millisecond a second, so no change is made unless a phone's profile says otherwise.
 
 ### 3.13 The GPU on Android (L12f)
 
@@ -400,6 +404,8 @@ The sysroot of §3.4 and R5's packaging (Setup's checkbox) follow L12b.
 
 ### L12a. The seam on the desktop
 
+*Built 2026-10-05 (FINDINGS "L12a"), with forwarders where this text first rewrote every reference (§3.2).*
+
 *Files:*
 - `tools/recompile.py`: `gen/game_table.c`, the `.note.soa` record, and `--split` for gcc and clang into its own
   directory, `gen/linux-split/`, always `--no-decomp`;
@@ -420,8 +426,8 @@ The sysroot of §3.4 and R5's packaging (Setup's checkbox) follow L12b.
   - the self test reports 0 failures;
   - `scenario.py replay --exe gen/linux-split/soa --threads 1,2,3,8` matches 23/23 against the same manifest;
   - `title --check` holds 4 of 4;
-  - the frame time is within the noise of `gen/linux/soa` (interleaved runs, H11's method), with `_setjmp` and
-    with `setjmp`, and the cost of each is written down.
+  - the frame time is within the noise of `gen/linux/soa` (interleaved runs, H11's method), and the savepoints a
+    second are counted (§3.12).
 - **Windows unchanged:** `soa.exe` through the table, the self test, and replay 23/23.
 - **`test_seam.py` on CI** (the gcc and clang legs) builds a synthetic game library of two functions with the
   real `game_table.c` template. The checks:

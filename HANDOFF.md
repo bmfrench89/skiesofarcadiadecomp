@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1342 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1351 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,8 +171,8 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1342 |
-| Self-test cases | 83 |
+| Python tests | 1351 |
+| Self-test cases | 86 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
 
@@ -686,8 +686,14 @@ C5c) is now done.
    `DT_NEEDED`, exports one versioned table and carries its build record
    in an ELF note, and the phone `dlopen`s it read-only from its own
    storage. The owner's devices are a Galaxy Z Fold 8 and an AYN Thor
-   (D-30 to D-33). **Next: L12a,** the seam on Linux in a container,
-   which needs no phone. Still open for the owner, and not blocking: whether a
+   (D-30 to D-33). **L12a is done** (FINDINGS "L12a"):
+   `recompile.py --cc gcc --split` builds `libsoa_runtime.so`,
+   `libsoa_game.so` and a launcher into `gen/linux-split`; the runtime
+   reaches the game only through `soa_game`'s table, `runtime/elfcheck.c`
+   refuses a wrong library in words before `dlopen`, and the self test,
+   replay 23/23 and `title --check` pass on it in the container.
+   **Next: L12b,** the game library from the PC for Android (the NDK
+   here; Q-A2's own sysroot follows). Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

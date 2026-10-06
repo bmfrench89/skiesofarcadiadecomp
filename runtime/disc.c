@@ -62,9 +62,23 @@ unsigned gx_frame_count(void); /* gx.c: the frame a logged read belongs to */
  * (I3): <--out>/disc_sys.c, which tools/recompile.py writes at every run --
  * little-endian words of the files' bytes, each with its size and SHA-1. A
  * --no-embed build has the same symbols with sizes of zero. */
+#ifdef SOA_SPLIT
+/* A split build has them from the game library's table (specs/android.md 3.2). */
+#include "soa_game.h"
+#define disc_sys_dol (soa_game_table->dol)
+#define disc_sys_boot (soa_game_table->boot)
+#define disc_sys_fst (soa_game_table->fst)
+#define disc_sys_dol_size (*soa_game_table->dol_size)
+#define disc_sys_boot_size (*soa_game_table->boot_size)
+#define disc_sys_fst_size (*soa_game_table->fst_size)
+#define disc_sys_dol_sha1 (soa_game_table->dol_sha1)
+#define disc_sys_boot_sha1 (soa_game_table->boot_sha1)
+#define disc_sys_fst_sha1 (soa_game_table->fst_sha1)
+#else
 extern const uint32_t disc_sys_dol[], disc_sys_boot[], disc_sys_fst[];
 extern const size_t disc_sys_dol_size, disc_sys_boot_size, disc_sys_fst_size;
 extern const char disc_sys_dol_sha1[], disc_sys_boot_sha1[], disc_sys_fst_sha1[];
+#endif
 static int g_builtin; /* 0 not yet asked; 1 built in and sound; 2 none; -1 broken */
 
 typedef struct {
