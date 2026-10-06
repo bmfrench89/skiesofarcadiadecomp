@@ -489,10 +489,12 @@ def dol_header(data: bytes, at: int = 0) -> bool:
     return any(sizes[i] and addrs[i] <= entry < addrs[i] + sizes[i] for i in range(7))
 
 
-def dol_inside(data: bytes) -> int | None:
-    """The offset of a DOL header anywhere in ``data`` on a 32-byte step,
-    or None. Only where the entry point's first byte could be MEM1's."""
-    for at in range(0, len(data) - DOL_HEADER + 1, 32):
+def dol_inside(data: bytes, step: int = 32) -> int | None:
+    """The offset of a DOL header anywhere in ``data`` on a ``step``-byte
+    step, or None. Only where the entry point's first byte could be MEM1's.
+    A file is copied whole, 32-byte aligned; inside a compiled library a C
+    array may sit at any 4-byte offset (--apk)."""
+    for at in range(0, len(data) - DOL_HEADER + 1, step):
         if data[at + 0xE0] in (0x80, 0x81) and dol_header(data, at):
             return at
     return None
@@ -547,7 +549,54 @@ def tree_problems(root: Path) -> list[str]:
     return problems
 
 
+def apk_problems(apk: Path) -> list[str]:
+    """What --apk refuses in an APK (specs/android.md 3.6): an entry by name and
+    place as --tree refuses a file, the APK's own native libraries aside; and
+    any entry holding a DOL's header -- a native library's at any 4-byte
+    offset, where a runtime built with disc_sys.c's arrays would hold the
+    player's executable. The APK carries the runtime, never the game."""
+    import zipfile
+
+    problems = []
+    with zipfile.ZipFile(apk) as z:
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            rel = info.filename
+            path = Path(rel)
+            suffix = forbidden_suffix(path.name)
+            if suffix and suffix.lower() == ".so" and rel.startswith("lib/"):
+                suffix = None  # the APK's own native libraries, SDL's and the runtime's
+            if suffix:
+                problems.append(f"{rel}: forbidden extension '{suffix}' (game data)")
+            # META-INF/ is the APK's signature and the build's metadata
+            # (META-INF/com/android/build/gradle/...), named by the tools
+            part = None if rel.startswith("META-INF/") else forbidden_dir(path)
+            if part:
+                problems.append(f"{rel}: under '{part}/'")
+            data = z.read(info)
+            at = 0 if dol_header(data) else dol_inside(data, 4 if rel.endswith(".so") else 32)
+            if at is not None:
+                problems.append(
+                    f"{rel}: holds a DOL's header at offset {at:#x} -- the game's executable"
+                )
+    return problems
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--apk"] and len(sys.argv) == 3:
+        apk = Path(sys.argv[2])
+        if not apk.is_file():
+            print(f"guard: {apk} is not a file", file=sys.stderr)
+            return 2
+        problems = apk_problems(apk)
+        if problems:
+            print(f"GAME DATA GUARD FAILED: {apk} holds\n", file=sys.stderr)
+            for p in problems:
+                print(f"  {p}", file=sys.stderr)
+            return 1
+        print(f"guard: {apk}, no game data and no game code")
+        return 0
     if sys.argv[1:2] == ["--tree"] and len(sys.argv) == 3:
         root = Path(sys.argv[2])
         if not root.is_dir():

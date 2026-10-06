@@ -29,7 +29,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
 | 5f | `python tools/citest/disc_check.py` | 4 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (408 tests want a C compiler) |
+| 7 | `python -m pytest tools/tests -q` | 724 s | nothing (408 tests want a C compiler) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -174,7 +174,7 @@ ok   window.c
 ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 37/37 runtime translation units
+compiled 38/38 runtime translation units
 gxv.c: compiled as the backend too
 the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
@@ -244,7 +244,7 @@ python tools/citest/dc_check.py --cc clang-cl
 python tools/citest/render_check.py --cc clang-cl
 ```
 ```
-compiled 37/37 runtime translation units
+compiled 38/38 runtime translation units
 ...
 all 12 routines agree with the host C library
 ...
@@ -287,7 +287,7 @@ python tools/fetch_mingw.py
 python tools/citest/compile_runtime.py --cc mingw
 ```
 ```
-compiled 37/37 runtime translation units
+compiled 38/38 runtime translation units
 ```
 
 ## 6. The decompilation check
@@ -339,13 +339,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1347 passed, 13 skipped in 697.13s
+1357 passed, 13 skipped in 723.93s
 ```
 
-1360 tests in 86 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1328 passed, 14 skipped` without
+1370 tests in 87 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1338 passed, 14 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `939 passed, 421 skipped` without MSVC. The 13
+into one module-level skip), `949 passed, 421 skipped` without MSVC. The 13
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
 `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),
@@ -443,7 +443,7 @@ gen\soa.exe extracted
 [selftest] 0 failure(s)
 ```
 
-**0.31 s, 100 lines, 86 cases** — the cheapest real check in the project and the
+**0.11 s, 101 lines, 87 cases** — the cheapest real check in the project and the
 one to run after every `--link`. It calls the recompiled library, the device
 models, the AX mixer and the software renderer directly, outside the game's
 control flow, so a wrong answer is a bug with a two-line repro. Every case

@@ -20,11 +20,14 @@
 #include <stdint.h>
 #include <string.h>
 
-/* A MinGW build's fma would come from the UCRT DLL, Wine's under Proton:
- * the guest's fused multiply-adds call the exe's own instead (soafma.c,
- * specs/distribution.md R1). Every other build's fma is in the exe already,
- * or exact. */
-#if defined(__MINGW32__)
+/* A MinGW build's fma would come from the UCRT DLL, Wine's under Proton,
+ * and an x86-64 Android build's is bionic's, which rounds a negative result
+ * that underflows to +0 rather than -0 (80 of the self test's 200,000 cases,
+ * FINDINGS "L12c"): the guest's fused multiply-adds call the runtime's own
+ * instead (soafma.c, specs/distribution.md R1). Every other build's fma is
+ * in the exe already, or exact: MSVC's static one, glibc's, and on ARM64 the
+ * instruction. */
+#if defined(__MINGW32__) || (defined(__ANDROID__) && defined(__x86_64__))
 double soa_fma(double a, double b, double c);
 #define fma soa_fma
 #endif

@@ -658,7 +658,10 @@ count kept before it starts.
   **L12a is done** (FINDINGS "L12a"): a split build loads the game through one table on Linux, and the
   self test, replay 23/23 and `title --check` pass on it. **L12b is done** (FINDINGS "L12b"):
   `recompile.py --cc android-arm64` builds and checks the phone's game library in about a minute, the same
-  bytes twice. **Next: L12c,** the shell on the emulator.
+  bytes twice. **L12c is done** (FINDINGS "L12c"): the APK runs the port on the x86-64 emulator; the self
+  test, the replay 23/23 at 1-8 threads, the title from a script and from the keyboard, Home and back,
+  and the MEM1 guard under ART pass, and five faults no desktop had shown were found and fixed there.
+  **Next: L12d,** the import on the emulator, then L12's Done on the Thor.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

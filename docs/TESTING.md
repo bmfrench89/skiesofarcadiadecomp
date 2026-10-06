@@ -34,10 +34,10 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1347 passed, 13 skipped in 697.13s
+1357 passed, 13 skipped in 723.93s
 ```
 
-1360 tests in 86 files, none of which reads the disc. The two FMA probes of
+1370 tests in 87 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -53,7 +53,7 @@ its own and run it, some of the C as well:
 | `test_mods.py` | 132 | `runtime/mod.c`'s data patches, built alone against a fake DOL: every refusal (address spelling, hardware window, outside RAM, alignment, the DOL's code, values, triggers, conditions, `mod.ini` keys, the API and the DOL's SHA-1) refuses the whole mod with its file and line; manifest 2's id and version name a mod in the recording -- past the line's end too, by id and not folder -- a bad or duplicate id refuses it, an `x_` key is passed over; `every_frame`, `once` and `on_map_load` apply when they say; a `mod.dll` built here loads on `SoaModApi`, whose memory calls refuse what a patch would, its callbacks fire where they say, a DLL that refuses itself takes its callbacks with it, and the example in `examples/mods` builds and loads; `call_guest` runs at a safe point with every register put back and is refused anywhere else; and the shipped `mods/encounter-rate`, built with `--link`'s line: nothing written unset, each preset's byte from the base the game works out (no accessory, 210, 211 on a later character), only in the field, hold-B's zeros and its one restore of the game's value, hold-B off leaving the controller alone, an unknown preset refused, and the spec's two mutations (halving the byte read back, no restore) failing; and the shipped `mods/autotext`: one press 45 frames into a complete page, two frames down and two up, again only on the next page; none after a choice, on an auto-scroll page, in a choice box, in state 8, with no window, over the person's own A, or when off -- with its two mutations (no flags guard, the press-in-choice switch), and hold-to-skip (LB) in states 3 and 4 and nowhere else, with the live check's own rules each broken; `host_buttons` as si.c gives it, and a mod built against the header before it still loads; `read_pad` giving port 2 as si.c does and nothing for 1 or 3, and a mod built before it still loading; and the shipped `mods/coop` (P10b): pad 2 plays the slots given, only in a battle's party input, a handover neutral -- buttons, sticks and triggers -- until the incoming pad lets go, pad 2 forwarded whole, one line per press and per phase edge, port 1 alone when pad 2 is absent, off and refused values filtering nothing, each rule with a mutation; and the live check's own test (`python tools/tests/test_mods.py p10b <log> <recording>`) with each rule broken |
 | `test_cardformat.py` | 109 | the memory-card formatter: does the image it writes say what the mount reads? And `.gci` import and export (P3): into the older slot with the next check code, the newer untouched, every refusal, disjoint chains, a round trip |
 | `test_scenario.py` | 102 | the scenario files, the pad grammar and the invariant checker, against report lines copied from the `fprintf`s that produce them; a sweep refuses a replay the GPU drew, and a replay cannot see `SOA_GPU` or a `soa.ini` (V5); and `--wrap` (L1): its words go before the exe for `run` and `replay`, and a wrapped replay may not bless; and `--threads inline` (GPU spec V2), which runs with no worker pool and fails a run that does not say it used none |
-| `test_guard.py` | 83 | the game-data guard (and, distribution R3, `--tree` over a player's package: a clean package passes with its third-party binaries over the size limit; `src/` and `include/` are refused by name, and a DOL by its header -- named innocently, inside a file on a 32-byte step, and in a third party's folder; size, folder names, suffixes and mod-folder text still hold outside those folders; random bytes and text hold no DOL): its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
+| `test_guard.py` | 84 | the game-data guard (and, distribution R3, `--tree` over a player's package; and, L12c, `--apk` over an APK, where the runtime's `lib/*.so` pass and a DOL at a 4-byte step inside one, a disc image or an `assets/` folder do not: a clean package passes with its third-party binaries over the size limit; `src/` and `include/` are refused by name, and a DOL by its header -- named innocently, inside a file on a 32-byte step, and in a third party's folder; size, folder names, suffixes and mod-folder text still hold outside those folders; random bytes and text hold no DOL): its suffix and size limits against CI's copy, CI's grep refusing the same names as the guard, a suffix anywhere in a name (`slotA.raw.bak`), the tree check on names git would quote, and `--history` -- a file deleted later, a file renamed through a forbidden name, an exemption keyed by content, and the content check over deleted blobs; and T0: what mods, packs and saves would carry, the pack, load, dump, blob, photo and out folders, a binary file that begins as game data whatever it is named (a card image by its directory, an untagged MP3 by its first frame), and in a mod folder a file that is not text, NULs included |
 | `test_cfg.py` | 40 | control-flow recovery over synthetic DOLs: function boundaries and switch tables |
 | `test_soak.py` | 41 | `tools/soak.py`: the generated play repeats by seed and fits `si.c`; `check` turns a soak log into pass, FAIL or "did not test what it says" and each injected fault fails through its own check; the warp and the encounter accelerator never poke the forced-battle flag, a field that comes back black after a battle is a question, and (GPU spec V7) gxv's pipelines are counted by where they were made, the longest of each and how many came after the landing map loaded |
 | `test_padrec.py` | 33 | recording controller input and replaying it byte for byte, and the `SOA_PAD` items `si.c` refuses rather than pressing nothing; the host buttons (`lb`, `view`, `ls`, `rs`) and their chords, which never reach the report, fire once a frame, and are comments in a recording; and a card under the port root named relative to it; `SOA_PAD2`, port 2 for mods, in the same grammar, apart from port 1, and never answering the game; 600 bytes of recorded settings and mods reach the `# config` line whole, and 800 are cut with a line that says so |
@@ -88,6 +88,7 @@ its own and run it, some of the C as well:
 | `test_fetch_sdl.py` | 8 | SDL3 for the window and sound off Windows (portability L10): an archive that is not the pinned one is refused and nothing unpacked, and the pinned one is unpacked once and its headers found; `--verify` finds a changed byte and a missing file of this host's build, and with none recorded says how to make one; the build config's drivers are read without their features; what a static `libSDL3.a` needs comes from `sdl3.pc`, either way SDL writes it; with a build in `vendor/sdl3` the Linux link compiles every runtime file with `SOA_SDL` and links the library after the objects and before the profile's libraries, and without one the link is as it was; on Windows the build is refused (D2) |
 | `test_seam.py` | 9 | the seam between the runtime and a split game library (specs/android.md L12a), with `SOA_CC`'s profile (CI's Linux legs: gcc, clang, ARM64): a game of two functions, built from the real `game_table.c` template, loads through the real launcher, `runtime/game.c` and `runtime/elfcheck.c` -- its entry calls the runtime, the table's record is the one written into it -- and exports `soa_game` alone; a library is refused before dlopen, in the player's words, for an import the runtime lacks, another build's record, the decompiled code's record, no table, 4 KB pages and no record; with a real split build in `gen/linux-split`, its libraries cross exactly `config/seam.txt` (CI leaves that case out). With `elfcheck.c`'s import check or its record comparison removed, the matching cases fail. Skips without an ELF system, as on Windows |
 | `test_android_build.py` | 9 | the game library from the PC for Android (specs/android.md L12b), with the NDK `tools/soa/toolchain.py` finds: a mistyped `SOA_ANDROID_NDK` is no NDK, never the next one, and the places looked are named; a game of two functions, built as `recompile.py --cc android-arm64` builds the real one, is what the phone loads by `tools/soa/elfcheck.py` (AArch64, `libsoa_game.so`, 16 KB pages, needing `libsoa_runtime.so`, `soa_game` alone, the record written into it), and two builds are the same bytes; a library with 4 KB pages, its functions not hidden, an import the runtime lacks, another build's record, or built for x86-64 draws its refusal; and `runtime/elfcheck.c`, built for this machine with `SOA_CC`'s profile, gives every one the Python's verdict in the same words. With `elfcheck.py`'s page limit at 4 KB, or `elfcheck.c`'s wording changed, it fails. Skips without an NDK; the C half without a compiler for this machine |
+| `test_android_tool.py` | 9 | `tools/android.py` without a device (specs/android.md L12c): the runtime's side of the seam the APK is built from exports exactly the seam's runtime names, the bindings a build with no `src/` leaves to the runtime (none of the decompiled ones), `soa_run` and `SDL_main`, under the record a game library built now carries, with a forwarder for every twin; a check with neither `--serial` nor `SOA_ADB_SERIAL` is refused; a run's status is the log's `[exit] N` line alone; a launch starts from a stopped app, passes its environment and arguments, and waits for two empty `pidof` answers in a row, not one; a run that outlasts its time is stopped with its log kept; Gradle is the pinned archive or nothing; and every exit function a runtime file calls is wrapped in the APK's link and answered by `runtime/android.c`. With one `--wrap` taken out, or the wait ended by one empty answer, it fails |
 | `test_window_sdl.py` | 1 | the SDL3 window and sound run for real (L10), built with `SOA_CC`'s profile against `vendor/sdl3` with a driver standing in for the renderer, on an X display (CI's gcc leg: Xvfb): the frame read back with xwd is the driver's, whole pixels and its colours in order; a key typed with xdotool is port 1's A, and let go nothing; `SOA_WINDOW_TEST`'s size gives a 1000x700 client with the frame at 1x, centred, in window.c's words; the presents are counted, none failed; 200 blocks of sound at once keep waveOut's 24 and drop the rest. Red and blue swapped, the key sent as B, the queue a hundred times deeper and the resize not asked each fail it. Skips without gcc or clang, SDL, a display, xwd or xdotool, as everywhere on Windows |
 | `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
@@ -145,10 +146,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1347 passed, 13 skipped` |
-| no capstone | `1328 passed, 14 skipped` |
-| no MSVC | `939 passed, 421 skipped` |
-| neither | `920 passed, 422 skipped` |
+| everything (MSVC + capstone) | `1357 passed, 13 skipped` |
+| no capstone | `1338 passed, 14 skipped` |
+| no MSVC | `949 passed, 421 skipped` |
+| neither | `930 passed, 422 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -246,7 +247,7 @@ ok   window.c
 ok   window_sdl.c
 ok   gxv.c with SOA_GXV=1 (the backend)
 
-compiled 37/37 runtime translation units
+compiled 38/38 runtime translation units
 gxv.c: compiled as the backend too
 the SDL window and sound: not compiled with SOA_SDL: Windows keeps window.c (D2)
 not compiled here: nothing, every runtime/*.c is covered
@@ -587,6 +588,60 @@ correctly; the copy in `/tmp` is the container's own layer, gone with `--rm`.
 replay may not `--bless`: Wine's frames are held to the manifest, never
 written into it.
 
+**On Android (L12c).** The APK, with a game library pushed beside it, on an
+emulator of its own: an AVD named `soa_x86_64` (android-34, google_apis,
+x86_64), started headless on a port of its own so that another project's
+emulator is never touched, and named to every command. `android.py` never
+takes the only device attached.
+
+```
+emulator -avd soa_x86_64 -port 5556 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+$env:SOA_ADB_SERIAL = 'emulator-5556'
+adb -s emulator-5556 shell svc power stayon true
+adb -s emulator-5556 shell settings put secure immersive_mode_confirmations confirmed
+python tools/recompile.py --cc android-x86_64 --compile --optimize --link
+python tools/android.py build
+python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk
+python tools/android.py install
+python tools/android.py push-game
+python tools/android.py push-disc
+python tools/android.py push-corpus
+python tools/android.py selftest
+python tools/android.py replay --threads 1,2,3,8
+python tools/android.py run --timeout 900 --env SOA_RENDER=1 --env SOA_FRAMES=2000 --env SOA_SNAP=50 --env SOA_STRICT=1 --env SOA_SETTINGS=0 --env SOA_PAD=1600:start,1640:a > build/android-title.log
+python tools/scenario.py check build/android-title.log --name title
+```
+
+The library takes about 68 s and the APK about 17 s once Gradle and SDL's
+AAR are in `vendor/`. On the device the self test takes 2 s, the replay at
+four thread counts about 8 minutes, and the title 3 min 40 s, because the
+emulator runs the game at about 9 frames a second.
+
+- **That speed is the emulator's clock.** Its kernel boots with
+  `clocksource=pit`, so every read of the clock is a system call of 8 to
+  17 us, against well under a microsecond on a phone. A run spends nearly
+  all its time in the kernel there, so measure nothing about speed on it, and
+  trust none of the renderer's per-phase times: its cycle counter disagrees
+  with its clock. `-qemu -append "clocksource=tsc tsc=reliable"` makes the
+  reads fast, but under WHPX every clock then moves in 24-48 ms steps.
+- **Keys:** `adb shell input keyevent --longpress KEYCODE_SPACE` is START and
+  `KEYCODE_X` is A, each held for the long-press time, about four frames
+  there. A plain `input keyevent` is over between two of the game's reads of
+  the pad, and the console's `adb emu event send` never reaches the app on a
+  headless emulator. `--env SOA_WINDOW=1` gives the run a window to have the
+  keys, and `--env SOA_PAD_RECORD=pad.rec` writes down what the port read.
+- **The screen stays on** (`stayon` above): a screen that times out locks,
+  and a locked device sends keys nowhere.
+- **Home, then back:** `adb shell input keyevent KEYCODE_HOME`, then `adb
+  shell am start -n io.github.bmfrench89.soa.dev/io.github.bmfrench89.soa.SoaActivity`
+  returns to the same run. The frame count holds while it is away, the
+  `[run]` line's "s excluded" is the time away, and the app's CPU there is a
+  few percent.
+- **The disc, the captures and the library are game data:** the push commands
+  are for the owner's own devices. The guard over the APK is what keeps game
+  code out of anything that could be published.
+- `adb root` is needed only for `debuggerd -b`, the stacks of a running app.
+
 If MSVC cannot be found, every step says so on stderr — `MSVC not found;
 skipping compile` — and returns 1 rather than pretending it did the work.
 `tools/soa/toolchain.py` finds it through `vswhere` and runs `vcvars64.bat`, so
@@ -594,7 +649,7 @@ skipping compile` — and returns 1 rather than pretending it did the work.
 
 ---
 
-## 3. The self test (86 cases)
+## 3. The self test (87 cases)
 
 ```
 $env:SOA_SELFTEST='1'
@@ -624,7 +679,7 @@ Without one you get the boot message and exit 1, not a self-test result:
 
 That is the reason none of section 3 runs in CI.
 
-The 86 cases, in the order they print:
+The 87 cases, in the order they print:
 
 | # | Group | Cases |
 |---|---|---|
@@ -636,16 +691,17 @@ The 86 cases, in the order they print:
 | 73 | Decompiled against recompiled | 1 |
 | 74 | `VIGetRetraceCount`, native against its twin | 1 |
 | 75 | The data-cache range calls, native against their twins | 1 |
-| 76 | Paired-single loads and stores against the general formula | 1 |
-| 77 | The race seed at OSGetTick | 1 |
-| 78 | The encounter multiplier as the game works it out | 1 |
-| 79 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
-| 80 | `unfocused = mute`: the device gets zeros, then the block again | 1 |
-| 81 | The audio DMA across a clock epoch: the owed blocks still come | 1 |
-| 82 | The audio DMA's pace through the game's running writes | 1 |
-| 83 | A mod's call into the game: every register as it was | 1 |
-| 84–85 | A fused multiply-add rounds once: the guest's `fmadds`, and the runtime's software `fma` over 200,000 inputs (distribution R1) | 2 |
-| 86 | The game's table against what the build calls directly: the entry, `dispatch`, the system files, the record, all 21 twins (specs/android.md L12a; in a split build, that a table is loaded) | 1 |
+| 76 | `__AI_SRC_INIT`, native against its twin where the twin can finish (FINDINGS "L12c") | 1 |
+| 77 | Paired-single loads and stores against the general formula | 1 |
+| 78 | The race seed at OSGetTick | 1 |
+| 79 | The encounter multiplier as the game works it out | 1 |
+| 80 | The rumble motor, from the OUTBUF writes PADControlMotor makes | 1 |
+| 81 | `unfocused = mute`: the device gets zeros, then the block again | 1 |
+| 82 | The audio DMA across a clock epoch: the owed blocks still come | 1 |
+| 83 | The audio DMA's pace through the game's running writes | 1 |
+| 84 | A mod's call into the game: every register as it was | 1 |
+| 85–86 | A fused multiply-add rounds once: the guest's `fmadds`, and the runtime's software `fma` over 200,000 inputs (distribution R1) | 2 |
+| 87 | The game's table against what the build calls directly: the entry, `dispatch`, the system files, the record, all 22 twins (specs/android.md L12a; in a split build, that a table is loaded) | 1 |
 
 ### The memory card (26)
 
@@ -793,16 +849,23 @@ counts and four call sites, the top of the loop among them, where it adds only
 a pass over the callbacks. The spin, and the callbacks, are `test_tick.py`'s.
 Answering the count plus one at one call site fails it at round 2.
 
-### The data-cache calls, paired singles, the race seed (3)
+### The data-cache calls, `__AI_SRC_INIT`, paired singles, the race seed (4)
 
 ```
 [selftest] DC range calls native vs twin ok    got "five calls over 100 rounds, a quarter of them empty"
+[selftest] __AI_SRC_INIT native vs twin ok    got "AICR as the twin leaves it from 4 values, the counter restarted"
 [selftest] psq_load/psq_store vs generic ok    got "8192 loads and stores over 8 types and 64 scales agree with the ldexp formula"
 [selftest] race seed at OSGetTick       ok    got "three sites pinned twice each and srand stored each pin; 8000A1DC left to the clock"
 ```
 
 The five data-cache range calls (H13) are no-ops natively; their twins must
-leave memory and the syscall count as the natives do. `cpu.h`'s paired-single
+leave memory and the syscall count as the natives do. `__AI_SRC_INIT`, the
+audio interface's timing of its rate switch, is answered natively because it
+never finishes where a clock read is slow (L12c): its twin must leave AICR as
+the native does from four starting values, and the native must restart the
+sample counter. Where a read of the counter costs 2 us or more the twin is not
+run, and the line says so and what it cost: 41 to 46 us on the x86-64 emulator.
+Leaving out the restart or the stop fails it. `cpu.h`'s paired-single
 fast path is held to the `ldexp` formula over every type and scale. The race
 seed (P6) runs the game's own OSGetTick and srand from each reseed site twice,
 and from `0x8000A1DC` must get the clock (FINDINGS "H13, first steps", "P6").
@@ -1474,6 +1537,8 @@ perfectly the whole time.
 | `SOA_SELFTEST=1` | **yes** | — | no | **yes** | no | no |
 | `scenario.py run … --check` | **yes** | — | no | **yes** | no | no |
 | `scenario.py replay` | **yes**³ | — | no | **yes** | **yes** | no |
+| `android.py build`, then `guard.py --apk` | no | no; the NDK, an Android SDK and a JDK | no | no | no | no |
+| `android.py selftest`, `run`, `replay` | **yes**, pushed to the device | no; the NDK for the library | no | no; the device's game library | `replay` only | no |
 | `imgdiff.py refs` and `mutate` | **yes**³ | — | no | **yes** | **yes** | no |
 | `gpuspike.py selftest`, `tevdiff`, `copydiff`, `loddiff` | no | yes | no | no | no | no⁴ |
 | `gpuspike.py oracle`, `time` | no | yes | no | no | **yes** | no⁴ |
@@ -1482,7 +1547,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 421 of the 1360 skip here without a C compiler: 408 build runtime files or the GPU spike with MSVC and run them (one, `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, and `test_seam.py`'s nine an ELF system, which no Windows run has.
+² 421 of the 1370 skip here without a C compiler: 408 build runtime files or the GPU spike with MSVC and run them (one, `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, and `test_seam.py`'s nine an ELF system, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

@@ -115,7 +115,7 @@ def compile_backend(
 # What SOA_SDL changes, compiled again with it (L10): the two SDL files are
 # empty without it, window.c's stubs must leave the names to them, and
 # audio_out.c and main.c take another branch.
-SDL_FILES = ("window_sdl.c", "audio_sdl.c", "window.c", "audio_out.c", "main.c")
+SDL_FILES = ("window_sdl.c", "audio_sdl.c", "window.c", "audio_out.c", "main.c", "android.c")
 
 
 def compile_sdl(

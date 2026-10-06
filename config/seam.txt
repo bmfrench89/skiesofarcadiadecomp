@@ -31,6 +31,8 @@ runtime mmio_write32
 runtime mmio_write64
 runtime trace_hit
 runtime watch_hit
+# x86-64 Android's fused multiply-add (runtime/cpu.h, soafma.c)
+runtime soa_fma
 libc _setjmp
 libc setjmp
 libc fma
@@ -54,6 +56,7 @@ twin 0x80232EC4
 twin 0x80232EF0
 twin 0x8023851C
 twin 0x8023F704
+twin 0x80241DA0
 twin 0x8025C710
 twin 0x8025C73C
 twin 0x8025ECBC

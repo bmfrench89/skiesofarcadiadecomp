@@ -14,7 +14,7 @@ This writes the C on each side of it for tools/recompile.py:
   exporting exactly the seam; and <out>/launcher.c.
 
 The record says what a game library must agree on with the runtime that
-loads it: the table's abi, the decomp mode (whether 25 or 13 bindings cross)
+loads it: the table's abi, the decomp mode (whether 26 or 14 bindings cross)
 and one digest of everything the translated C bakes in
 (player_build.BAKED). runtime/elfcheck.c compares the three before dlopen.
 """
@@ -189,10 +189,11 @@ int dispatch_known(uint32_t addr) {{ return soa_game_table->dispatch_known(addr)
 """
 
 
-def version_script(seam: Seam, bound: Iterable[int]) -> str:
+def version_script(seam: Seam, bound: Iterable[int], extra: Iterable[str] = ()) -> str:
     """<out>/runtime.map: the runtime library exports the seam, the launcher's
-    soa_run, and nothing else; SDL, linked in statically, stays inside."""
-    names = [*runtime_exports(seam, bound), "soa_run"]
+    soa_run, and nothing else; SDL, linked in statically, stays inside. The
+    APK's adds SDL_main, which SDLActivity looks up (specs/android.md 3.1)."""
+    names = [*runtime_exports(seam, bound), "soa_run", *extra]
     body = "\n".join(f"    {n};" for n in names)
     return f"{{\n  global:\n{body}\n  local: *;\n}};\n"
 

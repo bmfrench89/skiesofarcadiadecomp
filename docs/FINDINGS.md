@@ -7354,3 +7354,116 @@ the driver's.** 2026-10-04.
   and compiles the runtime for Android.
 - **The tests** are 1360 in 86 files, measured four ways: 1347 passed and 13 skipped here.
 - **What follows:** L12c, the APK shell, on the android-34 x86_64 emulator installed here.
+
+**L12c: the shell, on the emulator.** 2026-10-06.
+
+- **What it is:** the APK, with a game library pushed beside it, on the android-34 x86_64 emulator here (the AVD
+  `soa_x86_64`, headless on port 5556; the other project's emulator is never touched).
+  - **`android/`:** Gradle 9.6.0 and AGP 9.4.0; SDL3 3.4.18's own AAR by prefab; CMake building
+    `libsoa_runtime.so` from every `runtime/*.c` with `SOA_SDL`, `SOA_SPLIT` and `SOA_NO_DECOMP`; and
+    `SoaActivity`, which is SDL's activity, taking the run's environment and arguments from the intent in a
+    debuggable build only. Gradle is fetched by `android.py` against a pinned sha256, with no wrapper jar.
+  - **`runtime/android.c`:** the app's storage as the data root; stdout and stderr to logcat and `soa.log`
+    through a pipe and a thread; the window held landscape; the game library from that storage; and every
+    way out ending with `[exit] N` once the log is drained.
+  - **`tools/android.py`:** `build`, `install`, `push-game`, `push-disc`, `push-corpus`, `selftest`,
+    `replay`, `run` and `logs`. A device is always named, never taken as the only one attached.
+  - **Also new:** `tools/guard.py --apk` and `tools/fetch_sdl.py --android`.
+- **Checked on the emulator** [V], with the x86_64 library built here:
+  - **the self test:** 87 cases, 0 failures, `[exit] 0`;
+  - **the replay:** 23/23 at 1, 2, 3 and 8 threads, against the PC's manifest;
+  - **`title` from its script:** 4 of 4 invariants;
+  - **`title` from the keyboard:** in a window, `pad.rec` shows START at frame 1603 and A at 1696; START
+    skipped the opening, frame 2250 is the title screen with PRESS START, and the four invariants hold;
+  - **Home, then back:**
+    - 15.7 s are excluded from guest time, and the frame count held at 300 while away;
+    - 4% CPU while away, and no audio block dropped;
+    - the game's picture is drawn again at 2x after the return (screenshots);
+  - **`SOA_MEMPOKE=0x81800000,0x81900000,0x80001000`** under ART's `libsigchain`: reported once, the in-range
+    word read back, and the run carried on to `[exit] 0` at its frame limit;
+  - **`guard.py --apk`** passes the 8.5 MiB debug APK. A mutant with the real `disc_sys.c` in its runtime
+    library is refused at 0x11860 (arm64) and 0x12040 (x86_64).
+- **What the emulator found, each fixed:**
+  1. **Bionic's x86-64 `fma` rounds a negative result that underflows to +0, not −0:** 80 of the self test's
+     200,000 cases. Judged exactly with Python's `Fraction`, bionic was right on none of them and musl's soft
+     version on all 80.
+     - `cpu.h` now sends `fma` to `soa_fma` on x86-64 Android, as on MinGW: FMA3 where CPUID has it, else
+       the soft version. `soa_fma` joins the seam.
+     - ARM64's `fma` is the instruction.
+  2. **`__AI_SRC_INIT` never ended,** so the game stopped at AIInit with 1 frame in 20 s, 22.7 of its 22.9 CPU
+     seconds in the kernel.
+     - **What it does:** the SDK times one tick of the 48 kHz sample counter with the timebase, and retries
+       until the gap is under 28.5 µs (or between 34.5 and 39 µs).
+     - **Why it never ended:** the gap spans at least seven timebase reads. The emulator boots its kernel
+       with `clocksource=pit`, so one clock read is a system call of 8 µs (17 µs just after boot), and the
+       window was out of reach.
+     - **The fix:** `hle.txt` binds it and `hle_os.c` answers it with one round's read-modify-writes of AICR,
+       without the spins. That makes 26 bindings, 14 of them crossing under `--no-decomp`.
+     - **The self test** (case 76) holds it to its twin, with the five bounds AIInit computes set as AIInit
+       sets them. Where a counter read costs 2 µs or more, the twin is not run. Dropping the restart or the
+       stop fails it.
+  3. **The emulator runs the game at about 9 frames a second,** almost all of it in the kernel reading that
+     clock. `title` took 248.9 CPU seconds, 238.6 of them in the kernel, for 2,000 frames in 219 s.
+     - **That is the emulator,** not the port. A phone reads its clock through the vDSO in under a microsecond.
+       [I] The kernel seconds over the measured read cost give about 136,000 reads a second at 9 frames a
+       second. At the phone's 30, and 60 ns a read, that would be about 3% of one core.
+     - **A TSC clock is no way out:** booting with `-qemu -append "clocksource=tsc tsc=reliable"` makes the reads
+       cheap, but under WHPX every clock then moves in 24-48 ms steps.
+     - **The renderer's per-phase timers** disagree with the clock there ("−118% unaccounted").
+  4. **The runtime's own exits lost the log's end.**
+     - **How it leaves:** the frame limit and the watchdog leave through `_Exit`, a window's close through
+       `_exit`, a trap through `exit`. None of them ran `android.c`'s drain.
+     - **What was lost:** the report's last lines and the `[exit]` line.
+     - **The fix:** the APK links `--wrap` for all three. `test_android_tool.py` fails when a runtime file calls
+       an exit the link does not wrap.
+  5. **The background events came too late.**
+     - **Why:** SDL's pump blocks whichever thread calls it while the app is away. So the loop heard
+       `WILL_ENTER_BACKGROUND` only once the app was back, just before the foreground event.
+     - **The effect:** the game ran on unseen, with 0 s excluded and 2,946 audio blocks dropped.
+     - **The fix:** an `SDL_AddEventWatch` filter now pauses on the thread that sends the event.
+  6. **A paused guest spun a core.**
+     - **Why:** a guest waiting for an interrupt, in the idle loop or on a flag, read a frozen clock at full
+       speed: 100% of one core for as long as the app was away.
+     - **The fix:** `irq.c` sleeps while a pause is requested, and the core goes to 4%. `unfocused = pause` on
+       the desktop spun the same way.
+     - **Also:** the pause request is now one of L2's atomics, since a third thread writes it.
+  7. **The window:**
+     - **Landscape:** SDL replaced the manifest's landscape with "any" for a resizable window, so
+       `android.c` now sets SDL's orientation hint.
+     - **The title bar:** the default theme showed one, so the theme is now one without it.
+     - **Fullscreen** is the default on Android. Without it the system bars leave 954 lines, and a 2x picture
+       needs 960.
+  8. **Driving it:**
+     - **Keys:** the emulator console's `event send` never reaches the app on a headless emulator, and a plain
+       `input keyevent` ends between two reads of the pad. `input keyevent --longpress` holds a key for about
+       four frames.
+     - **The screen:** one that times out locks, and a locked device sends keys nowhere.
+  9. **A replay's log was read before its run ended,** with neither its hash nor its `[exit]` line in it.
+     - **The evidence:** logcat shows that run finishing normally, 46 ms before the process died.
+     - **Why:** one empty `pidof` answer had ended the wait.
+     - **The fix:** `launch` now waits for two empty answers in a row; with one, two tests fail. The second sweep
+       ran clean.
+- **Settled:**
+  - **SDL's thread (risk 4):** video, input and the lifecycle work from `window_sdl.c`'s own thread, so
+    `main.c` and `plat.c` are unchanged.
+  - **The MEM1 guard under `libsigchain` (risk 5)** works.
+- **Left for the phone:**
+  - **`setFrameRate`, the performance hint, and the render pool's default by `cpu_capacity`** (§3.12). The
+    emulator's display is fixed at 60 Hz, it gives no hint session, and its cores are alike.
+  - **`RENDER_DEVICE_RESET`** remakes the texture. That is written, but never seen: the context survived every
+    trip away.
+- **A correction to what this session told the owner:** the 8.5 MiB APK had not "carried something of the
+  mutant's".
+  - An ordinary incremental build is 8.5 MiB too, against a clean build's 8.1 MiB. The difference is the
+    archive's layout.
+  - Both pass the guard.
+- **Elsewhere:**
+  - **Windows,** retranslated for the binding: the self test 87 with 0 failures; `title` 4 of 4; the audio
+    unchanged (13,945 blocks, none dropped).
+  - **The Linux split build** in the container: the self test runs the new twin through the game table's
+    forwarder; `title` 4 of 4; replay 23/23 at 1 and 8 threads; `test_seam.py` 9 of 9.
+- **The tests** are 1370 in 87 files, measured four ways: 1357 passed and 13 skipped here; 1338 and 14
+  without capstone; 949 and 421 without MSVC; 930 and 422 without either. `test_guard.py` has 84 (the
+  `--apk` case), and `test_android_tool.py` is new, with 9.
+- **What follows:** L12d, the import on the emulator; then L12's Done on the AYN Thor. D-33 (the package name
+  and the release key) is the owner's, before anyone else installs it.

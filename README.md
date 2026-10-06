@@ -99,8 +99,11 @@ and `title --check` (all three pass, the replay 23 of 23 against the same manife
 **Android** is under way (specs/android.md). With the Android NDK installed (Android Studio's SDK
 manager, or `SOA_ANDROID_NDK`), `python tools/recompile.py --cc android-arm64 --compile --optimize --link`
 builds the game library a phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and
-checks it as the phone would; `--cc android-x86_64` builds it for the emulator. The app that loads it is
-L12c's.
+checks it as the phone would; `--cc android-x86_64` builds it for the emulator. The app that loads it
+runs on the x86-64 emulator (L12c): `python tools/android.py build` makes the APK, which holds the runtime
+and no game code, and `install`, `push-game` and `push-disc` put it and your files on a device you name
+(`--serial` or `SOA_ADB_SERIAL`); docs/TESTING.md has the whole recipe. Picking the disc and the library
+on the phone itself is L12d's, and no phone has run it yet.
 
 **cmd.exe** — the same commands, except for the line that sets the variable:
 
@@ -363,7 +366,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1360 tests; any that need a dump skip themselves
+python -m pytest                     # 1370 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

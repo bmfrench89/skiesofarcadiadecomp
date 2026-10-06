@@ -588,14 +588,16 @@ static void on_event(const SDL_Event* e)
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         on_focus(1);
         break;
-    case SDL_EVENT_WILL_ENTER_BACKGROUND: /* a phone's home button, a system's sleep: the game holds (M19) */
-        si_motor_stop();
-        clock_pause(1);
-        break;
-    case SDL_EVENT_DID_ENTER_FOREGROUND:
-        clock_pause(0);
-        break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        g_resized = 1;
+        break;
+    case SDL_EVENT_RENDER_DEVICE_RESET:
+        /* the GPU's context went (an Android app's can, while it is away), and
+         * the texture with it: made again at the next present, which follows
+         * at once with the last frame (specs/android.md 3.9) */
+        if (g_tex) SDL_DestroyTexture(g_tex);
+        g_tex = NULL;
+        g_bw = g_bh = 0;
         g_resized = 1;
         break;
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
@@ -658,6 +660,24 @@ static void headless(const char* what, const char* why)
     watchdog_fallback();
 }
 
+/* A phone's home button, a system's sleep: the game holds (M19). Caught as
+ * the event is sent, on the thread that sends it, not in the loop below:
+ * on Android SDL's pump blocks whichever thread calls it for as long as the
+ * app is away, so the loop heard of the background only once it was back,
+ * just before the foreground, and the game ran on unseen (FINDINGS "L12c";
+ * specs/android.md 3.9, 3.11). */
+static bool SDLCALL lifecycle_watch(void* userdata, SDL_Event* e)
+{
+    (void)userdata;
+    if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+        si_motor_stop();
+        clock_pause(1);
+    } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+        clock_pause(0);
+    }
+    return true;
+}
+
 static void ui_thread(void* arg)
 {
     const char* why = "";
@@ -668,6 +688,7 @@ static void ui_thread(void* arg)
         return;
     }
     g_wake = SDL_RegisterEvents(1);
+    SDL_AddEventWatch(lifecycle_watch, NULL);
     if (!g_scale) g_scale = fit_scale();
     g_win = SDL_CreateWindow("Skies of Arcadia Legends -- native", 640 * g_scale, 480 * g_scale,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -708,7 +729,14 @@ static void ui_thread(void* arg)
         fprintf(stderr, "[window] the display refreshes every %.2f ms (%.1f Hz; the mode says %.2f Hz)%s\n", g_refresh_ms,
                 hz, m ? (double)m->refresh_rate : 0.0,
                 g_interval == 1 ? ", not a multiple of 30: each frame takes the next refresh" : "");
+        /* a phone's game fills its screen, past the system bars, unless soa.ini or
+         * the environment says fullscreen = 0: only that leaves room for the
+         * picture at 2x on a screen 1080 tall */
+#ifdef __ANDROID__
+        if (!fs || !*fs || atoi(fs)) set_fullscreen(1);
+#else
         if (fs && atoi(fs)) set_fullscreen(1);
+#endif
     }
     window_test_parse();
     read_input(); /* before the port can ask: an unread snapshot is the stick hard left and down */

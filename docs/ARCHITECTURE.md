@@ -32,9 +32,10 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(25 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
-`tick.c` answers so the main loop has a safe point; and the five data-cache
-range calls, answered as the no-ops they are with no cache to keep).
+(26 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
+`tick.c` answers so the main loop has a safe point; the five data-cache
+range calls, answered as the no-ops they are with no cache to keep; and
+`__AI_SRC_INIT`, whose calibration never ends where a clock read is slow).
 
 **Threads in the process.** One guest CPU thread, which owns every device
 model and parses the graphics command stream; that thread's guest threads
@@ -474,14 +475,15 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `main.c` | host plumbing | Boot: allocate and guard the memory image, load the DOL, park the FST, fill low memory, pick the run mode, start the window, the watchdog and the sampling profiler, then jump to `__start` | The image is not what the apploader would have left, and the game misbehaves before any of its own code is suspect. The guarded tail is what turns an out-of-range guest store into one `[mem]` line instead of silent host-heap corruption |
 | `threads.c` | host plumbing | Guest threads on host fibers; the `OSSaveContext` / `OSLoadContext` replacements and the guest backtrace walker | A thread resumes with the wrong registers or on the wrong stack — which presents as the game corrupting itself minutes later, nowhere near the switch |
 | `hle.c` | host plumbing | MMIO routing to the device models, per-register access counting for unmodelled hardware, the guest timebase and `SOA_SPEED`, guest traps, and the end-of-run report | A register that should be modelled reads zero and the guest quietly takes a wrong branch; `SOA_STRICT=1` is what turns that into a stop with a backtrace |
-| `hle_os.c` | host plumbing | Native replacements for `__OSInitAudioSystem` and `__OSStopAudioSystem`, which exist only to leave the right register state behind | The DSP never announces itself and audio initialisation hangs |
+| `hle_os.c` | host plumbing | Native replacements for `__OSInitAudioSystem`, `__OSStopAudioSystem` and `__AI_SRC_INIT`, which exist only to leave the right register state behind (the last also because its timing of the sample-rate switch never finishes where a clock read is slow, L12c), and for the five data-cache range calls, which have no cache to keep | The DSP never announces itself and audio initialisation hangs; on a slow clock the boot never gets past AIInit |
 | `hle_stdio.c` | host plumbing | The guest's own `printf`, formatted from the EABI argument layout, so the game's messages reach the log | You lose the game's own diagnostics — which is how "memory reallocate error" was ever seen |
 | `decomp_swap.c` | host plumbing | The EABI adapters that let a natively compiled decompiled function stand in for its translation, and the program counter each one stores for the profiler | `memcpy`, `memset` and `strcpy` corrupt guest memory. The selftest's twin comparison is what catches it |
 | `decomp_shims.c` | host plumbing | Native stand-ins for functions a decompiled unit calls but nobody has decompiled yet. Empty today | A swapped-in function computes the wrong thing while byte-matching perfectly, because the error is in its callee |
 | `audio_out.c` | host plumbing | `waveOut` playback, or SDL3's through `audio_sdl.c` off Windows (L10), and the `SOA_WAV` writer | Nothing is audible, or blocks are dropped. The mix itself is unaffected: `ax.c` writes into guest memory whether or not a device exists |
 | `ax.c` | device model | The AX mixer: the command list, parameter blocks, voices, resampling, the buses, and the census the report prints. Reached through `dsp.c`'s mailbox rather than through registers of its own, because that is how the console reaches it too | Wrong or missing sound, and the game never notices — it writes a command list and reads buses back, so an error here is silent outside the report |
 | `soa_game.h`, `game.c`, `elfcheck.c` | host plumbing | The game's table (specs/android.md 3.2), which every build links from `<out>/game_table.c` and the self test holds to the direct calls; and, in a split build (`--split`), the loader that finds `libsoa_game.so`, checks it before `dlopen` and hands its table to the runtime | A split build refuses a library for another machine, page size or build, in words; a single-file build is unchanged |
-| `window_sdl.c`, `audio_sdl.c` | host plumbing | Off Windows (L10, built when `vendor/sdl3` holds SDL3): window.c's window, pads, rumble and report on SDL3, every SDL call on its own thread; and the sound's SDL audio stream | As window.c's and audio_out.c's, on Linux |
+| `window_sdl.c`, `audio_sdl.c` | host plumbing | Off Windows (L10, built when `vendor/sdl3` holds SDL3): window.c's window, pads, rumble and report on SDL3, every SDL call on its own thread; and the sound's SDL audio stream. On Android too (L12c), where the background events are caught by an event watch as they are sent, the texture is remade after a device reset, and the window is fullscreen by default | As window.c's and audio_out.c's, on Linux and Android |
+| `android.c` | host plumbing | The APK's entry (specs/android.md 3.8, L12c): `SDL_main` makes the app's storage the data root, sends stdout and stderr to logcat and `soa.log`, keeps the window landscape, and runs the port through `game.c` with the game library from that storage. Every way out -- a return, `exit`, `_exit` or `_Exit`, the last three by `--wrap` -- ends with `[exit] N` once the log is drained | A run writes nowhere `android.py` can read, or loses its last lines and its exit status |
 | `window.c` | host plumbing | The Win32 window on its own thread, presented through a DXGI flip-model swap chain paced to the display's refresh (GDI with `SOA_PRESENTER=gdi`; with `SOA_GPU=vulkan`, gxv's own swap chain, V8), and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
@@ -490,7 +492,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `picture.c` | host plumbing | Where the picture goes in the window -- `picture_layout`, the largest whole multiple of the frame (`integer`) or the largest 4:3 that fits (`fit`), centred with black bars -- and `present_interval`, how many refreshes each frame is held (H19a); pure, built alone by `test_picture.py`, whose Python twin checks a windowed run's `[window]` lines | A layout that disagreed between the two presenters, or with the log, would show as a moved picture only by eye; the twin is what catches it |
 | `seed.c` | host plumbing | The race seed (P6): with `SOA_SEED`, OSGetTick answers its three reseed sites -- a field load, two at a battle start -- with values from the seed, the site and the call count, through `guest_timebase_lo` in `hle.c`, gated on OSGetTick's pc | A pin that leaked to another timebase read would move a device's clock; the pc gate is what stops it, and `test_seed.py` and the self test hold the sites |
 | `trace.c` | diagnostic | Tracepoints from `config/trace.txt`: registers, string arguments and a backtrace at chosen addresses | Nothing about the run changes; you lose the answer to "how far did this get?" |
-| `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, all 12 decompiled functions against their recompiled twins over 200 random rounds, `VIGetRetraceCount` and the five data-cache calls against theirs, and the paired-single loads and stores against the generic formula they replaced | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
+| `selftest.c` | diagnostic | `SOA_SELFTEST=1`: the library routines, the card and EXI model, the AX mixer, a synthetic frame through the real GX pipe, all 12 decompiled functions against their recompiled twins over 200 random rounds, `VIGetRetraceCount`, `__AI_SRC_INIT` and the five data-cache calls against theirs, and the paired-single loads and stores against the generic formula they replaced | A false pass here is the worst failure in the tree: it is the check that is supposed to catch the others |
 
 ---
 
@@ -526,7 +528,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 25 entries and **none of them is a GX function**: every
+`config/hle.txt` has 26 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 
@@ -666,7 +668,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1360 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1370 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

@@ -1,0 +1,7 @@
+.gradle/
+build/
+# CMake's own build tree: objects of the runtime, and of anything once built into it
+app/.cxx/
+local.properties
+# written by tools/android.py from config/seam.txt before each build
+app/src/main/cpp/generated/

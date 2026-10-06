@@ -8,6 +8,7 @@
  */
 #include "cpu.h"
 #include "gxr.h"
+#include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1720,6 +1721,64 @@ static int dcache_selftest(CpuState* s, char* got, size_t cap)
     return check("DC range calls native vs twin", got, bad ? "agreement" : got);
 }
 
+/* __AI_SRC_INIT answered natively (hle_os.c, FINDINGS "L12c") against its
+ * recompiled twin: AICR as the twin leaves it, from four starting values, and
+ * the sample counter restarted. The twin compares its measurement with five
+ * bounds AIInit works out from the bus clock, so they are set here as AIInit
+ * sets them and put back after. It spins until two timebase reads fall
+ * close enough together, which they never do where a read of the host's
+ * clock costs microseconds; there the twin is not run, the case says so,
+ * and the native is held to the bits alone. */
+void recomp_fn_80241DA0(CpuState* s);
+void fn_80241DA0(CpuState* s);
+
+static int ai_src_selftest(CpuState* s, char* got, size_t cap)
+{
+    static const uint32_t start[4] = {0x00u, 0x03u, 0x44u, 0x57u};
+    /* bound_32KHz, bound_48KHz, min_wait, max_wait, buffer: 31524, 42024,
+     * 42000, 63000 and 3000 ns in 40.5 MHz ticks, each an OSTime */
+    static const uint32_t bound[5] = {1276u, 1701u, 1701u, 2551u, 121u};
+    const uint32_t AICR = 0xCC006C00u, AISCNT = 0xCC006C08u, BOUNDS = SDA_BASE - 0x6C28u;
+    uint8_t saved[40];
+    uint64_t t0 = plat_mono_raw();
+    double read_us;
+    int k, bad = 0, twin_runs;
+    for (k = 0; k < 64; k++) (void)mmio_read32(s, AISCNT);
+    read_us = (double)(plat_mono_raw() - t0) / plat_mono_hz() * 1e6 / 64; /* two timebase reads */
+    twin_runs = read_us < 2.0;
+    memcpy(saved, mem_ptr(s, BOUNDS), sizeof saved);
+    for (k = 0; k < 5; k++) {
+        mem_w32(s, BOUNDS + 8u * k, 0);
+        mem_w32(s, BOUNDS + 8u * k + 4u, bound[k]);
+    }
+    for (k = 0; k < 4 && !bad; k++) {
+        uint32_t want = start[k] & ~0x2Bu, twin = want, native, before, after;
+        if (twin_runs) {
+            mmio_write32(s, AICR, start[k]);
+            run_twin(s, recomp_fn_80241DA0);
+            twin = mmio_read32(s, AICR);
+        }
+        mmio_write32(s, AICR, start[k]);
+        while ((before = mmio_read32(s, AISCNT)) < 480u) {
+        } /* 10 ms of samples, so that a restart shows */
+        fn_80241DA0(s);
+        native = mmio_read32(s, AICR);
+        after = mmio_read32(s, AISCNT);
+        if (twin != native || native != want || after >= before) {
+            bad = 1;
+            snprintf(got, cap, "from %02X: twin %02X, native %02X, want %02X; the counter %u then %u", start[k], twin,
+                     native, want, before, after);
+        }
+    }
+    memcpy(mem_ptr(s, BOUNDS), saved, sizeof saved);
+    mmio_write32(s, AICR, 0);
+    if (!bad && twin_runs) snprintf(got, cap, "AICR as the twin leaves it from 4 values, the counter restarted");
+    else if (!bad)
+        snprintf(got, cap, "AICR as worked out from 4 values, the counter restarted; the twin not run, a counter read "
+                           "costs %.1f us here", read_us);
+    return check("__AI_SRC_INIT native vs twin", got, bad ? "agreement" : got);
+}
+
 /* psq_load and psq_store (PLAN-60FPS-MODS H13a) against the generic formula
  * they replaced -- the scale from ldexp on every access, whatever the type --
  * over all eight types and all 64 scales, paired and single, with random bit
@@ -2204,6 +2263,7 @@ static int game_table_selftest(CpuState* s, char* got, size_t cap)
         {0x8025ECBCu, fn_8025ECBC},        {0x8025ED74u, recomp_fn_8025ED74}, {0x8025EF18u, recomp_fn_8025EF18},
         {0x8025EF48u, recomp_fn_8025EF48}, {0x8025EF88u, recomp_fn_8025EF88}, {0x8025F0B0u, recomp_fn_8025F0B0},
         {0x8025F0DCu, recomp_fn_8025F0DC}, {0x8025F120u, recomp_fn_8025F120}, {0x8025F1D8u, recomp_fn_8025F1D8},
+        {0x80241DA0u, recomp_fn_80241DA0},
     };
 #ifdef SOA_NO_DECOMP
     const char* mode = "mode=no-decomp";
@@ -2230,7 +2290,7 @@ static int game_table_selftest(CpuState* s, char* got, size_t cap)
 #ifdef SOA_SPLIT
                  "loaded, this abi"
 #else
-                 "21 twins, entry, dispatch, files, record"
+                 "22 twins, entry, dispatch, files, record"
 #endif
     );
 }
@@ -2354,6 +2414,7 @@ int selftest(CpuState* s)
     failures += decomp_selftest(s, got, sizeof got);
     failures += tick_selftest(s, got, sizeof got);
     failures += dcache_selftest(s, got, sizeof got);
+    failures += ai_src_selftest(s, got, sizeof got);
     failures += psq_selftest(s, got, sizeof got);
     failures += seed_selftest(s, got, sizeof got);
     failures += encounter_selftest(s, got, sizeof got);

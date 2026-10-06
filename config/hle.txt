@@ -3,6 +3,7 @@
 
 0x80232B90  __OSInitAudioSystem   # boots a DSP program that clears ARAM; DSP is high-level emulated
 0x80232D4C  __OSStopAudioSystem   # its shutdown counterpart
+0x80241DA0  __AI_SRC_INIT         # times a sample-counter tick with the timebase; never ends where a clock read is slow
 
 # The data-cache range calls: there is no cache to maintain (runtime/hle_os.c, H13b).
 0x80232E38  DCInvalidateRange

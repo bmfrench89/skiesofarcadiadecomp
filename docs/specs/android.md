@@ -59,12 +59,13 @@ which a long press reopens. Saves are the card image, which Dolphin, the PC buil
   the longest unit in 48 s. They link into a 31.4 MB `libsoa_game.so`, every `PT_LOAD` aligned 0x4000 (16 KB),
   `DT_NEEDED` `libm.so`, `libdl.so` and `libc.so`.
 - **The seam is small.**
-  - The translated code imports 53 symbols (`nm` on the Linux build):
-    - the 25 bindings the runtime answers (`config/hle.txt`);
+  - The translated code imports 54 symbols (`nm` on the Linux build):
+    - the 26 bindings the runtime answers (`config/hle.txt`; 25 until L12c's `__AI_SRC_INIT`);
     - 23 runtime functions and globals: `dec_read`, `dec_write`, `g_watch_addr`, `g_watch_len`,
       `guest_resumed`, `guest_savepoint`, `guest_syscall`, `guest_timebase_hi`, `guest_timebase_lo`,
       `guest_trap`, `gx_pipe_write`, `hook_80237BA8`, `irq_poll`, `mmio_read8`, `mmio_read16`, `mmio_read32`,
-      `mmio_read64`, `mmio_write8`, `mmio_write16`, `mmio_write32`, `mmio_write64`, `trace_hit`, `watch_hit`;
+      `mmio_read64`, `mmio_write8`, `mmio_write16`, `mmio_write32`, `mmio_write64`, `trace_hit`, `watch_hit`.
+      On x86-64 Android a 24th, `soa_fma`, stands in for bionic's `fma` (L12c);
     - five from libc and libm: `_setjmp`, `fma`, `sqrt`, `nearbyint`, `nearbyintf`. On AArch64 the maths become
       instructions: the Android link leaves `setjmp` and crtbegin's `__cxa_atexit`, `__cxa_finalize` and
       `__register_atfork`.
@@ -78,10 +79,10 @@ which a long press reopens. Saves are the card image, which Dolphin, the PC buil
   - No function pointer crosses the boundary: `dispatch` is a switch.
   - No `long double` appears anywhere, and the translated objects call no compiler builtin, so the game library
     needs no compiler-rt.
-- **The bindings depend on the build mode.** `hle.txt` binds 25 functions. `decomp_swap.c` answers 12 of them
+- **The bindings depend on the build mode.** `hle.txt` binds 26 functions. `decomp_swap.c` answers 12 of them
   with decompiled code, and a build with no `src/` (`--no-decomp`, the player's build, distribution §3.1)
-  leaves those 12 to translated twins inside the game. 13 then cross the seam, and the self test's twins become
-  6 `recomp_fn_` and 15 `fn_` (`selftest.c:1504-1518`).
+  leaves those 12 to translated twins inside the game. 14 then cross the seam, and the self test's 22 twins become
+  7 `recomp_fn_` and 15 `fn_` (`selftest.c:1504-1518`).
 - **The window, pads and sound** run through SDL3 since L10 (`runtime/window_sdl.c`, `audio_sdl.c`), held on CI
   by `test_window_sdl.py`. `window_sdl.c` already sends `WILL_ENTER_BACKGROUND` and `DID_ENTER_FOREGROUND` to the
   clock, in its pump loop (`window_sdl.c:591-597`). Nothing handles `SDL_EVENT_RENDER_DEVICE_RESET`.
@@ -168,10 +169,10 @@ rewritten):
 - **Every build links the table.** `recompile.py` writes `<out>/game_table.c` into every build.
   - A single-file build (`soa.exe`, `gen/linux/soa`) links it and calls the translated code directly.
   - The self test's case "the game's table" holds the one to the other: the entry, `dispatch`, the system
-    files, the record's abi and mode, and all 21 twins. So Windows checks the table on every run.
+    files, the record's abi and mode, and all 22 twins. So Windows checks the table on every run.
 - **A split build** (`--split`) also writes `<out>/runtime_seam.c` into the runtime library. It holds
   forwarders, under the names the runtime calls, through the loaded table: `dispatch`, `dispatch_known`,
-  `fn_80003140` and the 21 twins.
+  `fn_80003140` and the 22 twins.
   - So `irq.c`, `mod.c`, `threads.c` and `selftest.c` do not change, and neither do the tests' stand-ins.
   - Only `main.c` (its `main` is `soa_main` under `SOA_SPLIT`) and `disc.c` change. A function cannot stand in
     for an array, so `disc.c` reads the system files from the table.
@@ -181,8 +182,8 @@ rewritten):
 **Visibility.**
 - The game library is compiled `-fvisibility=hidden`, with `soa_game` alone visible. The 7,144 functions call
   each other directly.
-- The runtime library's exports are generated from a checked-in `config/seam.txt` (the 23 runtime symbols) and
-  from `hle.txt` with `decomp_swap.c` (the 13 bindings under `--no-decomp`). They are linked with a version script
+- The runtime library's exports are generated from a checked-in `config/seam.txt` (the 24 runtime symbols) and
+  from `hle.txt` with `decomp_swap.c` (the 14 bindings under `--no-decomp`). They are linked with a version script
   that exports nothing else.
 
 ### 3.3 Loading the game library
@@ -297,14 +298,18 @@ rewritten):
 
 - **The window and the pads:** `window_sdl.c` as it is. The phone's built-in pad, and Bluetooth or USB pads,
   come through SDL (research §3).
-- **Its thread on Android:** SDL's main thread. SDL's event pump belongs to the thread that started video
-  [I; L12c settles it].
-  - So `main()` there starts the guest on the big-stack thread without waiting for it, and runs the window's loop
-    on its own thread until the run ends.
-  - This changes `main.c` and `plat.c`'s `plat_run_on_big_stack`, which joins today.
-- **The background events** move from the pump loop into an `SDL_AddEventWatch` filter, so they run before
-  Android stops the app (research §8).
-- **`SDL_EVENT_RENDER_DEVICE_RESET`** remakes the texture.
+- **Its thread on Android:** its own, as on the desktop [V L12c]. The window, the renderer, the keyboard, the
+  pads and the lifecycle all work from `window_sdl.c`'s thread. SDL's thread runs `SDL_main`, which runs `main()`,
+  which joins the guest as it does everywhere, so `main.c` and `plat.c` are unchanged.
+- **The background events** are caught in an `SDL_AddEventWatch` filter, on the thread that sends them
+  (research §8). In the pump loop they arrived only once the app was back, just before the foreground event: on
+  Android SDL's pump blocks whichever thread calls it while the app is away [V L12c].
+- **`SDL_EVENT_RENDER_DEVICE_RESET`** remakes the texture. Written, not seen: the emulator's context survived
+  every trip to the background.
+- **Landscape, and the whole screen.** SDL replaces the manifest's orientation with its own when the window is
+  made, which for a resizable window with no hint is any orientation; `android.c` sets the hint to landscape.
+  Fullscreen is the default there, so the system bars give way and a 1080-line screen has room for 2x
+  (`fullscreen = 0` in `soa.ini` keeps the bars). The theme has no title bar.
 - **The touch overlay (L12e)** follows port-android.md §5:
   - a GameCube layout: big A, small B, kidney X and Y;
   - a relative-centre stick;
@@ -322,10 +327,11 @@ read from the `[audio]` line of a pulled log.
 ### 3.11 Lifecycle
 
 - **`WILL_ENTER_BACKGROUND`,** in the event watch (§3.9):
-  - `clock_pause(1)`, which holds the guest at the frame end (§2);
+  - `clock_pause(1)`, which holds the guest at the frame start (§2), and in `irq.c` wherever it waits for an
+    interrupt, where it used to spin a core for as long as the app was away [V L12c];
   - `si_motor_stop()`;
-  - the card flushed;
-  - presenting stops.
+  - nothing to flush: the card writes each program through (`exi.c`);
+  - presenting stops, since SDL's pump holds the window's thread.
 - **`DID_ENTER_FOREGROUND`:** the surface is made again, then `clock_pause(0)`.
 - **A process killed in the background** loses only what the game had not saved, as on a console with the power
   off.
@@ -337,7 +343,9 @@ read from the `[audio]` line of a pulled log.
 - **Power:** an `APerformanceHint` session over the guest thread and the render workers, aiming at 33.3 ms. No
   affinity pinning (research §9).
 - **The render pool:** the default worker count (`gxr.c:2087`) on Android counts the cores whose `cpu_capacity`
-  (`/sys/devices/system/cpu/*/cpu_capacity`) is above the smallest [I; L12c measures it].
+  (`/sys/devices/system/cpu/*/cpu_capacity`) is above the smallest [I].
+- **All three wait for the phone** (L12's Done): the emulator's display is fixed at 60 Hz, it offers no
+  performance-hint session, and its cores are all alike, so none of them could be measured there.
 - **The savepoint stays `setjmp`.** Bionic's `setjmp` saves the signal mask, a system call each time [I]. But
   L12a counted about 47,000 savepoints over `title`'s 71 s on Linux: 2,000 context saves, and every interrupt
   delivered (about 44,800 of all kinds), so about 660 a second. At a microsecond each that is under a
@@ -355,8 +363,10 @@ read from the `[audio]` line of a pulled log.
 
 - **The check mode.** The debug APK takes the run's environment as an intent extra:
   `--es env "SOA_SELFTEST=1;SOA_SETTINGS=0"`, plus `--es args "..."`. The glue `setenv`s each variable before
-  `SDL_main`.
-- **The end of a check run.** It writes `[exit] N` as its last log line and then `_exit(N)`s after flushing.
+  `SDL_main`. Only a debuggable build reads them [V L12c]: the activity is exported, and a release must not let
+  another app choose what the port loads or how it runs.
+- **The end of a check run.** It writes `[exit] N` as its last log line and then `_exit(N)`s after flushing,
+  whether `main()` returned or the runtime left by `exit`, `_exit` or `_Exit` (linked with `--wrap`, L12c).
   This matters for two reasons:
   - adb cannot see an app's exit status;
   - `SDLActivity` keeps the process alive after `SDL_main` returns, so a second launch would run `main()` over
@@ -470,6 +480,16 @@ building the same libraries and comparing their verdicts, rather than by a writt
 
 ### L12c. The shell, on the emulator
 
+*Built 2026-10-06 (FINDINGS "L12c"). Gradle is fetched by `android.py` into `vendor/` against a pinned
+sha256, not run through a wrapper whose jar the repository would carry. The window's loop stays on its own
+thread (risk 4), so `main.c` and `plat.c` keep their join; `setFrameRate`, the performance hint and the
+worker default wait for the phone (§3.12); the savepoint stays `setjmp`. The emulator found five things no
+desktop had shown, each fixed here: bionic's x86-64 `fma` (`cpu.h`, `soafma.c`, `soa_fma` in the seam); the
+SDK's audio calibration, which never ends where a clock read is slow (`__AI_SRC_INIT` bound in `hle.txt`,
+answered in `hle_os.c`, a twin case in the self test); the runtime's own exits, which lost the log's end
+(`--wrap` for all three); the background events, which came only once the app was back (§3.9); and a
+paused guest spinning a core (§3.11, `irq.c`).*
+
 *Files:*
 - `android/`: Gradle with the wrapper pinned, `app/build.gradle.kts`, `CMakeLists.txt`, `SoaActivity.java`;
 - `runtime/android.c` (`#ifdef __ANDROID__`): `SDL_main`, the root, logcat, the check mode's end,
@@ -580,14 +600,15 @@ the CMake that builds the shaders into the runtime library, docs.
    HANDOFF). Phones throttle, and the Thor's chip is slower per core (port-android.md §1.3). L12f is the answer.
 3. **A future SELinux rule.** Mapping app data as code is allowed but audited (`auditallow`, research §1). If it
    is ever blocked, the fallback is `android_dlopen_ext` with a file descriptor.
-4. **SDL's thread.** §3.9 assumes video must stay on SDL's main thread. L12c finds out first, and the change to
-   `plat_run_on_big_stack` follows from what it finds.
+4. **SDL's thread.** §3.9 assumed video must stay on SDL's main thread. Settled by L12c: it need not, and
+   `plat_run_on_big_stack` is unchanged.
 5. **The MEM1 guard under ART.** ART's `libsigchain` interposes `sigaction`, so `plat.c`'s SIGSEGV handler is
-   chained behind ART's [I]. L12c's Done pokes it inside the app.
+   chained behind ART's. Settled by L12c: `SOA_MEMPOKE=0x81800000` inside the app is reported once, and the run
+   goes on to its frame limit.
 6. **Thermal throttling** changes timing, not results. The replay is exact at every thread count, and the frame
    rates say which run they came from.
 7. **The process freezer** suspends a cached app 10 s after it goes to the background (research §8). The guest is
-   already parked by then.
+   parked by then: asleep, since L12c, where it had been spinning (§3.11).
 8. **The sysroot of §3.4** is new work, and its headers must agree with the bionic each phone runs. The savepoint's
    `jmp_buf` belongs to the runtime (`guest_savepoint`), which the APK builds against the NDK, so the game
    library's view of `setjmp.h` matters only for the declaration [V `cpu.h:111`].

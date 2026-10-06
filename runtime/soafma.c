@@ -15,9 +15,10 @@
  * - otherwise soa_fma_soft, musl's fma, which computes the exact sum in
  *   integers and rounds it once.
  *
- * Elsewhere soa_fma is the C library's fma: MSVC's static one, and on Linux
- * and Android glibc's and bionic's, which are exact (and on ARM64 the
- * instruction). The self test holds soa_fma_soft to the build's fma, and a
+ * x86-64 Android takes the same path: bionic's fma there rounds a negative
+ * result that underflows to +0 rather than -0 (FINDINGS "L12c"). Elsewhere
+ * soa_fma is the C library's fma: MSVC's static one, glibc's on Linux, and on
+ * ARM64 Android bionic's, the instruction, all exact. The self test holds soa_fma_soft to the build's fma, and a
  * translated guest function's fmadds to its fused answer.
  *
  * soa_fma_soft is musl's src/math/fma.c (https://musl.libc.org/, commit
@@ -256,7 +257,7 @@ double soa_fma_soft(double x, double y, double z)
 
 /* ---- what the guest calls ------------------------------------------------- */
 
-#if defined(__MINGW32__) && defined(__x86_64__)
+#if (defined(__MINGW32__) || defined(__ANDROID__)) && defined(__x86_64__)
 /* The instruction, compiled for FMA3 alone; called only where the CPU has it. */
 __attribute__((target("fma"))) static double hw_fma(double a, double b, double c)
 {

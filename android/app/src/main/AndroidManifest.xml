@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The APK (specs/android.md 3.6): one activity, SDL's, landscape and with
+     no title bar (SDL would show the window's title in one). No
+     permissions: the disc and the game library come through the system file
+     picker (L12d). allowBackup off: the imported library and the disc are the
+     player's, and too large to back up. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:glEsVersion="0x00020000" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+
+    <application
+        android:label="SoA port"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:extractNativeLibs="false"
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+
+        <activity
+            android:name=".SoaActivity"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

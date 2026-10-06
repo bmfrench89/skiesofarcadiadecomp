@@ -645,6 +645,53 @@ def test_the_tree_guard_keeps_every_other_rule_outside_the_third_party_folders(t
     assert "source/mods/coop/patch.bin2: not text, in a mod folder" in problems
 
 
+def apk(path, entries):
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return path
+
+
+def test_the_apk_guard_passes_the_runtime_and_refuses_the_game_in_it(tmp_path):
+    """specs/android.md 3.6: an APK carries SDL and the runtime, never the
+    game. Its own native libraries and Gradle's metadata pass; a DOL's header
+    inside a native library at a 4-byte offset -- where a runtime built with
+    disc_sys.c's arrays would hold the player's executable, and a 32-byte
+    step would miss it -- and game data by name are refused."""
+    import random
+
+    from soa import discfixture
+
+    dol = discfixture.make_dol(random.Random(7))
+    noise = random.Random(5).randbytes(1 << 16)
+    clean = apk(
+        tmp_path / "clean.apk",
+        {
+            "lib/arm64-v8a/libsoa_runtime.so": noise,
+            "lib/x86_64/libSDL3.so": noise,
+            "classes.dex": noise,
+            "META-INF/com/android/build/gradle/app-metadata.properties": "appMetadataVersion=1.1",
+        },
+    )
+    assert guard.apk_problems(clean) == []
+    leaked = apk(
+        tmp_path / "leaked.apk",
+        {
+            "lib/x86_64/libsoa_runtime.so": noise[:4100]
+            + dol
+            + noise,  # 4100: 4-byte, not 32-byte, aligned
+            "assets/disc.iso": bytes(64),
+        },
+    )
+    problems = " | ".join(guard.apk_problems(leaked))
+    assert "lib/x86_64/libsoa_runtime.so: holds a DOL's header at offset 0x1004" in problems
+    assert guard.dol_inside(noise[:4100] + dol + noise) is None  # the 32-byte step misses it
+    assert "assets/disc.iso: forbidden extension '.iso'" in problems
+    assert "assets/disc.iso: under 'assets/'" in problems
+
+
 def test_the_dol_check_passes_random_bytes_and_text():
     import random
 

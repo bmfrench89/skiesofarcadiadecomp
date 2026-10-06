@@ -41,7 +41,7 @@ static uint64_t g_gap_ns = 2000000000ull;
 static volatile unsigned g_epoch;
 static unsigned long long g_gaps;
 static uint64_t g_excluded_ns;
-static volatile int g_pause_req;
+static plat_a32 g_pause_req; /* set by whichever thread hears of a pause, read by the guest's */
 static int g_paused;
 static void (*g_gap_note)(double gap_s);
 
@@ -71,8 +71,8 @@ uint64_t clock_advance_at(uint64_t host_ns)
         g_last_host_ns = g_origin_host_ns = host_ns;
         return g_guest_ns;
     }
-    if (g_pause_req != g_paused) {
-        if (g_pause_req) {
+    if (plat_load32(&g_pause_req) != g_paused) {
+        if (!g_paused) {
             /* up to the pause, then nothing until it ends */
             if (host_ns > g_last_host_ns) g_guest_ns += (host_ns - g_last_host_ns) * g_speed;
             g_last_host_ns = host_ns;
@@ -117,12 +117,12 @@ void clock_set_speed_at(unsigned speed, uint64_t host_ns)
 
 void clock_pause(int on)
 {
-    g_pause_req = on ? 1 : 0;
+    plat_cas32(&g_pause_req, on ? 0 : 1, on ? 1 : 0);
 }
 
 int clock_pause_requested(void)
 {
-    return g_pause_req;
+    return plat_load32(&g_pause_req);
 }
 
 unsigned clock_epoch(void)

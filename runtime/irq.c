@@ -305,11 +305,26 @@ static uint32_t interrupt_handler(CpuState* s, uint32_t irq)
 
 static int g_pace = -1;
 
+/* While the clock is held -- an Android app in the background, a window away
+ * under `unfocused = pause` -- nothing can come due, and a guest waiting for
+ * an interrupt, in the scheduler's idle loop or spinning on a flag, spun a
+ * core at full speed until the clock ran again: all of one on the emulator,
+ * for as long as the app was away (FINDINGS "L12c"). It waits here instead,
+ * as tick.c holds the frame start. */
+int clock_pause_requested(void);
+
+static void idle_while_paused(void)
+{
+    while (clock_pause_requested()) plat_sleep_ms(20);
+}
+
 static void deliver_pending(CpuState* s)
 {
-    uint64_t now = tb_now(s);
+    uint64_t now;
     uint32_t handler;
 
+    idle_while_paused();
+    now = tb_now(s);
     if (g_in_handler) return; /* a handler that idles must not nest deliveries */
     if (g_pace < 0) {
         const char* env = getenv("SOA_PACE");

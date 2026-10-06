@@ -9,7 +9,8 @@ broken here first, with its reason attached, because one without its reason is a
 
 **The owner's goal is any Windows or Android device** (2026-09-30): x86-64 PCs and
 handhelds (this machine is their ROG Ally X), the Steam Deck, and Android flagships.
-Linux runs natively since L10 (2026-10-05; no owner session there yet), Android not yet. What is next, in order, is
+Linux runs natively since L10 (2026-10-05; no owner session there yet), and Android on the x86-64
+emulator since L12c (2026-10-06; no phone yet). What is next, in order, is
 [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) §0, which overrides the rest of that file. Before
 choosing or starting work, use the `orient` skill.
 
@@ -46,6 +47,7 @@ Then, only if you touched the matching thing:
 | `config/hle.txt` | `--compile --optimize --link`, then the self test | see below; selftest case 73 is what checks the swap |
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
 | `runtime/game.c`, `elfcheck.c`, `soa_game.h`, `tools/soa/seam.py`, `config/seam.txt` | in a Linux container: `recompile.py --cc gcc --split --compile --optimize --link`, the self test, replay and title on `gen/linux-split/soa`, and `test_seam.py` | single-file builds never load a game library; only the split build and CI's Linux legs exercise the seam |
+| `runtime/android.c`, `android/`, `tools/android.py` | `python tools/android.py build`, `python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk`, then with `SOA_ADB_SERIAL=emulator-5556`: `install`, `push-game`, `selftest` | nothing else builds the APK, CI included, and the guard is what keeps game code out of it |
 | `runtime/window_sdl.c`, `audio_sdl.c`, `tools/fetch_sdl.py` | in a Linux container: `compile_runtime.py --cc gcc --require-sdl`, and `test_window_sdl.py` under Xvfb (`docs/TESTING.md` section 2) | Windows compiles them to nothing; only Linux, and CI's Linux legs, ever build them |
 
 The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only enforcer.
@@ -68,7 +70,7 @@ holds glslang (`tools/fetch_gpu.py`; without it `soa.exe` has no GPU backend).
 - `config/trace.txt` — tracepoints are emitted inline into the translated C (68
   today), so new ones never fire and `SOA_TRACE=1` looks like it worked. The file
   most often edited during a chase, and no build instruction elsewhere names it.
-- `config/hle.txt` — which of the 25 bound functions the runtime answers natively (12
+- `config/hle.txt` — which of the 26 bound functions the runtime answers natively (12
   decompiled). Adding a line and relinking gives LNK2005; *removing* one silently leaves
   the native version in charge. `hooks.txt` and `savepoints.txt` bake in the same way.
 

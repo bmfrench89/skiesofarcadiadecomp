@@ -29,6 +29,37 @@ void fn_80232D4C(CpuState* s)
     (void)s;
 }
 
+/* __AI_SRC_INIT (0x80241DA0), which the three sample-rate setters call, two
+ * of them from AIInit. It times the sample-rate converter: restart the sample
+ * counter at 32 kHz, spin until it ticks and read the timebase; switch to 48
+ * kHz, spin until it ticks again and read the timebase; stop; and start over
+ * until the gap between the two reads is under 28.5 us or between 34.5 and
+ * 39 us, then wait 42 or 63 us past the second. The gap spans at least seven
+ * timebase reads, so where one read of the host's clock costs more than about
+ * 3 us neither window can be reached and the loop never ends: 8 us on the
+ * x86-64 Android emulator, which sat in it for good (FINDINGS "L12c"). Here
+ * the counter runs at 48 kHz off the timebase whatever the rate bit says, and
+ * nothing keeps the verdict once the wait is over, so what is left is one
+ * round's register traffic: the same read-modify-writes of AICR, in the same
+ * order, without the spins. The self test holds it to the twin wherever the
+ * twin can finish. */
+static void aicr_rmw(CpuState* s, uint32_t keep, uint32_t set)
+{
+    mmio_write32(s, 0xCC006C00u, (mmio_read32(s, 0xCC006C00u) & keep) | set);
+}
+
+void fn_80241DA0(CpuState* s)
+{
+    s->pc = 0x80241DA0u; /* first, as the translation's block head does (test_hle_pc) */
+    aicr_rmw(s, ~0x20u, 0x20u); /* SCRESET: the sample counter restarts */
+    aicr_rmw(s, ~0x02u, 0);     /* 32 kHz */
+    aicr_rmw(s, ~0x01u, 0x01u); /* play */
+    aicr_rmw(s, ~0x02u, 0x02u); /* 48 kHz */
+    aicr_rmw(s, ~0x01u, 0x01u); /* play */
+    aicr_rmw(s, ~0x02u, 0);     /* 32 kHz */
+    aicr_rmw(s, ~0x01u, 0);     /* stop */
+}
+
 /* The data-cache range calls (PLAN-60FPS-MODS H13b): DCInvalidateRange
  * (0x80232E38), DCFlushRange (0x80232E64), DCStoreRange (0x80232E94),
  * DCFlushRangeNoSync (0x80232EC4) and DCStoreRangeNoSync (0x80232EF0). There
