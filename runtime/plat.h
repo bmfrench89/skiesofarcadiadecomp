@@ -522,11 +522,36 @@ static inline int plat_fseek64(FILE* f, int64_t off) /* from the start of the fi
 #endif
 }
 
+/* The descriptor a path names: N for "/proc/self/fd/N", else -1 (and always
+ * on Windows). Android's file picker hands the app a descriptor, never a path
+ * it may open (specs/android.md L12d), and opening /proc/self/fd/N again is a
+ * fresh open, checked against the app as any open is: refused for a picked
+ * file the app neither owns nor holds a MediaStore grant on. So such a path is
+ * read through the descriptor itself (plat_path_kind, plat_fopen_rb). */
+static inline int plat_fd_path(const char* path)
+{
+#ifdef _WIN32
+    (void)path;
+    return -1;
+#else
+    static const char prefix[] = "/proc/self/fd/";
+    long n = 0;
+    size_t i;
+    for (i = 0; prefix[i]; i++)
+        if (path[i] != prefix[i]) return -1;
+    if (path[i] < '0' || path[i] > '9') return -1;
+    for (; path[i] >= '0' && path[i] <= '9'; i++)
+        if ((n = n * 10 + (path[i] - '0')) > 1000000) return -1;
+    return path[i] ? -1 : (int)n;
+#endif
+}
+
 /* What a path names, for disc.c (disc-layer I1), which takes a directory or
- * an image: PLAT_PATH_NONE, _FILE (with its size in *size) or _DIR. The
+ * an image: PLAT_PATH_NONE, _FILE (with its size in *size), _DIR, or off
+ * Windows _STREAM, a pipe or a socket, which can be read only in order. The
  * 64-bit stat on both, since a disc image is 1.4 GB and a 32-bit size would
  * hold it only by luck. */
-enum { PLAT_PATH_NONE, PLAT_PATH_FILE, PLAT_PATH_DIR };
+enum { PLAT_PATH_NONE, PLAT_PATH_FILE, PLAT_PATH_DIR, PLAT_PATH_STREAM };
 static inline int plat_path_kind(const char* path, uint64_t* size)
 {
 #ifdef _WIN32
@@ -535,11 +560,31 @@ static inline int plat_path_kind(const char* path, uint64_t* size)
     if (st.st_mode & _S_IFDIR) return PLAT_PATH_DIR;
 #else
     struct stat st;
-    if (stat(path, &st) != 0) return PLAT_PATH_NONE;
+    int fd = plat_fd_path(path);
+    if ((fd >= 0 ? fstat(fd, &st) : stat(path, &st)) != 0) return PLAT_PATH_NONE;
     if (S_ISDIR(st.st_mode)) return PLAT_PATH_DIR;
+    if (S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode)) return PLAT_PATH_STREAM;
 #endif
     if (size) *size = (uint64_t)st.st_size;
     return PLAT_PATH_FILE;
+}
+
+/* A file to read, from its start: by name, or for a /proc/self/fd/N path
+ * through a duplicate of N, so that closing the FILE leaves N to whoever
+ * opened it. The duplicate shares N's offset, so the reader seeks before
+ * every read, as disc.c's does. */
+static inline FILE* plat_fopen_rb(const char* path)
+{
+#ifndef _WIN32
+    int fd = plat_fd_path(path);
+    if (fd >= 0) {
+        int d = dup(fd);
+        FILE* f = d >= 0 ? fdopen(d, "rb") : NULL;
+        if (!f && d >= 0) close(d);
+        return f;
+    }
+#endif
+    return fopen(path, "rb");
 }
 
 static inline int plat_setenv(const char* name, const char* value)

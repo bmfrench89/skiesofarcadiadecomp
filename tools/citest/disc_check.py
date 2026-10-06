@@ -113,10 +113,15 @@ def build(
 
 
 def drive(
-    exe: Path, cmds: list[str], env: dict[str, str] | None = None, code: int = 0
+    exe: Path,
+    cmds: list[str],
+    env: dict[str, str] | None = None,
+    code: int = 0,
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[list[str], str]:
     """The driver's answers to `cmds`, with the disc layer's switches only as
-    `env` gives them; it must exit `code` (9 is the disc layer's stop)."""
+    `env` gives them; it must exit `code` (9 is the disc layer's stop).
+    `pass_fds` are descriptors the driver inherits under the same numbers."""
     full = {k: v for k, v in os.environ.items() if not k.startswith("SOA_DISC_")}
     full.update(env or {})
     proc = subprocess.run(
@@ -126,6 +131,7 @@ def drive(
         text=True,
         timeout=120,
         env=full,
+        pass_fds=pass_fds,
     )
     if proc.returncode != code:
         raise RuntimeError(
@@ -358,6 +364,74 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
     )
 
 
+def check_descriptors(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> None:
+    """Off Windows, a disc handed over open, as /proc/self/fd/N (specs/android.md
+    L12d: Android's file picker gives the app a descriptor, never a path it
+    may open again). The image is read through the descriptor itself: once it
+    is open its file is made unreadable by name, so code that opened the path
+    again would be refused (for anyone but root, which reads it anyway: then
+    that half is said to be unproven). A store with no suffix is known by its
+    contents, and a pipe is refused as a stream."""
+    if os.name == "nt":
+        return
+    folder = out / "fd"
+    folder.mkdir(parents=True, exist_ok=True)
+    want = {
+        "dol": f"dol {len(fx.system['main.dol'])} {sha1(fx.system['main.dol'])}",
+        "boot": f"boot {0x440} {sha1(fx.system['boot.bin'])}",
+        "fst": f"fst {len(fx.system['fst.bin'])} {sha1(fx.system['fst.bin'])}",
+    }
+
+    image = folder / "picked-image"
+    image.write_bytes(fx.image)
+    fd = os.open(image, os.O_RDONLY)
+    try:
+        image.chmod(0)
+        try:
+            os.close(os.open(f"/proc/self/fd/{fd}", os.O_RDONLY))
+            print("  the descriptor cases run as root: opening the path again is not refused here")
+        except PermissionError:
+            pass
+        lines, err = drive(exe, [f"open /proc/self/fd/{fd}"], pass_fds=(fd,))
+        c.check(lines[:1] == ["open ok"], f"an image read through its descriptor: {lines[:1]}")
+        c.check(lines[1:4] == list(want.values()), "and its system files are the image's")
+        c.check(
+            f"[disc] /proc/self/fd/{fd}: " in err, "the [disc] line names the descriptor's path"
+        )
+    finally:
+        image.chmod(0o644)
+        os.close(fd)
+
+    store_path = out / "store" / f"{fx.game_id}{store.STORE_SUFFIX}"
+    if store_path.exists():
+        picked = folder / "picked-store"
+        picked.write_bytes(store_path.read_bytes())
+        fd = os.open(picked, os.O_RDONLY)
+        try:
+            lines, err = drive(exe, [f"open /proc/self/fd/{fd}"], pass_fds=(fd,))
+            c.check(lines[:1] == ["open ok"], f"a store with no suffix, by descriptor: {lines[:1]}")
+            c.check(" store v1" in err, "and it is read as the store it is")
+        finally:
+            os.close(fd)
+    else:
+        c.check(False, f"no store at {store_path} to pick")
+
+    r, w = os.pipe()
+    try:
+        os.write(w, fx.image[:4096])
+        os.close(w)
+        w = -1
+        lines, _ = drive(exe, [f"open /proc/self/fd/{r}"], pass_fds=(r,))
+        c.check(
+            lines[:1] != [] and lines[0].startswith("refused ") and "is a stream" in lines[0],
+            f"a pipe is refused as a stream: {lines[:1]}",
+        )
+    finally:
+        os.close(r)
+        if w >= 0:
+            os.close(w)
+
+
 def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     fx = discfixture.build(out / "good" / "disc.iso")
@@ -442,6 +516,7 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     c.check(len(set(said.values())) == len(said), "every refusal says something different")
     check_built_in(c, fx, out, cflags)
     check_store(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
+    check_descriptors(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
 
     print(
         f"disc check: {c.passed} passed, {c.failed} failed ({len(fx.offsets)} files, {size} bytes)"

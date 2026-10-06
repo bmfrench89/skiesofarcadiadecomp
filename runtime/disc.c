@@ -436,12 +436,17 @@ int disc_open(const char* where, char* why, size_t cap)
     } else {
         snprintf(g_path, sizeof g_path, "%s", where);
     }
+    if (kind == PLAT_PATH_STREAM)
+        return refuse(why, cap,
+                      "%s is a stream (a pipe or a socket), which can be read only from start to end, and a disc "
+                      "is read anywhere in it: copy it to a file first",
+                      g_path);
     if (kind != PLAT_PATH_FILE)
         return refuse(why, cap,
                       "no disc image at %s; make one from your own disc with: python tools/extract.py "
                       "<your disc dump> (which writes extracted/disc.iso), or name an .iso, .gcm or .soadisc file",
                       g_path);
-    g_f = fopen(g_path, "rb");
+    g_f = plat_fopen_rb(g_path); /* a /proc/self/fd/N path is read through N itself (plat.h) */
     if (!g_f) return refuse(why, cap, "cannot open %s", g_path);
     g_info.image_size = size;
     if (size >= sizeof magic && raw_read(0, magic, sizeof magic) && !memcmp(magic, STORE_MAGIC, 8)) {

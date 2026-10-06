@@ -65,4 +65,25 @@ void disc_set_stop_hook(void (*fn)(void));
  * differs or it is not a store. */
 int disc_check_store(const char* where);
 
+/* ---- L12d: the disc picked on a phone (specs/android.md L12d) ---- */
+/* Refusals in a phone's words from now on: none names `python tools/...`,
+ * `soa.exe` or `recompile.py`, and a split build says "this game library"
+ * where the PC says "this soa.exe". runtime/android.c sets it once, before
+ * anything is opened; every other build keeps the PC's words. */
+void disc_set_phone_words(int on);
+/* Whether the first bytes of the file at `path` -- however many it holds, as
+ * a copy in progress does -- could be this port's disc: an ISO, a GCM or a
+ * store, with GameCube boot magic, this game id and this revision; RVZ and WIA
+ * refused by name. 0, or nonzero and why in disc_open's own words. Needs no
+ * game library (a split build's disc_open does) and keeps nothing open. */
+int disc_identify(const char* path, char* why, size_t cap);
+/* The SHA-1, 40 lowercase hex digits, of the executable this build plays:
+ * what disc_open holds a disc's DOL to, and elf_check a game library's
+ * record (`dol=`) to. */
+const char* disc_port_dol_sha1(void);
+/* 1 when the last disc_open was refused because the image's file table is not
+ * the one built into the game library (I3): a disc another library could
+ * play; 0 otherwise. */
+int disc_refused_by_build(void);
+
 #endif
