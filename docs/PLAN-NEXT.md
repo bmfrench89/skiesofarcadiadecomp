@@ -342,6 +342,7 @@ changed since 24d9235).
 | [specs/portability.md](specs/portability.md) | L0 (done) to L12 | Reviewed twice, then checked with this file |
 | [specs/gpu-backend.md](specs/gpu-backend.md) | C5a-C5c (proposed for PLAN.md Track C), V0 to V12, and the gate | Reviewed twice, then checked with this file |
 | [specs/distribution.md](specs/distribution.md) | R1 to R5: the runtime package that builds the game on the player's machine (G3's route) | Written 2026-10-04, reviewed once against the code the same day |
+| [specs/android.md](specs/android.md) | L12a to L12g with R5: the Android shell, and the game library from the PC | Written 2026-10-05, reviewed once against the code the same day |
 | [specs/now.md](specs/now.md) | The first rows after the pivot | **Superseded**: every row has landed or is replaced (B3) |
 | `docs/ROADMAP.md`, `HANDOFF.md`, `docs/FINDINGS.md` | What is done, what is known, what was tried | Unchanged in role |
 
@@ -646,6 +647,15 @@ count kept before it starts.
 - **L10:** native Linux with SDL3. **Done** 2026-10-05 but the owner's windowed session (FINDINGS
   "L10"): gcc builds the port in a container on this PC; the self test, replay 23/23 at 1-8 threads
   and `title --check` pass; and the SDL3 window, pads and sound run under Xvfb.
+- **L12:** specified 2026-10-05 in [specs/android.md](specs/android.md), with R5, as L12a to L12g, and
+  reviewed once against the code. The first four slices need no phone: Linux in a container, then the
+  emulator installed here. **The owner's answers of 2026-10-05:**
+  - **the devices:** a Galaxy Z Fold 8 and an AYN Thor (D-30);
+  - **the player's compiler for the game library:** llvm-mingw plus this repository's own Android
+    sysroot (D-31);
+  - **the floor:** Android 13 (D-32);
+  - **the app's package name and release key:** the owner asked for an explanation first (D-33).
+  **Next: L12a,** the seam on Linux in a container.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:
@@ -660,7 +670,7 @@ about 1.5 weeks sooner. If you would rather follow the portability spec's order 
 **Gated, not scheduled:**
 - **L10**, native Linux: gate G2 (SDL3). **Done** 2026-10-05 but the owner's windowed session (FINDINGS "L10").
 - **L11**, ARM64 on a device: hardware you name.
-- **L12**, Android: gate G1 answering A, gate G3, and Android as a goal (all three since 2026-10-03), and G3's builder.
+- **L12**, Android: gate G1 answering A, gate G3, and Android as a goal (all three since 2026-10-03), and G3's builder. **Specified** 2026-10-05 in specs/android.md.
 
 **The order question the portability spec asked (its Q8).**
 - **(a) L2a in M1:** recommended here (D-12).
@@ -846,6 +856,10 @@ until you say otherwise.
 | D-27 | GPU build or gameplay milestone 2 first, after the gate | this plan | C6 | **answered 2026-10-03: the GPU build first** |
 | D-28 | Delete the loose tree (I2), and later `disc.iso` and your original dump (I5) | disc Q6 | session A; I5 | nothing is deleted without you; the commands check first |
 | D-29 | A Dolphin comparison for C5 | GPU Q-V6 | session B | **answered 2026-10-01: not before C5c's bless.** The shadow C5b seemed to lose is drawn (FINDINGS "The shadows were drawn out of order") |
+| D-30 | The Android device for L12's Done | android Q-A1 | L12's Done | **answered 2026-10-05: a Galaxy Z Fold 8 and an AYN Thor**; the Thor, the target's floor, first |
+| D-31 | How a player's PC compiles the game library for Android | android Q-A2 | R5's packaging | **answered 2026-10-05: llvm-mingw plus this repository's own Android sysroot** |
+| D-32 | Android 13 or newer (`minSdk 33`) | android Q-A3 | L12c | **answered 2026-10-05: yes** |
+| D-33 | The app's package name and release key | android Q-A4 | before anyone else installs the APK | a working name and the SDK's debug key; the owner asked for an explanation first (android.md §6) |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:

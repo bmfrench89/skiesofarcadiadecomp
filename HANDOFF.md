@@ -680,8 +680,14 @@ C5c) is now done.
    32,022 samples a wall second. The owner's fifteen minutes need a Linux
    desktop: a WSL distribution, which brings WSLg (`wsl --install -d
    Ubuntu`; this PC has only Docker Desktop's, without it), a Linux PC or
-   the Deck. **Next:** L12, the Android shell, to be specified in full
-   (portability.md's L12 is an outline), with R5 beside it. Still open for the owner, and not blocking: whether a
+   the Deck. **L12 is specified** (`docs/specs/android.md`, with R5,
+   reviewed once against the code): the APK holds SDL3 and the runtime;
+   the player's PC builds `libsoa_game.so`, which names the runtime as
+   `DT_NEEDED`, exports one versioned table and carries its build record
+   in an ELF note, and the phone `dlopen`s it read-only from its own
+   storage. The owner's devices are a Galaxy Z Fold 8 and an AYN Thor
+   (D-30 to D-33). **Next: L12a,** the seam on Linux in a container,
+   which needs no phone. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

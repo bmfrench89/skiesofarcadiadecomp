@@ -88,7 +88,7 @@ Ask, using the questions tool, with options and the consequence of each, before:
 - anything that needs them at the machine, such as an owner session or a look.
 
 Act without asking on anything that follows from a recorded answer. Answers
-go into PLAN-NEXT §0 or its decision register (D-1 to D-29) in the same
+go into PLAN-NEXT §0 or its decision register (D-1 to D-33) in the same
 session, and into SPEC.md if they change the goal.
 
 ## 6. Before you stop

@@ -345,6 +345,8 @@ hands.*
 
 *Specified with L12; recorded here so L12 does not miss what route C2 needs. Prerequisites: L12, R2.*
 
+*Specified 2026-10-05 in [android.md](android.md): the seam and its record in §3.2, the loading in §3.3, the PC's build in §3.4 and L12b. Its compiler question is answered there (Q-A2, D-31): llvm-mingw plus this repository's own Android sysroot, so no part of the NDK is shipped or fetched for players.*
+
 - **A seam between the runtime and the game.** Today `soa.exe` links everything. C2 needs the translated
   code built as a shared library (`libsoa_game.so`), which the APK's runtime loads with `dlopen` from the
   app's own storage and calls through a small versioned table. **The library records §3.8's build inputs**

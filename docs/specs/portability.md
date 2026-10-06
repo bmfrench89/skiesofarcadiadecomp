@@ -1705,6 +1705,8 @@ Q4's hardware.* **Owner.**
 
 ### L12. Android shell — gated on the GPU decision, distribution (Q3/G4) and Android as a goal
 
+*Specified 2026-10-05 in [android.md](android.md), with distribution R5, as L12a to L12g, and reviewed once against the code; the outline below stands as its summary. Every item of the outline is there: the profile (§3.4), lifecycle and surface loss (§3.9, §3.11), the SAF import (§3.3, §3.7), touch (L12e), AAudio through SDL3 (§3.10), one data root (§3.8), stderr to logcat and a file (§3.8).*
+
 *Several weeks for the shell; the GPU backend is months and is the precondition for playable speed.*
 **Owner.**
 
