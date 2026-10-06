@@ -29,7 +29,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
 | 5f | `python tools/citest/disc_check.py` | 4 s | MSVC |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (407 tests want a C compiler) |
+| 7 | `python -m pytest tools/tests -q` | 690 s | nothing (408 tests want a C compiler) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -339,13 +339,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1338 passed, 13 skipped in 678.63s
+1347 passed, 13 skipped in 697.13s
 ```
 
-1351 tests in 85 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1319 passed, 14 skipped` without
+1360 tests in 86 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1328 passed, 14 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `931 passed, 420 skipped` without MSVC. The 13
+into one module-level skip), `939 passed, 421 skipped` without MSVC. The 13
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
 `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),
@@ -353,7 +353,7 @@ and `test_seam.py`'s nine, which want an ELF system (CI's Linux legs run them).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 407 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 408 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

@@ -443,6 +443,10 @@ The sysroot of §3.4 and R5's packaging (Setup's checkbox) follow L12b.
 
 ### L12b. The game library from the PC
 
+*Built 2026-10-05 (FINDINGS "L12b"), but `player_build.py --target`. A player's package carries no NDK, so
+that waits for Q-A2's own sysroot and R5's packaging. The C checker and the Python one are held together by
+building the same libraries and comparing their verdicts, rather than by a written table.*
+
 *Files:*
 - `tools/soa/toolchain.py`: the `android-arm64` and `android-x86_64` profiles, finding the NDK through
   `SOA_ANDROID_NDK`, `ANDROID_NDK_HOME` or `ANDROID_HOME/ndk/*`;

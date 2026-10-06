@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1351 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1360 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1351 |
+| Python tests | 1360 |
 | Self-test cases | 86 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -692,8 +692,11 @@ C5c) is now done.
    reaches the game only through `soa_game`'s table, `runtime/elfcheck.c`
    refuses a wrong library in words before `dlopen`, and the self test,
    replay 23/23 and `title --check` pass on it in the container.
-   **Next: L12b,** the game library from the PC for Android (the NDK
-   here; Q-A2's own sysroot follows). Still open for the owner, and not blocking: whether a
+   **L12b is done** (FINDINGS "L12b"): `recompile.py --cc
+   android-arm64` (or `android-x86_64`, for the emulator) builds
+   `libsoa_game.so` with the NDK in about a minute and checks it with
+   `tools/soa/elfcheck.py`, the phone's checks in Python. **Next: L12c,**
+   the APK shell on the emulator installed here. Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two
    habits from L2: compare `gxr.c`'s queue in the `/FA` listing against the

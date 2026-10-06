@@ -656,8 +656,9 @@ count kept before it starts.
   - **the floor:** Android 13 (D-32);
   - **the app's package name and release key:** the owner asked for an explanation first (D-33).
   **L12a is done** (FINDINGS "L12a"): a split build loads the game through one table on Linux, and the
-  self test, replay 23/23 and `title --check` pass on it. **Next: L12b,** the game library from the PC for
-  Android.
+  self test, replay 23/23 and `title --check` pass on it. **L12b is done** (FINDINGS "L12b"):
+  `recompile.py --cc android-arm64` builds and checks the phone's game library in about a minute, the same
+  bytes twice. **Next: L12c,** the shell on the emulator.
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

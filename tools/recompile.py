@@ -52,7 +52,7 @@ import fetch_sdl  # noqa: E402
 import player_build  # noqa: E402
 from decomp import read_units  # noqa: E402
 from soa import dol as D  # noqa: E402
-from soa import embed, seam, shaders, toolchain  # noqa: E402
+from soa import elfcheck, embed, seam, shaders, toolchain  # noqa: E402
 from soa import symbols as S  # noqa: E402
 from soa.hle import load_hle  # noqa: E402
 from soa.ppc import cfg  # noqa: E402
@@ -420,6 +420,43 @@ def split_link_plan(
     return plan
 
 
+def android_link_plan(p: toolchain.Profile, out: Path) -> list[tuple[list[str], Path]]:
+    """An Android profile's links (specs/android.md L12b): a stand-in
+    libsoa_runtime.so from <out>/stub/stub_runtime.c, then libsoa_game.so
+    against it -- the translated objects, disc_sys.c and game_table.c, every
+    function hidden but soa_game (the profile's flags), needing the runtime by
+    name, laid out for 16 KB pages, and refused at link time if it calls
+    anything the runtime does not export (--no-undefined). No runtime, mods or
+    GPU here: the APK carries those (L12c, L12f, L12g)."""
+    objs = sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
+    stub = out / "stub"
+    stand_in = [
+        *p.cflags,
+        "-fvisibility=default",
+        "-shared",
+        f"/Fe{stub / seam.RUNTIME_SONAME}",
+        str(stub / "stub_runtime.c"),
+        f"-Wl,-soname,{seam.RUNTIME_SONAME}",
+    ]
+    game = [
+        *p.cflags,
+        "-shared",
+        f"/I{RUNTIME}",
+        f"/I{out}",
+        f"/Fe{out / seam.GAME_SONAME}",
+        str(out / "disc_sys.c"),
+        str(out / "game_table.c"),
+        *map(str, objs),
+        f"-Wl,-soname,{seam.GAME_SONAME}",
+        "-Wl,-z,max-page-size=16384",
+        "-Wl,--no-undefined",
+        f"-L{stub}",
+        f"-l:{seam.RUNTIME_SONAME}",
+        *p.linker,
+    ]
+    return [(stand_in, Path(".")), (game, Path("."))]
+
+
 def builds_mods(p: toolchain.Profile) -> bool:
     """The msvc profile builds mods/*/mod.c beside each, for gen/soa.exe;
     mingw, gcc and clang build them under their own directory (mod_out_dir):
@@ -573,6 +610,12 @@ def main() -> int:
     )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
+    # An Android profile builds the game library alone, as the player's PC
+    # does for the phone (specs/android.md L12b): no src/, as the APK's
+    # runtime has none.
+    android = prof in toolchain.ANDROID
+    if android:
+        args.no_decomp = True
     if args.split:
         if prof.name not in ("gcc", "clang"):
             ap.error("--split builds Android's arrangement on Linux: --cc gcc or --cc clang")
@@ -658,6 +701,11 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
+    if android:
+        (args.out / "stub").mkdir(exist_ok=True)
+        (args.out / "stub" / "stub_runtime.c").write_text(
+            seam.stub_runtime_c(the_seam, hle), encoding="utf-8"
+        )
     if args.split:
         (args.out / "runtime_seam.c").write_text(
             seam.runtime_seam_c(the_seam, hle, seam.record(True, baked)), encoding="utf-8"
@@ -701,6 +749,10 @@ def main() -> int:
     if args.compile:
         if toolchain.compiler_path(prof) is None:
             print(f"\n{shown} not found; skipping compile", file=sys.stderr)
+            if android:
+                print("no Android NDK in any of these, in order:", file=sys.stderr)
+                for place in toolchain.android_ndk_places():
+                    print(f"  {place}", file=sys.stderr)
             return 1
         units = [args.out / "dispatch.c", *chunks]
         level = opt_level(prof, args.optimize)
@@ -767,7 +819,7 @@ def main() -> int:
         # has filled vendor/: the shaders to SPIR-V first, and a shader that
         # does not compile fails the build. Without vendor/ soa.exe is built
         # as before, and SOA_GPU=vulkan says how to get the backend.
-        gxv = shaders.available()
+        gxv = shaders.available() and not android
         if gxv:
             bad = fetch_gpu.verify(VENDOR)
             if bad:
@@ -781,7 +833,7 @@ def main() -> int:
                 print(why, file=sys.stderr)
                 return 1
             print("GPU backend: built in (SOA_GPU=vulkan)")
-        else:
+        elif not android:
             print("GPU backend: not built in (python tools/fetch_gpu.py, then --link again)")
         # The window and the sound off Windows (portability L10), when
         # tools/fetch_sdl.py has built SDL3 for this host into vendor/sdl3.
@@ -805,7 +857,9 @@ def main() -> int:
                 )
         failed_mods = 0
         defines = ("/DSOA_NO_DECOMP=1",) if args.no_decomp else ()
-        if args.split:
+        if android:
+            plan = android_link_plan(prof, args.out)
+        elif args.split:
             plan = split_link_plan(prof, args.out, gxv, defines, sdl)
         else:
             plan = link_plan(
@@ -848,11 +902,30 @@ def main() -> int:
                 return 1
             if any(a in exe_flags for a in cmd):
                 print(f"linked {exe} ({time.time() - t0:.1f}s)")
-            elif args.split:
+            elif args.split or android:
                 made = next(a[3:] for a in cmd if a.startswith("/Fe"))
                 print(f"linked {made} ({time.time() - t0:.1f}s)")
         if failed_mods:
             return 1
+        if android:
+            # The phone's own checks (runtime/elfcheck.c), here first, in its
+            # words: what the player would be told after copying it over.
+            lib = args.out / seam.GAME_SONAME
+            found = elfcheck.problems(
+                elfcheck.read(lib),
+                machine=elfcheck.EM_AARCH64
+                if prof is toolchain.ANDROID_ARM64
+                else elfcheck.EM_X86_64,
+                exports=seam.runtime_exports(the_seam, hle),
+                libc=the_seam.libc,
+                record=seam.record(True, baked),
+                path=str(lib),
+            )
+            for problem in found:
+                print(f"  {problem}", file=sys.stderr)
+            if found:
+                return 1
+            print(f"checked {lib}: the phone's runtime would load it")
     return 0
 
 

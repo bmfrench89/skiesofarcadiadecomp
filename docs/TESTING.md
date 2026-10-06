@@ -34,16 +34,17 @@ memory.
 ### `python -m pytest tools/tests -q`
 
 ```
-1338 passed, 13 skipped in 678.63s
+1347 passed, 13 skipped in 697.13s
 ```
 
-1351 tests in 85 files, none of which reads the disc. The two FMA probes of
+1360 tests in 86 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
 SDL build, and `test_seam.py`'s nine wherever there is no ELF system, as on every Windows run;
-the counts below include those 13 skips. CI's Windows runner ships LLVM, so the FMA probes run
-there, and CI's Linux legs run the SDL window (gcc, under Xvfb) and the seam. They cover the Python
+the counts below include those 13 skips, and this machine has the Android NDK that
+`test_android_build.py` wants. CI's Windows runner ships LLVM, so the FMA probes run there, and
+CI's Linux legs run the SDL window (gcc, under Xvfb), the seam and the Android build. They cover the Python
 that builds the port and, through the tests that compile one `runtime/*.c` on
 its own and run it, some of the C as well:
 
@@ -86,6 +87,7 @@ its own and run it, some of the C as well:
 | `test_audio_wav.py` | 1 | `SOA_WAV` on every system (portability L9), with `SOA_CC`'s profile: a driver pushes seven blocks to `audio_out.c` with no device, and the WAV's header holds 7 x 640 bytes, the samples left then right, and the report says so; with the writer back inside `#ifdef _WIN32` it fails on Linux |
 | `test_fetch_sdl.py` | 8 | SDL3 for the window and sound off Windows (portability L10): an archive that is not the pinned one is refused and nothing unpacked, and the pinned one is unpacked once and its headers found; `--verify` finds a changed byte and a missing file of this host's build, and with none recorded says how to make one; the build config's drivers are read without their features; what a static `libSDL3.a` needs comes from `sdl3.pc`, either way SDL writes it; with a build in `vendor/sdl3` the Linux link compiles every runtime file with `SOA_SDL` and links the library after the objects and before the profile's libraries, and without one the link is as it was; on Windows the build is refused (D2) |
 | `test_seam.py` | 9 | the seam between the runtime and a split game library (specs/android.md L12a), with `SOA_CC`'s profile (CI's Linux legs: gcc, clang, ARM64): a game of two functions, built from the real `game_table.c` template, loads through the real launcher, `runtime/game.c` and `runtime/elfcheck.c` -- its entry calls the runtime, the table's record is the one written into it -- and exports `soa_game` alone; a library is refused before dlopen, in the player's words, for an import the runtime lacks, another build's record, the decompiled code's record, no table, 4 KB pages and no record; with a real split build in `gen/linux-split`, its libraries cross exactly `config/seam.txt` (CI leaves that case out). With `elfcheck.c`'s import check or its record comparison removed, the matching cases fail. Skips without an ELF system, as on Windows |
+| `test_android_build.py` | 9 | the game library from the PC for Android (specs/android.md L12b), with the NDK `tools/soa/toolchain.py` finds: a mistyped `SOA_ANDROID_NDK` is no NDK, never the next one, and the places looked are named; a game of two functions, built as `recompile.py --cc android-arm64` builds the real one, is what the phone loads by `tools/soa/elfcheck.py` (AArch64, `libsoa_game.so`, 16 KB pages, needing `libsoa_runtime.so`, `soa_game` alone, the record written into it), and two builds are the same bytes; a library with 4 KB pages, its functions not hidden, an import the runtime lacks, another build's record, or built for x86-64 draws its refusal; and `runtime/elfcheck.c`, built for this machine with `SOA_CC`'s profile, gives every one the Python's verdict in the same words. With `elfcheck.py`'s page limit at 4 KB, or `elfcheck.c`'s wording changed, it fails. Skips without an NDK; the C half without a compiler for this machine |
 | `test_window_sdl.py` | 1 | the SDL3 window and sound run for real (L10), built with `SOA_CC`'s profile against `vendor/sdl3` with a driver standing in for the renderer, on an X display (CI's gcc leg: Xvfb): the frame read back with xwd is the driver's, whole pixels and its colours in order; a key typed with xdotool is port 1's A, and let go nothing; `SOA_WINDOW_TEST`'s size gives a 1000x700 client with the frame at 1x, centred, in window.c's words; the presents are counted, none failed; 200 blocks of sound at once keep waveOut's 24 and drop the rest. Red and blue swapped, the key sent as B, the queue a hundred times deeper and the resize not asked each fail it. Skips without gcc or clang, SDL, a display, xwd or xdotool, as everywhere on Windows |
 | `test_disc_check.py` | 5 | `tools/citest/disc_check.py` (disc-layer I1): its `--log` half on a synthetic image, no compiler -- each file's own reads pass, and a read naming the neighbouring file, one naming no file, a wrong count past a file's end, and a log with no reads are each refused; its fixture half builds `runtime/disc.c` (with the fixture's system files built in, and without, I3, and reading a store, I5) and passes, and the mutation that moves the image's file table four bytes fails it (that one skipped without MSVC) |
 | `test_recompile_inputs.py` | 6 | what `recompile.py` builds into `soa.exe` (disc-layer I3), no compiler and no DOL: the build-input record passes the same executable and refuses one a digit apart, and a folder with none passes once with a note; `tools/soa/embed.py`'s words read back to the fixture's very bytes, little-endian and padded, under the marker; `--no-embed`'s file has the same symbols and nothing in them; the system files come from the disc and are refused when its executable is not `config/`'s or `--dol`'s, unless forced; and both links compile `disc_sys.c` |
@@ -143,17 +145,17 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1338 passed, 13 skipped` |
-| no capstone | `1319 passed, 14 skipped` |
-| no MSVC | `931 passed, 420 skipped` |
-| neither | `912 passed, 421 skipped` |
+| everything (MSVC + capstone) | `1347 passed, 13 skipped` |
+| no capstone | `1328 passed, 14 skipped` |
+| no MSVC | `939 passed, 421 skipped` |
+| neither | `920 passed, 422 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 407 compiler-gated tests are the ones that build runtime
+Two things follow. The 408 compiler-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not. And CI's install line is `pytest` and
@@ -1480,7 +1482,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 420 of the 1351 skip here without a C compiler: 407 build runtime files or the GPU spike with MSVC and run them, the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, and `test_seam.py`'s nine an ELF system, which no Windows run has.
+² 421 of the 1360 skip here without a C compiler: 408 build runtime files or the GPU spike with MSVC and run them (one, `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, and `test_seam.py`'s nine an ELF system, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

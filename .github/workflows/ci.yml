@@ -403,6 +403,21 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_seam.py -k "not a_real_split_build" -v
 
+      # specs/android.md L12b: the game library for Android, built with the
+      # NDK the runner image carries (ANDROID_NDK_HOME): a game of two functions
+      # as recompile.py builds the real one, checked by tools/soa/elfcheck.py and
+      # by runtime/elfcheck.c built for this machine, which must agree; then
+      # every runtime file, the SDL window and sound among them, compiled for
+      # the phone. A skip is a failure here
+      - name: The Android game library and runtime, no skips
+        if: ${{ !cancelled() && matrix.cc == 'gcc' }}
+        env:
+          SOA_CC: gcc
+          PYTHONPATH: tools/citest
+        run: |
+          python -m pytest -p noskip tools/tests/test_android_build.py -v
+          python tools/citest/compile_runtime.py --cc android-arm64 --require-gxv --require-sdl
+
       # portability L10: SDL3 built from its pinned source with the packages
       # tools/fetch_sdl.py names, then the window and sound run on an X
       # display (Xvfb, no window manager); xwd reads the screen back and

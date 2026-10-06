@@ -213,11 +213,12 @@ def main() -> int:
         backend_ok = compiled
         gxv_note = "compiled as the backend too" if compiled else "FAILED as the backend"
 
-    # The window and the sound off Windows (L10): Linux's profiles only, since
-    # window_sdl.c is POSIX's (_exit from unistd.h) and Windows keeps window.c.
+    # The window and the sound off Windows (L10): Linux's profiles and
+    # Android's (L12), since window_sdl.c is POSIX's (_exit from unistd.h) and
+    # Windows keeps window.c.
     sdl_ok = True
     sdl_note = "not compiled with SOA_SDL: Windows keeps window.c (D2)"
-    if prof.name in ("gcc", "clang"):
+    if prof.name in ("gcc", "clang") or prof in toolchain.ANDROID:
         sdl_note = (
             "not compiled with SOA_SDL: no SDL3 headers (python tools/fetch_sdl.py --headers)"
         )

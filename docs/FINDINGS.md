@@ -7321,3 +7321,36 @@ the driver's.** 2026-10-04.
   case, which needs the disc.
 - **What follows:** L12b, the game library built on the PC for Android, with the NDK here until Q-A2's own
   sysroot exists.
+
+**L12b: the game library from the PC.** 2026-10-05.
+
+- **What it is:** the phone's game library, built where the player builds `soa.exe`.
+  - `tools/soa/toolchain.py` gains the `android-arm64` and `android-x86_64` profiles: the NDK's clang at API
+    33 (Q-A3), the gnu flags, `-fPIC -fvisibility=hidden`.
+  - It finds the NDK through `SOA_ANDROID_NDK`, `ANDROID_NDK_HOME`/`_ROOT`, or the newest in an SDK's `ndk/`.
+    A mistyped `SOA_ANDROID_NDK` is no NDK, and the build names every place it looked.
+  - `recompile.py --cc android-arm64 --compile --optimize --link` (always `--no-decomp`) writes a stand-in
+    `libsoa_runtime.so` from the seam (`seam.stub_runtime_c`). It links `libsoa_game.so` against it with
+    `--no-undefined`, so a call outside the seam fails at link time.
+  - **`tools/soa/elfcheck.py`**, `runtime/elfcheck.c`'s checks in Python and in the same words, then says
+    whether the phone's runtime would load it.
+- **Checked** [V], on this PC with NDK 28.2:
+  - `--cc android-arm64`: 19 units compiled in 50 s, 66 s in all, giving a 34.0 MB library. `elfcheck.py`
+    passes it.
+  - **Reproducible:** a second full build gives the same bytes (sha256 `77ae5a24…`).
+  - `--cc android-x86_64`, for the emulator: 47 s to compile, 34.4 MB, passed.
+  - **The runtime compiles for both targets:** `compile_runtime.py --cc android-arm64` compiles all 37 files, and
+    the SDL window and sound with `SOA_SDL`.
+  - **`tools/tests/test_android_build.py`** (9 tests) passes. A game of two functions, built as the real one
+    is, passes `elfcheck.py` and is the same bytes twice.
+    - Five libraries with one thing wrong each draw their refusal: 4 KB pages, functions not hidden, an import
+      the runtime lacks, another record, and one built for x86-64.
+    - `runtime/elfcheck.c`, built for this PC with MSVC, gives every one the same verdict in the same words.
+  - **The mutations:** `elfcheck.py`'s page limit at 4 KB fails two tests. `elfcheck.c`'s wording changed fails
+    the agreement.
+- **Not built:** `player_build.py --target`. A player's package carries no NDK, so it waits for Q-A2's own
+  sysroot and R5's packaging.
+- **CI:** the gcc leg runs `test_android_build.py` with skips refused, using the NDK the runner image carries,
+  and compiles the runtime for Android.
+- **The tests** are 1360 in 86 files, measured four ways: 1347 passed and 13 skipped here.
+- **What follows:** L12c, the APK shell, on the android-34 x86_64 emulator installed here.

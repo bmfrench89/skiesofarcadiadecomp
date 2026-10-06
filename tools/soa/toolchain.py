@@ -9,6 +9,7 @@ import functools
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -226,7 +227,33 @@ MINGW = Profile(
         "-Wl,--stack,33554432",
     ),
 )
-PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG, MINGW)}
+# The Android game library (specs/android.md L12b): the NDK's clang for one
+# target at API 33 (Q-A3, Android 13), the gnu flags, and a shared object
+# whose every function but the table is hidden. Only the game library is
+# built with these; the APK's runtime is the Gradle build's (L12c).
+_ANDROID = ("-fPIC", "-fvisibility=hidden")
+ANDROID_ARM64 = Profile(
+    "android-arm64",
+    "gnu",
+    ("--target=aarch64-linux-android33", *_GNU_FLAGS, *_ANDROID),
+    _CLANG_STRICT,
+    ".o",
+    "",
+    "gen/android-arm64",
+    ("-lm",),
+)
+ANDROID_X86_64 = Profile(
+    "android-x86_64",
+    "gnu",
+    ("--target=x86_64-linux-android33", *_GNU_FLAGS, *_ANDROID),
+    _CLANG_STRICT,
+    ".o",
+    "",
+    "gen/android-x86_64",
+    ("-lm",),
+)
+ANDROID = (ANDROID_ARM64, ANDROID_X86_64)
+PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG, MINGW, *ANDROID)}
 
 
 def profile(name: str | None) -> Profile:
@@ -260,6 +287,68 @@ def mingw_bins() -> list[Path]:
     return out + [root.parent / "toolchain" / "bin", root / "vendor" / "llvm-mingw" / "bin"]
 
 
+def _version_key(name: str) -> tuple[int, ...]:
+    return tuple(int(x) if x.isdigit() else 0 for x in name.split("."))
+
+
+def android_ndk() -> Path | None:
+    """The NDK the Android profiles compile with: SOA_ANDROID_NDK, then
+    ANDROID_NDK_HOME or ANDROID_NDK_ROOT, then the newest under an SDK's ndk/
+    (ANDROID_HOME, ANDROID_SDK_ROOT, or where Android Studio's SDK manager
+    puts it). A SOA_ANDROID_NDK that is no NDK is None, never the next one
+    found, as SOA_CLANG_CL's typo is."""
+    own = os.environ.get("SOA_ANDROID_NDK", "")
+    if own:
+        return Path(own) if (Path(own) / "toolchains").is_dir() else None
+    for env in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"):
+        v = os.environ.get(env, "")
+        if v and (Path(v) / "toolchains").is_dir():
+            return Path(v)
+    sdks = [os.environ.get("ANDROID_HOME", ""), os.environ.get("ANDROID_SDK_ROOT", "")]
+    if os.environ.get("LOCALAPPDATA"):
+        sdks.append(str(Path(os.environ["LOCALAPPDATA"]) / "Android" / "Sdk"))
+    sdks += [str(Path.home() / "Android" / "Sdk"), str(Path.home() / "Library" / "Android" / "sdk")]
+    for sdk in sdks:
+        ndk = Path(sdk) / "ndk" if sdk else None
+        if ndk and ndk.is_dir():
+            found = sorted(
+                (d for d in ndk.iterdir() if (d / "toolchains").is_dir()),
+                key=lambda d: _version_key(d.name),
+            )
+            if found:
+                return found[-1]
+    return None
+
+
+def android_ndk_places() -> list[str]:
+    """Where android_ndk() looks, in its order, for a message that says so."""
+    out = [f"SOA_ANDROID_NDK ({os.environ.get('SOA_ANDROID_NDK') or 'unset'})"]
+    out += [
+        f"{e} ({os.environ.get(e) or 'unset'})" for e in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT")
+    ]
+    sdks = [os.environ.get("ANDROID_HOME", ""), os.environ.get("ANDROID_SDK_ROOT", "")]
+    if os.environ.get("LOCALAPPDATA"):
+        sdks.append(str(Path(os.environ["LOCALAPPDATA"]) / "Android" / "Sdk"))
+    sdks += [str(Path.home() / "Android" / "Sdk"), str(Path.home() / "Library" / "Android" / "sdk")]
+    return out + [str(Path(s) / "ndk") for s in sdks if s]
+
+
+def ndk_clang(ndk: Path) -> Path:
+    """The NDK's clang for this host."""
+    host = {"nt": "windows-x86_64"}.get(
+        os.name, "darwin-x86_64" if sys.platform == "darwin" else "linux-x86_64"
+    )
+    return (
+        ndk
+        / "toolchains"
+        / "llvm"
+        / "prebuilt"
+        / host
+        / "bin"
+        / ("clang.exe" if os.name == "nt" else "clang")
+    )
+
+
 def compiler_path(p: Profile = MSVC) -> str | None:
     """The compiler a profile runs, or None when it is not here.
 
@@ -278,6 +367,9 @@ def compiler_path(p: Profile = MSVC) -> str | None:
         if os.environ.get("SOA_MINGW"):
             bins = bins[:1]
         return next((str(b / name) for b in bins if (b / name).is_file()), None)
+    if p in ANDROID:
+        ndk = android_ndk()
+        return str(ndk_clang(ndk)) if ndk and ndk_clang(ndk).is_file() else None
     if p.name == "clang-cl":
         if msvc_env() is None:
             return None

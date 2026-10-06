@@ -197,6 +197,23 @@ def version_script(seam: Seam, bound: Iterable[int]) -> str:
     return f"{{\n  global:\n{body}\n  local: *;\n}};\n"
 
 
+def stub_runtime_c(seam: Seam, bound: Iterable[int]) -> str:
+    """<out>/stub/stub_runtime.c, for an Android profile (specs/android.md
+    L12b): the runtime library's exports as stand-ins, so the PC links a game
+    library against the runtime it will meet on the phone, by name, without
+    building that runtime. Data for the g_* globals, an empty function for
+    the rest; it is linked against, never run."""
+    lines = [
+        "/* Written by tools/recompile.py for an Android profile (specs/android.md",
+        " * L12b): stand-ins for libsoa_runtime.so's exports, linked against and",
+        " * never run. The phone's runtime library is the APK's. */",
+        "#include <stdint.h>",
+    ]
+    for name in runtime_exports(seam, bound):
+        lines.append(f"uint32_t {name};" if name.startswith("g_") else f"void {name}(void) {{}}")
+    return "\n".join(lines) + "\n"
+
+
 LAUNCHER_C = """/* Written by tools/recompile.py --split: the program a split build runs
  * (specs/android.md 3.2). It needs libsoa_runtime.so, which loads
  * libsoa_game.so from beside it (runtime/game.c). */

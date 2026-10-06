@@ -96,6 +96,12 @@ mods' `mod.so` under `gen/linux/mods`, and `SOA_RENDER=1 gen/linux/soa extracted
 window, X11 or Wayland. Without `vendor/sdl3` the same build is headless: the self test, the replay
 and `title --check` (all three pass, the replay 23 of 23 against the same manifest), and `SOA_WAV`.
 
+**Android** is under way (specs/android.md). With the Android NDK installed (Android Studio's SDK
+manager, or `SOA_ANDROID_NDK`), `python tools/recompile.py --cc android-arm64 --compile --optimize --link`
+builds the game library a phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and
+checks it as the phone would; `--cc android-x86_64` builds it for the emulator. The app that loads it is
+L12c's.
+
 **cmd.exe** — the same commands, except for the line that sets the variable:
 
 ```bat
@@ -357,7 +363,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1351 tests; any that need a dump skip themselves
+python -m pytest                     # 1360 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes
