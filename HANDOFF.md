@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1435 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1436 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1435 |
+| Python tests | 1436 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -426,9 +426,11 @@ CI for the last. The SOA emulator was shut down; TESTING.md's Android
 recipe starts it again. Its data image keeps the final debug APK; the
 store staged in Download, which `no_backup/disc.txt` names and which is
 read in place; the x86-64 library in `no_backup/` (and staged in
-Download); the ISO back at `files/extracted/disc.iso` (`push-disc`); the
+Download); no ISO, since the copy `push-disc` left at the end of L12d's
+session was 1226858496 of 1459978240 bytes and was removed on 2026-10-07
+(a check that reads a disc runs with `SOA_IMPORT=1`, from the store); the
 captures in `files/fifo`; and the debug provider's ten mutants, the real
-library and the GTSE01 fixture in `files/provider`, with 1.3 GB free.
+library and the GTSE01 fixture in `files/provider`, with 2.4 GB free.
 The Docker container `soa-l10` (python:3.14-slim, gcc, SDL3 built in
 `/work/vendor`) is kept for the next Linux check, with L12d's split
 build in `/work/gen/linux-split`; its layer holds a copy of the

@@ -224,11 +224,15 @@ class Shell:
     """adb answering from a table: the first key a command's words start with
     gives its (status, output); everything else succeeds and says nothing."""
 
-    def __init__(self, answers=None):
+    def __init__(self, answers=None, short=0):
         self.answers, self.calls = dict(answers or {}), []
+        # the last push's size, and how many bytes it falls short by
+        self.pushed, self.short = 0, short
 
     def adb(self, serial, *cmd, timeout=600, check=True):
         self.calls.append(cmd)
+        if cmd[0] == "push":
+            self.pushed = os.path.getsize(cmd[1]) - self.short
         line = " ".join(cmd)
         for key, (status, out) in self.answers.items():
             if line.startswith(key):
@@ -239,13 +243,15 @@ class Shell:
 
     def run_as(self, serial, script, check=True):
         self.calls.append(("run-as", script))
+        if script.startswith("stat -c %s "):
+            return CP(script, 0, f"{self.pushed}\n", "")
         return CP(script, 0, "", "")
 
 
 @pytest.fixture
 def shell(monkeypatch):
-    def make(answers=None) -> Shell:
-        sh = Shell(answers)
+    def make(answers=None, short=0) -> Shell:
+        sh = Shell(answers, short)
         monkeypatch.setattr(android, "adb", sh.adb)
         monkeypatch.setattr(android, "run_as", sh.run_as)
         monkeypatch.setattr(android.time, "sleep", lambda s: None)
@@ -270,8 +276,10 @@ def test_put_writes_into_the_folder_named_and_push_game_into_no_backup(shell, tm
     assert scripts(sh.calls) == [
         "mkdir -p files/provider && rm -f files/provider/a.so && "
         "cp /data/local/tmp/soa-push files/provider/a.so && chmod 0644 files/provider/a.so",
+        "stat -c %s files/provider/a.so",
         "mkdir -p no_backup/ && rm -f no_backup/libsoa_game.so && "
         "cp /data/local/tmp/soa-push no_backup/libsoa_game.so && chmod 0444 no_backup/libsoa_game.so",
+        "stat -c %s no_backup/libsoa_game.so",
     ]
     made = len(sh.calls)
     with pytest.raises(android.AndroidError, match="files or no_backup"):
@@ -279,8 +287,22 @@ def test_put_writes_into_the_folder_named_and_push_game_into_no_backup(shell, tm
     assert len(sh.calls) == made  # refused before anything reached the device
 
     assert android.main(["push-game", "--serial", "emu", str(lib)]) == 0
-    assert scripts(sh.calls)[-1] == scripts(sh.calls)[1]
+    assert scripts(sh.calls)[-2:] == scripts(sh.calls)[2:4]
     assert "emu's no_backup/libsoa_game.so" in capsys.readouterr().out
+
+
+def test_a_push_that_comes_up_short_is_refused_with_both_sizes(shell, tmp_path, capsys):
+    """L12d's session put an ISO back with push-disc and was left a copy
+    1226858496 of 1459978240 bytes long, with no error; the next run refused
+    it as a truncated dump. Each push is now held to the file's size."""
+    shell(short=4096)
+    image = tmp_path / "disc.iso"
+    image.write_bytes(b"\0" * 10000)
+    said = "is 5904 bytes, not 10000 bytes: did the device run out of room"
+    with pytest.raises(android.AndroidError, match=said):
+        android.put("emu", image, "extracted/disc.iso", "0444")
+    assert android.main(["push-disc", "--serial", "emu", str(image)]) == 1
+    assert "run out of room" in capsys.readouterr().err
 
 
 def test_provide_puts_a_file_where_the_debug_provider_serves_it(shell, tmp_path, capsys):
@@ -289,13 +311,13 @@ def test_provide_puts_a_file_where_the_debug_provider_serves_it(shell, tmp_path,
     store.write_bytes(b"SOADISC1")
     assert android.main(["provide", "--serial", "emu", str(store)]) == 0
     assert ("push", str(store), "/data/local/tmp/soa-push") in sh.calls
-    assert "cp /data/local/tmp/soa-push files/provider/GTSE01.soadisc" in scripts(sh.calls)[-1]
+    assert "cp /data/local/tmp/soa-push files/provider/GTSE01.soadisc" in scripts(sh.calls)[-2]
     out = capsys.readouterr().out
     assert "content://io.github.bmfrench89.soa.dev.testfiles/file/GTSE01.soadisc" in out
     assert "content://io.github.bmfrench89.soa.dev.testfiles/pipe/GTSE01.soadisc" in out
 
     assert android.main(["provide", "--serial", "emu", str(store), "--as", "other.soadisc"]) == 0
-    assert scripts(sh.calls)[-1].endswith("chmod 0644 files/provider/other.soadisc")
+    assert scripts(sh.calls)[-2].endswith("chmod 0644 files/provider/other.soadisc")
     made = len(sh.calls)
     assert android.main(["provide", "--serial", "emu", str(store), "--as", "my disc.soadisc"]) == 1
     assert "not a plain file name" in capsys.readouterr().err
@@ -648,7 +670,7 @@ def test_mutants_push_provides_each_for_the_devices_abi(shell, monkeypatch, tmp_
     out = str(tmp_path / "m")
     assert android.main(["mutants", "--push", "--serial", "emu", "--out", out]) == 0
     assert asked[0][1] == "android-x86_64"
-    assert "cp /data/local/tmp/soa-push files/provider/arm64.so" in scripts(sh.calls)[-1]
+    assert "cp /data/local/tmp/soa-push files/provider/arm64.so" in scripts(sh.calls)[-2]
     argv = ["mutants", "--push", "--serial", "emu", "--profile", "android-arm64", "--out", out]
     assert android.main(argv) == 1
     assert "--profile android-arm64 is another's" in capsys.readouterr().err

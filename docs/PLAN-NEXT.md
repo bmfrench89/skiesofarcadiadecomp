@@ -156,6 +156,12 @@ The owner answered four questions, with the research behind them summarised in t
   §3.4, so Setup can build the phone's library without the NDK (D-31). Still the owner's: where L12g (mods
   on the emulator) and card import and export through the picker, proposed as its own slice L12h, come
   after it.
+- **The owner's answers of 2026-10-07, on R5's sysroot** (D-34 to D-36), asked once a game library built
+  through it had passed the emulator (the self test, replay 23/23 at 1, 2, 3 and 8 threads, `title` 4 of 4):
+  **built where it is used**, from bionic's sources at a pinned commit, each file checked against a hash
+  this repository holds, rather than built once by CI and published; **its licences shipped with their
+  texts**, though not all are BSD; and **L12's Done on the Thor with a library built through it**, so that
+  one session proves R5 on a phone.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
@@ -876,6 +882,9 @@ until you say otherwise.
 | D-31 | How a player's PC compiles the game library for Android | android Q-A2 | R5's packaging | **answered 2026-10-05: llvm-mingw plus this repository's own Android sysroot** |
 | D-32 | Android 13 or newer (`minSdk 33`) | android Q-A3 | L12c | **answered 2026-10-05: yes** |
 | D-33 | The app's package name and release key | android Q-A4 | before anyone else installs the APK | a working name and the SDK's debug key; the owner asked for an explanation first (android.md §6) |
+| D-34 | How R5's Android sysroot is made and shipped | R5 | R5 | **answered 2026-10-07: built where it is used**, from pinned sources, by the script every machine runs; the stub libraries from `config/seam.txt` at each link. Not published as a release asset |
+| D-35 | The sysroot's licences: Apache-2.0, Sun's fdlibm notice, a NetBSD 4-clause text and Linux UAPI headers under GPL-2.0 WITH Linux-syscall-note, beside BSD | R5 | R5's packaging | **answered 2026-10-07: shipped, with their texts in `licenses/`** |
+| D-36 | The library L12's Done runs on the Thor | R5 | L12's Done | **answered 2026-10-07: built through R5's route** (llvm-mingw and the sysroot), so the session proves both |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:

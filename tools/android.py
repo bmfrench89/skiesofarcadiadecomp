@@ -237,6 +237,17 @@ def put(serial: str, local: Path, remote: str, mode: str = "0644", base: str = "
     path = f"{base}/{remote}"
     run_as(serial, f"{mkdir}rm -f {path} && cp {tmp} {path} && chmod {mode} {path}")
     adb(serial, "shell", f"rm -f {tmp}")
+    # Held to its size: a push that ran out of room has left a short copy and
+    # no error before (L12d's ISO, 1226858496 of 1459978240 bytes), which the
+    # next run took for a truncated dump.
+    got = run_as(serial, f"stat -c %s {path}", check=False).stdout.strip()
+    want = local.stat().st_size
+    if got != str(want):
+        size = f"{got} bytes" if got.isdigit() else "a size stat could not read"
+        raise AndroidError(
+            f"{path} on {serial} is {size}, not {want} bytes: did the device run out of room? A push needs "
+            "the file's size free twice, in /data/local/tmp and then in the app's storage"
+        )
 
 
 def device_abi(serial: str) -> str:

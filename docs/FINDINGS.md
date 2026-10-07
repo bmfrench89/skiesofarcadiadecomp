@@ -7718,3 +7718,37 @@ the driver's.** 2026-10-04.
   this measurement has nothing to compare with.
 - **The words wait for the owner's look**, with the import's, on `build/android-review/index.html`.
 - **The tests** are unchanged in number: 1435 in 89 files.
+
+**R5's gate, and a push held to its size.** 2026-10-07.
+
+- **What it is:** before designing R5's own Android sysroot (D-31), the one question every design rested on: does
+  Android's loader run a game library built by llvm-mingw's clang instead of the NDK's? Five readers mapped the
+  specs, the toolchain, what the library needs, what llvm-mingw does with a foreign sysroot, and the upstream
+  sources (scratchpad `r5_map.md`). The library needs 32 of bionic's headers, the four C-library names of
+  `config/seam.txt` it calls (`setjmp`, and `crtbegin_so.o`'s `__cxa_atexit`, `__cxa_finalize` and
+  `__register_atfork`), and no compiler runtime; llvm-mingw, which carries no Android compiler-rt, links it once
+  `-nodefaultlibs` is given with `-lm -ldl -lc` after the objects.
+- **The library** [V]: from `gen/android-x86_64`'s C with its real `disc_sys.c`, compiled by llvm-mingw 20260922
+  (clang 23.1.2) against a sysroot made only from bionic's sources at `android-17.0.0_r1`: the 32 headers,
+  `crtbegin_so.o` and `crtend_so.o` built from bionic's source by the same clang, and stubs of `seam.txt`'s names
+  with the version `LIBC`. 21 units in 38.9 s on 16 threads, linked in 0.3 s, 33,996,192 bytes. `elfcheck.py` with
+  the phone's settings passes it, as it does the NDK's; the same `DT_NEEDED` and the same 42 imports, 4 from the C
+  library at `LIBC`. It differs from the NDK's build in its relocations, packed (`DT_RELR` and `DT_ANDROID_RELA`,
+  clang 23's default from API 28) where the NDK's are plain `RELA`, and in a 4-byte ident note (the API level)
+  where the NDK's is 132.
+- **On the emulator** [V], pushed over the NDK's library with `push-game`: its `[game]` record line, the self test
+  0 failures, `android.py replay --threads 1,2,3,8` 23 of 23, and `title` 4 of 4 over 2000 frames, reading the
+  imported store in place (`SOA_IMPORT=1`). The NDK's library was put back after (`c0046416…`). So the route the
+  owner chose (D-34 to D-36, PLAN-NEXT §0) is the one measured.
+- **What it found:** the first title run stopped at boot: `[boot] extracted/disc.iso: its file table puts
+  sound/b7022300_R.dsp at 0x491FACA4 (+48050 bytes), and the image ends at 0x49206000: a truncated dump or copy?`.
+  L12d's new check was right. The ISO `push-disc` had put back at the end of L12d's session was 1,226,858,496 of
+  1,459,978,240 bytes, with no error then, and HANDOFF had recorded it as restored. A push needs the file's size
+  free twice, in `/data/local/tmp` and then in the app's storage, and the store staged in Download left too
+  little. `tools/android.py`'s `put()` now holds every push to its size (`stat -c %s`), refusing with both sizes;
+  `test_android_tool.py` has the case, and with the check taken out it fails. The short ISO was removed (2.4 GB
+  free); a check on the emulator that reads a disc runs with `SOA_IMPORT=1`.
+- **Not measured:** an arm64 library built this way (the Thor's, D-36), and a library built by `recompile.py`
+  itself, which R5 makes take this route.
+- **The tests** are 1436 in 89 files, measured four ways: 1395 passed and 41 skipped here; 1376 and 42
+  without capstone; 986 and 450 without MSVC; 967 and 451 without either. The full run took 784.73 s.
