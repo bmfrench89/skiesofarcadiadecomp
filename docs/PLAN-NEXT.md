@@ -149,15 +149,16 @@ The owner answered four questions, with the research behind them summarised in t
   executable (disc-layer I3), given it was never shareable: replays and the self test then need no
   disc, and an image other than the one a build was made from is refused. Never attach `soa.exe` to
   an issue or send it to anyone.
+- **The owner's answer of 2026-10-06, while L12's Done waits for the owner and the Thor: the box first,
+  then R5's own Android sysroot.** The box is the one L12d found missing, saying why when a run stops
+  mid-play (exit 9: a damaged block or the disc's storage gone), where the app had closed with the reason
+  in the log alone; built the same day (FINDINGS "L12d's stop box"). Then the sysroot of specs/android.md
+  §3.4, so Setup can build the phone's library without the NDK (D-31). Still the owner's: where L12g (mods
+  on the emulator) and card import and export through the picker, proposed as its own slice L12h, come
+  after it.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
-  - **Since L12d (2026-10-06): which slice comes first while L12's Done waits for the owner and the
-    Thor.** Two need neither: R5's own Android sysroot, so Setup can build the phone's library without the
-    NDK (D-31), and L12g, mods on the emulator (specs/android.md §4). This plan does not order them. Card
-    import and export through the picker is proposed as its own slice, L12h, for the owner to name and
-    place, and so is a small one L12d found missing: a box saying why when a run stops mid-play (exit 9, a
-    damaged block or the disc's storage gone), which today closes the app with the reason in the log alone.
 - **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
 
 ---
@@ -669,8 +670,8 @@ count kept before it starts.
   and the MEM1 guard under ART pass, and five faults no desktop had shown were found and fixed there.
   **L12d is done** (FINDINGS "L12d"): on the emulator the first run imports the game library and the disc
   through the app's own picker, each refusal in the player's words, the disc read in place through its
-  descriptor. **Next: L12's Done on the Thor,** which needs the owner; without the owner, R5's own Android
-  sysroot or L12g (mods on the emulator), whose order §0 leaves to the owner.
+  descriptor; since its stop box, a run the disc layer stops mid-play (exit 9) says why on the screen. **Next: L12's Done on the
+  Thor,** which needs the owner; without the owner, R5's own Android sysroot, as the owner answered (§0).
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

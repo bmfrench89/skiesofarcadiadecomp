@@ -366,8 +366,10 @@ rewritten):
   - **A read that fails inside the image once it is open stops the run** with `[exit] 9` and
     `[disc] cannot read <path> at 0x<offset> (+<n> bytes[, disc offset 0x<o>]): <why>; was its storage removed?`,
     the why being the system's words, or "it is N bytes now, and was M when it was opened". It is never served as
-    zeros. On a phone the app then closes, as it does when a damaged block stops the run (below): no box says why
-    yet, and these lines name the disc by its descriptor's path (not built, L12d).
+    zeros. On a phone, before the app closes, a box says why, as it does when a damaged block stops the run
+    (below): `disc_stop_words`, a sentence a player reads, with the disc named as it was picked in place of its
+    descriptor's path. A damaged disc is forgotten first (`disc.txt`, and the app's copy if it made one), so the
+    next launch asks for one [V, the damaged block read in place, L12d's stop box].
 - **Otherwise, copied** by `runtime/import.c` into `noBackupFilesDir/copy/`, as `disc.soadisc` or `disc.iso`,
   named by its content, never by its provider's name:
   - it needs its size and 512 MiB more free, kept for the card's next write, and takes the space first

@@ -7649,7 +7649,7 @@ the driver's.** 2026-10-04.
 - **Not built:** card import and export through the picker (proposed as slice L12h), a CI build of the APK, and
   a box for a run stopped mid-play. A damaged block or a disc whose storage went (exit 9) closes the app, and
   the reason is in the log alone (`finish()` in `android.c` shows nothing), in lines that name the disc by its
-  descriptor's path: a box would need words of its own.
+  descriptor's path: a box would need words of its own. (Built next: "L12d's stop box".)
 - **The words are not blessed.** Tests pin the checker's and the disc layer's refusals (`test_android_build.py`,
   `test_seam.py`, `disc_check.py`) and some of the copy's (`test_import.py`); nothing but the code pins the
   boxes or the refusals `android.c` words itself. The owner has looked at none of them, so under CLAUDE.md's
@@ -7667,3 +7667,54 @@ the driver's.** 2026-10-04.
   need neither: R5's own Android sysroot, so Setup builds the phone's library without the NDK, and L12g, mods
   on the emulator. Which comes first is the owner's (PLAN-NEXT §0). D-33 (the package name and the release
   key) is still the owner's, before anyone else installs it.
+
+**L12d's stop box.** 2026-10-06.
+
+- **What it is:** a run disc.c stops mid-play (exit 9: a read that fails, a damaged block) now says why on the
+  screen before the app closes, where L12d had left the reason in the log alone (found by reading `finish()`). The
+  owner chose it first, before R5's sysroot (PLAN-NEXT §0). `disc.c` keeps the stop's reason as a sentence a
+  player reads, with its kind (`disc_stop_words`, `DISC_STOP_READ`, `_DAMAGED` or `_MEMORY`): "<disc> could not be
+  read: <why>. Was its storage removed?", "<disc> is damaged: the part of it holding <files> is not what was
+  stored there; <remedy>." ("a part of it" when the block holds no file), or "There was no memory left to check
+  <disc>: close other apps and start the game again." On exit 9, `android.c`'s `finish()` puts the disc's name, as
+  the player picked it, in place of its path, and shows "The game stopped." with those words and a Close button. A
+  damaged disc is forgotten first, its `disc.txt` and the app's own copy if the import copied it, so the next
+  launch asks for a disc rather than stopping at the same place again, and the box ends "When you open the app
+  again, it asks for the disc." The box is SoaActivity's `messageboxShowMessageBox`, called through JNI from the
+  thread that stopped, not SDL's, which would work SDL's input state from a thread other than the window's;
+  SoaActivity now lets the screen sleep while any box waits. A check run logs the box (`[android] box: …`), shows
+  nothing and forgets nothing.
+- **What the review found,** before it was pushed [V, code]: the first version named the picked file and advised a
+  new copy even when the damaged thing was the app's own copy, which the next launch reused without asking
+  (`disc_open` hashes no payload block), so every launch stopped at the same place; called `SDL_ShowMessageBox`
+  off SDL's main thread; kept the screen on (SDL's video holds it once it starts); capitalised the picked name's
+  first letter; left one stop (the ISO comparison's out-of-memory) without words; and called a block with no file
+  in it "padding, no file". Each is fixed above.
+- **Checked on the PC and in the container** [V]: `disc_check.py`'s driver prints the words from disc.c's stop
+  hook, and the check holds them for the damaged store, in the PC's words and a phone's, and for an ISO cut while
+  open, through two readers and, on Linux, under its descriptor. 160 passed under MSVC, clang-cl and llvm-mingw,
+  174 on Linux as an ordinary user and 173 as root (156, 169 and 168 before). On Windows, with the damaged-block
+  words taken out and the read's words changed, 4 fail. `compile_runtime.py` 39 of 39 under MSVC, clang-cl,
+  llvm-mingw, android-x86_64 and android-arm64; `soa.exe` relinked, the self test 0 failures and `title` 4 of 4;
+  `test_android_jni.py` holds the new lookup of the box.
+- **Checked on the emulator** [V], on the APK built with it (`fbaa0f3d…`):
+  - **The self test:** 0 failures.
+  - **A check run** with `SOA_DISC_FLIP=sound/tone.info` logs the block line, then `[android] box: The game
+    stopped. / GEAE8P.soadisc is damaged: the part of it holding sound/stv73.samp, sound/tone.info is not what was
+    stored there; copy it to this phone again, or make it again on your PC.` and `[exit] 9`, and `disc.txt` stays.
+  - **A player's launch** (no extras) with one byte of the staged store in Download really damaged, the low bit at
+    file offset 1427257576 (0x551238E8: the payload's 0xF5000 plus disc offset 0x5502E8E8, in `sound/tone.info`),
+    stopped at the game's first frame and showed the box on a black screen, in those words and "When you open the
+    app again, it asks for the disc." (captured as `build/android-review/stopped-box.png`, local); `dumpsys
+    window` showed no window holding the screen on while it waited. Close ended the run `[exit] 9`, and
+    `no_backup/` held the library alone. The byte was put back and the store's SHA-256 matched the PC's; the next
+    launch asked for the disc (a check run answers Pick, finds no pick and cancels, `[exit] 1`); and a real pick
+    read it in place, `disc.txt` back, one grant held.
+  - **The mutation,** on the first version: an APK whose `finish()` never calls the box logs the block line and
+    `[exit] 9`, and no box.
+- **Not measured:** a damaged copy the app made, and its removal (the emulator has no room for a second 1.4 GB
+  store); the read-failure box on the device (no storage was pulled; the disc check holds the words for an ISO cut
+  while open, not for a cut store); the out-of-memory stops; and the screen held on with the first version, which
+  this measurement has nothing to compare with.
+- **The words wait for the owner's look**, with the import's, on `build/android-review/index.html`.
+- **The tests** are unchanged in number: 1435 in 89 files.

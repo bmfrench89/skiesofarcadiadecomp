@@ -91,5 +91,11 @@ const char* disc_port_dol_sha1(void);
  * the one built into the game library (I3): a disc another library could
  * play; 0 otherwise. */
 int disc_refused_by_build(void);
+/* Why disc.c stopped the run mid-play (exit 9), in a sentence a player can
+ * read, the disc named by the path it was opened by: its kind, with the words,
+ * from the stop hook on; DISC_STOP_NONE before any stop. runtime/android.c says
+ * it on the screen before the app closes, and forgets a damaged disc. */
+enum { DISC_STOP_NONE, DISC_STOP_READ, DISC_STOP_DAMAGED, DISC_STOP_MEMORY };
+int disc_stop_words(char* out, size_t cap);
 
 #endif

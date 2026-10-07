@@ -420,16 +420,15 @@ washed-out colour and a correct fix would have failed the suite.
 ## Where the last session stopped (2026-10-06)
 
 **The state at the stop (2026-10-06, after L12d):** L10 (d6d64aa), L12a
-(75d5ce2), L12b (316e50d) and L12c (64bcd85) are pushed. L12d is two
-commits: 6e39f13, the disc read through its descriptor, and the rest
-(with this section), pushed; read CI for the last. The SOA emulator was
-shut down; TESTING.md's Android recipe starts it again. Its data image
-keeps the final debug APK; the store staged in Download, which
-`no_backup/disc.txt` names and which is read in place; the x86-64 library
-in `no_backup/` (and staged in Download); the ISO back at
-`files/extracted/disc.iso` (`push-disc`); the captures in `files/fifo`;
-and the debug provider's ten mutants, the real library and the GTSE01
-fixture in `files/provider`, with 1.3 GB free.
+(75d5ce2), L12b (316e50d), L12c (64bcd85) and L12d (6e39f13 and abec5f6)
+are pushed, and the box a stop mid-play shows (with this section); read
+CI for the last. The SOA emulator was shut down; TESTING.md's Android
+recipe starts it again. Its data image keeps the final debug APK; the
+store staged in Download, which `no_backup/disc.txt` names and which is
+read in place; the x86-64 library in `no_backup/` (and staged in
+Download); the ISO back at `files/extracted/disc.iso` (`push-disc`); the
+captures in `files/fifo`; and the debug provider's ten mutants, the real
+library and the GTSE01 fixture in `files/provider`, with 1.3 GB free.
 The Docker container `soa-l10` (python:3.14-slim, gcc, SDL3 built in
 `/work/vendor`) is kept for the next Linux check, with L12d's split
 build in `/work/gen/linux-split`; its layer holds a copy of the
@@ -444,8 +443,7 @@ refusals, and nothing but the code the boxes and `android.c`'s own. Two
 of `player`'s three single captures of the game after the import came
 out black; captures every second or two after a re-import and a first
 run at font scale 1.3, run again, showed the picture each time (FINDINGS
-"L12d").
-What is next, and why, is item 2 of the list below.
+"L12d"). What is next, and why, is item 2 of the list below.
 
 Everything below this section is older and still true. Landed in the last
 stretch, newest first, each with a FINDINGS entry of its name: **L6**
@@ -743,19 +741,18 @@ C5c) is now done.
    disc is read in place through the picked descriptor (Android 14 refuses
    to open the file again by name, so this is necessary), or copied when
    it cannot be, as a pipe is; its grant survives a reboot; and a damaged
-   block stops the run with exit 9, though on a phone no box says why yet
-   (FINDINGS "L12d", not built). The activity destroyed during a pick came
-   with check 13's mutation: the run ends at once. **Next: L12's Done on
-   the AYN Thor,** as specs/android.md §4 orders it (the self test, the
-   replay and `title` on the phone, the frame rate at the Dangral base,
-   and the owner's session with a pad), which needs the owner and the
-   phone. Without them, two slices need neither: R5's own Android sysroot,
-   so Setup can build the phone's library without the NDK, and L12g, mods
-   on the emulator. Which comes first is an order question, so it is
-   PLAN-NEXT §0's, and §0 leaves it to the owner; this session did not
-   choose. Card import and export through the picker is proposed as L12h,
-   for the owner to name and place. D-33 (the package name and release
-   key) is still the owner's, and comes before anyone else installs it.
+   block stops the run with exit 9, saying why on the screen first since
+   its stop box (FINDINGS "L12d's stop box"). The activity destroyed
+   during a pick came with check 13's mutation: the run ends at once.
+   **Next: L12's Done on the AYN Thor,** as specs/android.md §4 orders it
+   (the self test, the replay and `title` on the phone, the frame rate at
+   the Dangral base, and the owner's session with a pad), which needs the
+   owner and the phone. Without them, the owner's answer of 2026-10-06
+   (PLAN-NEXT §0) puts R5's own Android sysroot next, so Setup can build
+   the phone's library without the NDK; where L12g (mods on the emulator)
+   and the proposed L12h (card import and export through the picker) come
+   after it is still the owner's. D-33 (the package name and release key)
+   is still the owner's, and comes before anyone else installs it.
    Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

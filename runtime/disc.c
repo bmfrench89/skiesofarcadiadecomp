@@ -136,6 +136,8 @@ static uint64_t g_read_at;   /* and where in the file it began, */
 static size_t g_read_n;      /* for how many bytes */
 static int g_phone;          /* disc_set_phone_words */
 static int g_by_build;       /* the last disc_open refused by the I3 guard */
+static char g_stop_words[1000]; /* disc_stop_words: why the run was stopped, for a player, */
+static int g_stop_kind;         /* and which kind of stop it was */
 
 /* The remedies refusals end with: the PC's commands, or a phone's, which has
  * no Python, no soa.exe and no recompile.py -- its player has Setup on a PC
@@ -158,6 +160,23 @@ static const char* build_noun(void)
 void disc_set_phone_words(int on) { g_phone = on != 0; }
 const char* disc_port_dol_sha1(void) { return DISC_DOL_SHA1; }
 int disc_refused_by_build(void) { return g_by_build; }
+
+int disc_stop_words(char* out, size_t cap)
+{
+    if (!g_stop_kind) return DISC_STOP_NONE;
+    snprintf(out, cap, "%s", g_stop_words);
+    return g_stop_kind;
+}
+
+/* A stop's words for a player, and its kind, said before stop() exits. */
+static void stop_said(int kind, const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_stop_words, sizeof g_stop_words, fmt, ap);
+    va_end(ap);
+    g_stop_kind = kind;
+}
 
 static uint32_t be32(const uint8_t* p)
 {
@@ -325,9 +344,11 @@ static void stop(const char* fmt, ...)
  * called damaged. */
 static void read_or_stop(uint64_t off, void* dst, size_t n)
 {
-    char said[1400];
+    char said[1400], reason[200];
     if (read_at(off, dst, n)) return;
     failed_read(said, sizeof said);
+    stop_said(DISC_STOP_READ, "%s could not be read: %s. Was its storage removed?", g_path,
+              why_short(g_read_errno, g_path, g_file_size, reason, sizeof reason));
     stop("%s", said);
 }
 
@@ -540,7 +561,7 @@ static int open_store(uint64_t file_size, char* why, size_t cap)
 }
 
 /* The files whose extents overlap [lo, hi), for a message. */
-static void files_in(uint64_t lo, uint64_t hi, char* out, size_t cap)
+static int files_in(uint64_t lo, uint64_t hi, char* out, size_t cap)
 {
     uint32_t i;
     size_t used = 0;
@@ -553,7 +574,9 @@ static void files_in(uint64_t lo, uint64_t hi, char* out, size_t cap)
             used += (size_t)k < cap - used ? (size_t)k : cap - used - 1;
         }
     }
-    if (!out[0]) snprintf(out, cap, "padding, no file");
+    if (out[0]) return 1;
+    snprintf(out, cap, "padding, no file");
+    return 0;
 }
 
 /* SOA_DISC_VERIFY and SOA_DISC_FLIP, once the image is open and indexed. */
@@ -957,14 +980,25 @@ static void verify_blocks(uint64_t offset, uint32_t length)
     uint64_t end = offset + length < g_covered ? offset + length : g_covered;
     uint32_t k;
     if (offset >= end) return;
-    if (!buf && !(buf = (uint8_t*)malloc(STORE_BLOCK))) stop("no memory to hash the store's blocks");
+    if (!buf && !(buf = (uint8_t*)malloc(STORE_BLOCK))) {
+        stop_said(DISC_STOP_MEMORY, "There was no memory left to check %s: close other apps and start the game "
+                  "again.", g_path);
+        stop("no memory to hash the store's blocks");
+    }
     for (k = (uint32_t)(offset / STORE_BLOCK); (uint64_t)k * STORE_BLOCK < end; k++) {
         uint64_t t0;
         if (g_seen[k / 8] & (1u << (k % 8))) continue;
         t0 = plat_mono_ns();
         if (!block_ok(k, buf)) {
             char names[600];
-            files_in((uint64_t)k * STORE_BLOCK, (uint64_t)(k + 1) * STORE_BLOCK, names, sizeof names);
+            const char* fix = g_phone ? PHONE_RECOPY : PC_REIMPORT;
+            if (files_in((uint64_t)k * STORE_BLOCK, (uint64_t)(k + 1) * STORE_BLOCK, names, sizeof names))
+                stop_said(DISC_STOP_DAMAGED,
+                          "%s is damaged: the part of it holding %s is not what was stored there; %s.", g_path,
+                          names, fix);
+            else
+                stop_said(DISC_STOP_DAMAGED, "%s is damaged: a part of it is not what was stored there; %s.", g_path,
+                          fix);
             stop("block %u of %s (0x%llX) does not match its SHA-1: %s; the store is damaged%s", k, g_path,
                  (unsigned long long)k * STORE_BLOCK, names, g_phone ? ": " PHONE_RECOPY : " -- " PC_REIMPORT);
         }
@@ -986,7 +1020,11 @@ static void verify_iso(uint64_t offset, const uint8_t* got, uint32_t length)
         buf = (uint8_t*)malloc(length);
         cap = buf ? length : 0;
     }
-    if (!buf) stop("no memory to compare a read with %s", g_iso_path);
+    if (!buf) {
+        stop_said(DISC_STOP_MEMORY, "There was no memory left to check %s: close other apps and start the game "
+                  "again.", g_path);
+        stop("no memory to compare a read with %s", g_iso_path);
+    }
     if (plat_fseek64(g_iso, (int64_t)offset) == 0) n = (uint32_t)fread(buf, 1, length, g_iso);
     if (n < length) memset(buf + n, 0, length - n);
     g_vreads++;

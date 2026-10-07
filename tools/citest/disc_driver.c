@@ -19,6 +19,9 @@
  *   bybuild              "bybuild <0|1>": disc_refused_by_build, of the last open
  *   table                (a split build) "table ok": soa_game_table set, as runtime/game.c sets it
  *
+ * A stop mid-run (exit 9) prints "stop words <words>" first: disc_stop_words,
+ * what runtime/android.c shows a player before the app closes.
+ *
  * Offsets and lengths are decimal. No guest, no clock: disc.c needs only the
  * frame counter, which is 0 here, and a disc_sys.c, which disc_check.py
  * writes: the fixture's system files built in, or none (--no-embed's). Built
@@ -49,6 +52,14 @@ const SoaGame* soa_game_table;
 static SoaGame g_table;
 #endif
 
+/* disc.c's stop hook: the words a player is shown, before the exit 9. */
+static void say_stop(void)
+{
+    char words[1200];
+    if (disc_stop_words(words, sizeof words)) printf("stop words %s\n", words);
+    fflush(stdout);
+}
+
 /* The file at `path` cut to `n` bytes, while disc.c may hold it open. */
 static int cut(const char* path, long long n)
 {
@@ -66,6 +77,7 @@ static int cut(const char* path, long long n)
 int main(void)
 {
     char line[2048], why[1024], hex[41];
+    disc_set_stop_hook(say_stop);
     while (fgets(line, sizeof line, stdin)) {
         char cmd[16] = {0}, arg[sizeof line] = {0}; /* a path, never longer than its line */
         unsigned long long off = 0, len = 0;

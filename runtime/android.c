@@ -117,14 +117,17 @@ static void logs_end(void)
 }
 
 _Noreturn void __real__exit(int status);
+static void stopped_box(void); /* below: why disc.c stopped a run mid-play, on the screen */
 
 /* Once, from whichever thread gets here first; a second caller waits for its
- * _exit rather than closing what the first is draining. */
+ * _exit rather than closing what the first is draining. An exit 9 is disc.c's
+ * stop, whose box comes first (or --check-disc's verdict, which has no words). */
 static _Noreturn void finish(int rc)
 {
     static atomic_flag once = ATOMIC_FLAG_INIT;
     if (atomic_flag_test_and_set(&once))
         for (;;) pause();
+    if (rc == 9) stopped_box();
     fprintf(stderr, "[exit] %d\n", rc);
     logs_end();
     __real__exit(rc);
@@ -200,6 +203,8 @@ static struct {
     int check;        /* a check run: its boxes answered here; a refusal or a cancel ends it */
     int picker;       /* pick() may open the system's picker */
     int loaded;       /* a library is loaded in this process: the one installed */
+    char disc_name[256];  /* the disc as the player knows it, and the path */
+    char disc_path[1200]; /* the port opens it by, for the box a stop shows */
 } g;
 
 /* What SoaActivity.describe says of a picked file. */
@@ -292,6 +297,7 @@ static int first_line(const char* path, char* out, size_t cap)
 static JNIEnv* g_env;
 static jobject g_act; /* SoaActivity, held for the process: it is the only one (singleInstance) */
 static jmethodID g_pick, g_open, g_describe, g_release, g_tidy, g_status, g_error;
+static jmethodID g_msgbox; /* SDL's box, overridden, which stopped_box calls itself */
 static jfieldID g_destroyed;
 
 static _Noreturn void closed(void)
@@ -390,10 +396,11 @@ static int java_init(void)
     g_tidy = method(cls, "tidyGrants", "([Ljava/lang/String;)I");
     g_status = method(cls, "status", "(Ljava/lang/String;I)Z");
     g_error = method(cls, "lastError", "()Ljava/lang/String;");
+    g_msgbox = method(cls, "messageboxShowMessageBox", "(ILjava/lang/String;Ljava/lang/String;[I[I[Ljava/lang/String;[I)I");
     g_destroyed = (*g_env)->GetFieldID(g_env, cls, "destroyed", "Z");
     if (caught("destroyed")) g_destroyed = NULL;
     (*g_env)->DeleteLocalRef(g_env, cls);
-    return g_pick && g_open && g_describe && g_release && g_tidy && g_status && g_error && g_destroyed;
+    return g_pick && g_open && g_describe && g_release && g_tidy && g_status && g_error && g_msgbox && g_destroyed;
 }
 
 /* java_init failed: this APK's C and Java do not agree (a method renamed, or
@@ -633,6 +640,59 @@ static int box(const char* text, const char* const* buttons, int n)
     }
     fprintf(stderr, "[import] answered: %s\n", buttons[id - 1]);
     return id - 1;
+}
+
+/* Whether path is a copy the import made, in noBackupFilesDir's copy/. */
+static int import_copy_path(const char* path)
+{
+    size_t n = strlen(g.nb);
+    return n && !strncmp(path, g.nb, n) && !strncmp(path + n, "/copy/", 6);
+}
+
+/* A run disc.c stopped mid-play (exit 9: a read that failed, a damaged
+ * block), said on the screen before the app closes: disc_stop_words, the disc
+ * named as the player picked it. A damaged disc is forgotten first, disc.txt
+ * and the app's copy of it if it was copied, so the next launch asks for one
+ * rather than stopping at the same place again. The box is SoaActivity's,
+ * called from this thread, attached to the VM if it was not: SDL's own box
+ * would work SDL's input state from a thread that is not the window's. A
+ * check run logs the box and forgets nothing. */
+static void stopped_box(void)
+{
+    static char words[1200], text[1500], flat[1600], txt[1100];
+    const char* again = "";
+    const jint flag = SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, id = 1;
+    jstring title, message, close1;
+    jintArray flags, ids;
+    jobjectArray texts;
+    JNIEnv* env;
+    int kind = disc_stop_words(words, sizeof words);
+    if (kind == DISC_STOP_NONE) return;
+    if (g.disc_path[0] && g.disc_name[0]) import_name_in(words, sizeof words, g.disc_path, g.disc_name);
+    if (kind == DISC_STOP_DAMAGED && !g.check) {
+        snprintf(txt, sizeof txt, "%s/disc.txt", g.nb);
+        if (unlink(txt) == 0 || errno == ENOENT) again = "\n\nWhen you open the app again, it asks for the disc.";
+        if (import_copy_path(g.disc_path) && unlink(g.disc_path) == 0)
+            fprintf(stderr, "[android] removed %s, the damaged copy\n", g.disc_path);
+    }
+    snprintf(text, sizeof text, "The game stopped.\n\n%s%s", words, again);
+    whole_utf8(text);
+    one_line(text, flat, sizeof flat);
+    fprintf(stderr, "[android] box: %s\n", flat);
+    if (g.check || !g_act || !g_msgbox || !(env = (JNIEnv*)SDL_GetAndroidJNIEnv())) return;
+    title = (*env)->NewStringUTF(env, TITLE);
+    message = (*env)->NewStringUTF(env, text);
+    close1 = (*env)->NewStringUTF(env, "Close");
+    flags = (*env)->NewIntArray(env, 1);
+    ids = (*env)->NewIntArray(env, 1);
+    texts = close1 ? (*env)->NewObjectArray(env, 1, (*env)->GetObjectClass(env, close1), close1) : NULL;
+    if (title && message && flags && ids && texts) {
+        (*env)->SetIntArrayRegion(env, flags, 0, 1, &flag);
+        (*env)->SetIntArrayRegion(env, ids, 0, 1, &id);
+        (*env)->CallIntMethod(env, g_act, g_msgbox, (jint)SDL_MESSAGEBOX_ERROR, title, message, flags, ids, texts,
+                              (jintArray)NULL);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
 /* A picked file refused, by the caller, who has closed its descriptor and let
@@ -1270,6 +1330,7 @@ static const char* disc(int forced, char* path, size_t pcap)
         works = stored_disc(&st, !forced, held, sizeof held, &held_fd, why, sizeof why) == 0;
         if (works && !forced) {
             snprintf(path, pcap, "%s", held);
+            snprintf(g.disc_name, sizeof g.disc_name, "%s", st.name);
             return st.uri;
         }
         if (!works) {
@@ -1294,6 +1355,7 @@ static const char* disc(int forced, char* path, size_t pcap)
             if (a == 1) finish(0);
             if (a == keep) {
                 snprintf(path, pcap, "%s", held);
+                snprintf(g.disc_name, sizeof g.disc_name, "%s", st.name);
                 return st.uri;
             }
             if (a == lib) {
@@ -1312,6 +1374,7 @@ static const char* disc(int forced, char* path, size_t pcap)
         r = take_disc(uri, &d, &st, path, pcap, why, sizeof why);
         if (r > 0) {
             if (held_fd >= 0) close(held_fd);
+            snprintf(g.disc_name, sizeof g.disc_name, "%s", d.name);
             return uri;
         }
         if (r < 0) {
@@ -1407,6 +1470,7 @@ static _Noreturn void run(int argc, char** argv, char* disc_path, const char* di
     static char* args[64];
     char ini[1100], why[600];
     int n = 0, i;
+    snprintf(g.disc_path, sizeof g.disc_path, "%s", disc_path);
     tidy(disc_uri, disc_path);
     snprintf(ini, sizeof ini, "%s/soa.ini", g.root);
     if (!g.check && !exists(ini)) {

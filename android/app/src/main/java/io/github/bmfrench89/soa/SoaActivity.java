@@ -735,6 +735,10 @@ public class SoaActivity extends SDLActivity {
                     return;
                 }
             }
+            // A box waits for the player, so the screen may sleep meanwhile:
+            // SDL keeps it on once its video starts, and the box a stop
+            // mid-play shows (runtime/android.c) comes after that.
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             if (isFinishing()) {
                 answerBox(token, -1);
                 return;

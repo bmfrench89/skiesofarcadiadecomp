@@ -473,6 +473,14 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
         "does not match its SHA-1" in err and victim in err and "re-import" in err,
         f"the hash check stops the run, exit 9, naming the file: {err.strip()[-300:]!r}",
     )
+    words = [ln[len("stop words ") :] for ln in lines if ln.startswith("stop words ")]
+    c.check(
+        len(words) == 1
+        and "is damaged: the part of it holding" in words[0]
+        and victim in words[0]
+        and words[0].endswith("re-import with python tools/extract.py <your disc dump> --store."),
+        f"and the words a player is shown say so (disc_stop_words): {words}",
+    )
     lines, err = drive_checked(
         c,
         "the hash check, in a phone's words",
@@ -488,6 +496,15 @@ def check_store(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) -> Non
         and "copy it to this phone again" in stopped[0]
         and not pc_words(stopped[0]),
         f"and in a phone's words: {stopped[:1]}",
+    )
+    words = [ln[len("stop words ") :] for ln in lines if ln.startswith("stop words ")]
+    c.check(
+        len(words) == 1
+        and "is damaged: the part of it holding" in words[0]
+        and victim in words[0]
+        and words[0].endswith("copy it to this phone again, or make it again on your PC.")
+        and not pc_words(words[0]),
+        f"and the words a phone shows a player, in a phone's words: {words}",
     )
 
     data = path.read_bytes()
@@ -782,6 +799,10 @@ def check_truncated(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) ->
         f"cannot read {pulled} at 0x{at1:X} (+{min(32, size - at1)} bytes): it is {keep} bytes "
         f"now, and was {size} when it was opened; was its storage removed?"
     )
+    shown = (  # disc_stop_words: what runtime/android.c puts in a box
+        f"{pulled} could not be read: it is {keep} bytes now, and was {size} when it was "
+        "opened. Was its storage removed?"
+    )
     for reader in ("serve", "peek"):  # the drive's read, and the census's
         pulled.write_bytes(fx.image)
         lines, err = drive_checked(
@@ -804,6 +825,10 @@ def check_truncated(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) ->
             said in err and "bytes of zeros" not in err,
             f"{reader}: a read past the cut stops the run, exit 9: {err.strip()[-300:]!r}",
         )
+        c.check(
+            [ln[len("stop words ") :] for ln in lines if ln.startswith("stop words ")] == [shown],
+            f"{reader}: and the words a player is shown: {[ln[len('stop words ') :] for ln in lines if ln.startswith('stop words ')]}",
+        )
 
     if os.name != "nt":
         pulled.write_bytes(fx.image)
@@ -820,6 +845,11 @@ def check_truncated(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) ->
             c.check(
                 said.replace(str(pulled), f"/proc/self/fd/{fd}") in err,
                 f"cut under its descriptor, exit 9: {err.strip()[-300:]!r}",
+            )
+            c.check(
+                [ln[len("stop words ") :] for ln in lines if ln.startswith("stop words ")]
+                == [shown.replace(str(pulled), f"/proc/self/fd/{fd}")],
+                f"and the words a player is shown, naming the descriptor: {[ln[len('stop words ') :] for ln in lines if ln.startswith('stop words ')]}",
             )
         finally:
             os.close(fd)

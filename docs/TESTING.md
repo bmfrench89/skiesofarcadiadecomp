@@ -400,13 +400,17 @@ system's reason; a store with no suffix known by its contents and identified
 through N; a pipe refused as a stream, by `disc_open` and `disc_identify` alike;
 `SOA_DISC_VERIFY=iso` or `all` on a descriptor refused, naming the fix
 (`SOA_DISC_VERIFY=iso:<path>`), with which it opens and compares; and a file cut
-short under its descriptor, exit 9. So it counts 156 on Windows (MSVC, clang-cl
-and mingw), 169 on Linux as an ordinary user, and 168 as root, where opening the
+short under its descriptor, exit 9. The words a player is shown for a stop
+(`disc_stop_words`, which the driver prints from disc.c's stop hook) are held
+for the damaged store, in the PC's words and a phone's, and for an ISO cut
+while open, by name and under its descriptor; not for a cut store or the
+out-of-memory stops. So it counts 160 on Windows (MSVC, clang-cl
+and mingw), 174 on Linux as an ordinary user, and 173 as root, where opening the
 path again is not refused, so the case that wants it refused is left out, and
 the run says so:
 
 ```
-disc check: 156 passed, 0 failed (12 files, 1212416 bytes)
+disc check: 160 passed, 0 failed (12 files, 1212416 bytes)
   refused bad boot magic: broken0.iso is not a GameCube disc image (boot magic 00000000, not C2339F3D)
   refused another game id: broken1.iso is GTSP01, not GTSE01: this port is the North American GameCube release only (European and Japanes
   ...
@@ -609,7 +613,7 @@ tools/tests/test_seam.py` then holds its libraries to `config/seam.txt`.
 cases an ordinary user, since root opens a file made unreadable. As one
 (`useradd -m tester`), `su tester -c "cd /work && python3
 tools/citest/disc_check.py --cc gcc --out /tmp/dc_l12d"` printed
-`disc check: 169 passed, 0 failed` on 2026-10-06 (168 as root, where opening the
+`disc check: 174 passed, 0 failed` on 2026-10-06 (173 as root, where opening the
 path again is not refused, so the case that wants it refused is left out, as the
 run says), and `su tester -c "cd /work && SOA_CC=gcc PYTHONPATH=tools/citest
 python3 -m pytest -p noskip -p no:cacheprovider tools/tests/test_import.py -q"`
@@ -843,9 +847,29 @@ python tools/android.py player --timeout 900 --reimport --tap "Keep this one" --
   the disc's check before the run is made without the switch, then `[disc] block
   21762 of /proc/self/fd/97 (0x55020000) does not match its SHA-1:
   sound/stv73.samp, sound/tone.info; the store is damaged: copy it to this phone
-  again, or make it again on your PC` and `[exit] 9`. **Mutation:** with
-  `SOA_DISC_VERIFY=0` as well there is no block line, and the game hangs until
-  the watchdog's `[exit] 5`.
+  again, or make it again on your PC`, `[android] box: The game stopped. /
+  GEAE8P.soadisc is damaged: …` (since L12d's stop box; a check run logs the box
+  a player is shown) and `[exit] 9`. **Mutation:** with `SOA_DISC_VERIFY=0` as
+  well there is no block line, and the game hangs until the watchdog's
+  `[exit] 5`. The box itself, on the screen, with a byte of the staged store
+  damaged for real (the low bit at file offset 1427257576: the payload's
+  0xF5000 plus disc offset 0x5502E8E8, in `sound/tone.info`, which reads 00):
+
+  ```
+  python -c "open('build/byte01.bin','wb').write(bytes([1]))"
+  adb -s emulator-5556 push build/byte01.bin /data/local/tmp/byte.bin
+  adb -s emulator-5556 shell dd if=/data/local/tmp/byte.bin of=/sdcard/Download/GEAE8P.soadisc bs=1 seek=1427257576 count=1 conv=notrunc
+  adb -s emulator-5556 shell am start -W -n io.github.bmfrench89.soa.dev/io.github.bmfrench89.soa.SoaActivity
+  ```
+
+  The box shows "The game stopped." and the same words, then "When you open the
+  app again, it asks for the disc."; `adb shell dumpsys window windows` lists no
+  `KEEP_SCREEN_ON` while it waits; Close (`adb shell input tap` at its centre,
+  from `uiautomator dump`) ends the run `[exit] 9`, with `no_backup/disc.txt`
+  gone. Put the byte back the same way from a file holding 0, check the store's
+  SHA-256 against the PC's, and check 6 again picks it, `disc.txt` back. The
+  first version's mutation, an APK whose `finish()` never calls the box, logs
+  no box line.
 - **Check 8, the grant outlives a restart.** `reboot` took 39 s and must print
   `[android] emulator-5556 (soa_x86_64) restarted, unlocked, and its screen held
   on`; it refuses any device but the AVD `soa_x86_64`, and only a new boot id
@@ -950,10 +974,11 @@ bless: tests pin the checker's, the disc layer's and some of the copy's
 refusals, and nothing but the code the boxes and `android.c`'s own; a page for
 that look is at `build/android-review/index.html`); a whole disc copied and
 then played, and a Cancel during a copy; the box an app update opens when the
-library no longer fits; three of the design's mutations (FINDINGS "L12d"); a
-box for a run stopped mid-play (exit 9 closes the app with its reason in the
-log alone); card import and export through the picker (proposed as L12h); a
-CI build of the APK; and a cloud provider's files.
+library no longer fits; three of the design's mutations (FINDINGS "L12d");
+of the stop box, a damaged copy the app made, a read that fails on the
+device, and the out-of-memory stops (FINDINGS "L12d's stop box"); card import
+and export through the picker (proposed as L12h); a CI build of the APK; and
+a cloud provider's files.
 
 If MSVC cannot be found, every step says so on stderr — `MSVC not found;
 skipping compile` — and returns 1 rather than pretending it did the work.
