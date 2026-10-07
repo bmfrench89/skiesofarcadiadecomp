@@ -162,6 +162,12 @@ The owner answered four questions, with the research behind them summarised in t
   this repository holds, rather than built once by CI and published; **its licences shipped with their
   texts**, though not all are BSD; and **L12's Done on the Thor with a library built through it**, so that
   one session proves R5 on a phone.
+- **R5's design, settled the same day** after four adversarial reviews, is
+  [specs/android-sysroot.md](specs/android-sysroot.md), in four slices: R5-0, the package fixed; R5a, the
+  sysroot's tool and then the route; R5b, the player's build and the package; R5c, Setup's checkbox and
+  words, which wait for the owner's look. **R5-0 is done** (FINDINGS "R5-0"): since L10 a package's build
+  had stopped at `import fetch_sdl`, and a package CI made did not carry the commit's `baked=`. Next:
+  R5a part 1, `tools/fetch_android_sysroot.py`.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
@@ -355,7 +361,8 @@ changed since 24d9235).
 | [specs/portability.md](specs/portability.md) | L0 (done) to L12 | Reviewed twice, then checked with this file |
 | [specs/gpu-backend.md](specs/gpu-backend.md) | C5a-C5c (proposed for PLAN.md Track C), V0 to V12, and the gate | Reviewed twice, then checked with this file |
 | [specs/distribution.md](specs/distribution.md) | R1 to R5: the runtime package that builds the game on the player's machine (G3's route) | Written 2026-10-04, reviewed once against the code the same day |
-| [specs/android.md](specs/android.md) | L12a to L12g with R5: the Android shell, and the game library from the PC | Written 2026-10-05, reviewed once against the code the same day |
+| [specs/android.md](specs/android.md) | L12a to L12g: the Android shell, and the game library from the PC (R5's own slices are android-sysroot.md's) | Written 2026-10-05, reviewed once against the code the same day |
+| [specs/android-sysroot.md](specs/android-sysroot.md) | R5-0 to R5c: the phone's game library built on the player's PC, through llvm-mingw and this repository's own Android sysroot (D-31, D-34 to D-36) | Settled 2026-10-07 after four adversarial reviews; R5-0 done |
 | [specs/now.md](specs/now.md) | The first rows after the pivot | **Superseded**: every row has landed or is replaced (B3) |
 | `docs/ROADMAP.md`, `HANDOFF.md`, `docs/FINDINGS.md` | What is done, what is known, what was tried | Unchanged in role |
 
@@ -677,7 +684,8 @@ count kept before it starts.
   **L12d is done** (FINDINGS "L12d"): on the emulator the first run imports the game library and the disc
   through the app's own picker, each refusal in the player's words, the disc read in place through its
   descriptor; since its stop box, a run the disc layer stops mid-play (exit 9) says why on the screen. **Next: L12's Done on the
-  Thor,** which needs the owner; without the owner, R5's own Android sysroot, as the owner answered (§0).
+  Thor,** which needs the owner; without the owner, R5's own Android sysroot, as the owner answered (§0):
+  R5-0 is done, and R5a is next ([specs/android-sysroot.md](specs/android-sysroot.md)).
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

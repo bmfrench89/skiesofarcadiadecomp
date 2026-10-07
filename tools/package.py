@@ -3,6 +3,7 @@
 
     python tools/package.py stage <folder>
     python tools/package.py --out <dir> [--version V]   # the release zip
+    python tools/package.py check <package folder> [--commit REV]
 
 specs/distribution.md R3, whose staging R2 tests with. --out stages into
 <dir>/soa-<version>-windows-x64/, zips it beside, and writes the zip's
@@ -42,7 +43,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import fetch_gpu  # noqa: E402
 import fetch_mingw  # noqa: E402
-from soa import toolchain  # noqa: E402
+import player_build  # noqa: E402
+from soa import seam, toolchain  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor"
@@ -53,8 +55,16 @@ PYTHON_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/{PYTHON_ZIP}"
 PYTHON_SHA256 = "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310"
 
 # The tools the build runs (tools/player_build.py and what it imports), and
-# soa/ whole.
-TOOLS = ("player_build.py", "recompile.py", "extract.py", "decomp.py", "fetch_gpu.py")
+# soa/ whole. recompile.py imports fetch_sdl at its top (L10): a package
+# without it stopped there, which test_package.py now holds.
+TOOLS = (
+    "player_build.py",
+    "recompile.py",
+    "extract.py",
+    "decomp.py",
+    "fetch_gpu.py",
+    "fetch_sdl.py",
+)
 TOP = ("README.md", "LICENSE", "NOTICE", "pyproject.toml")
 MOD_FILES = ("mod.c", "mod.ini", "patches.txt")
 # The licences that are not in what the package carries already, fetched at
@@ -143,16 +153,9 @@ def copy_tree(src: Path, dest: Path, suffixes: tuple[str, ...] | None = None) ->
     return n
 
 
-def stage(dest: Path) -> None:
-    if dest.exists() and any(dest.iterdir()):
-        raise SystemExit(f"error: {dest} is not empty")
-    bad = fetch_mingw.verify(VENDOR) + fetch_gpu.verify(VENDOR)
-    if bad:
-        raise SystemExit(f"error: vendor/ is not as recorded ({bad[0]})")
-    with zipfile.ZipFile(python_zip()) as z:
-        z.extractall(dest / "python")
-    shutil.copytree(VENDOR / "llvm-mingw", dest / "toolchain", symlinks=True)
-    source = dest / "source"
+def stage_source(source: Path) -> None:
+    """A package's source/: runtime/, config/, the tools the build runs with
+    soa/ whole, the top-level texts, and each mod's text."""
     copy_tree(ROOT / "runtime", source / "runtime")
     copy_tree(ROOT / "config", source / "config")
     copy_tree(ROOT / "tools" / "soa", source / "tools" / "soa", (".py",))
@@ -166,6 +169,19 @@ def stage(dest: Path) -> None:
                 if (mod / name).is_file():
                     (source / folder / mod.name).mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(mod / name, source / folder / mod.name / name)
+
+
+def stage(dest: Path) -> None:
+    if dest.exists() and any(dest.iterdir()):
+        raise SystemExit(f"error: {dest} is not empty")
+    bad = fetch_mingw.verify(VENDOR) + fetch_gpu.verify(VENDOR)
+    if bad:
+        raise SystemExit(f"error: vendor/ is not as recorded ({bad[0]})")
+    with zipfile.ZipFile(python_zip()) as z:
+        z.extractall(dest / "python")
+    shutil.copytree(VENDOR / "llvm-mingw", dest / "toolchain", symlinks=True)
+    source = dest / "source"
+    stage_source(source)
     for name in ("vulkan-headers", "glslang"):
         shutil.copytree(VENDOR / name, source / "vendor" / name)
     shutil.copyfile(VENDOR / fetch_gpu.RECORD, source / "vendor" / fetch_gpu.RECORD)
@@ -194,6 +210,59 @@ def licenses(dest: Path) -> None:
         if digest != pin:
             raise SystemExit(f"error: {url} has sha256 {digest}, not the pinned {pin}")
         shutil.copyfile(path, out / name)
+
+
+def git_blob(rev: str, name: str) -> bytes:
+    return subprocess.run(
+        ["git", "cat-file", "blob", f"{rev}:{name}"], cwd=ROOT, capture_output=True, check=True
+    ).stdout
+
+
+def commit_inputs(rev: str = "HEAD") -> dict[str, str]:
+    """player_build.inputs_record's, of a commit rather than a folder: each
+    BAKED file as git holds it at `rev`, a folder's *.py as inputs_record
+    takes them, read with CRLF as LF as it reads them."""
+    out: dict[str, str] = {}
+    for rel in player_build.BAKED:
+        names = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", rev, "--", rel],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        for name in names:
+            if name == rel or name.endswith(".py"):
+                blob = git_blob(rev, name).replace(b"\r\n", b"\n")
+                out[name] = hashlib.sha256(blob).hexdigest()
+    return out
+
+
+def check(folder: Path, rev: str = "HEAD") -> int:
+    """A package's baked inputs held to a commit's (R5-0): baked=, which its
+    soa.exe and libsoa_game.so will carry and a phone holds the library to,
+    must be the commit's whatever the checkout did to line endings."""
+    source = folder / "source"
+    if not source.is_dir():
+        print(f"error: {folder} holds no source/: not a package")
+        return 1
+    got, want = player_build.inputs_record(source), commit_inputs(rev)
+    if got == want:
+        a, b = seam.baked_digest(got), seam.baked_digest(want)
+        print(f"baked inputs of {source}: {a[:12]}, and of {rev}: {b[:12]}, the same")
+        return 0
+    name = next(n for n in sorted(set(got) | set(want)) if got.get(n) != want.get(n))
+    if name not in got:
+        print(f"{source}: {name} is missing; the commit has it")
+    elif name not in want:
+        print(f"{source}: {name} is not in the commit")
+    else:
+        ours, theirs = (source / name).read_bytes(), git_blob(rev, name)
+        hint = ""
+        if ours.replace(b"\r", b"") == theirs.replace(b"\r", b""):
+            hint = " (the checkout converted its line endings?)"
+        print(f"{source}: {name} is not the commit's{hint}")
+    return 1
 
 
 def version() -> str:
@@ -242,7 +311,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("stage", help="lay a package out in an empty folder")
     s.add_argument("dest", type=Path)
+    c = sub.add_parser("check", help="a package's baked inputs against a commit's")
+    c.add_argument("folder", type=Path)
+    c.add_argument("--commit", default="HEAD", help="the commit it was made from (default HEAD)")
     args = ap.parse_args(argv)
+    if args.cmd == "check":
+        return check(args.folder.resolve(), args.commit)
     if args.cmd == "stage":
         stage(args.dest.resolve())
     elif args.out:

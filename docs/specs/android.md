@@ -256,6 +256,12 @@ rewritten):
 
 ### 3.4 The game library on the player's PC (R5)
 
+*Settled 2026-10-07 in [android-sysroot.md](android-sysroot.md) (D-34 to D-36), which owns R5's slices
+from R5-0 on and supersedes this section where they differ: the sysroot is built where it is used, from
+pinned bionic sources, by the script every machine runs, not by CI; the stub libraries come from
+`config/seam.txt` at each link; its licences ship with their texts. R5a part 1 rewrites this section
+from it.*
+
 - **Two profiles,** `android-arm64` and `android-x86_64` (the emulator), in `tools/soa/toolchain.py`:
   - `--target=aarch64-linux-android33` (or `x86_64-...`), `-fPIC`, `-fvisibility=hidden`;
   - the gnu profile's `-ffp-contract=off -fno-strict-aliasing -fwrapv`;

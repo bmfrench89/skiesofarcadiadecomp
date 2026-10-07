@@ -120,7 +120,10 @@ def extract(image: Path, out: Path) -> None:
 
 def inputs_record(source: Path | None = None) -> dict[str, str]:
     """sha256 of every input the translation bakes in, by path: under SOURCE,
-    read when called, not when this module was imported."""
+    read when called, not when this module was imported. Each is read with
+    CRLF as LF, since a checkout's line endings are not the commit's: GitHub's
+    Windows runner checks out with core.autocrlf on, and every soa.exe and
+    libsoa_game.so carries the digest, which a phone holds the library to."""
     source = SOURCE if source is None else source
     out: dict[str, str] = {}
     for rel in BAKED:
@@ -128,7 +131,8 @@ def inputs_record(source: Path | None = None) -> dict[str, str]:
         files = sorted(p.rglob("*.py")) if p.is_dir() else [p]
         for f in files:
             if f.exists():
-                out[f.relative_to(source).as_posix()] = hashlib.sha256(f.read_bytes()).hexdigest()
+                data = f.read_bytes().replace(b"\r\n", b"\n")
+                out[f.relative_to(source).as_posix()] = hashlib.sha256(data).hexdigest()
     return out
 
 

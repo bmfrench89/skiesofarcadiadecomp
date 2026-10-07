@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1436 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1439 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1436 |
+| Python tests | 1439 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,13 +417,18 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-06)
+## Where the last session stopped (2026-10-07)
 
-**The state at the stop (2026-10-06, after L12d):** L10 (d6d64aa), L12a
-(75d5ce2), L12b (316e50d), L12c (64bcd85) and L12d (6e39f13 and abec5f6)
-are pushed, and the box a stop mid-play shows (with this section); read
-CI for the last. The SOA emulator was shut down; TESTING.md's Android
-recipe starts it again. Its data image keeps the final debug APK; the
+**The state at the stop (2026-10-07, after R5-0):** L10 (d6d64aa), L12a
+(75d5ce2), L12b (316e50d), L12c (64bcd85), L12d (6e39f13 and abec5f6),
+the box a stop mid-play shows (5acabbd), R5's gate (6d5916c) and R5-0
+(with this section) are pushed; read CI for the last. R5's design is
+`docs/specs/android-sysroot.md`. **R5-0 moved `baked=`** (705f401d4dcd to
+57f744e5121c here, FINDINGS "R5-0"), so the emulator's APK and library
+are another release's: its next run starts with `android.py build` and
+`install`, and the x86-64 library rebuilt and pushed. The SOA emulator
+was shut down; TESTING.md's Android recipe starts it again. Its data
+image keeps the final debug APK; the
 store staged in Download, which `no_backup/disc.txt` names and which is
 read in place; the x86-64 library in `no_backup/` (and staged in
 Download); no ISO, since the copy `push-disc` left at the end of L12d's
@@ -751,10 +756,15 @@ C5c) is now done.
    the Dangral base, and the owner's session with a pad), which needs the
    owner and the phone. Without them, the owner's answer of 2026-10-06
    (PLAN-NEXT §0) puts R5's own Android sysroot next, so Setup can build
-   the phone's library without the NDK; where L12g (mods on the emulator)
-   and the proposed L12h (card import and export through the picker) come
-   after it is still the owner's. D-33 (the package name and release key)
-   is still the owner's, and comes before anyone else installs it.
+   the phone's library without the NDK. Its design was settled on
+   2026-10-07 in `docs/specs/android-sysroot.md`, to the owner's answers
+   D-34 to D-36, and its first slice, R5-0 (the package's build had
+   stopped at `import fetch_sdl` since L10), is done (FINDINGS "R5-0");
+   R5a part 1, `tools/fetch_android_sysroot.py`, is next. Where L12g
+   (mods on the emulator) and the proposed L12h (card import and export
+   through the picker) come after it is still the owner's. D-33 (the
+   package name and release key) is still the owner's, and comes before
+   anyone else installs it.
    Still open for the owner, and not blocking: whether a
    Steam Deck or Linux PC exists for the optional Proton session. `tools/citest/queue_check.py` (16 s) is worth a run
    after any change to `gxr.c`'s queue. Two

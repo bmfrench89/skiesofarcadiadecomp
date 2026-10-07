@@ -3,8 +3,10 @@ name: Release
 # The player's package (specs/distribution.md R3): built from this commit and
 # the pinned downloads -- the embeddable CPython, llvm-mingw, Vulkan-Headers
 # and glslang -- with no translated or decompiled game code and no game data
-# (SPEC section 2 rule 5), checked by guard.py --tree once unzipped, and left
-# as a DRAFT release for the owner to publish. On a version tag, and by hand:
+# (SPEC section 2 rule 5), checked by guard.py --tree once unzipped, its build
+# imported by its own python and its baked inputs held to this commit's
+# (R5-0), and left as a DRAFT release for the owner to publish. On a version
+# tag, and by hand:
 #   gh workflow run release.yml --ref <branch>
 # Each step runs only if every step before it passed, so a package the guard
 # refuses is never drafted.
@@ -21,6 +23,14 @@ jobs:
     name: Package, guard and draft
     runs-on: windows-latest
     steps:
+      # R5-0: the commit's bytes, not the runner's line endings. Git on this
+      # runner converts LF to CRLF on checkout, so every package carried CRLF
+      # files; baked= now reads CRLF as LF, and this keeps the files the
+      # commit's as well. The second line prints where each setting comes from.
+      - name: Check out without converting line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --show-origin --get-all core.autocrlf
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # git describe names a version from the tags
@@ -61,14 +71,21 @@ jobs:
 
       # Then Setup.exe's own checks in that folder, which must pass: they
       # look for the package's python, build script and compiler, so a
-      # package laid out otherwise is refused before a player sees it.
-      - name: The guard, over the package unzipped, and Setup's checks there
+      # package laid out otherwise is refused before a player sees it. Then
+      # (R5-0) the package's python imports what its build runs, which a
+      # package without fetch_sdl.py did not, and package.py check holds its
+      # baked inputs to this commit's: baked= is made of them.
+      - name: The guard, over the package unzipped, Setup's checks, the build's imports and baked inputs
         run: |
           python -c "import glob, zipfile; zipfile.ZipFile(glob.glob('dist/*.zip')[0]).extractall('dist/check')"
           $pkg = (Get-ChildItem dist/check -Directory)[0].FullName
           python tools/guard.py --tree $pkg
           if ($LASTEXITCODE -ne 0) { exit 1 }
           & "$pkg\Setup.exe" --check | Write-Output
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$pkg\python\python.exe" -I -c "import sys; sys.path.insert(0, r'$pkg\source\tools'); import recompile, player_build, extract, decomp, fetch_gpu, fetch_sdl; print('the build imports')"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python tools/package.py check $pkg
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: A draft release, for the owner to publish

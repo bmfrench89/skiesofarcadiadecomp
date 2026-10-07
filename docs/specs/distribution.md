@@ -288,6 +288,15 @@ package carries, and llvm-mingw's and glslang's fetched at their tags, pinned), 
 `guard.py --tree` also allows `python/`, the embeddable CPython, whose DLLs pass the size limit;
 its DOL check reads offset 0 of every file and every 32-byte step of the package's own files.*
 
+*R5-0, 2026-10-07 (FINDINGS "R5-0"): two defects fixed. Since L10 (d6d64aa, 2026-10-05)
+`recompile.py` had imported `fetch_sdl`, which `package.py` did not stage, so a package's build stopped
+at that line; and the release runner's Git turns LF into CRLF on checkout, so once L12a (75d5ce2) put
+the baked inputs' digest into every build's record, a CI package's `baked=` was not the commit's.
+`TOOLS` now holds `fetch_sdl.py`; the digest reads CRLF as LF; `release.yml` checks out with
+`core.autocrlf false`, has the unzipped package's own python import the build, and runs
+`python tools/package.py check <package folder> [--commit REV]`, which holds the package's baked
+inputs to the commit's.*
+
 *A day to several days. Rebuild: none. Prerequisites: R2. Files: `tools/package.py` (new), `tools/guard.py`
 (`--tree <dir>`), `.github/workflows/release.yml` (new).*
 
@@ -341,7 +350,15 @@ from scratch (§3.8). The build runs in a job object, so closing Setup ends it. 
 <folder>]` exits with what the checks found, and `--disc --build --play` drives the window with no
 hands.*
 
+*R5-0, 2026-10-07: a package staged between L10 (2026-10-05) and R5-0 could not build, its
+`recompile.py` stopping at `import fetch_sdl`; the owner's run takes one staged since (FINDINGS
+"R5-0").*
+
 ### R5. Android: a runtime-only APK and a game library from the PC
+
+*Settled 2026-10-07 in [android-sysroot.md](android-sysroot.md) (D-34 to D-36), which owns R5's
+slices from then, R5-0 to R5c, and supersedes this section where they differ. R5-0 is done (FINDINGS
+"R5-0").*
 
 *Specified with L12; recorded here so L12 does not miss what route C2 needs. Prerequisites: L12, R2.*
 

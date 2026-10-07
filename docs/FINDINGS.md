@@ -7752,3 +7752,67 @@ the driver's.** 2026-10-04.
   itself, which R5 makes take this route.
 - **The tests** are 1436 in 89 files, measured four ways: 1395 passed and 41 skipped here; 1376 and 42
   without capstone; 986 and 450 without MSVC; 967 and 451 without either. The full run took 784.73 s.
+
+**R5-0: the package builds again, and carries the commit's bytes.** 2026-10-07.
+
+- **What it is:** the first slice of R5's design, settled the same day after four adversarial reviews and committed
+  with this entry as `docs/specs/android-sysroot.md`, which owns R5's slices from now on (PLAN-NEXT §0). It fixes
+  two defects in the player's package that those reviews found, before R5 builds on the package.
+- **A package's build stopped at an import** [V]: `recompile.py` has imported `fetch_sdl` at its top since L10
+  (d6d64aa), and `package.TOOLS` never gained it, so the `recompile.py` a package's `player_build.py` starts stopped
+  at that line. R4's commit (0223b3a) came before L10, so its Done held; every package staged after L10 and before
+  this entry could not build. `TOOLS` now holds `fetch_sdl.py`. `test_the_staged_tools_import_what_the_build_imports`
+  stages `source/` through `package.stage_source`, now factored out of `stage()`, then imports what the build runs
+  (`player_build`, `recompile`, `extract`) and every module `TOOLS` stages from it, with `-I -S` from the test's own
+  folder, under the package's own python where `vendor/` has its zip and else under this one; any module loaded from
+  outside the stage but the interpreter's own library fails it. With `fetch_sdl.py` taken out of `TOOLS` it fails,
+  `ModuleNotFoundError: No module named 'fetch_sdl'`, under the embeddable CPython and under this PC's python alike.
+- **A package CI made did not carry the commit's `baked=`** [V]: GitHub's Windows runner checks out with
+  `core.autocrlf true`, which Git for Windows sets system-wide (its log: `file:C:/Program Files/Git/etc/gitconfig
+  true`; this PC's own `.gitconfig` overrides it), the repository has no `.gitattributes`, and `inputs_record`
+  hashed raw bytes. The zip CI drafted at 0223b3a, which a review found and this entry measured again: its
+  `tools/recompile.py` is 25,436 bytes with 589 CRLF, git's 24,847 with none, and 10 of its 18 baked files differ
+  from the commit's, so its digest would be dc23fd1df793 where the commit's is 862f5c24caf4. Since L12a (75d5ce2),
+  after that zip, every build's record carries the digest (recompile.py writes `game_table.c` "in every build"),
+  and from R5 a phone refuses a library whose `baked=` is not its APK's. Now:
+  - `player_build.inputs_record` reads each file with CRLF as LF. `test_the_baked_digest_reads_crlf_as_lf`: two
+    trees, one LF and one CRLF, give one record, and a changed line still moves it; with the raw read put back it
+    fails.
+  - `release.yml` sets `core.autocrlf false` before checking out, and prints where each setting comes from.
+  - `python tools/package.py check <package folder> [--commit REV]` holds a package's baked inputs to the commit's,
+    read by `git ls-tree` and `git cat-file` with CRLF as LF. `release.yml` runs it over the unzipped package, after
+    the package's own python imports `recompile, player_build, extract, decomp, fetch_gpu, fetch_sdl`.
+    `test_a_package_s_baked_inputs_are_held_to_the_commit_s` writes a source from `git archive HEAD` of the baked
+    inputs (`core.autocrlf false`): it passes, and so it does with every line ending CRLF; a doubled CR (named, with
+    "(the checkout converted its line endings?)"), a changed byte, a file missing and one the commit lacks are each
+    refused by name. With a check that compares nothing it fails at the doubled CR; with the commit's side read raw,
+    at the commit's own files.
+- **`baked=` moved on this PC too** [V]: git stores eight of the 18 baked files with CRLF (`config/functions.tsv`,
+  `runtime/cpu.h`, `runtime/decomp_swap.c`, `tools/soa/dol.py`, `ppc/cfg.py`, `ppc/isa.py`, `recomp/emit.py`) or
+  mixed (`config/trace.txt`), so the digest here went from 705f401d4dcd to 57f744e5121c. The emulator's APK and
+  library are now another release's: its next run starts with `android.py build` and `install`, and the library
+  rebuilt and pushed.
+- **On this PC** [V]: `python tools/package.py stage build\r5-0\P` staged a package in 58 s. Its own CPython 3.14.8
+  (`P\python\python.exe -I -c "…import recompile, player_build, extract, decomp, fetch_gpu, fetch_sdl"`)
+  imported the build, and `package.py check` printed `baked inputs of …\P\source: 57f744e5121c, and of HEAD:
+  57f744e5121c, the same`. With `P\source\tools\recompile.py` rewritten with CRLF ends (39,009 bytes to 39,942)
+  it still passed; with `inputs_record`'s normalisation taken out it exited 1, `…\P\source: config/functions.tsv
+  is not the commit's (the checkout converted its line endings?)`; with both put back it passed. R2's recipe from
+  the package, with `PATH` holding only `P\python`, built the owner's disc into `build\r5-0\R` in 87 s, every
+  unit translated again and the GPU backend built in, ending `[build] done soa.exe sha256 6d0c88f9…`; the
+  checkout's `tools\player_build.py` built it into `build\r5-0\R2` in 97 s, with the same hash. `build\r5-0` was
+  deleted after.
+- **On CI** [V]: `release.yml` on a scratch branch at the same tree (run 37661533080, 094a5e6), every step green:
+  the settings printed as `file:C:/Program Files/Git/etc/gitconfig true` and `file:C:/Users/runneradmin/.gitconfig
+  false`; the tests 1327 passed and 94 skipped in 337.44 s; the package 128,879,786 bytes; `guard.py --tree` over
+  its 5541 files; `the build imports`; and `baked inputs of …\soa-094a5e6-windows-x64\source: 57f744e5121c, and of
+  HEAD: 57f744e5121c, the same`, the digest this PC's tree gives. Downloaded, the zip's 18 baked files are the
+  commit's byte for byte, its `tools/recompile.py` 39,009 bytes with no CRLF. The draft and the branch were deleted
+  after; the drafts of c7ca5a2 and 0223b3a are earlier sessions' and stay.
+- **What differed from the design's text:** the import test also imports the build's three entry points by name,
+  so one dropped from `TOOLS` is still imported, and runs with `-S`, since a package's python has no
+  site-packages; the commit-side test writes its source with `git archive` rather than `git show`, and adds the
+  doubled-CR, missing and extra cases; and the by-hand CRLF refusal named `config/functions.tsv`, not
+  `tools/recompile.py`: stored with CRLF, it sorts first and differs too once the digest reads raw bytes.
+- **The tests** are 1439 in 89 files, measured four ways: 1398 passed and 41 skipped here; 1379 and 42
+  without capstone; 989 and 450 without MSVC; 970 and 451 without either. The full run took 792.94 s.

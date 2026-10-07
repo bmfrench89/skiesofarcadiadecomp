@@ -79,7 +79,8 @@ there). It draws the 23 reference frames exactly as MSVC's build does too (distr
 disc, extracts it, builds with llvm-mingw and no `src/`, and leaves `soa.exe`, the mods and `soa.ini`
 in the folder; `python tools/package.py stage <folder>` lays out the package that carries it (R2),
 and `python tools/package.py --out <dir>` zips it (R3), which `.github/workflows/release.yml` builds,
-checks with `python tools/guard.py --tree` and leaves as a draft release for the owner to publish.
+checks with `python tools/guard.py --tree` and `python tools/package.py check` (its baked inputs
+against the commit's, R5-0), and leaves as a draft release for the owner to publish.
 A player never types either: the package's `Setup.exe` (`tools/setup/`, R4) checks the folder,
 builds from the disc image they pick with no console window, and starts the game.
 `SOA_CLANG_CL` names the compiler; the Android NDK's
@@ -373,7 +374,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1436 tests; any that need a dump skip themselves
+python -m pytest                     # 1439 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

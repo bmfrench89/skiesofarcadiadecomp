@@ -166,6 +166,23 @@ def test_setups_rebuild_translates_again_when_nothing_moved(monkeypatch, tmp_pat
     assert "[build] translate: Rebuild asked for" in capsys.readouterr().out
 
 
+def test_the_baked_digest_reads_crlf_as_lf(tmp_path):
+    """R5-0: a checkout's line endings are not the commit's -- GitHub's
+    Windows runner checks out with core.autocrlf on -- and baked= is made of
+    this record, so the same files with CRLF endings make the same record,
+    while a changed line still moves it."""
+    lf, crlf = tmp_path / "lf", tmp_path / "crlf"
+    for rel in player_build.BAKED:
+        name = rel if "." in Path(rel).name else rel + "/x.py"
+        text = f"{rel}\none\ntwo\n".encode()
+        for tree, data in ((lf, text), (crlf, text.replace(b"\n", b"\r\n"))):
+            (tree / name).parent.mkdir(parents=True, exist_ok=True)
+            (tree / name).write_bytes(data)
+    assert player_build.inputs_record(lf) == player_build.inputs_record(crlf)
+    (crlf / "runtime" / "cpu.h").write_bytes(b"runtime/cpu.h\r\none\r\nthree\r\n")
+    assert player_build.inputs_record(lf) != player_build.inputs_record(crlf)
+
+
 def test_an_rvz_reads_back_as_the_disc(fixture_disc, tmp_path):
     from soa.disc import Disc
     from soa.rvz import RVZ
