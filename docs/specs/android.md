@@ -106,7 +106,7 @@ the phone share (§3.8).
   `SOA_THREADS` and `SOA_SETTINGS=0` (`scenario.py:1085-1089`), and the MEM1 poke `SOA_MEMPOKE` (`main.c:704`).
 - **One guest thread off Windows:** a second exits 6 (`threads.c:311-315`; portability risk 18). Every log so
   far has had one.
-- **The savepoint is `setjmp`** (`cpu.h:111`), run at every interrupt delivered (`irq.c:285`). On glibc that
+- **The savepoint is `setjmp`** (`cpu.h:114`), run at every interrupt delivered (`irq.c:285`). On glibc that
   is `_setjmp`, which saves no signal mask.
 - **The GPU backend presents through a Win32 surface only** (`gxv.c:3629-3666`). Its loader already looks for
   `libvulkan.so` off Windows (`gxv.c:345-354`).
@@ -256,30 +256,39 @@ rewritten):
 
 ### 3.4 The game library on the player's PC (R5)
 
-*Settled 2026-10-07 in [android-sysroot.md](android-sysroot.md) (D-34 to D-36), which owns R5's slices
-from R5-0 on and supersedes this section where they differ: the sysroot is built where it is used, from
-pinned bionic sources, by the script every machine runs, not by CI; the stub libraries come from
-`config/seam.txt` at each link; its licences ship with their texts. R5a part 1 rewrites this section
-from it.*
+*Rewritten 2026-10-07 for R5a (FINDINGS "R5a part 1", "R5a part 2"), from
+[android-sysroot.md](android-sysroot.md), which owns R5's slices and their detail.*
 
-- **Two profiles,** `android-arm64` and `android-x86_64` (the emulator), in `tools/soa/toolchain.py`:
-  - `--target=aarch64-linux-android33` (or `x86_64-...`), `-fPIC`, `-fvisibility=hidden`;
-  - the gnu profile's `-ffp-contract=off -fno-strict-aliasing -fwrapv`;
-  - `-shared -Wl,-soname,libsoa_game.so -Wl,-z,max-page-size=16384`.
+- **The compiler:** llvm-mingw's clang, the `clang` beside the `x86_64-w64-mingw32-clang` the mingw profile finds,
+  so the phone's library and `soa.exe` come from one llvm-mingw, the one a player's package carries (R1). It is held
+  to its identity, clang 23.1.2 at `85ac5602`, before anything is built.
+- **The profiles,** `android-arm64` and `android-x86_64` (the emulator), in `tools/soa/toolchain.py`:
+  `--target=aarch64-linux-android33` (or `x86_64-...`), the gnu profile's `-ffp-contract=off -fno-strict-aliasing
+  -fwrapv`, `-fPIC -fvisibility=hidden`; every command with `--sysroot` and without clang's search variables
+  (`CPATH` and the rest); every link `-nodefaultlibs -lm -ldl -lc` after its objects, since llvm-mingw carries no
+  Android compiler-rt or libunwind and the game needs neither.
+- **The sysroot (D-31, D-34):** built where it is used, the player's PC included, by
+  `tools/fetch_android_sysroot.py`, from 44 files of bionic at `06356e41` (android-17.0.0_r1), each held to its
+  sha256 and git blob id: the 30 headers the game reads (what `cpu.h` and `soa_game.h` include: `math.h`,
+  `setjmp.h`, `stdint.h`, `string.h` and what they read; `stdlib.h` only under `_MSC_VER`), unmodified;
+  `crtbegin_so.o` and `crtend_so.o` built from bionic's source and held to pinned bytes; `NOTICE.txt`. No LLVM
+  sources, since nothing references compiler-rt or libunwind; nothing built is published.
+- **The stubs:** `libc.so`, `libm.so` and `libdl.so`, written from `config/seam.txt` at each link, their names at
+  version `LIBC` in bionic's own placement (`fma`, `sqrt`, `nearbyint` and `nearbyintf` in `libm.so`). A call to
+  anything outside the seam fails the link on the PC.
 - **The build:** `recompile.py --cc android-arm64 --compile --optimize --link` makes
-  `gen/android-arm64/libsoa_game.so`. It is always `--no-decomp`. It links against a stub `libsoa_runtime.so`
-  generated from the seam's lists, so the PC needs no runtime built for Android. It is reproducible as
-  distribution §3.8 requires.
-- **The compiler (Q-A2, answered A):** llvm-mingw, already in the package (R1), plus a small Android sysroot
-  this repository's CI builds from pinned AOSP and LLVM sources:
-  - the bionic headers the translated C includes (`cpu.h`: `math.h`, `setjmp.h`, `string.h`, `stdlib.h`), BSD;
-  - `crtbegin_so.o` and `crtend_so.o`, built from bionic's sources;
-  - stub `libc.so`, `libm.so` and `libdl.so`, generated from symbol lists.
-  This avoids the SDK licence and a 728 MB download (research §10). It is fetched as `vendor/` is, pinned, and
-  recorded.
-- **The NDK in the meantime:** until the sysroot exists, L12a to L12d build with the NDK installed here.
-- **For the player:** `player_build.py --target android-arm64` (and Setup's checkbox, R4) puts `libsoa_game.so`
-  in the install folder beside `soa.exe`, and Setup says how to copy it to the phone.
+  `gen/android-arm64/libsoa_game.so`, always `--no-decomp`, linked against a stand-in `libsoa_runtime.so` from the
+  seam's lists, and checked as the phone checks it. `build_inputs.txt` names the compiler, a digest of its flags and
+  the sysroot's, and a `--link` over objects another compiler, other flags or another sysroot made is refused. It is
+  reproducible as distribution §3.8 requires.
+- **The NDK:** the APK's runtime (its Gradle build), and the `-ndk` profiles' compile check of every runtime file
+  for the phone (`compile_runtime.py --cc android-arm64-ndk`). `recompile.py` refuses them.
+- **The licences (D-35):** the sysroot's files are BSD-2-Clause and BSD-3-Clause, the NetBSD Foundation's 4-clause
+  text, Sun's fdlibm notice, Apache-2.0 and the Linux user-space headers (GPL-2.0 WITH Linux-syscall-note); their
+  texts ship in `licenses/` (R5b).
+- **For the player** (R5b, R5c): `player_build.py --target android-arm64`, and Setup's checkbox, put
+  `libsoa_game.so` in the install folder beside `soa.exe`, the sysroot built from the package's own copy of the 44
+  files; Setup says how to copy it to the phone.
 
 ### 3.5 SDL3 on Android: the pinned AAR
 
@@ -608,6 +617,10 @@ The sysroot of §3.4 and R5's packaging (Setup's checkbox) follow L12b.
 that waits for Q-A2's own sysroot and R5's packaging. The C checker and the Python one are held together by
 building the same libraries and comparing their verdicts, rather than by a written table.*
 
+*As built since R5a (FINDINGS "R5a part 2"): the NDK lines below are history. The game library is built by
+llvm-mingw's clang against this repository's own sysroot (§3.4); the NDK builds only the APK's runtime and the
+`-ndk` compile checks, and without llvm-mingw or the sysroot the build says where it looked.*
+
 *Files:*
 - `tools/soa/toolchain.py`: the `android-arm64` and `android-x86_64` profiles, finding the NDK through
   `SOA_ANDROID_NDK`, `ANDROID_NDK_HOME` or `ANDROID_HOME/ndk/*`;
@@ -723,7 +736,8 @@ three of the design's mutations, and any cloud provider (FINDINGS "L12d"). The c
 
 ### L12's Done: the phone
 
-On the AYN Thor, then the Fold 8:
+On the AYN Thor, then the Fold 8, with a library built through R5's route (D-36): llvm-mingw and this
+repository's own sysroot (§3.4):
 - the self test reports 0 failures;
 - `android.py replay --threads 1,2,3,8` matches 23/23, from a library built on this PC;
 - `title`'s invariants hold on the pulled log;
@@ -763,7 +777,7 @@ the CMake that builds the shaders into the runtime library, docs.
 - **Q-A1. The devices.** ***Answered 2026-10-05:*** a Samsung Galaxy Z Fold 8 and an AYN Thor. The Thor's
   Snapdragon 8 Gen 2 is the target's floor, so it goes first.
 - **Q-A2. The player's compiler for the game library.** ***Answered 2026-10-05: A,*** llvm-mingw plus this
-  repository's own Android sysroot from AOSP's BSD sources (§3.4).
+  repository's own Android sysroot from bionic's pinned sources (§3.4), whose licences are not all BSD (D-35).
 - **Q-A3. Android 13 or newer** (`minSdk 33`). ***Answered 2026-10-05: yes.***
 - **Q-A4. The app's identity.** *Open: the owner asked for an explanation first.*
   - **The package name** (for example `io.github.bmfrench89.soa`) is the app's permanent ID on every phone.
@@ -799,7 +813,7 @@ the CMake that builds the shaders into the runtime library, docs.
    with the app and goes on when it is back: L12d gave it no job or foreground service [I, not measured].
 8. **The sysroot of §3.4** is new work, and its headers must agree with the bionic each phone runs. The savepoint's
    `jmp_buf` belongs to the runtime (`guest_savepoint`), which the APK builds against the NDK, so the game
-   library's view of `setjmp.h` matters only for the declaration [V `cpu.h:111`].
+   library's view of `setjmp.h` matters only for the declaration [V `cpu.h:114`].
 
 ---
 

@@ -7917,3 +7917,92 @@ the driver's.** 2026-10-04.
 - **The tests** are 1461 in 90 files, measured four ways: 1420 passed and 41 skipped here; 1401 and 42 without
   capstone; 1011 and 450 without MSVC; 992 and 451 without either. The full run took 1186.10 s, against 792.94 s
   this morning: the new tests take about 10 s of it, and the rest is this PC's load that hour.
+
+**R5a part 2: the game library through R5's route, with no NDK.** 2026-10-07.
+
+- **What it is:** the second half of R5a (docs/specs/android-sysroot.md §1.1). `recompile.py --cc android-arm64`
+  and `android-x86_64` now build the phone's game library with llvm-mingw's clang -- the `clang` beside the mingw
+  profile's compiler, held to its identity -- against the sysroot part 1 builds, every command with `--sysroot` and
+  without clang's search variables, every link `-nodefaultlibs -lm -ldl -lc`. The C libraries are stubs written
+  from `config/seam.txt` at each link (`libc.so`, `libm.so`, `libdl.so`, bionic's SONAMEs, the names at version
+  `LIBC` in bionic's placement), so a call outside the seam fails the link on the PC. `build_inputs.txt` names the
+  compiler, a digest of its flags and the sysroot's, and `--link` refuses objects another compiler, other flags or
+  another sysroot made, and for Android a record without them or none. The post-link check is the phone's: the
+  machine by the profile's name, Android's C library names only, and the record's `dol=` held to the executable
+  built in. `gamefixture` builds through `recompile.android_link_plan` itself, its stubs linked once a session and
+  copied after. `compile_runtime.py` keeps the NDK for the runtime under `--cc android-arm64-ndk` and refuses the
+  game library's names. `fetch_android_sysroot.py --compare` compiles a `gen/` folder's units against another
+  sysroot and this one. CI's `android-route` job now runs `test_android_build.py` too; the Linux gcc leg keeps only
+  the runtime's NDK compile.
+- **On this PC** [V]:
+  - **Stale objects refused:** `recompile.py --cc android-x86_64 --link` over L12c's NDK-built `gen/android-x86_64`
+    exited 1 in 1.2 s, `gen\android-x86_64: its objects were compiled before build_inputs.txt named their compiler,
+    flags and sysroot; run --compile again (stale link)`.
+  - **No compiler:** with `SOA_MINGW` naming no folder, `--cc android-arm64 --compile` exited 1 in 0.43 s with the
+    design's lines exactly, `SOA_MINGW (C:\no-such-mingw): no llvm-mingw there (no x86_64-w64-mingw32-clang.exe)`
+    and the sysroot `there`.
+  - **The builds:** x86_64, 19 units in 37.7 s on 16 threads, 57 s in all; arm64, 19 units in 44.6 s. Each linked
+    the three stubs, the stand-in runtime and the library, and printed `checked …\libsoa_game.so: the phone's
+    runtime would load it`; `build_inputs.txt` holds the design's five lines. A second arm64 build into another
+    folder had the same sha256, `e4837ec2…`. L12b's NDK build took 50 s for the same 19 units; the gate's, 38.9 s
+    for 21.
+  - **The headers change no object:** `--compare` printed `19 of 19 objects identical against …\ndk\28.2.13676358\…\sysroot`
+    for both ABIs, at -O2. (Its first run compiled one unit at a time, 5 min 29 s; in parallel, 55 s.)
+  - **The runtime keeps the NDK:** `compile_runtime.py --cc android-arm64-ndk --require-gxv --require-sdl` and
+    `android-x86_64-ndk` each compiled 39 of 39, the SDL files and the GPU backend among them; `--cc android-arm64`
+    exited 1, `the runtime is the APK's, compiled by the NDK: --cc android-arm64-ndk; --cc android-arm64 builds the
+    game library (tools/recompile.py)`.
+  - **The tests** of the design's Done, under `noskip` with `SOA_CC=msvc`: 94 passed, none skipped; after the
+    review's tests, `test_android_sysroot.py` and `test_android_build.py` alone, 60 passed in 42.81 s.
+- **The seam row** (CLAUDE.md, since `seam.py` changed), in the `soa-l10` container: `recompile.py --cc gcc --split
+  --compile --optimize --link`, then on `gen/linux-split/soa` the self test `0 failure(s)`, the replay `23 captures
+  match config/fifo_manifest.tsv at SOA_THREADS 1,2,3,8`, `title: 4 of 4 invariants hold`, and `test_seam.py` 17
+  passed, none skipped. The first attempt ran those checks on L12d's split build of 2026-10-06: the container's `sh`
+  has no `time`, so the build line failed, and its error was filtered out of what was printed. The library's
+  `baked=705f401d…`, the digest from before R5-0, was what gave it away; the build was then run for real and the
+  checks again, with the results above.
+- **`baked=` moved again** [V]: `recompile.py` is one of the baked inputs, so this tree's digest is
+  `2285d11b…`, the container's and this PC's alike. The APK was rebuilt for the emulator.
+- **On the emulator** [V] (`soa_x86_64` on 5556; the other project's 5554 untouched), the real route, `recompile.py`'s
+  own library, which the gate did not run: `android.py build` (25 s), `guard.py --apk` passed, `install`,
+  `push-game`; the self test, `[game] …: abi=1 mode=no-decomp baked=2285d11b… dol=8c0e2781… profile=android-x86_64`,
+  `[selftest] 0 failure(s)`, `[exit] 0`; `replay --threads 1,2,3,8`, `[android] 23 captures match
+  config/fifo_manifest.tsv at SOA_THREADS 1,2,3,8 on emulator-5556`, in 227 s; the title, `4 of 4 invariants hold`,
+  in 252 s, reading the store in place (`SOA_IMPORT=1`). The ten mutants, now made by llvm-mingw (`arm32.so`
+  `-nostdlib`), each picked through the test provider's `file/`: the first loop's first pick, `arm32.so`, printed no
+  refusal line, and its output was not kept; picked again it drew its predicted words, and a second loop of all ten
+  gave `10 of 10 mutants refused in their predicted words`. The player's path, a fresh install picking the
+  library and `GEAE8P.soadisc` by taps: `copied 33996192 of 33996192 bytes`, the library installed, the store read
+  in place through its descriptor, `wrote …/files/soa.ini: render = 1`, `1 setting(s) applied`, `[window] open at
+  2x`; the capture 30 s after the last tap shows the opening's "Created by Overworks" logo, looked at.
+- **A review**, the same four lenses as part 1, each finding argued against: 11 confirmed, 4 refuted, all 11 fixed.
+  `gamefixture`'s stub reuse failed when a cached folder had been removed (the stubs neither copied nor linked) and
+  when a folder was built twice in place (`SameFileError`); no caller in the tree met either. The rest: the docs
+  this change owed (written since), `--compare` missing from the docstring's instructions, the CI job's part-1
+  name, and five tests too weak -- the post-link check never run on a good library or its arguments checked, the
+  identity and sysroot gates in `main()` never driven, three of the eight search variables checked, the sysroot's
+  part in the lookup untested, and the stubs' `LIBC` version read only off the command line (now read from the
+  built objects by llvm-readelf). One reviewer, told not to, rebuilt `gen/mingw` from these sources; nothing was
+  lost but that folder's earlier objects, and its scratch held only fixtures, deleted.
+- **Mutations** [V]: 25, each failing its check, the files put back byte for byte: the design's (a `strlen` stub, the
+  post-link check not Android's, a strict record taken without its fields, the note's gnu branch removed, the
+  stand-in without `p.linker`, the machine by identity, a FAIL line from stdout alone, the old label loop, the
+  fixture linking its stubs every time, `compile_runtime` taking `--cc android-arm64`, the lookup asking for an
+  NDK, a header dropped from the tree, `BIONIC_LIBM` without `sqrt`, the version script through `-Wl,`, `cc()`'s
+  clean environment taken out, `--compare` always identical, the sysroot dropped from one of `gnu_commands`' paths,
+  `compiler_id` saying nothing, the sysroot's record unchecked) and the review's (the old reuse decision, no
+  identity or no sysroot check in `main()`, the lookup not needing the sysroot, the stubs without their version
+  script, one search variable left in). The last first passed, because the test read the list it was testing; it
+  spells the eight names out now.
+- **On CI** [V]: `ci.yml` on a scratch branch at this tree (run 37718331526): all 12 jobs green; both `android-route`
+  legs restored main's source cache by its exact key, and ran `test_android_sysroot.py` and
+  `test_android_build.py` with no skip, 60 passed, `runtime/elfcheck.c` built by gcc 13.3 on Ubuntu and MSVC
+  on Windows. With `__cxa_atexit` taken out of `config/seam.txt` on a second branch (run 37718342239), both legs
+  failed and nothing else did: `undefined symbol: __cxa_atexit` 46 times, 9 tests failed and 14 errored in the
+  fixtures that link. Both branches were deleted after.
+- **What differed from the design's text:** the rebuild and refusal words as part 1 records; `cpu.h:114`, not
+  `:116`, for the savepoint's `setjmp`; a split build's progress names its game library's link `link`; and
+  `test_android_build.py`'s time before the stubs were reused was not measured, so what the reuse saves is not
+  given.
+- **The tests** are 1490 in 90 files, measured four ways: 1449 passed and 41 skipped here; 1430 and 42
+  without capstone; 1040 and 450 without MSVC; 1021 and 451 without either. The full run took 981.69 s.

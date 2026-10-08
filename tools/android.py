@@ -419,7 +419,9 @@ def cmd_mutants(args: argparse.Namespace) -> int:
     must draw on the device; --push provides them all, for run --pick
     file/<name>.so. For the device's ABI when pushed, else --profile's,
     else the x86-64 emulator's."""
-    from soa import gamefixture  # the NDK's builder: only this command needs it
+    from soa import (
+        gamefixture,
+    )  # llvm-mingw's and the sysroot's builder: only this command needs it
 
     serial = serial_of(args) if args.push else ""
     profile = args.profile
@@ -435,7 +437,9 @@ def cmd_mutants(args: argparse.Namespace) -> int:
         made = gamefixture.android_mutants(
             Path(args.out), profile or toolchain.ANDROID_X86_64.name, record, dol
         )
-    except RuntimeError as exc:  # no NDK, a compile that failed, or a mutant the phone would take
+    except (
+        RuntimeError
+    ) as exc:  # no llvm-mingw or sysroot, a compile that failed, or a mutant the phone would take
         raise AndroidError(f"the mutants could not be made: {exc}") from None
     for lib, words in made.values():
         print(f"{lib}\n  [import] refused {lib.name}: {words}")

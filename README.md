@@ -97,12 +97,13 @@ mods' `mod.so` under `gen/linux/mods`, and `SOA_RENDER=1 gen/linux/soa extracted
 window, X11 or Wayland. Without `vendor/sdl3` the same build is headless: the self test, the replay
 and `title --check` (all three pass, the replay 23 of 23 against the same manifest), and `SOA_WAV`.
 
-**Android** is under way (specs/android.md). With the Android NDK installed (Android Studio's SDK manager,
-or `SOA_ANDROID_NDK`), `python tools/recompile.py --cc android-arm64 --compile --optimize --link` builds
-the game library a phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and checks it
-much as the phone will: its machine, page size, build record and the runtime functions it needs (only the
-phone also holds it to Android's own C libraries and to the disc's executable); `--cc android-x86_64`
-builds it for the emulator. `python tools/android.py build` makes the app, an APK holding the runtime and
+**Android** is under way (specs/android.md). With llvm-mingw and this repository's own Android sysroot
+(`python tools/fetch_mingw.py`, then `python tools/fetch_android_sysroot.py`; no NDK),
+`python tools/recompile.py --cc android-arm64 --compile --optimize --link` builds the game library a
+phone will load, `gen/android-arm64/libsoa_game.so`, in about a minute, and checks it as the phone will:
+its machine, page size, build record, the runtime functions and Android C library names it needs, and
+the disc's executable it was made from; `--cc android-x86_64` builds it for the emulator. The APK itself
+still needs Android Studio's SDK and NDK. `python tools/android.py build` makes the app, an APK holding the runtime and
 no game code, and `install` puts it on a device you name (`--serial` or `SOA_ADB_SERIAL`); docs/TESTING.md
 has the whole recipe. Then copy two files to the phone (its Download folder is where the app's file picker
 opens): that library, and the disc. For the disc, the store `extract.py --store` makes, `GEAE8P.soadisc`,
@@ -374,7 +375,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1461 tests; any that need a dump skip themselves
+python -m pytest                     # 1490 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

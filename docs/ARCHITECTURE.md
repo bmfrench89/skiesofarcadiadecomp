@@ -653,12 +653,15 @@ that matter:
   `soa.exe` and the game library, driving the compiler directly with the flags
   of a profile in `tools/soa/toolchain.py`: MSVC by default, and with `--cc`
   `clang-cl`, `gcc`, `clang`, `mingw` (llvm-mingw), or `android-arm64` and
-  `android-x86_64` (the NDK's clang). CMake appears only around it:
+  `android-x86_64` (llvm-mingw's clang against this repository's own Android
+  sysroot, `tools/fetch_android_sysroot.py`; the NDK builds only the APK's
+  runtime and the `-ndk` compile checks). CMake appears only around it:
   `tools/fetch_sdl.py` builds SDL3 with it for Linux (L10), and Gradle builds
   the APK's runtime library with CMake and Ninja
   (`android/app/src/main/cpp/CMakeLists.txt`, L12c). SDL3 (its source for
   Linux, its AAR for Android), Vulkan's headers and glslang (the GPU backend,
-  V5) are fetched into `vendor/`, never committed; Vulkan itself is the host's
+  V5), and bionic's 44 pinned files for the Android sysroot (R5a), are fetched
+  into `vendor/`, never committed; Vulkan itself is the host's
   driver, opened at run time.
 - The binding table is `config/hle.txt`, not `config/symbols.toml`.
 - §7 proposed a hybrid: HLE the 104 out-of-line GX entry points and decode
@@ -676,7 +679,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1461 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1490 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

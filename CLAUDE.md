@@ -49,15 +49,18 @@ Then, only if you touched the matching thing:
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
 | `runtime/game.c`, `elfcheck.c`, `soa_game.h`, `tools/soa/seam.py`, `config/seam.txt` | in a Linux container: `recompile.py --cc gcc --split --compile --optimize --link`, the self test, replay and title on `gen/linux-split/soa`, and `test_seam.py` | single-file builds never load a game library; only the split build and CI's Linux legs exercise the seam |
 | `runtime/android.c`, `import.c`, `android/`, `tools/android.py` | `python tools/android.py build`, `python tools/guard.py --apk android/app/build/outputs/apk/debug/app-debug.apk`, then with `SOA_ADB_SERIAL=emulator-5556`: `install`, `push-game`, `selftest`, and, for the import, the L12d recipe in `docs/TESTING.md`; for `import.c`, also `test_import.py` with `SOA_CC=gcc` in a Linux container | nothing else builds the APK, CI included, and the guard is what keeps game code out of it; the picker, the boxes and the grants exist only on a device, and Windows compiles `import.c` to stubs and skips `test_import.py` |
-| `tools/fetch_android_sysroot.py`, `toolchain.py`'s llvm-mingw lookup | `python tools/fetch_android_sysroot.py --verify`, then `$env:PYTHONPATH='tools/citest'; python -m pytest -p noskip tools/tests/test_android_sysroot.py` | the crt objects' pins are llvm-mingw's bytes; without llvm-mingw or the source cache the checks that build skip, and only the `android-route` job runs them on both systems |
+| `tools/fetch_android_sysroot.py`, the Android profiles, `cc()` or the llvm-mingw lookup in `toolchain.py`, `seam.py`'s stubs, `android_link_plan`, or an `#include` in `runtime/cpu.h` or `soa_game.h` | `python tools/fetch_android_sysroot.py --verify`, then `$env:PYTHONPATH='tools/citest'; python -m pytest -p noskip tools/tests/test_android_sysroot.py tools/tests/test_android_build.py`; for a header change `--compare`; when a library's bytes can move, the emulator: `recompile.py --cc android-x86_64 --compile --optimize --link`, `android.py build`, `install`, `push-game`, `selftest`, `replay --threads 1,2,3,8` | the sysroot holds exactly the headers the game reads, so a new `#include` fails only here and in CI's `android-route` job; the crt objects' pins are llvm-mingw's bytes; only the emulator runs a library built this way |
 | `runtime/window_sdl.c`, `audio_sdl.c`, `tools/fetch_sdl.py` | in a Linux container: `compile_runtime.py --cc gcc --require-sdl`, and `test_window_sdl.py` under Xvfb (`docs/TESTING.md` section 2) | Windows compiles them to nothing; only Linux, and CI's Linux legs, ever build them |
 
 The guard is not a hook — `.git/hooks/` holds only samples, so CI is its only enforcer.
 
 ## Relink, or retranslate
 
-`--link` never rebuilds translated code: it globs the `chunk_*.obj` that already exist
-(`tools/recompile.py:203`), and nothing tracks dependencies or warns about staleness.
+`--link` never rebuilds translated code: it globs the `chunk_*.obj` that already exist,
+and nothing tracks dependencies. What it does refuse, from `build_inputs.txt`, is a link
+of objects compiled from another executable; for gcc, clang, llvm-mingw and Android,
+by another compiler or with other flags; and for Android against another sysroot, or
+with no record at all (R5a). Everything below is still on you.
 
 **`--link` alone is enough** after editing `runtime/*.c`, a runtime-only header
 (`runtime/gxr.h`), `src/**`, `include/`, `config/GEAE8P/units.txt`, or the GPU

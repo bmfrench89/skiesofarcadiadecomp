@@ -227,11 +227,17 @@ MINGW = Profile(
         "-Wl,--stack,33554432",
     ),
 )
-# The Android game library (specs/android.md L12b): the NDK's clang for one
-# target at API 33 (Q-A3, Android 13), the gnu flags, and a shared object
+# The Android game library (specs/android.md L12b, specs/android-sysroot.md
+# R5a): llvm-mingw's clang -- the compiler a player's package carries -- for
+# one target at API 33 (Q-A3, Android 13), against this repository's own
+# sysroot (tools/fetch_android_sysroot.py), the gnu flags, and a shared object
 # whose every function but the table is hidden. Only the game library is
 # built with these; the APK's runtime is the Gradle build's (L12c).
 _ANDROID = ("-fPIC", "-fvisibility=hidden")
+# Every Android link names its C libraries itself, after the objects, in the
+# NDK's order: llvm-mingw carries no Android compiler-rt or libunwind, which
+# the driver's defaults ask for, and nothing in the game library uses either.
+_ANDROID_LINK = ("-nodefaultlibs", "-lm", "-ldl", "-lc")
 ANDROID_ARM64 = Profile(
     "android-arm64",
     "gnu",
@@ -240,7 +246,7 @@ ANDROID_ARM64 = Profile(
     ".o",
     "",
     "gen/android-arm64",
-    ("-lm",),
+    _ANDROID_LINK,
 )
 ANDROID_X86_64 = Profile(
     "android-x86_64",
@@ -250,10 +256,46 @@ ANDROID_X86_64 = Profile(
     ".o",
     "",
     "gen/android-x86_64",
-    ("-lm",),
+    _ANDROID_LINK,
 )
 ANDROID = (ANDROID_ARM64, ANDROID_X86_64)
-PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG, MINGW, *ANDROID)}
+# The NDK, for what the sysroot cannot serve: the APK's runtime reads system
+# headers it does not hold (jni.h, android/log.h, pthread.h, SDL's, Vulkan's).
+# compile_runtime.py's check of every runtime file for the phone uses these;
+# recompile.py refuses them.
+ANDROID_ARM64_NDK = Profile(
+    "android-arm64-ndk",
+    "gnu",
+    ANDROID_ARM64.cflags,
+    _CLANG_STRICT,
+    ".o",
+    "",
+    "gen/android-arm64-ndk",
+    ("-lm",),
+)
+ANDROID_X86_64_NDK = Profile(
+    "android-x86_64-ndk",
+    "gnu",
+    ANDROID_X86_64.cflags,
+    _CLANG_STRICT,
+    ".o",
+    "",
+    "gen/android-x86_64-ndk",
+    ("-lm",),
+)
+ANDROID_NDK = (ANDROID_ARM64_NDK, ANDROID_X86_64_NDK)
+PROFILES = {p.name: p for p in (MSVC, CLANG_CL, GCC, CLANG, MINGW, *ANDROID, *ANDROID_NDK)}
+
+
+def is_android(p: Profile) -> bool:
+    """The game library's profiles, by name, so a dataclasses.replace'd one
+    is still known."""
+    return p.name in ("android-arm64", "android-x86_64")
+
+
+def is_ndk(p: Profile) -> bool:
+    """The NDK's pair, for the runtime's check alone."""
+    return p.name in ("android-arm64-ndk", "android-x86_64-ndk")
 
 
 def profile(name: str | None) -> Profile:
@@ -362,6 +404,52 @@ def clean_clang_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k.upper() not in _CLANG_ENV}
 
 
+def android_sysroot() -> Path | None:
+    """<source root>/vendor/android-sysroot when it holds its headers:
+    vendor/ in a checkout, source/vendor/ in a package. It is not verified
+    here; recompile and player_build do that."""
+    root = Path(__file__).resolve().parents[2] / "vendor" / "android-sysroot"
+    return root if (root / "usr" / "include" / "stdint.h").is_file() else None
+
+
+def compiler_id(p: Profile) -> str:
+    """The first line of a gnu-style profile's compiler's --version, what a
+    build records its objects were compiled by; "" for msvc-style ones and
+    when there is no compiler."""
+    if p.style != "gnu":
+        return ""
+    exe = compiler_path(p)
+    return clang_id(exe) if exe else ""
+
+
+def android_places() -> list[str]:
+    """Where the game library's compiler and sysroot were looked for, a line
+    each, for "the build says where it looked"."""
+    root = Path(__file__).resolve().parents[2]
+    name = "x86_64-w64-mingw32-clang" + (".exe" if os.name == "nt" else "")
+    own = os.environ.get("SOA_MINGW", "")
+
+    def answer(b: Path) -> str:
+        if not (b / name).is_file():
+            return f"no llvm-mingw there (no {name})"
+        clang = b / ("clang.exe" if os.name == "nt" else "clang")
+        problem = mingw_identity_problem(str(clang)) if clang.is_file() else "no clang beside it"
+        if problem:
+            return problem
+        version, commit = MINGW_CLANG
+        return f"llvm-mingw's clang {version} ({commit[:8]})"
+
+    out = [f"SOA_MINGW ({own or 'unset'})" + (f": {answer(Path(own))}" if own else "")]
+    if not own:
+        out += [f"{b}: {answer(b)}" for b in mingw_bins()]
+    sysroot = root / "vendor" / "android-sysroot"
+    there = (
+        "there" if android_sysroot() else "none (python tools/fetch_android_sysroot.py builds it)"
+    )
+    out.append(f"{sysroot}: {there}")
+    return out
+
+
 def _version_key(name: str) -> tuple[int, ...]:
     return tuple(int(x) if x.isdigit() else 0 for x in name.split("."))
 
@@ -442,7 +530,10 @@ def compiler_path(p: Profile = MSVC) -> str | None:
         if os.environ.get("SOA_MINGW"):
             bins = bins[:1]
         return next((str(b / name) for b in bins if (b / name).is_file()), None)
-    if p in ANDROID:
+    if is_android(p):
+        # llvm-mingw's clang and this repository's sysroot; never an NDK
+        return mingw_clang() if android_sysroot() is not None else None
+    if is_ndk(p):
         ndk = android_ndk()
         return str(ndk_clang(ndk)) if ndk and ndk_clang(ndk).is_file() else None
     if p.name == "clang-cl":
@@ -500,15 +591,18 @@ def gnu_commands(args: list[str], exe: str, p: Profile) -> list[list[str]]:
     per source, each with -o <dir>/<stem><objext>: gcc writes several objects
     only into its working directory, and the sources here are paths relative
     to the caller's."""
+    # The game library's every command, on both paths, against the
+    # sysroot: without --sysroot clang looks at the root of the drive.
+    head = [f"--sysroot={android_sysroot()}"] if is_android(p) else []
     fo = [a for a in args if _fo_dir(a)]
     rest = [a for a in args if not _fo_dir(a)]
     sources = [a for a in rest if a.endswith(".c")]
     if not fo or "/c" not in args or not sources:
-        return [[exe, *gnu_args(args)]]
+        return [[exe, *head, *gnu_args(args)]]
     out_dir = fo[-1][3:]
     common = [a for a in rest if not a.endswith(".c")]
     return [
-        [exe, *gnu_args(common), "-o", str(Path(out_dir) / (Path(s).stem + p.objext)), s]
+        [exe, *head, *gnu_args(common), "-o", str(Path(out_dir) / (Path(s).stem + p.objext)), s]
         for s in sources
     ]
 
@@ -530,8 +624,11 @@ def cc(args: list[str], cwd: Path | str, p: Profile = MSVC) -> subprocess.Comple
             text=True,
             check=False,
         )
+    # An Android command never reads clang's search variables (CPATH and
+    # the rest): they come ahead of the sysroot.
+    env = clean_clang_env() if is_android(p) else None
     runs = [
-        subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=False)
+        subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env, check=False)
         for cmd in gnu_commands(args, exe, p)
     ]
     return subprocess.CompletedProcess(

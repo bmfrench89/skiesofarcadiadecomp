@@ -4,6 +4,7 @@
     python tools/fetch_android_sysroot.py --verify [--vendor DIR]
     python tools/fetch_android_sysroot.py --check-upstream
     python tools/fetch_android_sysroot.py --cache-key
+    python tools/fetch_android_sysroot.py --compare [<reference sysroot>] [--gen DIR] [--cc PROFILE]
 
 specs/android-sysroot.md R5a (D-31, D-34): the phone's game library is built
 by llvm-mingw's clang, the compiler a player's package already carries, against
@@ -34,8 +35,8 @@ fetch_mingw.RELEASE bumps toolchain.MINGW_RELEASE and MINGW_CLANG with it (a
 test holds the two releases equal), derives the new pins, and runs R5a's
 emulator checks again. A new #include in runtime/cpu.h or soa_game.h fails
 the closure test (R5a part 2): whoever adds it pins the new headers
-(--check-upstream checks them against bionic's own listing), then runs the
-emulator. A count this tool prints that the docs quote is found everywhere by
+(--check-upstream checks them against bionic's own listing), runs --compare
+against the NDK's sysroot, then runs the emulator. A count this tool prints that the docs quote is found everywhere by
 grep -rn "<the old number>" --include="*.md" . Nothing here touches game data.
 """
 
@@ -44,6 +45,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import concurrent.futures
 import email.utils
 import gzip
 import hashlib
@@ -1139,6 +1141,70 @@ def check_upstream(get=None, sleep=time.sleep, clock=time.monotonic) -> tuple[li
     return out, compared
 
 
+def ndk_sysroot() -> Path | None:
+    """The sysroot of the NDK toolchain.android_ndk() finds, the reference
+    --compare holds this one's headers to."""
+    ndk = toolchain.android_ndk()
+    root = toolchain.ndk_clang(ndk).parent.parent / "sysroot" if ndk else None
+    return root if root and root.is_dir() else None
+
+
+def compare(reference: Path, ours: Path, gen: Path, profile: str) -> tuple[list[str], list[str]]:
+    """Every translation unit in gen (dispatch.c and each chunk_*.c) compiled
+    twice by the profile's --optimize command, against `reference` and against
+    `ours`, into a temporary folder: (the units compiled, those whose objects
+    differ). The headers change no object when the second list is empty."""
+    import recompile  # beside this script; only this mode needs it
+
+    p = toolchain.profile(profile)
+    clang = toolchain.mingw_clang()
+    if clang is None:
+        raise Refused(
+            "no llvm-mingw (python tools/fetch_mingw.py fetches it): --compare compiles with its clang"
+        )
+    gen = gen.resolve()
+    units = sorted(u.name for u in [gen / "dispatch.c", *gen.glob("chunk_*.c")] if u.is_file())
+    if not units:
+        raise Refused(
+            f"{gen} holds no dispatch.c or chunk_*.c to compare: recompile.py --cc {profile} writes them"
+        )
+
+    def one(unit: str, n: int, root: Path, tmp: Path) -> bytes:
+        obj = tmp / f"{n}-{Path(unit).stem}{p.objext}"
+        cmd = [
+            a
+            for a in recompile.compile_command(p, gen, gen / unit, True)
+            if not a.startswith("/Fo")
+        ]
+        cmd = [clang, f"--sysroot={root}", *toolchain.gnu_args([*cmd, f"/Fo{obj}"])]
+        proc = subprocess.run(
+            cmd,
+            cwd=str(gen),
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            env=toolchain.clean_clang_env(),
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise Refused(
+                f"{unit} did not compile against {root}:\n{proc.stdout}{proc.stderr}".rstrip()
+            )
+        return obj.read_bytes()
+
+    with (
+        tempfile.TemporaryDirectory(prefix="soa-compare-") as tmp,
+        concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool,
+    ):
+        jobs = {
+            (u, n): pool.submit(one, u, n, root, Path(tmp))
+            for u in units
+            for n, root in enumerate((reference, ours))
+        }
+        differ = [u for u in units if jobs[u, 0].result() != jobs[u, 1].result()]
+    return units, differ
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1164,6 +1230,17 @@ def main(argv: list[str] | None = None) -> int:
         "--check-upstream", action="store_true", help="hold every pin to bionic's own tree listing"
     )
     ap.add_argument("--cache-key", action="store_true", help="print the source cache's key, for CI")
+    ap.add_argument(
+        "--compare",
+        nargs="?",
+        const="",
+        metavar="REFERENCE",
+        help="compile gen/'s units against a reference sysroot (the NDK's) and this one: the headers change no object",
+    )
+    ap.add_argument("--gen", type=Path, help="--compare's translated C (default gen/<--cc>)")
+    ap.add_argument(
+        "--cc", default="android-arm64", help="--compare's profile (default android-arm64)"
+    )
     args = ap.parse_args(argv)
     vendor = args.vendor
     new_run()
@@ -1171,6 +1248,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.cache_key:
             print(f"key={cache_key()}")
             return 0
+        if args.compare is not None:
+            reference = Path(args.compare) if args.compare else ndk_sysroot()
+            if reference is None:
+                raise Refused(
+                    "no reference sysroot: name one, or install an NDK for --compare to use its own"
+                )
+            gen = args.gen or ROOT / toolchain.profile(args.cc).out
+            units, differ = compare(reference, vendor / DEST, gen, args.cc)
+            for unit in differ:
+                print(f"{unit}: its object differs", file=sys.stderr)
+            print(
+                f"{len(units) - len(differ)} of {len(units)} objects identical against {reference} ({args.cc}, -O2)"
+            )
+            return 1 if differ else 0
         if args.verify:
             facts = verify(vendor)
             for line in facts:

@@ -69,13 +69,33 @@ MOD_FOLDERS = ("mods", "examples/mods")
 BUILD_INPUTS = "build_inputs.txt"
 
 
-def write_build_inputs(out: Path, dol_sha1: str, profile: str) -> None:
+def write_build_inputs(
+    out: Path,
+    dol_sha1: str,
+    profile: str,
+    *,
+    compiler: str = "",
+    cflags: str = "",
+    sysroot: str = "",
+) -> None:
     """After a --compile that succeeded: the executable its chunks were
     translated from, and the toolchain profile (disc-layer I3, portability
-    3.9). --link holds the executable it builds in to this."""
-    (out / BUILD_INPUTS).write_text(
-        f"dol_sha1 = {dol_sha1}\nprofile = {profile}\n", encoding="utf-8"
-    )
+    3.9); for a gnu profile the compiler and a digest of its flags, and for
+    Android the sysroot's digest (specs/android-sysroot.md 5.3). --link holds
+    the objects to these."""
+    lines = [f"dol_sha1 = {dol_sha1}", f"profile = {profile}"]
+    if compiler:
+        lines += [f"compiler = {compiler}", f"cflags = {cflags}"]
+    if sysroot:
+        lines.append(f"sysroot = {sysroot}")
+    (out / BUILD_INPUTS).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def cflags_digest(cprof: toolchain.Profile) -> str:
+    """The flags a compile's profile declares, as one digest: an edit to them
+    between a compile and a link is a stale link. The level --compile picks
+    is not in it, as CLAUDE.md says the last --compile decides that."""
+    return hashlib.sha256(" ".join(cprof.cflags).encode("utf-8")).hexdigest()
 
 
 def read_build_inputs(out: Path) -> dict[str, str] | None:
@@ -86,28 +106,80 @@ def read_build_inputs(out: Path) -> dict[str, str] | None:
     return {k.strip(): v.strip() for k, v in rows}
 
 
-def check_build_inputs(out: Path, dol_sha1: str) -> str | None:
+def check_build_inputs(
+    out: Path,
+    dol_sha1: str,
+    *,
+    compiler: str = "",
+    cflags: str = "",
+    sysroot: str = "",
+    strict: bool = False,
+    profile: str = "",
+) -> str | None:
     """Why --link must refuse: the chunks in `out` were compiled from another
-    executable than the one about to be built in beside them, which would
-    link old code to new data with nothing saying so. None when they agree,
-    or when there is no record (a gen/ from before this: build_inputs_note)."""
+    executable than the one about to be built in beside them, or by another
+    compiler, with other flags or against another sysroot, which would link
+    old code to new data with nothing saying so. None when they agree, or
+    when there is no record and not `strict` (a gen/ from before this:
+    build_inputs_note). `strict` (Android) takes no record, and no compiler,
+    flags or sysroot in it, as stale too."""
     rec = read_build_inputs(out)
-    if rec is None or rec.get("dol_sha1") == dol_sha1:
+    stale = "run --compile again (stale link)"
+    if rec is None:
+        if strict:
+            return f"{out}: it has no {BUILD_INPUTS}, so nothing says how its objects were compiled; {stale}"
         return None
-    return (
-        f"{out}: its translated code was compiled from the executable with SHA-1 "
-        f"{rec.get('dol_sha1')}, and this one is {dol_sha1}; run --compile again (stale link)"
-    )
+    if rec.get("dol_sha1") != dol_sha1:
+        return (
+            f"{out}: its translated code was compiled from the executable with SHA-1 "
+            f"{rec.get('dol_sha1')}, and this one is {dol_sha1}; {stale}"
+        )
+    if strict and not all(rec.get(k) for k in ("compiler", "cflags", "sysroot")):
+        return f"{out}: its objects were compiled before {BUILD_INPUTS} named their compiler, flags and sysroot; {stale}"
+    if compiler and rec.get("compiler") and rec["compiler"] != compiler:
+        return f'{out}: its objects were compiled by "{rec["compiler"]}", and this link uses "{compiler}"; {stale}'
+    if cflags and rec.get("cflags") and rec["cflags"] != cflags:
+        return f"{out}: its objects were compiled with other flags than {profile or 'its profile'}'s now are; {stale}"
+    if sysroot and rec.get("sysroot") and rec["sysroot"] != sysroot:
+        return (
+            f"{out}: its objects were compiled against the Android sysroot recorded as {rec['sysroot'][:12]}, "
+            f"and vendor/android-sysroot is now {sysroot[:12]}; {stale}"
+        )
+    return None
 
 
-def build_inputs_note(out: Path) -> str | None:
-    """The one-time note for a gen/ compiled before the record existed."""
-    if read_build_inputs(out) is not None:
+def build_inputs_note(out: Path, gnu: bool = False) -> str | None:
+    """The one-time note for a gen/ compiled before the record existed, or,
+    for a gnu profile, before it named the compiler and flags."""
+    rec = read_build_inputs(out)
+    if rec is None:
+        return (
+            f"note: {out} has no {BUILD_INPUTS}, so this link cannot check its code was compiled "
+            "from this executable; the next --compile writes one"
+        )
+    if gnu and not rec.get("compiler"):
+        return (
+            f"note: {out}'s {BUILD_INPUTS} does not name the compiler or flags its objects were "
+            "compiled with, so this link cannot check them; the next --compile writes them"
+        )
+    return None
+
+
+def android_sysroot_problem(vendor: Path = VENDOR) -> str | None:
+    """vendor/android-sysroot not as recorded, in words, or None. The tool is
+    imported here, so a defect in it never stops a Windows build."""
+    import fetch_android_sysroot
+
+    facts = fetch_android_sysroot.verify(vendor)
+    if not facts:
         return None
-    return (
-        f"note: {out} has no {BUILD_INPUTS}, so this link cannot check its code was compiled "
-        "from this executable; the next --compile writes one"
-    )
+    return f"vendor/android-sysroot is not as recorded ({facts[0]}): run python tools/fetch_android_sysroot.py"
+
+
+def android_sysroot_digest(vendor: Path = VENDOR) -> str:
+    import fetch_android_sysroot
+
+    return fetch_android_sysroot.sysroot_digest(vendor)
 
 
 def system_files(
@@ -420,16 +492,66 @@ def split_link_plan(
     return plan
 
 
-def android_link_plan(p: toolchain.Profile, out: Path) -> list[tuple[list[str], Path]]:
-    """An Android profile's links (specs/android.md L12b): a stand-in
-    libsoa_runtime.so from <out>/stub/stub_runtime.c, then libsoa_game.so
-    against it -- the translated objects, disc_sys.c and game_table.c, every
-    function hidden but soa_game (the profile's flags), needing the runtime by
-    name, laid out for 16 KB pages, and refused at link time if it calls
-    anything the runtime does not export (--no-undefined). No runtime, mods or
-    GPU here: the APK carries those (L12c, L12f, L12g)."""
-    objs = sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
+def _target(p: toolchain.Profile) -> str:
+    return next(f for f in p.cflags if f.startswith("--target="))
+
+
+def android_stub_commands(p: toolchain.Profile, stub: Path) -> list[list[str]]:
+    """The three C libraries' stubs (specs/android-sysroot.md 3): seam.txt's
+    names and no others, each at version LIBC, by bionic's SONAMEs. Not the
+    profile's flags whole, whose -fvisibility=hidden would hide every stub.
+    The version script goes through -Xlinker, since clang splits a -Wl,
+    argument at every comma and a player's folder may hold one."""
+    out = []
+    for soname in seam.C_LIBRARIES:
+        base = soname.removesuffix(".so")
+        out.append(
+            [
+                _target(p),
+                "-fPIC",
+                "-fvisibility=default",
+                "-fno-builtin",
+                "-w",
+                "-shared",
+                "-nostdlib",
+                f"/Fe{stub / soname}",
+                str(stub / f"{base}.c"),
+                f"-Wl,-soname,{soname}",
+                "-Xlinker",
+                f"--version-script={stub / (base + '.vers')}",
+            ]
+        )
+    return out
+
+
+def android_link_plan(
+    p: toolchain.Profile,
+    out: Path,
+    *,
+    units: list[Path] | None = None,
+    flags: tuple[str, ...] = (),
+    page: int = 16384,
+    undefined: bool = False,
+    needed: tuple[str, ...] = (),
+    stubs: bool = True,
+) -> list[tuple[list[str], Path]]:
+    """An Android profile's links (specs/android.md L12b, specs/android-sysroot.md
+    5.4): the C libraries' stubs, a stand-in libsoa_runtime.so from
+    <out>/stub/stub_runtime.c, then libsoa_game.so against them -- the
+    translated objects (or `units`), disc_sys.c and game_table.c, every
+    function hidden but soa_game, needing the runtime by name, laid out for
+    `page`-byte pages, and refused at link time if it calls anything the
+    runtime or seam.txt does not give (--no-undefined, unless `undefined`).
+    `needed` adds empty libraries by SONAME, for a mutant; `stubs=False`
+    leaves the C stubs to a caller that put them in <out>/stub already. No
+    runtime, mods or GPU here: the APK carries those (L12c, L12f, L12g)."""
+    objs = (
+        units
+        if units is not None
+        else sorted(out.glob("chunk_*" + p.objext)) + [out / ("dispatch" + p.objext)]
+    )
     stub = out / "stub"
+    plan = [(cmd, Path(".")) for cmd in android_stub_commands(p, stub)] if stubs else []
     stand_in = [
         *p.cflags,
         "-fvisibility=default",
@@ -437,9 +559,27 @@ def android_link_plan(p: toolchain.Profile, out: Path) -> list[tuple[list[str], 
         f"/Fe{stub / seam.RUNTIME_SONAME}",
         str(stub / "stub_runtime.c"),
         f"-Wl,-soname,{seam.RUNTIME_SONAME}",
+        f"-L{stub}",
+        *p.linker,
     ]
+    plan.append((stand_in, Path(".")))
+    for name in needed:
+        plan.append(
+            (
+                [
+                    _target(p),
+                    "-shared",
+                    "-nostdlib",
+                    f"/Fe{stub / name}",
+                    str(stub / "empty.c"),
+                    f"-Wl,-soname,{name}",
+                ],
+                Path("."),
+            )
+        )
     game = [
         *p.cflags,
+        *flags,
         "-shared",
         f"/I{RUNTIME}",
         f"/I{out}",
@@ -448,13 +588,140 @@ def android_link_plan(p: toolchain.Profile, out: Path) -> list[tuple[list[str], 
         str(out / "game_table.c"),
         *map(str, objs),
         f"-Wl,-soname,{seam.GAME_SONAME}",
-        "-Wl,-z,max-page-size=16384",
-        "-Wl,--no-undefined",
+        f"-Wl,-z,max-page-size={page}",
+        *([] if undefined else ["-Wl,--no-undefined"]),
+        *(["-Wl,--no-as-needed", *(str(stub / n) for n in needed)] if needed else []),
         f"-L{stub}",
         f"-l:{seam.RUNTIME_SONAME}",
         *p.linker,
     ]
-    return [(stand_in, Path(".")), (game, Path("."))]
+    plan.append((game, Path(".")))
+    return plan
+
+
+def post_link_problems(
+    prof: toolchain.Profile, lib: Path, the_seam: seam.Seam, hle, baked: str, dol_sha1: str
+) -> list[str]:
+    """The phone's own checks (runtime/elfcheck.c), in its words: what the
+    player would be told after copying the library over. The machine by the
+    profile's name, the C libraries by bionic's names alone, and the record's
+    dol= held to the executable built in."""
+    return elfcheck.problems(
+        elfcheck.read(lib),
+        machine=elfcheck.ANDROID_MACHINES[prof.name],
+        exports=seam.runtime_exports(the_seam, hle),
+        libc=the_seam.libc,
+        record=seam.record(True, baked),
+        dol=dol_sha1,
+        android=True,
+        path=str(lib),
+    )
+
+
+def fail_reason(proc) -> str:
+    """The line of a failed command that says why, from stdout and stderr
+    both: clang writes its errors to stderr, cl to stdout."""
+    text = (proc.stdout or "") + (proc.stderr or "")
+    errs = [ln for ln in text.splitlines() if "error" in ln.lower()]
+    return errs[0] if errs else text[-300:]
+
+
+def progress_label(cmd: list[str], cwd: Path, out: Path, exe: Path) -> str:
+    """The [build] line for one command of a link plan: the link, a mod, an
+    Android stub, or the decompiled units."""
+    if cwd != Path("."):
+        return f"mod {cwd.name}"
+    made = next((a[3:].lstrip(":") for a in cmd if a.startswith("/Fe")), "")
+    if made and Path(made) in (exe, out / seam.GAME_SONAME):
+        return "link"
+    if made and Path(made).parent == out / "stub":
+        return f"stub {Path(made).name}"
+    return "decompiled units"
+
+
+def compile_units(
+    prof: toolchain.Profile,
+    cprof: toolchain.Profile,
+    out: Path,
+    units: list[Path],
+    optimize: bool,
+    progress: bool,
+) -> collections.Counter:
+    """Every unit compiled with cprof's flags by prof's compiler, a [build]
+    line each with progress, a FAIL line with its reason for each that fails."""
+
+    def build(path: Path):
+        return path, toolchain.cc(compile_command(cprof, out, path, optimize), out, prof)
+
+    failures: collections.Counter = collections.Counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for n, (path, proc) in enumerate(pool.map(build, units), 1):
+            if progress:
+                print(f"[build] {n}/{len(units)} {path.name}", flush=True)
+            if proc.returncode != 0:
+                failures[path.name] += 1
+                print(f"  FAIL {path.name}: {fail_reason(proc)}")
+    return failures
+
+
+def run_plan(
+    plan: list[tuple[list[str], Path]],
+    prof: toolchain.Profile,
+    out: Path,
+    exe: Path,
+    progress: bool,
+    name_each: bool = False,
+) -> int:
+    """A link plan's commands in order: 1 when a link fails or any mod did.
+    `name_each` says each library linked, as a split or Android build does."""
+    t0 = time.time()
+    failed_mods = 0
+    for cmd, cwd in plan:
+        if progress:
+            print(f"[build] {progress_label(cmd, cwd, out, exe)}", flush=True)
+        if cwd != Path(".") and prof.style == "gnu":
+            # the mod's own text beside the library this build makes
+            src = next(s for s in mod_dll_sources() if s.parent.name == cwd.name)
+            cwd.mkdir(parents=True, exist_ok=True)
+            for name in MOD_TEXT:
+                if (src.parent / name).exists():
+                    (cwd / name).write_bytes((src.parent / name).read_bytes())
+        proc = toolchain.cc(cmd, cwd, prof)
+        if cwd != Path("."):  # a mod's library, beside its mod.c or under <out>/mods
+            lib = "mod.so" if prof.name in ("gcc", "clang") else "mod.dll"
+            try:
+                where = cwd.relative_to(RUNTIME.parent) / lib
+            except ValueError:  # a player's folder, outside the source tree
+                where = cwd / lib
+            if proc.returncode != 0:
+                print(f"  FAIL {where}: {fail_reason(proc)}", file=sys.stderr)
+                failed_mods += 1
+            else:
+                print(f"built {where}")
+            continue
+        if proc.returncode != 0:
+            print(((proc.stdout or "") + (proc.stderr or ""))[-2000:], file=sys.stderr)
+            return 1
+        made = next((a[3:].lstrip(":") for a in cmd if a.startswith("/Fe")), "")
+        if made and Path(made) == exe:
+            print(f"linked {exe} ({time.time() - t0:.1f}s)")
+        elif name_each and made:
+            print(f"linked {made} ({time.time() - t0:.1f}s)")
+    return 1 if failed_mods else 0
+
+
+def compile_profile(prof: toolchain.Profile, split: bool) -> toolchain.Profile:
+    """The profile a compile uses: a split build's game library is a shared
+    object, every function in it hidden but the table (specs/android.md 3.2)."""
+    if split:
+        return dataclasses.replace(prof, cflags=(*prof.cflags, "-fPIC", "-fvisibility=hidden"))
+    return prof
+
+
+def cc_choices() -> list[str]:
+    """--cc's choices: every profile but the NDK's pair, which only the
+    runtime's check uses (compile_runtime.py)."""
+    return [n for n, p in toolchain.PROFILES.items() if not toolchain.is_ndk(p)]
 
 
 def builds_mods(p: toolchain.Profile) -> bool:
@@ -572,7 +839,7 @@ def main() -> int:
     ap.add_argument("--config", type=Path, default=Path("config"))
     ap.add_argument(
         "--cc",
-        choices=list(toolchain.PROFILES),
+        choices=cc_choices(),
         default="msvc",
         help="the toolchain profile; a non-msvc one writes to its own --out (clang-cl: gen/clang)",
     )
@@ -613,7 +880,7 @@ def main() -> int:
     # An Android profile builds the game library alone, as the player's PC
     # does for the phone (specs/android.md L12b): no src/, as the APK's
     # runtime has none.
-    android = prof in toolchain.ANDROID
+    android = toolchain.is_android(prof)
     if android:
         args.no_decomp = True
     if args.split:
@@ -632,14 +899,53 @@ def main() -> int:
     shown = "MSVC" if prof is toolchain.MSVC else prof.name
     into = "" if prof is toolchain.MSVC else f" into {args.out}"
 
+    # Android (specs/android-sysroot.md 5.2): the compiler, its identity and
+    # the sysroot, before anything is read or written.
+    if android and (args.compile or args.link):
+        if toolchain.compiler_path(prof) is None:
+            print(
+                f"\n{prof.name}: no compiler or no sysroot here, so nothing was built",
+                file=sys.stderr,
+            )
+            print(
+                "the game library for Android is built by llvm-mingw's clang against this "
+                "repository's own sysroot; looked in, in order:",
+                file=sys.stderr,
+            )
+            for place in toolchain.android_places():
+                print(f"  {place}", file=sys.stderr)
+            return 1
+        problem = toolchain.mingw_identity_problem(toolchain.compiler_path(prof))
+        if problem:
+            print(f"{problem}: python tools/fetch_mingw.py fetches it", file=sys.stderr)
+            return 1
+        problem = android_sysroot_problem(VENDOR)
+        if problem:
+            print(problem, file=sys.stderr)
+            return 1
+    cprof = compile_profile(prof, args.split)
+    compiler = (
+        toolchain.compiler_id(prof) if prof.style == "gnu" and (args.compile or args.link) else ""
+    )
+    sysroot = android_sysroot_digest(VENDOR) if android and (args.compile or args.link) else ""
+
     if args.progress:
         print("[build] translate", flush=True)
     dol_bytes = args.dol.read_bytes()
     dol_sha1 = hashlib.sha1(dol_bytes, usedforsecurity=False).hexdigest()
     # The stale-link guard, before anything is parsed: a link of chunks
-    # compiled from another executable is refused (disc-layer I3).
+    # compiled from another executable, by another compiler, with other
+    # flags or against another sysroot, is refused (disc-layer I3, R5a).
     if args.link and not args.compile:
-        stale = check_build_inputs(args.out, dol_sha1)
+        stale = check_build_inputs(
+            args.out,
+            dol_sha1,
+            compiler=compiler,
+            cflags=cflags_digest(cprof) if compiler else "",
+            sysroot=sysroot,
+            strict=android,
+            profile=prof.name,
+        )
         if stale:
             print(stale, file=sys.stderr)
             return 1
@@ -702,10 +1008,7 @@ def main() -> int:
         encoding="utf-8",
     )
     if android:
-        (args.out / "stub").mkdir(exist_ok=True)
-        (args.out / "stub" / "stub_runtime.c").write_text(
-            seam.stub_runtime_c(the_seam, hle), encoding="utf-8"
-        )
+        seam.write_android_stubs(args.out / "stub", the_seam, hle)
     if args.split:
         (args.out / "runtime_seam.c").write_text(
             seam.runtime_seam_c(the_seam, hle, seam.record(True, baked)), encoding="utf-8"
@@ -749,49 +1052,31 @@ def main() -> int:
     if args.compile:
         if toolchain.compiler_path(prof) is None:
             print(f"\n{shown} not found; skipping compile", file=sys.stderr)
-            if android:
-                print("no Android NDK in any of these, in order:", file=sys.stderr)
-                for place in toolchain.android_ndk_places():
-                    print(f"  {place}", file=sys.stderr)
             return 1
         units = [args.out / "dispatch.c", *chunks]
         level = opt_level(prof, args.optimize)
-        # A split build's game library is a shared object, every function in
-        # it hidden but the table (specs/android.md 3.2).
-        cprof = (
-            dataclasses.replace(prof, cflags=(*prof.cflags, "-fPIC", "-fvisibility=hidden"))
-            if args.split
-            else prof
-        )
         print(f"\ncompiling {len(units)} translation units with {shown} ({level}){into} ...")
         t0 = time.time()
-
-        def build(path: Path):
-            return path, toolchain.cc(
-                compile_command(cprof, args.out, path, args.optimize), args.out, prof
-            )
-
-        failures = collections.Counter()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for n, (path, proc) in enumerate(pool.map(build, units), 1):
-                if args.progress:
-                    print(f"[build] {n}/{len(units)} {path.name}", flush=True)
-                if proc.returncode != 0:
-                    failures[path.name] += 1
-                    errs = [ln for ln in proc.stdout.splitlines() if "error" in ln.lower()]
-                    print(f"  FAIL {path.name}: {errs[0] if errs else proc.stdout[-300:]}")
+        failures = compile_units(prof, cprof, args.out, units, args.optimize, args.progress)
         elapsed = time.time() - t0
         print(f"compiled {len(units) - len(failures)}/{len(units)} units in {elapsed:.1f}s")
         if failures:
             return 1
-        write_build_inputs(args.out, dol_sha1, prof.name)
+        write_build_inputs(
+            args.out,
+            dol_sha1,
+            prof.name,
+            compiler=compiler,
+            cflags=cflags_digest(cprof) if compiler else "",
+            sysroot=sysroot,
+        )
 
     if args.link:
         if toolchain.compiler_path(prof) is None:
             print(f"\n{shown} not found; skipping link", file=sys.stderr)
             return 1
         exe = args.out / ("soa" + prof.exeext)
-        note = build_inputs_note(args.out)
+        note = build_inputs_note(args.out, gnu=prof.style == "gnu")
         if note:
             print(note)
         t0 = time.time()
@@ -855,7 +1140,6 @@ def main() -> int:
                 print(
                     "window and sound: none, headless (python tools/fetch_sdl.py, then --link again)"
                 )
-        failed_mods = 0
         defines = ("/DSOA_NO_DECOMP=1",) if args.no_decomp else ()
         if android:
             plan = android_link_plan(prof, args.out)
@@ -865,62 +1149,13 @@ def main() -> int:
             plan = link_plan(
                 prof, args.out, dc_files, dc_defines, gxv, defines, args.reproducible, sdl
             )
-        exe_flags = (f"/Fe:{exe}", f"/Fe{exe}")
-        for cmd, cwd in plan:
-            if args.progress:
-                what = "link" if any(a in exe_flags for a in cmd) else f"mod {cwd.name}"
-                if cwd == Path(".") and what != "link":
-                    what = "decompiled units"
-                print(f"[build] {what}", flush=True)
-            if cwd != Path(".") and prof.style == "gnu":
-                # the mod's own text beside the library this build makes
-                src = next(s for s in mod_dll_sources() if s.parent.name == cwd.name)
-                cwd.mkdir(parents=True, exist_ok=True)
-                for name in MOD_TEXT:
-                    if (src.parent / name).exists():
-                        (cwd / name).write_bytes((src.parent / name).read_bytes())
-            proc = toolchain.cc(cmd, cwd, prof)
-            if cwd != Path("."):  # a mod's library, beside its mod.c or under <out>/mods
-                lib = "mod.so" if prof.name in ("gcc", "clang") else "mod.dll"
-                try:
-                    where = cwd.relative_to(RUNTIME.parent) / lib
-                except ValueError:  # a player's folder, outside the source tree
-                    where = cwd / lib
-                if proc.returncode != 0:
-                    out_text = proc.stdout + proc.stderr
-                    errs = [ln for ln in out_text.splitlines() if "error" in ln.lower()]
-                    print(
-                        f"  FAIL {where}: {errs[0] if errs else out_text[-300:]}",
-                        file=sys.stderr,
-                    )
-                    failed_mods += 1
-                else:
-                    print(f"built {where}")
-                continue
-            if proc.returncode != 0:
-                print((proc.stdout + proc.stderr)[-2000:], file=sys.stderr)
-                return 1
-            if any(a in exe_flags for a in cmd):
-                print(f"linked {exe} ({time.time() - t0:.1f}s)")
-            elif args.split or android:
-                made = next(a[3:] for a in cmd if a.startswith("/Fe"))
-                print(f"linked {made} ({time.time() - t0:.1f}s)")
-        if failed_mods:
+        if run_plan(plan, prof, args.out, exe, args.progress, name_each=args.split or android):
             return 1
         if android:
             # The phone's own checks (runtime/elfcheck.c), here first, in its
             # words: what the player would be told after copying it over.
             lib = args.out / seam.GAME_SONAME
-            found = elfcheck.problems(
-                elfcheck.read(lib),
-                machine=elfcheck.EM_AARCH64
-                if prof is toolchain.ANDROID_ARM64
-                else elfcheck.EM_X86_64,
-                exports=seam.runtime_exports(the_seam, hle),
-                libc=the_seam.libc,
-                record=seam.record(True, baked),
-                path=str(lib),
-            )
+            found = post_link_problems(prof, lib, the_seam, hle, baked, dol_sha1)
             for problem in found:
                 print(f"  {problem}", file=sys.stderr)
             if found:

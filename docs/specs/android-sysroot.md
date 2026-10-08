@@ -357,6 +357,8 @@ a first bless too: it is read whole before it is pinned, and the owner reads it 
 
 #### Part 2: the route (one push)
 
+*Done 2026-10-07 (FINDINGS "R5a part 2"), with what differed from this text recorded there.*
+
 *Files:*
 - `tools/soa/toolchain.py` (§4): the profiles; `ANDROID_NDK` and its two profiles; `is_android()`, `is_ndk()`,
   `android_sysroot()`; `compiler_path()`'s branches; `android_places()`; `compiler_id()`; `gnu_commands()` with the

@@ -28,9 +28,9 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5d | the three above with `--cc clang-cl`, then the no-skip pytest step | 4–5 s each, 12 s | MSVC and a clang-cl (`SOA_CLANG_CL`) |
 | 5e | `python tools/citest/compile_runtime.py --cc mingw` | 5 s | llvm-mingw (`python tools/fetch_mingw.py`) |
 | 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
-| 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` under `noskip` | 9 s | llvm-mingw, and the sysroot (`python tools/fetch_android_sysroot.py`) |
+| 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` and `test_android_build.py` under `noskip` | 43 s | llvm-mingw, the sysroot (`python tools/fetch_android_sysroot.py`), and MSVC for `elfcheck.c`'s half |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 1186 s | nothing (409 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 982 s | nothing (409 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -293,20 +293,23 @@ compiled 39/39 runtime translation units
 
 ### 5g. R5's Android sysroot
 
-CI's `The Android sysroot through R5's route` job (R5a), on Ubuntu and
-Windows: the phone's C headers and crt objects, built by
+CI's `The Android game library through R5's route` job (R5a), on Ubuntu
+and Windows: the phone's C headers and crt objects, built by
 `tools/fetch_android_sysroot.py` from bionic's pinned files with llvm-mingw's
-clang. Run it after touching the tool or `toolchain.py`'s llvm-mingw lookup.
+clang, and the game library built through them. Run it after touching the
+tool, the Android profiles or `toolchain.py`'s llvm-mingw lookup, `seam.py`'s
+stubs or `recompile.py`'s Android link.
 The first build fetches four archives (about 10 s); later ones ask nothing:
 
 ```
 python tools/fetch_android_sysroot.py --verify
 $env:PYTHONPATH = 'tools/citest'
-python -m pytest -p noskip tools/tests/test_android_sysroot.py -q
+$env:SOA_CC = 'msvc'
+python -m pytest -p noskip tools/tests/test_android_sysroot.py tools/tests/test_android_build.py -q
 ```
 ```
 35 of 35 recorded Android sysroot file(s) unchanged
-20 passed in 8.62s
+60 passed in 42.81s
 ```
 
 **On failure:** a crt object off its pin means another clang or a changed
@@ -363,13 +366,13 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1420 passed, 41 skipped in 1186.10s
+1449 passed, 41 skipped in 981.69s
 ```
 
-1461 tests in 90 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1401 passed, 42 skipped` without
+1490 tests in 90 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1430 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `1011 passed, 450 skipped` without MSVC. The 41
+into one module-level skip), `1040 passed, 450 skipped` without MSVC. The 41
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
 `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),

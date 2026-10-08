@@ -702,3 +702,145 @@ def test_from_fills_the_cache_with_what_is_as_pinned_and_names_the_rest(
         f"libc/private/c.h: not in {src}",
     ]
     assert (cache / "libc/include/a.h").exists() and not (cache / "libc/include/b.h").exists()
+
+
+# ---- 11, 12, 16 (R5a part 2): the closure, bionic's placement, --compare ----
+
+SYSROOT = toolchain.android_sysroot()
+needs_sysroot = pytest.mark.skipif(
+    SYSROOT is None or toolchain.mingw_clang() is None,
+    reason="no llvm-mingw or no Android sysroot (python tools/fetch_mingw.py, then python tools/fetch_android_sysroot.py)",
+)
+needs_lists = pytest.mark.skipif(
+    not all((CACHE / p).is_file() for p in fas.TEXT_FILES),
+    reason="no check lists (python tools/fetch_android_sysroot.py --lists)",
+)
+
+
+def headers_read(stderr: str) -> list[Path]:
+    """The headers clang -H names, one a line after its depth's dots, each
+    path whole, spaces kept."""
+    out = []
+    for line in stderr.splitlines():
+        dots = len(line) - len(line.lstrip("."))
+        if dots and line[dots : dots + 1] == " ":
+            out.append(Path(line[dots + 1 :].rstrip()))
+    return out
+
+
+def test_the_include_parser_keeps_a_path_whole():
+    text = ". C:/Skies, the game/runtime/cpu.h\n.. C:/a b/usr/include/math.h\nMultiple include guards may be useful for:\n"
+    assert headers_read(text) == [
+        Path("C:/Skies, the game/runtime/cpu.h"),
+        Path("C:/a b/usr/include/math.h"),
+    ]
+
+
+def closure(p, runtime: Path, tmp: Path) -> subprocess.CompletedProcess:
+    unit = tmp / f"closure-{p.name}.c"
+    unit.write_text(
+        '#include "cpu.h"\n#include "soa_game.h"\n#include <stddef.h>\n#include <stdint.h>\n',
+        encoding="utf-8",
+    )
+    cmd = [
+        toolchain.mingw_clang(),
+        f"--sysroot={SYSROOT}",
+        *p.cflags,
+        f"-I{runtime}",
+        "-fsyntax-only",
+        "-H",
+        str(unit),
+    ]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env=toolchain.clean_clang_env(),
+        check=False,
+    )
+
+
+@needs_sysroot
+def test_the_sysroot_is_the_closure_of_what_the_game_includes(tmp_path):
+    root = SYSROOT.resolve()
+    seen = set()
+    for p in toolchain.ANDROID:
+        run = closure(p, ROOT / "runtime", tmp_path)
+        assert run.returncode == 0, run.stderr
+        read = {
+            h.resolve().relative_to(root).as_posix()
+            for h in headers_read(run.stderr)
+            if h.resolve().is_relative_to(root)
+        }
+        other = "x86_64-linux-android" if p.name == "android-arm64" else "aarch64-linux-android"
+        want = {place for place in fas.SHIP.values() if f"/{other}/" not in place}
+        assert read == want, (p.name, sorted(read ^ want))
+        seen |= read
+    unused = set(fas.SHIP.values()) - seen
+    assert not unused, f"shipped and read by no compile: {sorted(unused)}"
+    # a new include the sysroot does not hold fails, naming it
+    copy = tmp_path / "runtime"
+    shutil.copytree(ROOT / "runtime", copy, ignore=shutil.ignore_patterns("*.obj", "*.o"))
+    cpu = copy / "cpu.h"
+    cpu.write_text("#include <stdlib.h>\n" + cpu.read_text(encoding="utf-8"), encoding="utf-8")
+    run = closure(toolchain.ANDROID_X86_64, copy, tmp_path)
+    assert run.returncode != 0 and "stdlib.h" in run.stderr
+
+
+def libc_block(text: str) -> dict[str, str]:
+    """The names in a symbol list's LIBC block, each with its comment."""
+    out = {}
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("LIBC {"):
+            inside = True
+        elif inside and line.startswith("}"):
+            break
+        elif inside and line.strip().endswith(";") or (inside and ";" in line):
+            name, _, comment = line.strip().partition(";")
+            if name and " " not in name and name not in ("global:", "local:"):
+                out[name] = comment
+    return out
+
+
+@needs_lists
+def test_the_seam_s_c_library_names_are_bionic_s():
+    import re
+
+    from soa import seam
+
+    the_seam = seam.read_seam(ROOT / "config" / "seam.txt")
+    lists = {
+        "libc.so": libc_block((CACHE / "libc/libc.map.txt").read_text(encoding="utf-8")),
+        "libm.so": libc_block((CACHE / "libm/libm.map.txt").read_text(encoding="utf-8")),
+    }
+    for lib, names in seam.c_library_names(the_seam).items():
+        for name in names:
+            assert name in lists[lib], f"{name} is not in {lib}'s LIBC block"
+            for level in re.findall(r"introduced(?:-(?:arm64|x86_64))?=(\d+)", lists[lib][name]):
+                assert int(level) <= 33, (name, level)
+    # and the placement is bionic's: no libc name defined in the other list
+    for name in the_seam.libc:
+        where = "libm.so" if name in seam.BIONIC_LIBM else "libc.so"
+        other = "libc.so" if where == "libm.so" else "libm.so"
+        assert name in lists[where] and name not in lists[other], name
+
+
+@needs_sysroot
+def test_compare_names_an_object_that_differs(tmp_path):
+    gen = tmp_path / "gen"
+    gen.mkdir()
+    (gen / "chunk_000.c").write_text(
+        '#include "cpu.h"\n#include <math.h>\ndouble g(double x) { return sqrt(x); }\n',
+        encoding="utf-8",
+    )
+    copy = tmp_path / "sysroot"
+    shutil.copytree(SYSROOT, copy)
+    units, differ = fas.compare(SYSROOT, copy, gen, "android-x86_64")
+    assert (units, differ) == (["chunk_000.c"], [])
+    math = copy / "usr" / "include" / "math.h"
+    math.write_text(
+        math.read_text(encoding="utf-8") + "#define sqrt(x) ((x) * 2.0)\n", encoding="utf-8"
+    )
+    assert fas.compare(SYSROOT, copy, gen, "android-x86_64") == (["chunk_000.c"], ["chunk_000.c"])

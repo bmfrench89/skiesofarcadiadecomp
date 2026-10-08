@@ -27,6 +27,8 @@ from soa import seam
 
 MACHINES = {3: "32-bit x86", 40: "32-bit ARM", 62: "x86-64", 183: "64-bit ARM (AArch64)"}
 EM_ARM, EM_AARCH64, EM_X86_64 = 40, 183, 62
+# The machine each Android profile builds for, by the profile's name.
+ANDROID_MACHINES = {"android-arm64": EM_AARCH64, "android-x86_64": EM_X86_64}
 # A Windows file's machine, from its COFF header, as the ELF number MACHINES
 # knows it by: x86, ARM (and its Thumb and Windows RT forms), x86-64, ARM64.
 PE_MACHINES = {0x14C: 3, 0x1C0: 40, 0x1C2: 40, 0x1C4: 40, 0x8664: 62, 0xAA64: 183}
@@ -35,7 +37,7 @@ MIN_ALIGN = 16384
 PT_LOAD, SHT_DYNAMIC, SHT_DYNSYM = 1, 6, 11
 DT_NEEDED, DT_SONAME, DT_TEXTREL, DT_FLAGS, DF_TEXTREL = 1, 14, 22, 30, 4
 STB_WEAK = 2
-C_LIBRARIES = ("libc.so", "libm.so", "libdl.so")
+C_LIBRARIES = seam.C_LIBRARIES
 READ_CAP = 64 << 20  # elfcheck.c's read_at reads no section larger
 # elfcheck.c's buffers: the record's first 511 bytes are read, and of each of
 # its values the first 127, so a longer record is judged by that much alone

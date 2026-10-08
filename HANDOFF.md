@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1461 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1490 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1461 |
+| Python tests | 1490 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -419,11 +419,11 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-07)
 
-**The state at the stop (2026-10-07, after R5a part 1):** L10 (d6d64aa),
+**The state at the stop (2026-10-07, after R5a part 2):** L10 (d6d64aa),
 L12a (75d5ce2), L12b (316e50d), L12c (64bcd85), L12d (6e39f13 and
 abec5f6), the box a stop mid-play shows (5acabbd), R5's gate (6d5916c),
-R5-0 (14c764f), the SDL test's five reads (727c687) and R5a part 1 (with
-this section) are pushed; read CI for the last. R5's design is
+R5-0 (14c764f), the SDL test's five reads (727c687), R5a part 1 (664aca4)
+and R5a part 2 (with this section) are pushed; read CI for the last. R5's design is
 `docs/specs/android-sysroot.md`; `vendor/android-sysroot` here is built
 by its tool, from `vendor/android-sysroot-src`. **R5-0 moved `baked=`** (705f401d4dcd to
 57f744e5121c here, FINDINGS "R5-0"), so the emulator's APK and library
@@ -762,9 +762,10 @@ C5c) is now done.
    2026-10-07 in `docs/specs/android-sysroot.md`, to the owner's answers
    D-34 to D-36, and its first slice, R5-0 (the package's build had
    stopped at `import fetch_sdl` since L10), is done (FINDINGS "R5-0"),
-   and so is R5a part 1, `tools/fetch_android_sysroot.py` (FINDINGS "R5a
-   part 1"). R5a part 2, the game library built through the sysroot by
-   `recompile.py` and `gamefixture`, with its emulator proof, is next. Where L12g
+   and so is R5a, `tools/fetch_android_sysroot.py` and the game library
+   built through it by `recompile.py` with no NDK, proven on the emulator
+   (FINDINGS "R5a part 1", "R5a part 2"). R5b, the player's build and the
+   package, is next. Where L12g
    (mods on the emulator) and the proposed L12h (card import and export
    through the picker) come after it is still the owner's. D-33 (the
    package name and release key) is still the owner's, and comes before

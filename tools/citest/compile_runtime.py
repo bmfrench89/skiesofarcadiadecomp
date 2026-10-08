@@ -1,6 +1,7 @@
 """Compile every runtime/*.c on its own, no linking and no generated code.
 
-    python tools/citest/compile_runtime.py [--cc msvc|clang-cl|gcc|clang] [--out build/citest/runtime]
+    python tools/citest/compile_runtime.py [--cc msvc|clang-cl|gcc|clang|mingw|android-arm64-ndk|android-x86_64-ndk]
+        [--out build/citest/runtime]
 
 The runtime is the part of the port that is actually hand-written C, and
 until this existed nothing built it except the owner's machine, so a syntax
@@ -30,6 +31,14 @@ they are compiled again with SOA_SDL=1 against SDL3's headers (python
 tools/fetch_sdl.py --headers), with the three files whose code SOA_SDL
 changes; without the headers they are reported as not compiled, and
 --require-sdl, which CI's Linux legs pass, makes that a failure.
+
+For the phone, the runtime is the APK's, which the NDK compiles: --cc
+android-arm64-ndk and android-x86_64-ndk compile every file with the NDK's
+clang and the game library's flags, SDL's files with them. --cc
+android-arm64 and android-x86_64 build the game library alone, through
+llvm-mingw and this repository's sysroot (tools/recompile.py), which holds
+no header the runtime needs beyond the game's (jni.h, android/log.h,
+pthread.h, SDL's, Vulkan's), so they are refused here, naming the -ndk one.
 """
 
 from __future__ import annotations
@@ -163,6 +172,13 @@ def main() -> int:
     )
     args = ap.parse_args()
     prof = toolchain.profile(args.cc)
+    if toolchain.is_android(prof):
+        print(
+            f"the runtime is the APK's, compiled by the NDK: --cc {prof.name}-ndk; "
+            f"--cc {prof.name} builds the game library (tools/recompile.py)",
+            file=sys.stderr,
+        )
+        return 1
     if args.out is None:
         args.out = (
             ROOT
@@ -213,12 +229,12 @@ def main() -> int:
         backend_ok = compiled
         gxv_note = "compiled as the backend too" if compiled else "FAILED as the backend"
 
-    # The window and the sound off Windows (L10): Linux's profiles and
-    # Android's (L12), since window_sdl.c is POSIX's (_exit from unistd.h) and
+    # The window and the sound off Windows (L10): Linux's profiles and the
+    # NDK's (L12), since window_sdl.c is POSIX's (_exit from unistd.h) and
     # Windows keeps window.c.
     sdl_ok = True
     sdl_note = "not compiled with SOA_SDL: Windows keeps window.c (D2)"
-    if prof.name in ("gcc", "clang") or prof in toolchain.ANDROID:
+    if prof.name in ("gcc", "clang") or toolchain.is_ndk(prof):
         sdl_note = (
             "not compiled with SOA_SDL: no SDL3 headers (python tools/fetch_sdl.py --headers)"
         )

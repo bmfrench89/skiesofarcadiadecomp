@@ -582,7 +582,7 @@ def test_the_screen_is_read_from_uiautomators_dump():
 
 
 def fake_fixture(monkeypatch, words: str) -> list[tuple]:
-    """Stands in for tools/soa/gamefixture.py, which needs the NDK: what
+    """Stands in for tools/soa/gamefixture.py, which needs llvm-mingw and the sysroot: what
     android.py asks of it, and one library with `words` as its refusal."""
     asked = []
 

@@ -303,10 +303,12 @@ jobs:
   # pinned sources -- the 30 headers the translated C reads and the crt
   # objects built from bionic's own source, each held to its pin. On Ubuntu
   # and on Windows, which players build on: both must make the same bytes.
-  # Part 1 builds and checks the sysroot; part 2 adds the game library built
-  # through it. A skip is a failure here.
+  # Then the game library built through it -- a game of two functions, the
+  # C libraries' stubs from config/seam.txt -- checked by tools/soa/elfcheck.py
+  # and by runtime/elfcheck.c (gcc on Ubuntu, MSVC on Windows), which must
+  # agree. A skip is a failure here.
   android-route:
-    name: The Android sysroot through R5's route (${{ matrix.os }})
+    name: The Android game library through R5's route (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -330,9 +332,11 @@ jobs:
           python tools/fetch_mingw.py
           python tools/fetch_mingw.py --verify
 
-      - name: The compiler the sysroot is built with
+      - name: The compilers the checks use
         shell: bash
-        run: python -c "import sys; sys.path.insert(0, 'tools'); from soa import toolchain; c = toolchain.mingw_clang(); print(c, toolchain.clang_id(c) if c else 'none')"
+        run: |
+          python -c "import sys; sys.path.insert(0, 'tools'); from soa import toolchain; c = toolchain.mingw_clang(); print(c, toolchain.clang_id(c) if c else 'none')"
+          if [ "$RUNNER_OS" = Linux ]; then gcc --version; fi
 
       # bionic's pinned files, cached on the pins alone (not the script's bytes
       # or line ends), shared across systems, restored by prefix when the pins
@@ -364,11 +368,12 @@ jobs:
           key: android-sysroot-src-${{ steps.key.outputs.key }}
           enableCrossOsArchive: true
 
-      - name: The sysroot's checks, no skips
+      - name: The sysroot and the route, no skips
         if: ${{ !cancelled() }}
         env:
           PYTHONPATH: tools/citest
-        run: python -m pytest -p noskip tools/tests/test_android_sysroot.py -v
+          SOA_CC: ${{ runner.os == 'Linux' && 'gcc' || 'msvc' }}
+        run: python -m pytest -p noskip tools/tests/test_android_sysroot.py tools/tests/test_android_build.py -v
 
   # The same checks under gcc and clang on Linux (portability.md 3.12, L4b).
   # These are the first runs of plat.h's POSIX half -- pthread_create, the
@@ -488,20 +493,13 @@ jobs:
           PYTHONPATH: tools/citest
         run: python -m pytest -p noskip tools/tests/test_import.py -v
 
-      # specs/android.md L12b: the game library for Android, built with the
-      # NDK the runner image carries (ANDROID_NDK_HOME): a game of two functions
-      # as recompile.py builds the real one, checked by tools/soa/elfcheck.py and
-      # by runtime/elfcheck.c built for this machine, which must agree; then
-      # every runtime file, the SDL window and sound among them, compiled for
-      # the phone. A skip is a failure here
-      - name: The Android game library and runtime, no skips
+      # specs/android.md L12c: every runtime file, the SDL window and sound
+      # among them, compiled for the phone with the NDK the runner image
+      # carries (ANDROID_NDK_HOME), as the APK's Gradle build compiles them.
+      # The game library is the android-route job's (R5a).
+      - name: The runtime compiled for the phone (the NDK), no skips
         if: ${{ !cancelled() && matrix.cc == 'gcc' }}
-        env:
-          SOA_CC: gcc
-          PYTHONPATH: tools/citest
-        run: |
-          python -m pytest -p noskip tools/tests/test_android_build.py -v
-          python tools/citest/compile_runtime.py --cc android-arm64 --require-gxv --require-sdl
+        run: python tools/citest/compile_runtime.py --cc android-arm64-ndk --require-gxv --require-sdl
 
       # portability L10: SDL3 built from its pinned source with the packages
       # tools/fetch_sdl.py names, then the window and sound run on an X

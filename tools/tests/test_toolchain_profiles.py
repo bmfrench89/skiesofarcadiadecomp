@@ -385,3 +385,33 @@ def test_the_runtime_support_sources_are_plat_c():
     needs beside it; the link of soa.exe globs it with the rest of runtime/."""
     assert toolchain.runtime_support_sources() == [RUNTIME / "plat.c"]
     assert (RUNTIME / "plat.c").is_file()
+
+
+# ---- R5a part 2: the Android profiles ---------------------------------------
+
+ANDROID_FLAGS = [*GNU_FLAGS, "-fPIC", "-fvisibility=hidden"]
+
+
+def test_the_android_profiles_are_the_spec_s():
+    import recompile
+
+    for p, target in ((toolchain.ANDROID_ARM64, "aarch64"), (toolchain.ANDROID_X86_64, "x86_64")):
+        name = p.name
+        assert list(p.cflags) == [f"--target={target}-linux-android33", *ANDROID_FLAGS]
+        assert p.linker == ("-nodefaultlibs", "-lm", "-ldl", "-lc") and p.out == f"gen/{name}"
+        ndk = toolchain.profile(f"{name}-ndk")
+        assert (ndk.cflags, ndk.linker, ndk.out) == (p.cflags, ("-lm",), f"gen/{name}-ndk")
+        assert toolchain.is_android(p) and not toolchain.is_ndk(p)
+        assert toolchain.is_ndk(ndk) and not toolchain.is_android(ndk)
+    choices = recompile.cc_choices()
+    assert "android-arm64" in choices and not any(c.endswith("-ndk") for c in choices)
+
+
+def test_an_android_command_carries_the_sysroot_and_an_ndk_one_does_not(monkeypatch):
+    monkeypatch.setattr(toolchain, "android_sysroot", lambda: Path("S"))
+    one = toolchain.gnu_commands(["/c", "a.c", "/Foa.o"], "clang", toolchain.ANDROID_X86_64)
+    assert one == [["clang", "--sysroot=S", "-c", "a.c", "-o", "a.o"]]
+    many = toolchain.gnu_commands(["/c", "a.c", "b.c", "/Foout/"], "clang", toolchain.ANDROID_ARM64)
+    assert len(many) == 2 and all(cmd[1] == "--sysroot=S" for cmd in many)
+    ndk = toolchain.gnu_commands(["/c", "a.c", "/Foa.o"], "clang", toolchain.ANDROID_X86_64_NDK)
+    assert not any(a.startswith("--sysroot") for a in ndk[0])

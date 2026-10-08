@@ -75,7 +75,7 @@ def test_the_native_job_needs_no_pip_install():
     probe = (
         "import sys, json;"
         f"sys.path.insert(0, {str(ROOT / 'tools')!r});"
-        "import recompile;"
+        "import recompile, fetch_android_sysroot;"
         "print(json.dumps([getattr(m, '__file__', '') or '' for m in list(sys.modules.values())]))"
     )
     out = subprocess.run(
@@ -93,7 +93,7 @@ def test_the_player_build_runs_on_the_standard_library_alone():
     probe = (
         "import sys, json;"
         f"sys.path.insert(0, {str(ROOT / 'tools')!r});"
-        "import player_build, extract, soa.rvz;"
+        "import player_build, extract, soa.rvz, fetch_android_sysroot;"
         "print(json.dumps([getattr(m, '__file__', '') or '' for m in list(sys.modules.values())]))"
     )
     out = subprocess.run(
@@ -117,3 +117,18 @@ def test_the_render_driver_still_runs_the_ports_own_checks():
         "update it so CI checks what the port checks"
     )
     assert "render full-screen quad" in copied and "render triangle rows" in copied
+
+
+def test_the_runtime_is_checked_for_the_phone_with_the_ndk(monkeypatch, capsys):
+    """R5a: the runtime is the APK's, compiled by the NDK; --cc android-arm64
+    is the game library's profile, refused here before any compiler is
+    looked for, naming the -ndk one."""
+
+    def no(*a, **k):
+        raise AssertionError("a compiler was looked for")
+
+    monkeypatch.setattr(compile_runtime.toolchain, "compiler_path", no)
+    monkeypatch.setattr(sys, "argv", ["compile_runtime.py", "--cc", "android-arm64"])
+    assert compile_runtime.main() == 1
+    err = capsys.readouterr().err
+    assert "--cc android-arm64-ndk" in err and "builds the game library" in err

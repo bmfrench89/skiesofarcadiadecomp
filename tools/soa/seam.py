@@ -29,6 +29,13 @@ from pathlib import Path
 ABI = 1
 RUNTIME_SONAME = "libsoa_runtime.so"
 GAME_SONAME = "libsoa_game.so"
+# The C libraries the phone gives a game library, by the names bionic's
+# own SONAMEs are: elfcheck takes these alone on Android.
+C_LIBRARIES = ("libc.so", "libm.so", "libdl.so")
+# The seam.txt libc names bionic's libm.so defines, at version LIBC; every
+# other is libc.so's, and libdl.so gets none. Bionic's own placement, held
+# to its two symbol lists by test_android_sysroot.py.
+BIONIC_LIBM = frozenset({"fma", "nearbyint", "nearbyintf", "sqrt"})
 ENTRY = 0x80003140  # __start, runtime/main.c's ENTRY_FN
 
 
@@ -213,6 +220,51 @@ def stub_runtime_c(seam: Seam, bound: Iterable[int]) -> str:
     for name in runtime_exports(seam, bound):
         lines.append(f"uint32_t {name};" if name.startswith("g_") else f"void {name}(void) {{}}")
     return "\n".join(lines) + "\n"
+
+
+def c_library_names(seam: Seam) -> dict[str, tuple[str, ...]]:
+    """seam.txt's libc names by the library bionic defines each in, in
+    seam.txt's order: what the game library's link may import from each."""
+    return {
+        "libc.so": tuple(n for n in seam.libc if n not in BIONIC_LIBM),
+        "libm.so": tuple(n for n in seam.libc if n in BIONIC_LIBM),
+        "libdl.so": (),
+    }
+
+
+def stub_library_c(soname: str, names: Iterable[str]) -> str:
+    """<out>/stub/<lib>.c: an empty function for each name the game library
+    may take from that C library, linked against and never run."""
+    lines = [
+        f"/* Written by tools/recompile.py for an Android profile: {soname}'s names in",
+        " * config/seam.txt (specs/android-sysroot.md 3), linked against and never",
+        " * run. The phone's C library is its own. */",
+    ]
+    lines += [f"void {n}(void) {{}}" for n in names]
+    return "\n".join(lines) + "\n"
+
+
+def stub_version_script(names: Iterable[str]) -> str:
+    """The stub's version script: its names at bionic's version, LIBC, so the
+    game library's imports carry it as the phone's libraries define them."""
+    names = list(names)
+    if not names:
+        return "LIBC {\n  local: *;\n};\n"
+    body = "".join(f"    {n};\n" for n in names)
+    return f"LIBC {{\n  global:\n{body}  local: *;\n}};\n"
+
+
+def write_android_stubs(stub_dir: Path, seam: Seam, bound: Iterable[int]) -> None:
+    """Everything an Android link's stubs are built from, into stub_dir: the
+    stand-in runtime and the three C libraries' sources and scripts. The one
+    writer: recompile.py at each run that translates, gamefixture at each
+    fixture build."""
+    stub_dir.mkdir(parents=True, exist_ok=True)
+    (stub_dir / "stub_runtime.c").write_text(stub_runtime_c(seam, bound), encoding="utf-8")
+    for soname, names in c_library_names(seam).items():
+        base = soname.removesuffix(".so")
+        (stub_dir / f"{base}.c").write_text(stub_library_c(soname, names), encoding="utf-8")
+        (stub_dir / f"{base}.vers").write_text(stub_version_script(names), encoding="utf-8")
 
 
 LAUNCHER_C = """/* Written by tools/recompile.py --split: the program a split build runs
