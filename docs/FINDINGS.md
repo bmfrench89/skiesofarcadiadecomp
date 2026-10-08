@@ -7836,3 +7836,84 @@ the driver's.** 2026-10-04.
   (video x11)` and `[present] … 119 intervals between presents`, `0 failed present(s)`.
 - **Not settled:** whether CI's failures were a present later than a second or a frame not shown at all. If it
   fails again, its log says which.
+
+**R5a part 1: R5's Android sysroot, built from bionic's pinned files.** 2026-10-07.
+
+- **What it is:** `tools/fetch_android_sysroot.py` (docs/specs/android-sysroot.md §2), the first half of R5a.
+  It builds the phone's C headers and crt objects on every machine that uses them (D-34): 44 files of bionic at
+  06356e41 (android-17.0.0_r1), each held to a sha256 and a git blob id, fetched as four directory archives into
+  `vendor/android-sysroot-src`; the 30 headers the translated C reads, unmodified, under
+  `vendor/android-sysroot/usr/include`; `crtbegin_so.o` and `crtend_so.o` for arm64 and x86_64 built from bionic's
+  own source by llvm-mingw's clang, each held to a pinned sha256; and `NOTICE.txt`, each file's own licence words,
+  pinned too. `vendor/ANDROID-SYSROOT.sha256` records the 35 files. `tools/soa/toolchain.py` gains llvm-mingw's
+  release and clang (`MINGW_RELEASE`, `MINGW_CLANG`), the clang and ld.lld beside the mingw profile's compiler, a
+  clang's identity line, and the environment clang reads ahead of a sysroot taken out. Nothing builds the game
+  library through it yet: that is part 2.
+- **On this PC** [V], with no `vendor/android-sysroot*`: the first run printed the four `fetching
+  .../+archive/06356e41.../<dir>.tar.gz` lines and then, exactly, `44 of 44 bionic files the build reads, at
+  06356e41 (android-17.0.0_r1), are as pinned`, `built crtbegin_so.o and crtend_so.o for arm64 and x86_64: as
+  pinned`, `wrote android-sysroot/NOTICE.txt: as pinned`, `recorded 35 file(s) in vendor/ANDROID-SYSROOT.sha256`,
+  in 10.4 s with no 429. Again: `vendor/android-sysroot is there and as recorded (35 file(s) checked)` and no
+  request; `--verify`: `35 of 35 recorded Android sysroot file(s) unchanged`. With a byte of `math.h` changed the
+  plain run named it and built the tree again from the cache, no request; with the tree deleted, `--offline` did
+  the same. A second vendor folder, `build\r5\two, again`, built and verified (it found a bug, below). `--lists`
+  fetched the two symbol lists as pinned; `--check-upstream` printed `47 of 47 pins are bionic's own blobs at
+  06356e41 (refs/tags/android-17.0.0_r1 is 06356e41)`; `--cache-key` printed `key=b080f95ed440cef5`. The tests,
+  `python -m pytest -p noskip tools/tests/test_android_sysroot.py`: 20 passed, none skipped.
+- **The first bless, and how each pin was checked** [V]:
+  - **The 47 source pins** are the design's table, generated from it rather than retyped and held to the scratch
+    copy of bionic at the commit by size, sha256 and blob id (47 of 47), and to bionic's own tree listing by
+    `--check-upstream` (47 of 47).
+  - **The x86_64 crt objects** are the bytes of the gate's, which ran the game on the emulator (FINDINGS "R5's
+    gate").
+  - **The arm64 crt objects** were compared with NDK r28c's API-33 ones by `llvm-readelf -S -s -r -n`, as the
+    design asked, and differ in more than it predicted. Its expected differences are there: the Android ident note
+    (4 bytes of descriptor, the API level, against the NDK's 132, which add the NDK's version) and the `.comment`.
+    So are clang 23's unsuffixed mapping symbols (`$x`, `$d` for `$x.1`, `$d.2`) and `crtend_so.o`'s section
+    order. The one that is not cosmetic: the NDK's `crtbegin_so.o` carries a `.note.gnu.property` marking it BTI
+    and PAC, its functions longer by the branch-protection instructions, and ours neither. It changes nothing in a
+    library: a shared object is marked BTI only when every object in it is, neither the NDK's clang nor llvm-mingw's
+    marks ordinary code (a one-line function compiled by each for `aarch64-linux-android33` carries no such note),
+    and the arm64 game library the NDK built in L12b carries no GNU property at all.
+  - **`NOTICE.txt`** (43,194 bytes, 965 lines) was read whole before it was pinned: every shipped and compiled file's
+    leading comments under its place, `setjmp.h`'s, `strings.h`'s, `sys/cdefs.h`'s and both `bionic_asm_<arch>.h`'s
+    tag lines and licence blocks, `strings.h`'s advertising clause, `math.h`'s Sun notice. One sentence of the
+    preface was reworded before pinning. The owner reads it in R5b.
+- **A review**, four lenses (the design, correctness, Linux and Windows, the tests' strength), each finding then
+  argued against by another reader: 23 confirmed, 2 refuted, all 23 fixed. Among them: the test module failed
+  `ruff format --check` after a last edit (CI's Tests job would have gone red on both systems); on GitHub's Windows
+  runner a step's exit status is its last command's, so a failed `--lists` hid behind the `--verify` after it (the
+  step runs under bash now); a leftover folder another program held, an unreadable record, a `--version` line the
+  code page cannot decode and a JSON answer with no `{` each reached the user as a traceback; a connection reset
+  mid-body said "cannot reach"; `--verify` said "35 of 35 unchanged" over a record not this script's; and nine
+  tests that would have agreed with a broken tool (no pace, `Retry-After` ignored on a 503, files written one
+  archive at a time, a check list off its pin, `--from` unchecked, the key over the script's bytes, `ensure()`
+  taking a stale record, the identity check untested without llvm-mingw, `--check-upstream` skipping a directory).
+  Separately, a relative `--vendor` failed to build: clang runs in the build sysroot's folder, so the cache's path
+  is now resolved first.
+- **Mutations** [V]: 39, each a defect a check is there for, each failing its check, the files put back byte for
+  byte after: the design's list (a pin a digit short, the sha256 or blob check removed, a missing member unnamed,
+  no retry, `Retry-After` ignored or its date form unread, no cap, a decode failure not retried, no deadline, a 404
+  retried, `--offline` ignored, the cache's own pin check removed, any record taken as there, the unrecorded-file
+  walk and the record-to-pins comparison removed, the output pins and the identity check removed, the first
+  comment only, the NOTICE's pin check removed, the record deleted last, no retries in the swap, the clean
+  environment not passed, the upstream comparison removed, any clang taken as llvm-mingw's) and the review's.
+- **On CI** [V]: `ci.yml` on a scratch branch at this tree (run 37712785770): all 12 jobs green. On both
+  `android-route` legs, Ubuntu's llvm-mingw and Windows' each printed `clang version 23.1.2 (... 85ac5602...)`,
+  fetched the four archives and the two lists with no 429 and no wait, built the crt objects `as pinned` -- so
+  the two systems make the same bytes -- verified 35 of 35 and passed the 20 tests with no skip. Ubuntu saved
+  the source cache under `android-sysroot-src-b080f95ed440cef5`; Windows' save of the same key failed, with a
+  warning only, the key being taken. With `math.h`'s pin one digit off on a second branch (run 37712813356),
+  both legs failed at the sysroot step, `error: libc/include/math.h from .../libc/include.tar.gz: sha256
+  e50651fa..., pinned f50651fa...`, and at the tests after it, whose three skips `noskip` failed. Not yet seen:
+  a run restoring an older cache by its prefix when a pin moves, which needs main's cache, saved by this push's run.
+  Both branches were deleted after.
+- **What differed from the design's text:** the rebuild line is `vendor/android-sysroot is not as recorded
+  (<fact>); building it again from vendor/android-sysroot-src`; the notice heads a file compiled into the crt
+  objects `== bionic <path>`, since it has no place in the tree; `check_upstream` also returns how many pins it
+  compared, which the 47 line prints; a folder `build()` cannot clear is refused in words like the swap's; and
+  `test_mingw.py`'s archive test still skips on this PC (no symbolic links without developer mode), so the Done
+  line's "none skipped" holds for `test_android_sysroot.py`.
+- **The tests** are 1461 in 90 files, measured four ways: 1420 passed and 41 skipped here; 1401 and 42 without
+  capstone; 1011 and 450 without MSVC; 992 and 451 without either. The full run took 1186.10 s, against 792.94 s
+  this morning: the new tests take about 10 s of it, and the rest is this PC's load that hour.

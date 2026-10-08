@@ -166,8 +166,10 @@ The owner answered four questions, with the research behind them summarised in t
   [specs/android-sysroot.md](specs/android-sysroot.md), in four slices: R5-0, the package fixed; R5a, the
   sysroot's tool and then the route; R5b, the player's build and the package; R5c, Setup's checkbox and
   words, which wait for the owner's look. **R5-0 is done** (FINDINGS "R5-0"): since L10 a package's build
-  had stopped at `import fetch_sdl`, and a package CI made did not carry the commit's `baked=`. Next:
-  R5a part 1, `tools/fetch_android_sysroot.py`.
+  had stopped at `import fetch_sdl`, and a package CI made did not carry the commit's `baked=`. **R5a part
+  1 is done** (FINDINGS "R5a part 1"): `tools/fetch_android_sysroot.py` builds the sysroot from bionic's
+  pinned files on every machine, its crt objects held to their pins on Ubuntu and Windows alike. Next: R5a
+  part 2, the game library built through it by `recompile.py` and `gamefixture`, proven on the emulator.
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
@@ -685,7 +687,7 @@ count kept before it starts.
   through the app's own picker, each refusal in the player's words, the disc read in place through its
   descriptor; since its stop box, a run the disc layer stops mid-play (exit 9) says why on the screen. **Next: L12's Done on the
   Thor,** which needs the owner; without the owner, R5's own Android sysroot, as the owner answered (§0):
-  R5-0 is done, and R5a is next ([specs/android-sysroot.md](specs/android-sysroot.md)).
+  R5-0 and R5a part 1 are done, and R5a part 2 is next ([specs/android-sysroot.md](specs/android-sysroot.md)).
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

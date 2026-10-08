@@ -121,6 +121,52 @@ def test_soa_mingw_naming_no_compiler_finds_none(monkeypatch, tmp_path):
     assert toolchain.mingw_bins()[-1] == ROOT / "vendor" / "llvm-mingw" / "bin"
 
 
+def test_the_pinned_clang_is_fetch_mingw_s():
+    """R5a: the crt objects R5's sysroot pins are this clang's bytes, so the
+    release toolchain.py names is the one fetch_mingw.py fetches, and the
+    clang in vendor/ says it is that release's (skipped without it)."""
+    assert toolchain.MINGW_RELEASE == fetch_mingw.RELEASE
+    clang = toolchain.mingw_clang()
+    if clang is None:
+        pytest.skip("no llvm-mingw (python tools/fetch_mingw.py)")
+    version, commit = toolchain.MINGW_CLANG
+    assert toolchain.clang_id(clang) == (
+        f"clang version {version} (https://github.com/llvm/llvm-project.git {commit})"
+    )
+    assert toolchain.mingw_identity_problem(clang) is None
+
+
+def test_the_android_clang_is_llvm_mingw_s_own(monkeypatch, tmp_path):
+    """R5a: the Android clang is the one beside the mingw profile's compiler.
+    A SOA_MINGW folder holding a clang but no x86_64-w64-mingw32-clang, as an
+    NDK's bin does, gives none, never the next place's; one holding both
+    gives its own."""
+    exe = ".exe" if os.name == "nt" else ""
+    (tmp_path / f"clang{exe}").write_bytes(b"")
+    (tmp_path / f"ld.lld{exe}").write_bytes(b"")
+    monkeypatch.setenv("SOA_MINGW", str(tmp_path))
+    assert toolchain.mingw_clang() is None and toolchain.mingw_lld() is None
+    (tmp_path / f"x86_64-w64-mingw32-clang{exe}").write_bytes(b"")
+    assert toolchain.mingw_clang() == str(tmp_path / f"clang{exe}")
+    assert toolchain.mingw_lld() == str(tmp_path / f"ld.lld{exe}")
+    assert "nothing that runs" in toolchain.mingw_identity_problem(str(tmp_path / "missing"))
+    version, commit = toolchain.MINGW_CLANG
+    line = f"clang version {version} (https://github.com/llvm/llvm-project.git {commit})"
+    monkeypatch.setattr(toolchain, "clang_id", lambda exe: line)
+    assert toolchain.mingw_identity_problem("clang") is None
+    monkeypatch.setattr(toolchain, "clang_id", lambda exe: "clang version 19.0.1 (https://x 0123)")
+    words = toolchain.mingw_identity_problem("clang")
+    assert "clang version 19.0.1" in words and version in words and commit[:8] in words
+    # unset, the package's toolchain/ comes before vendor/
+    monkeypatch.delenv("SOA_MINGW")
+    bins = toolchain.mingw_bins()
+    assert bins[0].parts[-2:] == ("toolchain", "bin") and bins[1].parts[-3:] == (
+        "vendor",
+        "llvm-mingw",
+        "bin",
+    )
+
+
 def test_the_mingw_plan_writes_only_under_gen_mingw():
     out = Path("gen/mingw")
     plan = recompile.link_plan(toolchain.MINGW, out, [], [], gxv=True)

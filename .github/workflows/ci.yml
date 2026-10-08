@@ -297,6 +297,79 @@ jobs:
       - name: Compile every runtime/*.c
         run: python tools/citest/compile_runtime.py --cc mingw --require-gxv
 
+  # R5 (specs/android-sysroot.md R5a): the phone's game library is built by
+  # llvm-mingw's clang against this repository's own sysroot, which
+  # tools/fetch_android_sysroot.py builds on every machine from bionic's
+  # pinned sources -- the 30 headers the translated C reads and the crt
+  # objects built from bionic's own source, each held to its pin. On Ubuntu
+  # and on Windows, which players build on: both must make the same bytes.
+  # Part 1 builds and checks the sysroot; part 2 adds the game library built
+  # through it. A skip is a failure here.
+  android-route:
+    name: The Android sysroot through R5's route (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      # the files as git stores them: the runner's Git turns LF into CRLF on Windows (R5-0)
+      - name: No line-ending conversion
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: python -m pip install --upgrade pip pytest
+
+      - name: llvm-mingw, pinned and verified
+        shell: bash
+        run: |
+          python tools/fetch_mingw.py
+          python tools/fetch_mingw.py --verify
+
+      - name: The compiler the sysroot is built with
+        shell: bash
+        run: python -c "import sys; sys.path.insert(0, 'tools'); from soa import toolchain; c = toolchain.mingw_clang(); print(c, toolchain.clang_id(c) if c else 'none')"
+
+      # bionic's pinned files, cached on the pins alone (not the script's bytes
+      # or line ends), shared across systems, restored by prefix when the pins
+      # move: every file is held to its pins when it is read
+      - name: The sysroot's cache key
+        id: key
+        shell: bash
+        run: python tools/fetch_android_sysroot.py --cache-key >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: restore
+        with:
+          path: vendor/android-sysroot-src
+          key: android-sysroot-src-${{ steps.key.outputs.key }}
+          restore-keys: android-sysroot-src-
+          enableCrossOsArchive: true
+
+      - name: R5's Android sysroot, built from bionic's pinned sources, and verified
+        timeout-minutes: 15
+        shell: bash  # -e: a failed --lists fails the step on Windows too, not only --verify
+        run: |
+          python tools/fetch_android_sysroot.py --lists
+          python tools/fetch_android_sysroot.py --verify
+
+      # saved as soon as the fetch has passed, whatever the tests after it do
+      - uses: actions/cache/save@v4
+        if: steps.restore.outputs.cache-hit != 'true'
+        with:
+          path: vendor/android-sysroot-src
+          key: android-sysroot-src-${{ steps.key.outputs.key }}
+          enableCrossOsArchive: true
+
+      - name: The sysroot's checks, no skips
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_android_sysroot.py -v
+
   # The same checks under gcc and clang on Linux (portability.md 3.12, L4b).
   # These are the first runs of plat.h's POSIX half -- pthread_create, the
   # futex wait and CLOCK_MONOTONIC -- and of the native twins on a host where

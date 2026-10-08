@@ -256,6 +256,8 @@ machine, through `recompile.py` and `gamefixture` alike. The NDK leaves the game
 
 #### Part 1: the tool (one push)
 
+*Done 2026-10-07 (FINDINGS "R5a part 1"), with what differed from this text recorded there.*
+
 *Files:*
 - `tools/fetch_android_sysroot.py` (new), all of §2:
   - constants `COMMIT`, `TAG`, `BASE`, `API`, `ABIS`, `ARCHIVES`, `TEXT_FILES`, `SOURCES`, `SHIP`, `OUTPUTS`,

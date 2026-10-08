@@ -34,10 +34,10 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 ### `python -m pytest tools/tests -q`
 
 ```
-1398 passed, 41 skipped in 792.94s
+1420 passed, 41 skipped in 1186.10s
 ```
 
-1439 tests in 89 files, none of which reads the disc. The two FMA probes of
+1461 tests in 90 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -73,7 +73,8 @@ its own and run it, some of the C as well:
 | `test_package.py` | 6 | `tools/package.py` (distribution R3): the licence texts it copies come from the folders `guard.py --tree` allows to hold third parties, it never copies `src/`, `include/` or build output, its downloads are pinned by exact version and hash, and a stage refuses a folder that already holds something; and, since R5-0, what a package's build runs, and every module `TOOLS` stages, imports from what it stages and from nothing outside it but the interpreter's library, under the package's own python where `vendor/` has its zip and else under this one with `-I -S` (without `fetch_sdl.py` in `TOOLS` it fails, as every package did from L10 to R5-0), and `package.py check` holds a package's baked inputs to the commit's: the commit's files pass, and so do they with every ending CRLF, while a doubled CR, a changed byte, a file missing and one the commit lacks are each refused by name; with the check comparing nothing, or reading the commit's side raw, it fails (skipped without git) |
 | `test_setup.py` | 11 | the setup window (distribution R4), `Setup.exe --check` as `package.py` builds it: a whole package in a plain folder passes and keeps nothing; Setup.exe opened alone (from inside the zip) and each package file missing, a path with a non-ASCII letter, a root one character too long for the deepest file, both Program Files folders (the short name too, not a name that only starts the same) and a folder denied writes are each refused in words; `package.deepest` measures a tree; formats but ISO, GCM and RVZ name Dolphin's Convert File; the exit codes are `setup.c`'s; one source builds one file, holding its manifest; python and the game are started with `CREATE_NO_WINDOW` (skipped off Windows and without `vendor/llvm-mingw`) |
 | `test_player_build.py` | 14 | the player's build (distribution R2): the 12 bindings `decomp_swap.c` answers are the ones `hle.txt` notes as decompiled, an adapter added without its note is seen, `--no-decomp`'s link builds no native unit and defines `SOA_NO_DECOMP`, and the runtime keeps that branch; `player_build.py` refuses a disc of another game by name, an executable whose SHA-1 differs, an image that is not a disc and a config it cannot read, each exit 2 and a `[build] refused:` line; a changed input retranslates and an unchanged one relinks, and without the check a changed `cpu.h` would only relink; Setup's Rebuild (`--rebuild`, R4) translates again when nothing moved; the baked inputs are read with CRLF as LF (R5-0), so a checkout's line endings move no `baked=` and a changed line still does, which fails with the raw read put back; a synthetic RVZ reads back as its disc, and under the embedded CPython, which fails it with `_zstd.pyd` taken out (skipped without `vendor/`'s zip) |
-| `test_mingw.py` | 7 | `soa.exe` with no Microsoft compiler (distribution R1): `fetch_mingw.py` keeps the x86-64 target alone, its `--verify` finds a byte changed and a file missing, and the Linux archive unpacks files and links and skips the rest (where the OS makes links); the `mingw` profile's flags, libraries and stack are the spec's, a `SOA_MINGW` naming no compiler finds none, and its plan writes only under `gen/mingw`, each `mod.dll` under `gen/mingw/mods`; and, with `vendor/llvm-mingw` and the disc's executable, the whole build runs with `msvc_env` made to raise and the exe imports no `fma`, `exp2f` or `log2f` |
+| `test_mingw.py` | 9 | `soa.exe` with no Microsoft compiler (distribution R1): `fetch_mingw.py` keeps the x86-64 target alone, its `--verify` finds a byte changed and a file missing, and the Linux archive unpacks files and links and skips the rest (where the OS makes links); the `mingw` profile's flags, libraries and stack are the spec's, a `SOA_MINGW` naming no compiler finds none, and its plan writes only under `gen/mingw`, each `mod.dll` under `gen/mingw/mods`; and, with `vendor/llvm-mingw` and the disc's executable, the whole build runs with `msvc_env` made to raise and the exe imports no `fma`, `exp2f` or `log2f`; and (R5a) the release `toolchain.py` pins is `fetch_mingw.py`'s and `vendor/`'s clang says it is that release's, the Android clang is the one beside the mingw profile's compiler -- a `SOA_MINGW` holding a clang but no `x86_64-w64-mingw32-clang`, as an NDK's `bin` does, gives none -- and another clang's identity is refused in words naming both |
+| `test_android_sysroot.py` | 20 | R5's Android sysroot (specs/android-sysroot.md R5a), `tools/fetch_android_sysroot.py`: the 47 pins by role, the tree's 30 places, nothing the guard refuses, and CI's cache key moving with each column of a pin but not with the script's bytes or line ends; a file off its sha256 or its blob id refused with nothing written, across archives too, a pinned file missing from its archive named, and a check list off its pin refused; android.googlesource.com's answers -- 429 and 503 with `Retry-After` in seconds or as a date, capped at 300 s, a back-off without it, the pace between two requests, a gzip cut short, no network, the run's deadline -- waited on, tried again or given up in words that never speak of pins, and a 404 asked once; a whole cache asks nothing, `--offline` names what it lacks, and a tree not as recorded beside a record is built again from it; `--from` copies what is as pinned and names the rest; `--verify`'s facts (a changed byte, a missing file, an unrecorded one, an unreadable record, a record not this script's) and its count; the crt objects built from a relative cache in a folder with a space and a comma are the pinned bytes, and with `CPATH` poisoned, while `-O0` and another clang are refused; `NOTICE.txt` is the pinned text, each file's leading comments under its place; a stop inside the swap, or a leftover folder held by another program, leaves no record and says so, no traceback; the tool runs under `python -I` as a package's python runs it, and not without its `sys.path` line; `--check-upstream` against an injected listing names a changed blob in every directory and a tag on another commit. Those that build skip without llvm-mingw or the source cache; CI's `android-route` job runs them with no skips |
 | `test_gxv_present.py` | 5 | the window's picture from the GPU (GPU spec V8), through `gpuspike.py present`: two synthetic screen copies through the presenter's pass into eight target sizes at both layouts give `picture_scale`'s picture in every pixel's colour, 32 of 32, and `--mutate present` (one column over) gives 0 of 32; and (V8b) `present --filters`, P5a's filters on the GPU, at scale 1 and 3: eight filter sets and a two-frame flash-limiter blend give `picture_filter`'s, `picture_blend`'s and the scaler's bytes in 24 of 24 cases, and one colour coefficient changed (`--mutate filter`) 12 of 24. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_scale.py` | 6 | the EFB at three times the console's size (GPU spec V9a): `copydiff --scale 3`, on an EFB whose samples are alike within each pixel, gives the CPU's bytes, image and screen, with the pool's image and the full screen the native ones replicated, and `--mutate taps` (the copy filter's taps one sample apart) fails it; `copyimage --scale 3` gives the CPU's frame from a copy sampled at scale, and `--mutate copy-scale` (the scaled image sampled as if native) fails it; `present --scale 3` gives `picture_scale_area`'s picture, 32 of 32, and `--mutate present` 0 of 32. The oracle at scale is `gpuspike.py oracle --scale 3`, too long for here. They skip without MSVC, `vendor/` or a Vulkan device |
 | `test_gxv_queue.py` | 6 | the GPU backend on its own thread (GPU spec V6a), and (V7) the pipeline cache on disk: a second run of the queue frame finds every pipeline the first made, and a file of junk none; the compiler thread accounts for every pipeline specialised on the TEV's shape, with every compile stalled 200 ms the frame is unchanged and its consumer under the stall, `--mutate compile-wait` fails that, and `SOA_GPU_SPECIALIZE` `wait` and `0` report as they should; through `gpuspike.py queue`: a synthetic frame of 64 quads each sampling one texture slot at a new generation and 656,000 vertices that fill the vertex arena twice gives the CPU's frame hash, every quad its own texture and two arena drains, three times on the thread, inline and with the consumer stalled; and the pool-in-place and count-early mutations each fail it. MSVC, `vendor/` and a Vulkan device, skipped saying which without |
@@ -150,10 +151,10 @@ makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1398 passed, 41 skipped` |
-| no capstone | `1379 passed, 42 skipped` |
-| no MSVC | `989 passed, 450 skipped` |
-| neither | `970 passed, 451 skipped` |
+| everything (MSVC + capstone) | `1420 passed, 41 skipped` |
+| no capstone | `1401 passed, 42 skipped` |
+| no MSVC | `1011 passed, 450 skipped` |
+| neither | `992 passed, 451 skipped` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -634,6 +635,43 @@ correctly; the copy in `/tmp` is the container's own layer, gone with `--rm`.
 `--wrap` puts its words before the exe for `run` and `replay`, and a wrapped
 replay may not `--bless`: Wine's frames are held to the manifest, never
 written into it.
+
+**The Android sysroot (R5a).** The phone's game library is built by
+llvm-mingw's clang against this repository's own sysroot, which
+`tools/fetch_android_sysroot.py` builds from 44 files of bionic at
+android-17.0.0_r1, each held to a sha256 and a git blob id
+(`docs/specs/android-sysroot.md` §2). With llvm-mingw fetched
+(`python tools/fetch_mingw.py`):
+
+```
+python tools/fetch_android_sysroot.py           # the first run fetches four archives, about 10 s
+python tools/fetch_android_sysroot.py --verify  # 35 of 35 recorded Android sysroot file(s) unchanged
+$env:PYTHONPATH = 'tools/citest'; python -m pytest -p noskip tools/tests/test_android_sysroot.py
+```
+
+The first run prints four `fetching .../+archive/06356e41.../<dir>.tar.gz`
+lines, then
+
+```
+44 of 44 bionic files the build reads, at 06356e41 (android-17.0.0_r1), are as pinned
+built crtbegin_so.o and crtend_so.o for arm64 and x86_64: as pinned
+wrote android-sysroot/NOTICE.txt: as pinned
+recorded 35 file(s) in vendor/ANDROID-SYSROOT.sha256
+```
+
+Later runs ask nothing (`vendor/android-sysroot is there and as recorded (35
+file(s) checked)`), and a tree not as recorded is built again from
+`vendor/android-sysroot-src` (`vendor/android-sysroot is not as recorded (<the
+first fact>); building it again from vendor/android-sysroot-src`). When
+android.googlesource.com will not serve (it answers HTTP 429 to many requests
+close together; the tool waits and tries six times), `--from <folder>` fills the
+cache from any folder laid out as bionic -- a checkout of the tag, or another
+machine's `vendor/android-sysroot-src` -- and `--offline` never asks the
+network. `--lists` also fetches bionic's two symbol lists, which only tests
+read; `--check-upstream` holds every pin to bionic's own tree listing (`47 of 47
+pins are bionic's own blobs at 06356e41 ...`); `--cache-key` is CI's cache key.
+A new llvm-mingw release fails the crt objects' pins by design: the module's
+docstring says what to bump and check.
 
 **On Android (L12c).** The APK, with a game library pushed beside it, on an
 emulator of its own: an AVD named `soa_x86_64` (android-34, google_apis,
@@ -1892,7 +1930,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 450 of the 1439 skip here without MSVC: 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
+² 450 of the 1461 skip here without MSVC: 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;
@@ -1900,7 +1938,7 @@ CI runs the eleven tests of `test_gpuspike.py` that need neither.
 
 ### What CI can and cannot run
 
-Nine job runs on every push and pull request:
+Twelve job runs on every push and pull request:
 
 | Job | Runner | Does |
 |---|---|---|
@@ -1911,6 +1949,8 @@ Nine job runs on every push and pull request:
 | **Runtime compiles (Linux, gcc)** and **(Linux, clang)** | ubuntu | the same three with `--cc gcc` or `--cc clang`, and `render_check.py` twice, at `--threads 1` and `--threads 4`, each asserting the renderer started that many workers: the first runs of `plat.h`'s POSIX half and of the twins where `long` is 64 bits (L4b); then `test_memguard.py` under `noskip` with `SOA_CC` set, and `threads_check.py`: `plat.c`'s SIGSEGV guard and the guest's 32 MB stack (L7); and `libm_check.py` (L6) |
 | **ThreadSanitizer (render queue)** | ubuntu | clang `-fsanitize=thread`: `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4`, every race reported and any failing the run, no suppression (L8) |
 | **Runtime compiles (Linux ARM64, gcc)** | ubuntu-24.04-arm | `compile_runtime.py`, `dc_check.py`, `render_check.py --threads 4` and `queue_check.py --threads 1,2,3,4` on ARM64, where a load the queue forgot to order can show (L8); and L7's two steps, where the guard learns a fault was a store from the ESR record in the signal frame; and `libm_check.py`, which prints the x86 legs' hashes (L6) |
+| **Runtime compiles (llvm-mingw)** | ubuntu | every runtime file under llvm-mingw's clang and mingw-w64's headers, with `--require-gxv`: the runtime's Windows half as a player's package compiles it (distribution R1) |
+| **The Android sysroot through R5's route** | ubuntu and windows | llvm-mingw fetched and verified; `tools/fetch_android_sysroot.py --lists`, its source cache restored by the pins' key across both systems, then `--verify`; `test_android_sysroot.py` under `noskip` (R5a). Both systems must build the crt objects to the same pins |
 | **Runtime compiles (clang-cl)** | windows | the same three and `libm_check.py` with `--cc clang-cl`, then `test_toolchain_fp.py` and `test_gxr_fastpath.py` with `SOA_CC=clang-cl`, where a skip fails the run — 5 passed on 2026-09-30, under LLVM's clang-cl 20.1.8 (the job prints its version) |
 
 The Windows runner already ships VS 2022, and `tools/soa/toolchain.py` finds it

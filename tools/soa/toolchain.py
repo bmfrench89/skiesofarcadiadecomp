@@ -287,6 +287,81 @@ def mingw_bins() -> list[Path]:
     return out + [root.parent / "toolchain" / "bin", root / "vendor" / "llvm-mingw" / "bin"]
 
 
+# The llvm-mingw release the package carries and tools/fetch_mingw.py fetches
+# (a test holds the two equal), and the clang it holds: R5's sysroot pins the
+# crt objects that clang builds, so another one is refused by name.
+MINGW_RELEASE = "20260922"
+MINGW_CLANG = ("23.1.2", "85ac560262434c9ccfc0c183ec22d4138ed647fb")
+
+
+def _mingw_bin() -> Path | None:
+    exe = compiler_path(MINGW)
+    return Path(exe).parent if exe else None
+
+
+def mingw_clang() -> str | None:
+    """The clang beside the x86_64-w64-mingw32-clang the mingw profile found,
+    so the game library for Android and soa.exe come from one llvm-mingw: a
+    clang anywhere else, another project's or an NDK's, is never taken."""
+    b = _mingw_bin()
+    c = b / ("clang.exe" if os.name == "nt" else "clang") if b else None
+    return str(c) if c and c.is_file() else None
+
+
+def mingw_lld() -> str | None:
+    """The ld.lld beside mingw_clang()."""
+    b = _mingw_bin()
+    c = b / ("ld.lld.exe" if os.name == "nt" else "ld.lld") if b else None
+    return str(c) if c and c.is_file() else None
+
+
+@functools.cache
+def clang_id(exe: str) -> str:
+    """The first line of `exe --version`, or "" when it cannot run."""
+    try:
+        out = subprocess.run(
+            [exe, "--version"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=60,
+        ).stdout
+    except OSError, subprocess.TimeoutExpired:
+        return ""
+    return next((line.strip() for line in out.splitlines() if line.strip()), "")
+
+
+def mingw_identity_problem(exe: str) -> str | None:
+    """None when exe is llvm-mingw MINGW_RELEASE's clang; else words naming
+    what it is and what was wanted."""
+    version, commit = MINGW_CLANG
+    line = clang_id(exe)
+    if f"clang version {version} " in line + " " and commit in line:
+        return None
+    return f'{exe} is "{line or "nothing that runs"}", not llvm-mingw {MINGW_RELEASE}\'s clang {version} ({commit[:8]})'
+
+
+# What clang reads ahead of a sysroot: header folders searched first, a crt
+# object or linker found first, a command line edited. Every Android build
+# runs without them.
+_CLANG_ENV = (
+    "COMPILER_PATH",
+    "CPATH",
+    "C_INCLUDE_PATH",
+    "CPLUS_INCLUDE_PATH",
+    "OBJC_INCLUDE_PATH",
+    "OBJCPLUS_INCLUDE_PATH",
+    "LIBRARY_PATH",
+    "CCC_OVERRIDE_OPTIONS",
+)
+
+
+def clean_clang_env() -> dict[str, str]:
+    """os.environ without the variables clang reads ahead of a sysroot."""
+    return {k: v for k, v in os.environ.items() if k.upper() not in _CLANG_ENV}
+
+
 def _version_key(name: str) -> tuple[int, ...]:
     return tuple(int(x) if x.isdigit() else 0 for x in name.split("."))
 
