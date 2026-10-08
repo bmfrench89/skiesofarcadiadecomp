@@ -7816,3 +7816,23 @@ the driver's.** 2026-10-04.
   `tools/recompile.py`: stored with CRLF, it sorts first and differs too once the digest reads raw bytes.
 - **The tests** are 1439 in 89 files, measured four ways: 1398 passed and 41 skipped here; 1379 and 42
   without capstone; 989 and 450 without MSVC; 970 and 451 without either. The full run took 792.94 s.
+
+**The SDL window test on CI: five reads of the screen, and its log when none shows the frame.** 2026-10-07.
+
+- **What happened** [V]: `test_window_sdl.py` failed in CI's `Runtime compiles (Linux, gcc)` job on R5-0's push
+  (run 37666958607) and again on its rerun: `no green on the X screen: the frame was not shown`. R5-0 changed
+  nothing the test builds or runs. The same job on 6d5916c, green that morning, passed when run again; the two
+  failures ran on runner images 20261004.327.1 and 20260927.320.1, and the test has passed on both. In the
+  `soa-l10` container it passed 20 times of 20, and 15 of 15 with every one of its 16 cores kept busy. So it is
+  intermittent on GitHub's runners and was not reproduced here.
+- **Why it could not be read:** the driver read the X screen once, 30 frames (about a second) after the window
+  opened, and the failing assertion printed nothing else, so a present that came late and a frame never shown
+  looked the same.
+- **The change:** the driver reads the screen five times, at frames 30, 32, 34, 36 and 38, all before
+  `SOA_WINDOW_TEST`'s resize at 40, and the test checks the first read that holds the frame's green corner. When
+  none does, the failure carries the window's whole log: its renderer, and the `[present]` report of how many
+  presents there were and how many failed. In the container it passed 10 times of 10; with the driver's frame
+  drawn without its green square, it fails, printing `[window] open at 1x, presenting with SDL3's opengl renderer
+  (video x11)` and `[present] … 119 intervals between presents`, `0 failed present(s)`.
+- **Not settled:** whether CI's failures were a present later than a second or a frame not shown at all. If it
+  fails again, its log says which.

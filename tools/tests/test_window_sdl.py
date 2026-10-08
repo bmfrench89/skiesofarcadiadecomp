@@ -7,7 +7,8 @@ plat.c, with a driver standing in for the renderer and the rest of the port,
 and run on an X display (CI's gcc leg: Xvfb): the window opens through SDL's
 X11 driver, and
 
-- the picture on the X screen, read back with xwd, is the driver's frame at
+- the picture on the X screen, read back with xwd (the first of five reads
+  that shows it, frames 30 to 38), is the driver's frame at
   whole pixels: its red, blue and green where they were drawn, in that order
   of bytes (gxr_screen's RGBA is BGRA by the time SDL has it);
 - a key typed with xdotool reaches port 1 through window_pad: the key that
@@ -111,8 +112,16 @@ int main(void)
     window_start();
     for (i = 0; i < 1000 && !window_open(); i++) plat_sleep_ms(10);
     if (!window_open()) { printf("no window\n"); return 2; }
+    /* the X screen read back at frames 30, 32, 34, 36 and 38, before the
+     * resize at 40: the test takes the first holding the frame, so one late
+     * present on a loaded machine is waited for, a frame never shown is not */
     frames(30);
-    if (system("xwd -root -silent -out shot.xwd") != 0) printf("xwd failed\n");
+    for (i = 0; i < 5; i++) {
+        char cmd[64];
+        if (i) frames(2);
+        snprintf(cmd, sizeof cmd, "xwd -root -silent -out shot%d.xwd", i);
+        if (system(cmd) != 0) printf("xwd failed\n");
+    }
     if (system("xdotool search --name 'Skies of Arcadia' windowfocus --sync") != 0) printf("no focus\n");
     plat_sleep_ms(200);
     if (system("xdotool keydown x") != 0) printf("xdotool failed\n");
@@ -196,10 +205,16 @@ def test_the_sdl_window_shows_the_frame_reads_a_key_and_drops_sound_it_cannot_qu
     assert run.returncode == 0, out + err
     assert "[window] open at 1x, presenting with SDL3's" in err and "(video x11)" in err, err
 
-    # the picture, as X has it
-    shot = Xwd(tmp_path / "shot.xwd")
-    corner = shot.first((0, 255, 0))  # the frame's top-left corner, on a black screen
-    assert corner, "no green on the X screen: the frame was not shown"
+    # the picture, as X has it: the first of the five screens holding the
+    # frame's top-left corner, green on a black screen
+    for n in range(5):
+        shot = Xwd(tmp_path / f"shot{n}.xwd")
+        corner = shot.first((0, 255, 0))
+        if corner:
+            break
+    assert corner, (
+        "no green on the X screen in 5 reads, frames 30 to 38: the frame was not shown\n" + err
+    )
     left, top = corner
     assert left + 640 < shot.width and top + 480 < shot.height, (corner, shot.width)
     samples = {
