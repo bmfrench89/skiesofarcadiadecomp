@@ -16,7 +16,7 @@ picker (2026-10-06; no phone yet). What is next, in order, is
 choosing or starting work, use the `orient` skill.
 
 **No game data enters this repository, ever.** `tools/guard.py` refuses 49 extensions,
-18 directory names, a binary file that begins as game data whatever its name, and
+18 directory names and any `gen-…` folder, a binary file that begins as game data whatever its name, and
 anything in a mod folder that is not text; CI rescans all history: a later commit cannot
 undo a leak.
 

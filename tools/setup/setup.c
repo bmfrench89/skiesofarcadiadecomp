@@ -62,8 +62,9 @@ enum {
 #endif
 /* What the build needs of the package, whose absence means it was not all
  * extracted: Setup.exe opened from inside the zip has only itself. */
-static const wchar_t* const PACKAGE[] = {L"python\\python.exe", L"source\\tools\\player_build.py",
-                                         L"toolchain\\bin\\x86_64-w64-mingw32-clang.exe"};
+static const wchar_t* const PACKAGE[] = {
+    L"python\\python.exe", L"source\\tools\\player_build.py", L"toolchain\\bin\\x86_64-w64-mingw32-clang.exe",
+    L"source\\vendor\\android-sysroot-src\\libc\\arch-common\\bionic\\crtbegin_so.c"};
 #define WM_BUILD_LINE (WM_APP + 1)
 #define WM_BUILD_DONE (WM_APP + 2)
 #define NEED_FREE (2ull << 30) /* the image's copy, gen/ and the build: about 1.6 GB (3.7) */

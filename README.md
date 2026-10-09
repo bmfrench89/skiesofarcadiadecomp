@@ -77,7 +77,9 @@ about a minute and a quarter, with the mods' `mod.dll` under `gen\mingw\mods` (p
 there). It draws the 23 reference frames exactly as MSVC's build does too (distribution R1).
 `python tools/player_build.py --disc <image> --root <folder>` is the player's build: it checks the
 disc, extracts it, builds with llvm-mingw and no `src/`, and leaves `soa.exe`, the mods and `soa.ini`
-in the folder; `python tools/package.py stage <folder>` lays out the package that carries it (R2),
+in the folder; with `--target android-arm64` (repeatable beside `--target windows`) it also builds the
+phone's `libsoa_game.so` there, the Android sysroot built first, offline, from the bionic files the
+package carries (R5b); `python tools/package.py stage <folder>` lays out the package that carries it (R2),
 and `python tools/package.py --out <dir>` zips it (R3), which `.github/workflows/release.yml` builds,
 checks with `python tools/guard.py --tree` and `python tools/package.py check` (its baked inputs
 against the commit's, R5-0), and leaves as a draft release for the owner to publish.

@@ -82,7 +82,8 @@ Catches game data about to enter the repository: 49 forbidden extensions
 wherever they sit in a name (`.rvz`, `.iso`, `.dol`, `.tpl`, `.dsp`, `.bin`, `.map`,
 `.gci`, …, and `slotA.raw.bak`), eighteen directory
 names that must never be tracked (`extracted/`, `gen/`, `build/`, `vendor/`,
-`scratch/`, `packs/`, `photos/`, …), any tracked file over 2 MiB, a binary file that
+`scratch/`, `packs/`, `photos/`, …) and any folder whose name starts `gen-` (a player's
+build's Android targets, R5b), any tracked file over 2 MiB, a binary file that
 begins as game data whatever it is named (a card image by the save in its
 directory), and in a mod folder any file that is not text. It lists `git ls-files`, so it
 sees what would be committed, not what is lying around.

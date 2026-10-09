@@ -744,6 +744,27 @@ def sources(
     return cache
 
 
+def stage_sources(cache: Path, dest: Path) -> int:
+    """Exactly the 44 build and ship files, from the cache into dest in
+    bionic's layout, each held to both its pins: what a player's package
+    carries to build the sysroot from (R5b). Never the check files, nor
+    anything else the cache holds. The answer is how many."""
+    for path in needed():
+        data = (cache / path).read_bytes()
+        why = held(path, data)
+        if why:
+            raise Refused(f"{path} in {show(cache)}: {why}; nothing more was staged")
+        (dest / path).parent.mkdir(parents=True, exist_ok=True)
+        (dest / path).write_bytes(data)
+    return len(needed())
+
+
+def longest_written() -> int:
+    """The longest path this script writes under a vendor folder: a shipped
+    header's place under the tree it builds before the swap."""
+    return max(len(f"{DEST}.new/{place}") for place in SHIP.values())
+
+
 def fill_from(folder: Path, cache: Path) -> list[str]:
     """The cache filled from a folder laid out as bionic, each file held to
     its pins as it is copied: what the folder lacked or held off them."""

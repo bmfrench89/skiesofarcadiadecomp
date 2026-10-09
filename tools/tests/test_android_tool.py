@@ -264,7 +264,9 @@ def scripts(calls) -> list[str]:
     return [c[1] for c in calls if c[0] == "run-as"]
 
 
-def test_put_writes_into_the_folder_named_and_push_game_into_no_backup(shell, tmp_path, capsys):
+def test_put_writes_into_the_folder_named_and_push_game_into_no_backup(
+    shell, monkeypatch, tmp_path, capsys
+):
     """files/ is the data root (the logs, the card, the debug provider's
     files); no_backup/ holds the imported library, which neither a backup nor
     a move to a new phone may take, and is made when the app has none yet."""
@@ -286,9 +288,34 @@ def test_put_writes_into_the_folder_named_and_push_game_into_no_backup(shell, tm
         android.put("emu", lib, "libsoa_game.so", base="cache")
     assert len(sh.calls) == made  # refused before anything reached the device
 
+    monkeypatch.setattr(android, "device_abi", lambda serial: "x86_64")
+    monkeypatch.setattr(android, "library_verdict", lambda lib, profile: "ok")
     assert android.main(["push-game", "--serial", "emu", str(lib)]) == 0
     assert scripts(sh.calls)[-2:] == scripts(sh.calls)[2:4]
-    assert "emu's no_backup/libsoa_game.so" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"checked {lib} against the app this PC built: ok" in out
+    assert "emu's no_backup/libsoa_game.so" in out
+
+
+def test_push_game_refuses_a_library_the_app_would_refuse(shell, monkeypatch, tmp_path, capsys):
+    """R5b: push-game holds the library to the record, exports and C library
+    names the APK was built with (generated/runtime_seam.c), in the phone's
+    own words, before anything reaches the device: a baked= of another
+    release, or a file that is not a library at all, is found on the PC."""
+    from soa import gamefixture
+
+    sh = shell()
+    monkeypatch.setattr(android, "device_abi", lambda serial: "x86_64")
+    generated = tmp_path / "generated"
+    monkeypatch.setattr(android, "GENERATED", generated)
+    android.seam_files(generated)
+    lib = tmp_path / "libsoa_game.so"
+    lib.write_bytes(gamefixture.windows_file())
+    assert android.main(["push-game", "--serial", "emu", str(lib)]) == 1
+    err = capsys.readouterr().err
+    assert f"{lib}: the app this PC built would refuse it: " in err
+    assert "Windows" in err
+    assert not [c for c in sh.calls if c[0] == "push"]  # nothing pushed
 
 
 def test_a_push_that_comes_up_short_is_refused_with_both_sizes(shell, tmp_path, capsys):

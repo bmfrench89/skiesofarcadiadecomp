@@ -115,6 +115,10 @@ FORBIDDEN_DIRS = {
     "photos",
     "out",
 }
+# And any folder whose name starts with one of these: player_build.py writes
+# each Android target's translated C into <root>/gen-<target> (R5b), whose
+# chunks are under the size limit and match no other rule.
+FORBIDDEN_DIR_PREFIXES = ("gen-",)
 
 # A mod in this repository is text (PLAN-GAMEPLAY-MODS.md, rule 3): its edits,
 # keyed by entry, and its wholly new entries, with every binary built on the
@@ -200,10 +204,11 @@ def forbidden_suffix(name: str) -> str | None:
 
 def forbidden_dir(path: Path) -> str | None:
     """The first directory component of ``path`` that is forbidden, in any
-    case, at any depth -- or None. The file's own name is not a directory:
+    case, at any depth -- or None: one of FORBIDDEN_DIRS, or one that starts
+    with FORBIDDEN_DIR_PREFIXES. The file's own name is not a directory:
     ``src/game.c`` is fine, ``src/game/x.c`` is not."""
     for part in path.parts[:-1]:
-        if part.lower() in FORBIDDEN_DIRS:
+        if part.lower() in FORBIDDEN_DIRS or part.lower().startswith(FORBIDDEN_DIR_PREFIXES):
             return part
     return None
 

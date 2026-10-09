@@ -182,6 +182,16 @@ def android_sysroot_digest(vendor: Path = VENDOR) -> str:
     return fetch_android_sysroot.sysroot_digest(vendor)
 
 
+def made_by(compiler: str, sysroot: str) -> dict[str, str]:
+    """What an Android library's record says made it (distribution 3.8,
+    specs/android-sysroot.md 5.7): the package's version (`checkout` in a
+    clone), the compiler (clang-<version>, or a digest of a line that names
+    none) and the sysroot's digest, each shortened by seam.record."""
+    m = re.search(r"clang version (\S+)", compiler)
+    cc = f"clang-{m.group(1)}" if m else hashlib.sha256(compiler.encode("utf-8")).hexdigest()[:12]
+    return {"package": player_build.package_version(), "cc": cc, "sysroot": sysroot[:12]}
+
+
 def system_files(
     disc: Path, dol_bytes: bytes, want_sha1: str, force: bool
 ) -> tuple[dict[str, bytes] | None, str | None]:
@@ -1001,11 +1011,15 @@ def main() -> int:
     # split one.
     the_seam = seam.read_seam(args.config / "seam.txt")
     baked = seam.baked_digest(player_build.inputs_record(RUNTIME.parent))
+    record = seam.record(
+        args.no_decomp,
+        baked,
+        dol_sha1,
+        prof.name,
+        made_by(compiler, sysroot) if android else None,
+    )
     (args.out / "game_table.c").write_text(
-        seam.game_table_c(
-            the_seam, hle, entries, seam.record(args.no_decomp, baked, dol_sha1, prof.name)
-        ),
-        encoding="utf-8",
+        seam.game_table_c(the_seam, hle, entries, record), encoding="utf-8"
     )
     if android:
         seam.write_android_stubs(args.out / "stub", the_seam, hle)

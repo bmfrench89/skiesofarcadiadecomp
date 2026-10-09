@@ -18,9 +18,14 @@ translated or decompiled game code and no game data (SPEC section 2 rule 5;
                 hashed (3.5), which runs the build's tools
     toolchain/  llvm-mingw, as tools/fetch_mingw.py keeps it (3.2)
     source/     runtime/, config/, the tools the build runs, the mods' text,
-                vendor/'s GPU build files, README.md, LICENSE and NOTICE
+                vendor/'s GPU build files, bionic's 44 pinned files the
+                phone's sysroot is built from on the player's PC
+                (vendor/android-sysroot-src, R5b), VERSION, README.md,
+                LICENSE and NOTICE
     licenses/   the third parties' texts: CPython, LLVM, llvm-mingw, mingw-w64,
-                Vulkan-Headers and glslang
+                Vulkan-Headers, glslang, the Android sysroot's notices
+                (bionic's own words, generated from those files), and Linux's
+                GPL-2.0 and syscall note, which its kernel headers are under
 
 Never src/, include/, gen/, extracted/ or build/. The player runs
 python\\python.exe source\\tools\\player_build.py --disc <image> --root <folder>
@@ -35,12 +40,12 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.request
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import fetch_android_sysroot  # noqa: E402
 import fetch_gpu  # noqa: E402
 import fetch_mingw  # noqa: E402
 import player_build  # noqa: E402
@@ -56,7 +61,8 @@ PYTHON_SHA256 = "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a31
 
 # The tools the build runs (tools/player_build.py and what it imports), and
 # soa/ whole. recompile.py imports fetch_sdl at its top (L10): a package
-# without it stopped there, which test_package.py now holds.
+# without it stopped there, which test_package.py now holds. An Android
+# target runs fetch_android_sysroot.py to build the sysroot (R5b).
 TOOLS = (
     "player_build.py",
     "recompile.py",
@@ -64,9 +70,14 @@ TOOLS = (
     "decomp.py",
     "fetch_gpu.py",
     "fetch_sdl.py",
+    "fetch_android_sysroot.py",
 )
 TOP = ("README.md", "LICENSE", "NOTICE", "pyproject.toml")
 MOD_FILES = ("mod.c", "mod.ini", "patches.txt")
+# The kernel the Android sysroot's Linux headers were generated from: bionic's
+# pinned linux/version.h says 6.19.0 (LINUX_VERSION_CODE 398080), which
+# test_package.py derives, so a new bionic commit with newer headers fails it.
+LINUX_TAG = "v6.19"
 # The licences that are not in what the package carries already, fetched at
 # the pinned releases' tags and held to their hashes.
 LICENSE_URLS = {
@@ -78,7 +89,18 @@ LICENSE_URLS = {
         f"https://raw.githubusercontent.com/KhronosGroup/glslang/{fetch_gpu.GLSLANG_VERSION}/LICENSE.txt",
         "17e70c676e1521ff3e4686f04a2053d93a7e28a33be8de7ec37ab0ff72feb677",
     ),
+    "linux-gpl-2.0.txt": (
+        f"https://raw.githubusercontent.com/torvalds/linux/{LINUX_TAG}/LICENSES/preferred/GPL-2.0",
+        "8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa",
+    ),
+    "linux-syscall-note.txt": (
+        f"https://raw.githubusercontent.com/torvalds/linux/{LINUX_TAG}/LICENSES/exceptions/Linux-syscall-note",
+        "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f",
+    ),
 }
+# Generated at staging from the package's own sources, held to the pin of the
+# sysroot's NOTICE.txt: the same text the player's PC writes into the tree.
+SYSROOT_LICENSE = "android-sysroot.txt"
 # And the ones it carries, by where they are in the package.
 LICENSE_COPIES = {
     "cpython.txt": "python/LICENSE.txt",
@@ -91,15 +113,34 @@ LICENSE_COPIES = {
 
 # Never in a package, wherever they appear under what is copied.
 NEVER = {"src", "include", "gen", "extracted", "build", "__pycache__", ".pytest_cache"}
+# Where bionic's pinned files go in a package: under the guard's third-party
+# allowance (source/vendor/), so their libc/include/ passes guard.py --tree.
+SYSROOT_SOURCES = Path("source") / "vendor" / fetch_android_sysroot.CACHE
+# The deepest path a build writes under a package's folder, each under the
+# longest name its tool writes it, which Setup.exe leaves room for too:
+# gen-android-x86_64/stub/libsoa_runtime.so (41) and lld's temporary suffix
+# (11); source/vendor/ (14) and the sysroot's own deepest, 73 (R5b).
+BUILD_DEEPEST = max(
+    len("gen-android-x86_64/stub/libsoa_runtime.so") + 11,
+    len("source/vendor/") + fetch_android_sysroot.longest_written(),
+)
+
+
+def fetch(url: str) -> bytes:
+    """One download, through the sysroot tool's fetch(): paced, its transport
+    failures tried again, a 429's wait honoured, and refused in its words."""
+    print(f"fetching {url}")
+    try:
+        return fetch_android_sysroot.fetch(url)
+    except fetch_android_sysroot.Refused as exc:
+        raise SystemExit(f"error: {exc}") from None
 
 
 def python_zip() -> Path:
     """The embeddable CPython, fetched once into vendor/ and held to its pin."""
     path = VENDOR / PYTHON_ZIP
     if not path.exists():
-        print(f"fetching {PYTHON_URL}")
-        with urllib.request.urlopen(PYTHON_URL, timeout=300) as r:  # noqa: S310 - fixed https URL
-            blob = r.read()
+        blob = fetch(PYTHON_URL)
         VENDOR.mkdir(parents=True, exist_ok=True)
         path.write_bytes(blob)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -130,10 +171,10 @@ def build_setup(out: Path, defines: tuple[str, ...] = ()) -> Path:
 
 def deepest(folder: Path) -> int:
     """The longest path under ``folder`` as Windows spells it from there, and
-    never less than the build's own outputs under it (gen/, build/, mods/:
-    34 at most, measured 2026-10-04): what Setup.exe leaves room for."""
+    never less than what a build writes under it (BUILD_DEEPEST): what
+    Setup.exe leaves room for."""
     paths = (len(str(f.relative_to(folder))) for f in folder.rglob("*") if f.is_file())
-    return max(max(paths, default=0), 40)
+    return max(max(paths, default=0), BUILD_DEEPEST)
 
 
 def copy_tree(src: Path, dest: Path, suffixes: tuple[str, ...] | None = None) -> int:
@@ -153,9 +194,11 @@ def copy_tree(src: Path, dest: Path, suffixes: tuple[str, ...] | None = None) ->
     return n
 
 
-def stage_source(source: Path) -> None:
+def stage_source(source: Path, ver: str | None = None) -> None:
     """A package's source/: runtime/, config/, the tools the build runs with
-    soa/ whole, the top-level texts, and each mod's text."""
+    soa/ whole, the top-level texts, each mod's text, and VERSION, which the
+    build reads (player_build.package_version) and an Android library's
+    record carries as package= (version() when `ver` is None)."""
     copy_tree(ROOT / "runtime", source / "runtime")
     copy_tree(ROOT / "config", source / "config")
     copy_tree(ROOT / "tools" / "soa", source / "tools" / "soa", (".py",))
@@ -169,22 +212,48 @@ def stage_source(source: Path) -> None:
                 if (mod / name).is_file():
                     (source / folder / mod.name).mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(mod / name, source / folder / mod.name / name)
+    # the version and LF, read stripped; no suffix, so the guard takes it for
+    # the text it is
+    (source / "VERSION").write_bytes(f"{version() if ver is None else ver}\n".encode())
 
 
-def stage(dest: Path) -> None:
+def stage_vendor(vendor: Path, dest: Path) -> None:
+    """A package's source/vendor: the GPU build files and their record, and
+    exactly bionic's 44 pinned files the sysroot is built from, each held to
+    both its pins -- never copy_tree, which drops every path through a folder
+    named include, and never the cache's check files."""
+    for name in ("vulkan-headers", "glslang"):
+        shutil.copytree(vendor / name, dest / name)
+    shutil.copyfile(vendor / fetch_gpu.RECORD, dest / fetch_gpu.RECORD)
+    try:
+        fetch_android_sysroot.stage_sources(
+            vendor / fetch_android_sysroot.CACHE, dest / fetch_android_sysroot.CACHE
+        )
+    except fetch_android_sysroot.Refused as exc:
+        raise SystemExit(f"error: {exc}") from None
+
+
+def stage(dest: Path, ver: str | None = None) -> None:
     if dest.exists() and any(dest.iterdir()):
         raise SystemExit(f"error: {dest} is not empty")
-    bad = fetch_mingw.verify(VENDOR) + fetch_gpu.verify(VENDOR)
+    fetch_android_sysroot.new_run()
+    cache = VENDOR / fetch_android_sysroot.CACHE
+    sources = [
+        f"{fetch_android_sysroot.CACHE}/{p}" for p in fetch_android_sysroot.cache_problems(cache)
+    ]
+    bad = fetch_mingw.verify(VENDOR) + fetch_gpu.verify(VENDOR) + sources
     if bad:
-        raise SystemExit(f"error: vendor/ is not as recorded ({bad[0]})")
+        raise SystemExit(
+            f"error: vendor/ is not as recorded ({bad[0]}): python tools/fetch_mingw.py, "
+            "tools/fetch_gpu.py and tools/fetch_android_sysroot.py fetch it"
+        )
+    ver = version() if ver is None else ver
     with zipfile.ZipFile(python_zip()) as z:
         z.extractall(dest / "python")
     shutil.copytree(VENDOR / "llvm-mingw", dest / "toolchain", symlinks=True)
     source = dest / "source"
-    stage_source(source)
-    for name in ("vulkan-headers", "glslang"):
-        shutil.copytree(VENDOR / name, source / "vendor" / name)
-    shutil.copyfile(VENDOR / fetch_gpu.RECORD, source / "vendor" / fetch_gpu.RECORD)
+    stage_source(source, ver)
+    stage_vendor(VENDOR, source / "vendor")
     licenses(dest)
     # last, so it knows the deepest path it must leave room for
     build_setup(dest / "Setup.exe", (f"SETUP_DEEPEST={deepest(dest)}",))
@@ -193,7 +262,8 @@ def stage(dest: Path) -> None:
 
 def licenses(dest: Path) -> None:
     """dest/licenses: the third parties' texts, copied from the package or
-    fetched at their pinned tags into vendor/licenses/ once."""
+    fetched at their pinned tags into vendor/licenses/ once, and the Android
+    sysroot's notices, generated from the sources the package carries."""
     out = dest / "licenses"
     out.mkdir(parents=True, exist_ok=True)
     for name, rel in LICENSE_COPIES.items():
@@ -202,14 +272,21 @@ def licenses(dest: Path) -> None:
     for name, (url, pin) in LICENSE_URLS.items():
         path = cache / name
         if not path.exists():
-            with urllib.request.urlopen(url, timeout=60) as r:  # noqa: S310 - fixed https URL
-                blob = r.read()
+            blob = fetch(url)
             cache.mkdir(parents=True, exist_ok=True)
             path.write_bytes(blob)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if digest != pin:
             raise SystemExit(f"error: {url} has sha256 {digest}, not the pinned {pin}")
         shutil.copyfile(path, out / name)
+    notice = fetch_android_sysroot.notice_text(dest / SYSROOT_SOURCES).encode("utf-8")
+    want = fetch_android_sysroot.OUTPUTS["NOTICE.txt"]
+    if hashlib.sha256(notice).hexdigest() != want:
+        raise SystemExit(
+            f"error: {SYSROOT_LICENSE} made from {SYSROOT_SOURCES.as_posix()} is not the "
+            f"pinned NOTICE.txt ({want[:12]})"
+        )
+    (out / SYSROOT_LICENSE).write_bytes(notice)
 
 
 def git_blob(rev: str, name: str) -> bytes:
@@ -245,6 +322,15 @@ def check(folder: Path, rev: str = "HEAD") -> int:
     source = folder / "source"
     if not source.is_dir():
         print(f"error: {folder} holds no source/: not a package")
+        return 1
+    # R5b: a package's VERSION is the version its folder, and its zip, are
+    # named for, since an Android library's record carries it as package=
+    named = folder.name.removeprefix("soa-").removesuffix("-windows-x64")
+    if named != folder.name and player_build.package_version(source) != named:
+        print(
+            f"{source}: VERSION says {player_build.package_version(source)!r}, "
+            f"and the package is named for {named!r}"
+        )
         return 1
     got, want = player_build.inputs_record(source), commit_inputs(rev)
     if got == want:
@@ -286,7 +372,7 @@ def build_zip(out: Path, ver: str) -> Path:
     staged = out / name
     if staged.exists():
         shutil.rmtree(staged)
-    stage(staged)
+    stage(staged, ver)
     zpath = out / f"{name}.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for f in sorted(staged.rglob("*")):
@@ -318,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check":
         return check(args.folder.resolve(), args.commit)
     if args.cmd == "stage":
-        stage(args.dest.resolve())
+        stage(args.dest.resolve(), args.version)
     elif args.out:
         args.out.mkdir(parents=True, exist_ok=True)
         build_zip(args.out.resolve(), args.version or version())

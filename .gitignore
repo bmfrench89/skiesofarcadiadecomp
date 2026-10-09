@@ -29,6 +29,11 @@ out/
 *.obj
 *.exe
 *.pdb
+# a player's build's Android targets (R5b: <root>/gen-android-arm64 and the
+# library beside it) and the APK, should a --root land inside a checkout
+gen-*/
+*.so
+*.apk
 # a mod's build (mods/*/mod.dll and what the linker leaves beside it)
 *.dll
 *.exp

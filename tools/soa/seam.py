@@ -79,14 +79,29 @@ def baked_digest(inputs: Mapping[str, str]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def record(no_decomp: bool, baked: str, dol_sha1: str = "", profile: str = "") -> str:
+# Each value made_by adds to a record is cut to this, so abi, mode, baked and
+# dol, which come first, stay inside the 511 bytes a phone reads of it
+# (elfcheck.RECORD_CAP): at most 321 bytes in all (specs/android-sysroot.md 5.7).
+MADE_BY_CAP = 64
+
+
+def record(
+    no_decomp: bool,
+    baked: str,
+    dol_sha1: str = "",
+    profile: str = "",
+    made_by: Mapping[str, str] | None = None,
+) -> str:
     """A build record: what elfcheck compares (abi, mode, baked), and what
-    only says where a library came from (dol, profile)."""
+    only says where a library came from (dol, profile, and for an Android
+    build made_by's package, cc and sysroot, in the order given)."""
     parts = [f"abi={ABI}", f"mode={'no-decomp' if no_decomp else 'decomp'}", f"baked={baked}"]
     if dol_sha1:
         parts.append(f"dol={dol_sha1}")
     if profile:
         parts.append(f"profile={profile}")
+    for key, value in (made_by or {}).items():
+        parts.append(f"{key}={value.replace(' ', '_')[:MADE_BY_CAP]}")
     return " ".join(parts)
 
 

@@ -117,6 +117,25 @@ def test_a_forbidden_directory_is_any_directory_component(path, forbidden):
     assert (guard.forbidden_dir(Path(path)) is not None) == forbidden, path
 
 
+@pytest.mark.parametrize(
+    "path,forbidden",
+    [
+        ("gen-android-arm64/chunk_001.c", True),
+        ("R/GEN-Android-x86_64/chunk_014.c", True),  # any case, at any depth
+        ("Skies/gen-android-arm64/stub/libc.c", True),
+        ("tools/soa/gen-notes.md", False),  # a file of that name is not a folder of it
+        ("docs/regen-x/a.md", False),  # the prefix starts the name
+        ("gene/x.c", False),
+    ],
+)
+def test_a_gen_dash_folder_is_refused(path, forbidden):
+    """R5b: player_build.py writes an Android target's translated C into
+    <root>/gen-<target>, whose chunks (1.6 to 2.0 MB) are under the size limit
+    and match no other rule: a --root in a checkout outside build/ would leave
+    them for git add -A."""
+    assert (guard.forbidden_dir(Path(path)) is not None) == forbidden, path
+
+
 def test_the_oversize_threshold_is_the_same_number_in_both(workflow):
     """guard.py caps a tracked file; CI caps a blob in history. Different
     limits would mean a file the guard accepts cannot be pushed."""

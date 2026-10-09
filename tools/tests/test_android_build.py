@@ -358,6 +358,18 @@ def test_the_phone_s_checker_agrees_with_the_pc_s(libs, driver, tmp_path):
     files["a field's name alone"] = build(
         tmp_path / "alone", record=GAME_RECORD.replace(" mode=", " mode mode=")
     )
+    # and what an Android build's record says made it (R5b), the longest it
+    # can be: keys both checkers pass over, after abi, mode, baked and dol
+    files["a record that says what made it"] = build(
+        tmp_path / "made",
+        record=seam.record(
+            True,
+            "0" * 64,
+            DOL,
+            "android-arm64",
+            {"package": "v" * 600, "cc": "c" * 600, "sysroot": "s" * 12},
+        ),
+    )
     said = {}
     for what, lib in files.items():
         for setting, want in SETTINGS.items():
@@ -377,6 +389,7 @@ def test_the_phone_s_checker_agrees_with_the_pc_s(libs, driver, tmp_path):
         f"{releases} (its mode is {long_mode[:127]}, the app's no-decomp): {SAME_RELEASE}"
     )
     assert said["a field's name alone", "phone"] == "ok"
+    assert said["a record that says what made it", "phone"] == "ok"
     # the settings differ where they should, and nowhere else
     differ = {what for what in files if said[what, "phone"] != said[what, "desktop"]}
     assert differ == {"a Linux library"}
@@ -423,6 +436,40 @@ def test_the_mutants_a_device_is_given_each_draw_their_refusal(driver, tmp_path)
 
 
 # ---- R5a part 2: the route's own decisions, needing no compiler -------------
+
+
+def test_the_record_says_what_made_the_library(monkeypatch):
+    """R5b (distribution 3.8): an Android library's record says what made it,
+    after profile=: the package's version, the compiler and the sysroot. Each
+    value is cut at 64 characters, its spaces made _, so abi, mode, baked and
+    dol, which come first, are always inside the 511 bytes a phone reads: at
+    most 321 in all. With the cut taken out, a 600-character VERSION fails."""
+    import player_build
+    import recompile
+
+    line = "clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac5602)"
+    assert recompile.made_by(line, "a" * 64) == {
+        "package": "checkout",
+        "cc": "clang-23.1.2",
+        "sysroot": "a" * 12,
+    }
+    other = recompile.made_by("gcc (Debian 14.2.0) 14.2.0", "")["cc"]
+    assert len(other) == 12 and set(other) <= set("0123456789abcdef")
+    monkeypatch.setattr(player_build, "package_version", lambda: "v 1")
+    rec = seam.record(True, "0" * 64, "1" * 40, "android-x86_64", recompile.made_by(line, "a" * 64))
+    assert rec.split(" ")[4:] == [
+        "profile=android-x86_64",
+        "package=v_1",
+        "cc=clang-23.1.2",
+        "sysroot=aaaaaaaaaaaa",
+    ]
+    monkeypatch.setattr(player_build, "package_version", lambda: "v" * 600)
+    made = recompile.made_by("clang version " + "9" * 600 + " (x)", "s" * 64)
+    rec = seam.record(True, "0" * 64, "1" * 40, "android-x86_64", made)
+    assert len(rec.encode("utf-8")) == 321
+    assert [len(f) for f in rec.split(" ")[5:]] == [8 + 64, 3 + 64, 8 + 12]
+    assert rec.index(" dol=") + len(" dol=") + 40 <= elfcheck.RECORD_CAP
+    assert seam.record(True, "0" * 64) == RECORD  # the APK's own is unchanged
 
 
 def test_without_llvm_mingw_or_the_sysroot_the_build_says_where_it_looked(monkeypatch, tmp_path):

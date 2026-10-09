@@ -45,6 +45,8 @@ PACKAGE = [
     "python/python.exe",
     "source/tools/player_build.py",
     "toolchain/bin/x86_64-w64-mingw32-clang.exe",
+    # R5b: bionic's sources, which a package's Android build is made from
+    "source/vendor/android-sysroot-src/libc/arch-common/bionic/crtbegin_so.c",
 ]
 DEEPEST = 100  # setup.c's SETUP_DEEPEST when package.py does not say
 
@@ -61,11 +63,13 @@ def test_the_lists_here_are_setup_cs():
 def test_package_leaves_room_for_the_deepest_file(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "b.txt").write_text("x", encoding="utf-8")
-    assert package.deepest(tmp_path) == 40  # never less than the build's own outputs
+    # never less than what a build writes under it: the sysroot's deepest
+    # header under source/vendor (R5b)
+    assert package.deepest(tmp_path) == package.BUILD_DEEPEST == 87
     deep = tmp_path / ("d" * 30) / ("e" * 30)
     deep.mkdir(parents=True)
-    (deep / ("f" * 30 + ".h")).write_text("x", encoding="utf-8")
-    assert package.deepest(tmp_path) == 30 + 1 + 30 + 1 + 32
+    (deep / ("f" * 40 + ".h")).write_text("x", encoding="utf-8")
+    assert package.deepest(tmp_path) == 30 + 1 + 30 + 1 + 42
 
 
 def lay_out(folder: Path, exe: Path, skip: str = "") -> Path:
@@ -106,8 +110,8 @@ def test_setup_opened_from_inside_the_zip_says_to_extract_it(setup_exe, tmp_path
     assert (
         code == "INCOMPLETE" and "python\\python.exe is missing" in words and "Extract All" in words
     )
-    for rel in PACKAGE:  # each one missing is seen
-        exe = lay_out(tmp_path / rel.replace("/", "_"), setup_exe, skip=rel)
+    for n, rel in enumerate(PACKAGE):  # each one missing is seen
+        exe = lay_out(tmp_path / f"without{n}", setup_exe, skip=rel)
         code, words = check(exe)
         assert code == "INCOMPLETE" and rel.replace("/", "\\") in words, rel
 

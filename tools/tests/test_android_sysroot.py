@@ -623,6 +623,43 @@ def test_the_tool_runs_as_a_package_runs_it(tmp_path):
     assert gone.returncode != 0 and "No module named 'soa'" in gone.stderr
 
 
+# ---- 18 ---------------------------------------------------------------------
+
+
+def test_a_package_gets_the_44_sources_and_nothing_else(monkeypatch, tmp_path):
+    """R5b: a player's package carries exactly the build and ship files, each
+    held to its pins: a header under libc/include among them (copy_tree drops
+    any path through a folder named include), and never the check files, nor
+    anything else a cache holds. The real table names 44."""
+    assert len(fas.needed()) == 44
+    files = {
+        "libc/include/math.h": b"/* a header */\n",
+        "libc/arch-common/bionic/crtbegin_so.c": b"/* a crt source */\n",
+        "libc/libc.map.txt": b"LIBC { };\n",
+        "libc/kernel/uapi/linux/version.h": b"#define LINUX_VERSION_CODE 398080\n",
+    }
+    rows = table(monkeypatch, files)
+    rows["libc/include/math.h"] = rows["libc/include/math.h"]._replace(role="ship")
+    for path in ("libc/libc.map.txt", "libc/kernel/uapi/linux/version.h"):
+        rows[path] = rows[path]._replace(role="check", abi=None)
+    cache = tmp_path / "cache"
+    for path, data in [*files.items(), (".build/x", b"a stray")]:
+        (cache / path).parent.mkdir(parents=True, exist_ok=True)
+        (cache / path).write_bytes(data)
+    dest = tmp_path / "Skies, the package" / "android-sysroot-src"
+    assert fas.stage_sources(cache, dest) == 2
+    staged = sorted(f.relative_to(dest).as_posix() for f in dest.rglob("*") if f.is_file())
+    assert staged == ["libc/arch-common/bionic/crtbegin_so.c", "libc/include/math.h"]
+    assert (dest / "libc/include/math.h").read_bytes() == files["libc/include/math.h"]
+
+    (cache / "libc/include/math.h").write_bytes(b"/* a header, one byte on */\n")
+    with pytest.raises(fas.Refused, match=r"libc/include/math\.h in .*: sha256 "):
+        fas.stage_sources(cache, tmp_path / "again")
+
+    assert fas.longest_written() == 73  # android-sysroot.new/ and the x86_64 posix_types_64.h
+    assert fas.longest_written() == max(len(f"{fas.DEST}.new/{p}") for p in fas.SHIP.values())
+
+
 # ---- 17 ---------------------------------------------------------------------
 
 

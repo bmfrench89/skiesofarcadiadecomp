@@ -154,9 +154,11 @@ extension module (`DLLs\_zstd.pyd`) [V]. `test_citest.py`'s stdlib check is exte
 | `python/` | the embeddable CPython | python.org, pinned and hashed |
 | `toolchain/` | llvm-mingw, pruned to the x86_64 host and target | `fetch_mingw.py` |
 | `source/` | `runtime/`, `config/`, the `tools/` the build runs, `README`, `LICENSE` | the tagged commit |
+| `source/VERSION` | the package's version and a line feed (R5b): what an Android library's record carries as `package=`, and what `package.py check` holds to the folder's name | `package.py` |
 | `source/vendor/` | Vulkan-Headers and glslang, as `fetch_gpu.py` fetches them, so `--link` builds the GPU backend unchanged | `fetch_gpu.py` (glslang is the build-time shader compiler the owner allowed, 2026-09-30) |
+| `source/vendor/android-sysroot-src/` | bionic's 44 pinned files, 151,273 bytes, from which the player's PC builds the phone's sysroot on its first Android build (R5b, D-34): never a built tree | `fetch_android_sysroot.py`, each file held to its sha256 and git blob |
 | `mods/` | each shipped mod's `mod.c` and `mod.ini` (their addresses are rule-3 metadata), built into `mod.dll` at the root by R1's GNU mod build | the tagged commit |
-| `licenses/` | the texts for CPython, LLVM, llvm-mingw, mingw-w64, Vulkan-Headers and glslang | each project |
+| `licenses/` | the texts for CPython, LLVM, llvm-mingw, mingw-w64, Vulkan-Headers and glslang; and (R5b, D-35) `android-sysroot.txt`, the sysroot's files' own licence words, generated from the package's sources and held to the pinned `NOTICE.txt`, and Linux's `linux-gpl-2.0.txt` and `linux-syscall-note.txt`, at the kernel the headers were generated from (v6.19) | each project |
 
 **Never in it:** `src/`, `include/`, anything from `gen/`, `extracted/` or `build/`, a DOL or anything
 built from one. R3's guard holds the zip to that.
@@ -175,6 +177,12 @@ package [I]; with I1 landed the image is read where it lies and its copy goes.
   plain ASCII, saying why, rather than let the root be lost silently.
 - **Where it may not write:** `Setup.exe` checks write access and free space (about 2 GB) before it
   starts, and refuses Program Files with a message.
+- **The phone's library** (R5b): `player_build.py --target android-arm64` translates into
+  `gen-android-arm64/` (kept, for relinks) and puts `libsoa_game.so` at the top, beside `soa.exe`;
+  `--target android-x86_64`, the emulator's, `gen-android-x86_64/` and `libsoa_game-x86_64.so`. The first
+  Android build first builds the sysroot under `source/vendor/android-sysroot/`, offline, from the package's own
+  sources. An Android target needs about 384 MiB free beside the root, 64 MiB for a relink; the build checks
+  that, the sources and the compiler before it writes anything.
 
 ### 3.8 Identity, reproducibility, and a stale `gen/`
 
@@ -182,10 +190,15 @@ package [I]; with I1 landed the image is read where it lies and its copy goes.
   not the North American GameCube release, GEAE8P"; "this disc's executable is not the one this package
   was made for"). `player_build` treats extract.py's "cannot check" as a refusal.
 - **The build says what made it:** `soa.exe`'s `[boot]` line gains the package version, the compiler's
-  version (L3b already prints it) and the DOL's SHA-1.
+  version (L3b already prints it) and the DOL's SHA-1. An Android library's record (R5b) ends `package=<the
+  package's VERSION> cc=clang-23.1.2 sysroot=<12 hex>`, after the `profile=` it already had, each value cut at
+  64 characters so the fields the phone compares stay inside the 511 bytes it reads.
 - **Never a stale `gen/`:** `player_build` records the package version and a hash of every input the
   chunks bake in (G5's build inputs), and retranslates from scratch when any differs. A new package
-  over an old folder, and the setup window's Rebuild, take that path.
+  over an old folder, and the setup window's Rebuild, take that path. *As built:* the inputs are read with CRLF
+  as LF (R5-0), so no checkout's line endings move them; and (R5b) each target's record also holds the package's
+  version, the compiler's `--version` line and its declared flags, and for Android the sysroot's digest, so a
+  change to any of them translates that target again.
 - **Two builds from the same package and disc give the same `soa.exe`, byte for byte:** no timestamps
   (`-Wl,--no-insert-timestamp`), `-ffile-prefix-map` for the absolute paths `__FILE__` writes (gxv.c:286
   is one, and would put the player's user name in the exe), sorted inputs, no PDB. This is what lets a
@@ -357,8 +370,11 @@ hands.*
 ### R5. Android: a runtime-only APK and a game library from the PC
 
 *Settled 2026-10-07 in [android-sysroot.md](android-sysroot.md) (D-34 to D-36), which owns R5's
-slices from then, R5-0 to R5c, and supersedes this section where they differ. R5-0 is done (FINDINGS
-"R5-0").*
+slices from then, R5-0 to R5c, and supersedes this section where they differ. R5-0, R5a and R5b are done
+(FINDINGS "R5-0", "R5a part 1", "R5a part 2", "R5b"): `player_build.py --target android-arm64` builds the
+phone's library from a player's package, offline, with what it carries. **The release gate:** no published
+release shows Setup's Android box (R5c) before the release APK exists (D-33); the owner publishes every
+release (Q-D4).*
 
 *Specified with L12; recorded here so L12 does not miss what route C2 needs. Prerequisites: L12, R2.*
 
@@ -370,8 +386,8 @@ slices from then, R5-0 to R5c, and supersedes this section where they differ. R5
   and the table's version. The runtime refuses a library made from other inputs, naming the rebuild the
   player needs, rather than run a stale one.
 - **The PC build gains `--target android-arm64`:** clang cross-compiling with Android's headers and
-  libraries. Whether the NDK's sysroot may be shipped in the package, or must be fetched on the player's PC,
-  is L12's to settle (its licence terms are not this spec's to read [I]).
+  libraries. *Settled:* llvm-mingw and this repository's own sysroot, built where it is used, the player's PC
+  included (D-31, D-34), from bionic's 44 pinned files the package carries.
 - **The phone:** the APK asks for the library and the disc image through the system file picker (SAF) and
   copies them into its storage (L12's "SAF import").
 - **Done** belongs to L12: replay 23/23 at 1-8 threads on the phone from a library built on this PC.

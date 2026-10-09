@@ -288,7 +288,12 @@ rewritten):
   texts ship in `licenses/` (R5b).
 - **For the player** (R5b, R5c): `player_build.py --target android-arm64`, and Setup's checkbox, put
   `libsoa_game.so` in the install folder beside `soa.exe`, the sysroot built from the package's own copy of the 44
-  files; Setup says how to copy it to the phone.
+  files; Setup says how to copy it to the phone. *As built in R5b (FINDINGS "R5b"):* the package carries the 44
+  under `source/vendor/android-sysroot-src`, `source/VERSION` and the licence texts; before anything is written the
+  build checks those files (or the tree built from them), the package's clang and the space, refusing in the
+  player's words, then builds the sysroot offline when it is not there, and translates into `gen-android-arm64/`.
+  The library's record says what made it: `package=`, `cc=` and `sysroot=` after `profile=`. `android.py push-game`
+  holds a library to the APK this PC built before it pushes. Setup's checkbox is R5c.
 
 ### 3.5 SDL3 on Android: the pinned AAR
 
@@ -619,7 +624,8 @@ building the same libraries and comparing their verdicts, rather than by a writt
 
 *As built since R5a (FINDINGS "R5a part 2"): the NDK lines below are history. The game library is built by
 llvm-mingw's clang against this repository's own sysroot (§3.4); the NDK builds only the APK's runtime and the
-`-ndk` compile checks, and without llvm-mingw or the sysroot the build says where it looked.*
+`-ndk` compile checks, and without llvm-mingw or the sysroot the build says where it looked. `player_build.py
+--target` landed with R5b (FINDINGS "R5b").*
 
 *Files:*
 - `tools/soa/toolchain.py`: the `android-arm64` and `android-x86_64` profiles, finding the NDK through

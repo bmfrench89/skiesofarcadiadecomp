@@ -261,18 +261,41 @@ def cmd_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def library_verdict(lib: Path, profile: toolchain.Profile) -> str:
+    """What the APK this PC built would say of lib on a device of profile's
+    ABI, word for word: "ok", or its first refusal. Its record, exports and C
+    library names are the ones the APK was built with (generated/), not this
+    tree's, which may have moved on since (R5b)."""
+    from soa import elfcheck
+
+    return elfcheck.verdict(
+        lib,
+        machine=elfcheck.ANDROID_MACHINES[profile.name],
+        exports=apk_exports(),
+        libc=apk_libc(),
+        record=apk_record(),
+        dol=apk_dol(),
+        android=True,
+    )
+
+
 def cmd_push_game(args: argparse.Namespace) -> int:
     serial = serial_of(args)
-    lib = Path(args.library) if args.library else None
-    if lib is None:
-        abi = device_abi(serial)
-        if abi not in ABIS:
-            raise AndroidError(f"{serial} is {abi}; this port builds for {', '.join(ABIS)}")
-        lib = ROOT / ABIS[abi].out / seam.GAME_SONAME
+    abi = device_abi(serial)
+    if abi not in ABIS:
+        raise AndroidError(f"{serial} is {abi}; this port builds for {', '.join(ABIS)}")
+    lib = Path(args.library) if args.library else ROOT / ABIS[abi].out / seam.GAME_SONAME
     if not lib.exists():
         raise AndroidError(
-            f"no {lib}: python tools/recompile.py --cc {ABIS.get(device_abi(serial)).name} --compile --link"
+            f"no {lib}: python tools/recompile.py --cc {ABIS[abi].name} --compile --link"
         )
+    # Held to the APK first, so a library it would refuse (another release's
+    # baked=, another executable, the wrong machine) is found here, not on
+    # the device (R5b).
+    said = library_verdict(lib, ABIS[abi])
+    if said != "ok":
+        raise AndroidError(f"{lib}: the app this PC built would refuse it: {said}")
+    print(f"checked {lib} against the app this PC built: ok")
     # read-only, as Android 17 asks of loaded code; where an import puts it (L12d)
     put(serial, lib, seam.GAME_SONAME, "0444", base="no_backup")
     print(f"pushed {lib} to {serial}'s no_backup/{seam.GAME_SONAME}")
@@ -402,6 +425,29 @@ def apk_record(seam_c: Path | None = None) -> str:
     if not m:
         raise AndroidError(f"{seam_c} has no soa_runtime_record")
     return re.sub(r"\\(.)", r"\1", m.group(1))
+
+
+def _apk_names(array: str, seam_c: Path | None) -> list[str]:
+    seam_c = seam_c or GENERATED / "runtime_seam.c"
+    if not seam_c.is_file():
+        raise AndroidError(
+            f"no {seam_c}: python tools/android.py build writes it, and builds the APK from it"
+        )
+    m = re.search(rf"{array}\[\]\s*=\s*\{{(.*?)\}};", seam_c.read_text(encoding="utf-8"), re.S)
+    if not m:
+        raise AndroidError(f"{seam_c} has no {array}")
+    return [re.sub(r"\\(.)", r"\1", s) for s in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))]
+
+
+def apk_exports(seam_c: Path | None = None) -> list[str]:
+    """What the APK's runtime lets a game library import from it, as build
+    wrote it into generated/runtime_seam.c."""
+    return _apk_names("soa_runtime_exports", seam_c)
+
+
+def apk_libc(seam_c: Path | None = None) -> list[str]:
+    """The C library names the APK's runtime lets a game library import."""
+    return _apk_names("soa_runtime_libc", seam_c)
 
 
 def apk_dol() -> str:
