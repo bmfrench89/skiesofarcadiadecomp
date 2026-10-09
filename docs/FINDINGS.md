@@ -8006,3 +8006,143 @@ the driver's.** 2026-10-04.
   given.
 - **The tests** are 1490 in 90 files, measured four ways: 1449 passed and 41 skipped here; 1430 and 42
   without capstone; 1040 and 450 without MSVC; 1021 and 451 without either. The full run took 981.69 s.
+
+**R5b: the phone's library from a player's package.** 2026-10-09.
+
+- **What it is:** the third slice of R5 (docs/specs/android-sysroot.md §1.2). A player's package now builds the
+  phone's game library offline, with what it carries. `player_build.py --target android-arm64` (repeatable beside
+  `--target windows`; `android-x86_64` for the emulator):
+  - checks, right after the disc and before anything is written, the package's bionic files (or the sysroot built
+    from them), its clang and that clang's identity, and the space, refusing each in the player's words with every
+    target stopped, Windows' too;
+  - builds the sysroot from the package's own 44 files with the package's own python and clang, offline, when it
+    is not there and as recorded;
+  - translates each target into a folder of its own (`gen-android-arm64`), whose record holds, beside the baked
+    inputs, the package's version, the compiler's `--version` line, its declared flags and, for Android, the
+    sysroot's digest, so a change to any of them translates that target again;
+  - passes every line recompile prints on as `[build] android …`, and puts the library at the root's top as
+    `libsoa_game.so` (`libsoa_game-x86_64.so` for the emulator).
+
+  The package carries `source/vendor/android-sysroot-src` (exactly the 44, each held to both pins as it is staged,
+  never the check files), `source/VERSION`, `fetch_android_sysroot.py`, and three licence texts:
+  `android-sysroot.txt`, the NOTICE generated from the staged files and held to its pin, and the kernel's GPL-2.0
+  and syscall note at v6.19. An Android library's record now ends `package=<VERSION> cc=clang-23.1.2 sysroot=<12
+  hex>`, each value cut at 64 characters. `android.py push-game` holds a library to the APK this PC built before it
+  pushes. The guard refuses `gen-…` folders, and `.gitignore` ignores them and `*.so` and `*.apk`; Setup's package
+  check names bionic's `crtbegin_so.c`; `package.py check` holds `VERSION` to the package's name; and the release
+  workflow builds the sysroot from the unzipped package with its own python, offline.
+- **On this PC** [V], at 3c268c4, every run of the package's own tools with a `PATH` holding only its python:
+  - **The package:** `package.py stage build\r5b\P` in 37 s. `source\vendor\android-sysroot-src` holds the 44 files,
+    151,273 bytes, none named `.map`, 15 of them under `libc\include`; `source\VERSION` is `3c268c4` and a line
+    feed, `git describe`'s answer; `licenses\` gains `android-sysroot.txt` (43,194 bytes), `linux-gpl-2.0.txt`
+    (18,600) and `linux-syscall-note.txt` (1,258); `guard.py --tree` passed its 5,590 files; `package.py check`
+    printed `baked inputs of …\P\source: 1747c42488ed, and of HEAD: 1747c42488ed, the same`; and the package's
+    `Setup.exe --check` said `ready`.
+  - **The player's sysroot:** `P\python\python.exe P\source\tools\fetch_android_sysroot.py --offline` printed R5a
+    part 1's four lines, no `fetching`, in 1.67 s; `--verify`: `35 of 35`; again: `…android-sysroot is there and as
+    recorded (35 file(s) checked)`.
+  - **The emulator's library:** `player_build --target android-x86_64` into `build\r5b\R` ended `[build] android
+    done libsoa_game-x86_64.so sha256 4304d80a…`, exit 0, 51 s after the extraction's 2.5 s.
+  - **The phone's library:** `--target android-arm64` into `R` ended `[build] android done libsoa_game.so sha256
+    6f85bd56…`, in 50.6 s; into a second root, `R2`, the same hex, in 61.4 s with its extraction. Within a target,
+    the translation takes about 14 s (7.5 s of control flow, 6.6 s emitting 55.7 MB of C), the compile 34 s and
+    the four links 2 s; `gen-android-arm64` is 152 MB, 70 MB of it C, and the library 34 MB. So separate gen folders
+    cost a second translation and compile, about 48 s, and 152 MB, per Android target. The peak drop in free space
+    from the target's translation to its library at the root was 172.5 MiB (x86_64) and 179.7 MiB (arm64, `R2`);
+    `ANDROID_FREE` stays at the planned 384 MiB, about twice it, and `RELINK_FREE` at 64 MiB.
+  - **Both targets in one run:** `--target windows --target android-arm64` over `R` translated Windows (`[build]
+    translate: no record of the last translation`, `[build] done soa.exe sha256 a858d389…`) and only relinked
+    Android, with no `[build] android translate:` line, to the same `6f85bd56…`, in 74 s; with `--rebuild` both
+    translated, in 110 s, to the same two hashes. The relink takes 15 s, since recompile reads the executable again
+    for every `--link`.
+  - **Refused before any work:** with one byte of the package's `libc/include/math.h` changed and no tree, a
+    two-target run printed `[build] check` and `[build] android failed: this package's Android files are not as it
+    shipped them (libc/include/math.h): extract the package again, into a new folder`, exit 1, and made no root.
+    With the sources whole and the tree deleted, `[build] android sysroot` and the tool's four lines came before
+    `[build] extract` (a filter of mine on the output then stopped that run mid-build, so it left no record); with
+    one byte of the tree's `string.h` changed, `vendor/android-sysroot is not as recorded
+    (android-sysroot/usr/include/string.h: differs from the record); building it again from
+    vendor/android-sysroot-src`, and the build went on to the same `6f85bd56…`.
+- **The tests** of the Done, under `noskip`, at 1bc44b9's tree: `test_package.py`, `test_player_build.py`, `test_setup.py`,
+  `test_android_tool.py` and `test_guard.py`, 174 passed in 27.04 s; `test_android_sysroot.py` and
+  `test_android_build.py`, 62 passed in 27.17 s; none skipped.
+- **Mutations** [V]: 23, each failing its test, each file put back from git byte for byte and its test passing
+  again: the design's 1 to 5 and 8 to 10 (staging by `copy_tree`, or the whole cache; the record without the
+  identity; the preflight not checking the sources; the space check out; the 64-character cut out; `push-game`
+  unchecked; `forbidden_dir` without `gen-`), its 6 being a case of the staging test and its 7 the CI run below;
+  and a package's words as a checkout's, `identity()` without the
+  sysroot, a tree never rebuilt, a translation's old folder not counted, the root measured where it does not exist,
+  the prefix not passed, the emulator's library under the phone's name, `check` without the `VERSION` rule, `stage`
+  without the cache check, `VERSION` not written, the old depth floor, `stage_sources` taking the check files or
+  not held to the pins, and a failed compile not named. One more passed at first: recompile's `main()` writing an
+  Android library's record without `made_by`. Only the emulator would have shown it; the record's line is now
+  `recompile.game_record()`, which the record test drives for both Android profiles and for gcc (3c268c4), and the
+  mutation fails it.
+- **The seam row** (CLAUDE.md, since `seam.record` changed), in the `soa-l10` container at 1bc44b9's tree:
+  `recompile.py --cc gcc --split --compile --optimize --link` in 217 s, then on `gen/linux-split/soa` the self test
+  `0 failure(s)` with `baked=643b8a2b…`, this PC's digest of that tree, and `profile=gcc` with no `package=`, as
+  designed; the replay `23 captures match config/fifo_manifest.tsv at SOA_THREADS 1,2,3,8`; `title: 4 of 4
+  invariants hold`; and `test_seam.py` 17 passed. 3c268c4 changed `recompile.py` only by moving the record's line
+  into a function, so the split build's record is the same text.
+- **On CI** [V]: `release.yml` on a scratch branch at 3c268c4 (run 37940818210), every step green:
+  - the tests, 1371 passed and 127 skipped in 255 s;
+  - the source cache restored from main's key, `android-sysroot-src-b080f95ed440cef5` (45,843 bytes), then the
+    sysroot built from it with `--lists`, the four lines and the two lists, and 35 of 35 verified;
+  - the route's two modules, 62 passed with no skip;
+  - the package, 128,983,643 bytes (sha256 `240e4bff…`), `guard.py --tree` over its 5,590 files, `Setup.exe --check`
+    `ready`, the build's imports (`fetch_android_sysroot` among them), `baked inputs of …\soa-3c268c4-windows-x64\source:
+    1747c42488ed, and of HEAD: 1747c42488ed, the same`;
+  - and the player's own path on GitHub's Windows machine: the unzipped package's python and clang built the sysroot
+    from its sources, offline, the four lines and 35 of 35.
+
+  Downloaded into `build\r5b\ci`, the zip's sha256 was the draft's. Extracted, its `VERSION` was `3c268c4`, and its
+  `player_build --target android-x86_64` built the sysroot (the zip carries none), then ended `[build] android done
+  libsoa_game-x86_64.so sha256 4304d80a…`: the bytes of the package staged here from the same commit. With a package
+  that carries no sources (a scratch branch whose `stage()` removed them, run 37940822404), the run failed at Setup's
+  check, `This folder does not hold the whole package:
+  source\vendor\android-sysroot-src\libc\arch-common\bionic\crtbegin_so.c is missing.`, and drafted nothing. The
+  draft and both branches were deleted after.
+- **On the emulator** [V] (`soa_x86_64` on 5556; the other project's 5554 untouched): `android.py build` at 3c268c4 in
+  34 s, its record `baked=1747c424…`; `guard.py --apk` passed; `install`. `push-game` printed `checked
+  build\r5b\R\libsoa_game-x86_64.so against the app this PC built: ok` and pushed it; given the arm64 library it
+  printed `…\libsoa_game.so: the app this PC built would refuse it: this library was built for 64-bit ARM (AArch64),
+  not this device (x86-64): rebuild it for this device with Setup`, exit 1, nothing pushed. With the package's
+  library:
+  - the self test: `[game] …: abi=1 mode=no-decomp baked=1747c424… dol=8c0e2781… profile=android-x86_64
+    package=3c268c4 cc=clang-23.1.2 sysroot=f48b452a0828`, `[selftest] 0 failure(s)`, `[exit] 0`;
+  - the replay: `[android] 23 captures match config/fifo_manifest.tsv at SOA_THREADS 1,2,3,8 on emulator-5556`, in
+    214 s;
+  - the title: `4 of 4 invariants hold`, in 222 s, the store read in place (`SOA_IMPORT=1`);
+  - the player's path: `stage` put the library and `R\extracted\disc.iso` in Download (there was room, so the store
+    stayed), and `player --fresh` tapped through: `copied 33996304 of 33996304 bytes`, the library installed with
+    its `package=3c268c4` record, `disc.iso` read in place through its descriptor, `soa.ini` written, `[window] open
+    at 2x`; the capture 30 s after the last tap shows the opening's "Created by Overworks" logo, looked at.
+
+  With the library from the CI zip, pushed after `push-game`'s `ok`: the self test `0 failure(s)`, the same `[game]`
+  record to the last character; the replay 23 of 23 at 1, 2, 3 and 8 threads, in 194 s; the title 4 of 4, in 215 s.
+  The emulator was stopped after.
+- **The licence texts, for the owner's look:** `build/r5-licences/index.html` (local) lists what the package ships
+  for the sysroot, each of the NOTICE's 44 sections under its file's place with its class, and the kernel's two
+  texts. Each section's class was checked against its own words, not taken from the design's table: 16 are the
+  Android Open Source Project's BSD-2-Clause text, 5 the University of California's BSD-3-Clause, 2 Apache-2.0
+  (AOSP), 1 the NetBSD Foundation's 4-clause text with its advertising clause, 1 Sun's fdlibm notice, and 19 the
+  Linux headers that say only that they are generated (15 shipped, and the 4 `unistd` headers read while building
+  the crt objects), the design's §2.5 count exactly.
+- **What differed from the design's text:**
+  - a checkout's preflight words are the tool's fact and its command (`vendor/android-sysroot-src:
+    libc/private/x.h: missing: python tools/fetch_android_sysroot.py fetches it`; `no llvm-mingw here: python
+    tools/fetch_mingw.py fetches it`), and a failed link says `[build] android failed: link failed (exit status 1);
+    the lines above say why`;
+  - `package.py stage` honours the top-level `--version` too, so a stage can be named for a version;
+  - mutation 7 as written, a `package.py` that stages no sources, stops at `licenses()`, which generates the
+    NOTICE from the staged sources, before Setup is built; the branch removed the sources after the licences
+    instead, so the run reached Setup's check, which is what the mutation is for;
+  - `test_setup.py` names its layout folders by number: named after the missing file, the sentinel's 72 characters
+    made the test's own folder too long for Setup's length check;
+  - beyond the design's tests: a failed compile naming its unit, `identity()` itself, and `package.py check`
+    holding `VERSION` to the folder's name; and the record's line moved into `recompile.game_record()`, above.
+- **The tests** are 1516 in 90 files, measured five ways at 3c268c4: 1475 passed and 41 skipped here; 1456 and 42
+  without capstone; 1066 and 450 without MSVC; 1047 and 451 without either; and, the row the design added, 1437 and
+  79 without llvm-mingw (`SOA_MINGW` naming an empty folder, as a fresh clone and CI's Tests jobs have it): 24 more
+  skips in `test_android_build.py`, 8 in `test_setup.py`, 4 in `test_android_sysroot.py` and 2 in `test_mingw.py`.
+  The full run took 977.75 s.

@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1490 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. 1516 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1490 |
+| Python tests | 1516 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,32 +417,41 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-07)
+## Where the last session stopped (2026-10-09)
 
-**The state at the stop (2026-10-07, after R5a part 2):** L10 (d6d64aa),
-L12a (75d5ce2), L12b (316e50d), L12c (64bcd85), L12d (6e39f13 and
-abec5f6), the box a stop mid-play shows (5acabbd), R5's gate (6d5916c),
-R5-0 (14c764f), the SDL test's five reads (727c687), R5a part 1 (664aca4)
-and R5a part 2 (with this section) are pushed; read CI for the last. R5's design is
-`docs/specs/android-sysroot.md`; `vendor/android-sysroot` here is built
-by its tool, from `vendor/android-sysroot-src`. **R5-0 moved `baked=`** (705f401d4dcd to
-57f744e5121c here, FINDINGS "R5-0"), so the emulator's APK and library
-are another release's: its next run starts with `android.py build` and
-`install`, and the x86-64 library rebuilt and pushed. The SOA emulator
-was shut down; TESTING.md's Android recipe starts it again. Its data
-image keeps the final debug APK; the
-store staged in Download, which `no_backup/disc.txt` names and which is
-read in place; the x86-64 library in `no_backup/` (and staged in
-Download); no ISO, since the copy `push-disc` left at the end of L12d's
-session was 1226858496 of 1459978240 bytes and was removed on 2026-10-07
-(a check that reads a disc runs with `SOA_IMPORT=1`, from the store); the
-captures in `files/fifo`; and the debug provider's ten mutants, the real
-library and the GTSE01 fixture in `files/provider`, with 2.4 GB free.
-The Docker container `soa-l10` (python:3.14-slim, gcc, SDL3 built in
-`/work/vendor`) is kept for the next Linux check, with L12d's split
-build in `/work/gen/linux-split`; its layer holds a copy of the
-captures, so it stays on this machine, and `docker rm -f soa-l10`
-removes it. **L12d's words wait for the owner's look:**
+**The state at the stop (2026-10-09, after R5b):** R5b (1bc44b9, 3c268c4,
+and its docs with this section) is pushed; read CI for the last. R5's design
+is `docs/specs/android-sysroot.md`; R5-0, R5a and R5b are done, and R5c
+(Setup's checkbox and words) is next. **R5b moved `baked=`** (`recompile.py`
+is a baked input; 1747c42488ed at 3c268c4), so the emulator's APK was
+rebuilt and installed at 3c268c4, and the library on it is the package's
+x86-64 one (`package=3c268c4`). `build\r5b\` holds that run's package
+(`P`, its sysroot built, and its sources put back on their pins after the
+damaged-source check), its roots (`R`: both Android libraries, `soa.exe`
+and the extraction; `R2`), and the release draft's zip, extracted
+(`ci\Z`) with the root it built (`ci\R`); `build\r5-licences\index.html`
+is the owner's licence look (below). All of it is game data or built from
+it and stays on this machine; delete `build\r5b` whenever its space is
+wanted. The SOA emulator was stopped (TESTING.md's Android recipe starts
+it again). Its data
+image keeps the debug APK at 3c268c4; in Download the store
+(`GEAE8P.soadisc`), `disc.iso` and `libsoa_game-x86_64.so`, the last two
+staged by R5b's player run, after which `no_backup/disc.txt` names
+`disc.iso`, read in place (a check that reads a disc runs with
+`SOA_IMPORT=1`); the x86-64 library in `no_backup/`; the captures in
+`files/fifo`; and the debug provider's ten mutants, the real library and
+the GTSE01 fixture in `files/provider`. The Docker container `soa-l10`
+(python:3.14-slim, gcc, SDL3 built in `/work/vendor`) is kept for the next
+Linux check, with R5b's split build in `/work/gen/linux-split`; its layer
+holds a copy of the captures, so it stays on this machine, and `docker rm
+-f soa-l10` removes it. **R5b's two owner items wait, and neither
+blocks:** the licence texts the package now ships
+(`build\r5-licences\index.html`, local: each of the 44 files' own words
+under its class, and the kernel's two texts), and one line on how the
+design read D-34 (PLAN-NEXT's D-34 row): the player's PC builds the
+phone's sysroot itself, from bionic's 44 files the package carries, in
+under two seconds and offline, the first time it builds for Android, and
+nothing built from them is published. **L12d's words wait for the owner's look:**
 `build/android-review/index.html` (local) shows the boxes the emulator
 drew at font scale 1.0 and 1.3, the refusals its check runs printed,
 with what causes each, and every other box and refusal as the code words
@@ -764,8 +773,15 @@ C5c) is now done.
    stopped at `import fetch_sdl` since L10), is done (FINDINGS "R5-0"),
    and so is R5a, `tools/fetch_android_sysroot.py` and the game library
    built through it by `recompile.py` with no NDK, proven on the emulator
-   (FINDINGS "R5a part 1", "R5a part 2"). R5b, the player's build and the
-   package, is next. Where L12g
+   (FINDINGS "R5a part 1", "R5a part 2"). **R5b is done** (FINDINGS "R5b"):
+   `player_build.py --target android-arm64` builds the phone's library
+   from a player's package, offline, the sysroot built on the player's PC
+   from the 44 files the package carries; the release workflow builds that
+   sysroot from its own unzipped package; and a library built from the zip
+   it drafted passed the emulator's checks. **R5c is next:** Setup's
+   checkbox, its two-phase bar, the status it chooses from what the run
+   built, and the words (spec §1.3), which are drafts until the owner's
+   first bless, with three small questions for the owner. Where L12g
    (mods on the emulator) and the proposed L12h (card import and export
    through the picker) come after it is still the owner's. D-33 (the
    package name and release key) is still the owner's, and comes before

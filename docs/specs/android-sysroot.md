@@ -523,6 +523,8 @@ record before the session (R5b).
 
 ### 1.2 R5b. The player's build and the package
 
+*Done 2026-10-09 (FINDINGS "R5b"), with what differed from this text recorded there.*
+
 **Purpose.** A player's package builds the phone's library offline with what it carries:
 - `player_build.py --target android-arm64`;
 - `--target android-x86_64`, for the emulator.

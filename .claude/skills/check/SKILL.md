@@ -30,7 +30,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
 | 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` and `test_android_build.py` under `noskip` | 43 s | llvm-mingw, the sysroot (`python tools/fetch_android_sysroot.py`), and MSVC for `elfcheck.c`'s half |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 982 s | nothing (409 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (409 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -367,13 +367,15 @@ twin behaves the same is case 73 of step 9.
 python -m pytest tools/tests -q
 ```
 ```
-1449 passed, 41 skipped in 981.69s
+1475 passed, 41 skipped in 977.75s
 ```
 
-1490 tests in 90 files, none of which reads the disc. The count you see depends
-on what is installed, and the tool tells you: `1430 passed, 42 skipped` without
+1516 tests in 90 files, none of which reads the disc. The count you see depends
+on what is installed, and the tool tells you: `1456 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
-into one module-level skip), `1040 passed, 450 skipped` without MSVC. The 41
+into one module-level skip), `1066 passed, 450 skipped` without MSVC, and
+`1437 passed, 79 skipped` without llvm-mingw (`SOA_MINGW` naming an empty folder:
+the Android route's, Setup's and the sysroot build's tests skip). The 41
 skips of a full run are the FMA probes, which want a clang (`SOA_CLANG_CL`),
 `test_mingw.py`'s archive test, which wants symbolic links (Windows' developer mode),
 `test_window_sdl.py`, which wants an X display and SDL (CI's gcc leg runs it under Xvfb),

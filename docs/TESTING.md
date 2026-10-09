@@ -34,10 +34,10 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 ### `python -m pytest tools/tests -q`
 
 ```
-1449 passed, 41 skipped in 981.69s
+1475 passed, 41 skipped in 977.75s
 ```
 
-1490 tests in 90 files, none of which reads the disc. The two FMA probes of
+1516 tests in 90 files, none of which reads the disc. The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -145,16 +145,19 @@ its own and run it, some of the C as well:
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine on 2026-10-07 by hiding one at a time, with a pytest plugin that
+this machine on 2026-10-09 by hiding one at a time, with a pytest plugin that
 makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
-"L3a's review"); there is no clang here, so every row has the two FMA skips:
+"L3a's review"), and for the last row `SOA_MINGW` naming an empty folder, which is
+what a fresh clone and CI's Tests jobs see (no llvm-mingw, so no Android sysroot
+build and no `Setup.exe`); there is no clang here, so every row has the two FMA skips:
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone) | `1449 passed, 41 skipped` |
-| no capstone | `1430 passed, 42 skipped` |
-| no MSVC | `1040 passed, 450 skipped` |
-| neither | `1021 passed, 451 skipped` |
+| everything (MSVC + capstone + llvm-mingw and the Android sysroot) | `1475 passed, 41 skipped` |
+| no capstone | `1456 passed, 42 skipped` |
+| no MSVC | `1066 passed, 450 skipped` |
+| neither | `1047 passed, 451 skipped` |
+| no llvm-mingw | `1437 passed, 79 skipped`: 24 more in `test_android_build.py`, 8 in `test_setup.py`, 4 in `test_android_sysroot.py` and 2 in `test_mingw.py` |
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
@@ -700,6 +703,12 @@ Before it writes anything the build checks the package's Android files (or the
 tree built from them), its clang and the space, and refuses in the player's
 words, exit 1, with no target begun. `python tools/android.py push-game
 <library>` holds a library to the APK this PC built before it pushes it.
+Measured on 2026-10-09 (FINDINGS "R5b"): the stage 37 s; the sysroot from the
+package 1.7 s; a library about 51 s after the extraction (the translation
+about 14 s, the compile 34 s, the links 2 s), the same bytes from two roots;
+a relink about 15 s; `gen-android-arm64` 152 MB, of which 70 MB is C. A
+target's translation drops the free space by about 180 MiB at its peak, the
+library included; the build asks for 384 MiB.
 
 **On Android (L12c).** The APK, with a game library pushed beside it, on an
 emulator of its own: an AVD named `soa_x86_64` (android-34, google_apis,
@@ -1961,7 +1970,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 450 of the 1490 skip here without MSVC: 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
+² 450 of the 1516 skip here without MSVC: 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;
