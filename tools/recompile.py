@@ -192,6 +192,16 @@ def made_by(compiler: str, sysroot: str) -> dict[str, str]:
     return {"package": player_build.package_version(), "cc": cc, "sysroot": sysroot[:12]}
 
 
+def game_record(
+    prof: toolchain.Profile, no_decomp: bool, baked: str, dol_sha1: str, compiler: str, sysroot: str
+) -> str:
+    """The record game_table.c carries (specs/android.md 3.2): what the
+    phone compares, where the library came from, and for an Android profile
+    what made it (made_by)."""
+    android = made_by(compiler, sysroot) if toolchain.is_android(prof) else None
+    return seam.record(no_decomp, baked, dol_sha1, prof.name, android)
+
+
 def system_files(
     disc: Path, dol_bytes: bytes, want_sha1: str, force: bool
 ) -> tuple[dict[str, bytes] | None, str | None]:
@@ -1011,13 +1021,7 @@ def main() -> int:
     # split one.
     the_seam = seam.read_seam(args.config / "seam.txt")
     baked = seam.baked_digest(player_build.inputs_record(RUNTIME.parent))
-    record = seam.record(
-        args.no_decomp,
-        baked,
-        dol_sha1,
-        prof.name,
-        made_by(compiler, sysroot) if android else None,
-    )
+    record = game_record(prof, args.no_decomp, baked, dol_sha1, compiler, sysroot)
     (args.out / "game_table.c").write_text(
         seam.game_table_c(the_seam, hle, entries, record), encoding="utf-8"
     )

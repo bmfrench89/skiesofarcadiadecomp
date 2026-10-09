@@ -470,6 +470,13 @@ def test_the_record_says_what_made_the_library(monkeypatch):
     assert [len(f) for f in rec.split(" ")[5:]] == [8 + 64, 3 + 64, 8 + 12]
     assert rec.index(" dol=") + len(" dol=") + 40 <= elfcheck.RECORD_CAP
     assert seam.record(True, "0" * 64) == RECORD  # the APK's own is unchanged
+    # what recompile.py writes into game_table.c: these keys for Android alone
+    monkeypatch.setattr(player_build, "package_version", lambda: "v1")
+    for p in toolchain.ANDROID:
+        got = recompile.game_record(p, True, "0" * 64, "1" * 40, line, "a" * 64)
+        assert got.endswith(f"profile={p.name} package=v1 cc=clang-23.1.2 sysroot=aaaaaaaaaaaa")
+    got = recompile.game_record(toolchain.GCC, True, "0" * 64, "1" * 40, line, "")
+    assert got == seam.record(True, "0" * 64, "1" * 40, "gcc")
 
 
 def test_without_llvm_mingw_or_the_sysroot_the_build_says_where_it_looked(monkeypatch, tmp_path):
