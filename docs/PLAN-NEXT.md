@@ -180,8 +180,10 @@ The owner answered four questions, with the research behind them summarised in t
   below). **R5c is built** (FINDINGS "R5c", 2026-10-14, in a cloud session): Setup's Android box builds `soa.exe`
   and `libsoa_game.so` in one run, with a two-phase bar, a status chosen from the run's own lines and the phone's
   space counted; its four mutations are caught under Wine, and CI's `android-route` Windows leg runs its tests.
-  What waits is its Done on the owner's PC (the real run from the disc, the window captured at 100% and 150%, the
-  tests there) and the owner's first bless of its words, with §1.3's three small questions.
+  **Its Done on this PC is met but for the 150% capture** (FINDINGS "R5c and M6 on the PC", 2026-10-14): the real
+  run from the disc, the library equal to `player_build`'s, the bar from that run's log, the split timed at 59/41
+  (60 stands), the tests under `noskip`. The 150% capture goes with the owner's sitting on the Ally X, and the owner's
+  first bless of its words, with §1.3's questions, is the local page `build/setup-review/index.html`.
 
 - **The owner's answers of 2026-10-14: two sessions, two tracks** (D-37 to D-39). The owner asked for the PC port to
   move on beside the Android path: "I want that working 100% and focusing on mods and improvements wherever we can."
@@ -189,7 +191,8 @@ The owner answered four questions, with the research behind them summarised in t
   game, and pushes to its own branch (§E item 10). **The PC session** is a Claude Code session the owner opens on
   this PC, and it runs the game.
   - **The PC session: make it 100% first** (D-37). In order:
-    1. Merge the cloud branch into `main`, read CI, then R5c's Done lines that need this PC (HANDOFF).
+    1. Merge the cloud branch into `main`, read CI, then R5c's Done lines that need this PC (HANDOFF). **Done
+       2026-10-14** (FINDINGS "R5c and M6 on the PC"), with M6's game runs; the 150% capture moves to step 3.
     2. Scripted runs into what no run has reached, fixing what breaks, each with a FINDINGS entry. Its first slice
        writes down the runs and the invariants each must hold before any is run:
        - a boss or event battle;
@@ -199,7 +202,8 @@ The owner answered four questions, with the research behind them summarised in t
        - effect packages beyond the 20 of 576 ever loaded, with gxr's tripwires for the unmodelled GX features
          watched (`runtime/gxr.c`'s warn-once list).
     3. One owner sitting, the display at 60 or 120 Hz, confirming what is built but never checked: sessions A and B
-       (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked.
+       (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked, its window
+       captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`).
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
     (H17a) and widescreen (M10).
@@ -207,7 +211,8 @@ The owner answered four questions, with the research behind them summarised in t
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").
     2. M6, richer patches, moved ahead of M16, whose options for a byte need M6's widths (research/plan-gaps.md).
-       **Built 2026-10-14** (FINDINGS "M6"); its game runs are this PC's.
+       **Done 2026-10-14**: built in the cloud (FINDINGS "M6"), its game runs on this PC (FINDINGS "R5c and M6 on
+       the PC": part G at × 0 fought 0 battles, at × 1 five).
     3. M16, declared options.
     4. M17, load order and conflict reports.
     5. T10, a modding guide and tool.

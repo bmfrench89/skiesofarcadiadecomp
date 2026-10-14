@@ -8313,3 +8313,68 @@ the driver's.** 2026-10-04.
     `examples/mods/encounter-scale`'s factor set to each;
   - the contract: `--link`, the self test, the replay and `title --check`, since `runtime/mod.c` changed. With
     `SOA_MODS` unset nothing here runs.
+
+**R5c and M6 on the PC: the cloud's branch merged, and the Done lines it left for this machine.** 2026-10-14.
+
+- **The merge** [V]: `main` fast-forwarded to the cloud branch `ccr-ff7e48fb-uaiw45` (285eb07..1c1fefd) and pushed;
+  CI run 38591805540 on `main` green, all 12 jobs. Before the push, here: guard and `--history` (2,693 paths), ruff
+  check and format, `checkdump.py`, `compile_runtime.py` (39/39), `--link`, the self test (0 failures), the replay
+  (23/23 at 1, 2, 3 and 8 threads, the manifest unmoved) and `title --check` (4 of 4).
+- **M6's contract and game runs** [V], `build/m6/` (logs, cards, snapshots; game data, kept here). Every job was
+  part G from a copy of `card-partG.raw`, on S3's recipe: walk mix seed 33, 33,500 frames, the accelerator
+  (`soak.py --pokes --encounter-every 600`) and its peeks, `SOA_STRICT=1`, traced, `SOA_SETTINGS=0`, snapshots
+  every 100 frames into the job's own folder, and `SOA_MODS` naming a folder that holds only
+  `examples/mods/encounter-scale` with its factor set to 0 or 1.
+  - **The eight rate words, logged at a real load:** a 4,500-frame probe at × 1 logged the table's load at `a116a`,
+    `80E84402: 002D -> 002D` and its seven neighbours 132 bytes apart, zones 0-3 at 0x2D and 4-7 at 0, and the
+    title's `a299a`, which has no table, as one null pointer. `0x803474BC` held `80E84400` at frames 3300 and 4400.
+  - **The peek agrees:** at × 0 the eight words at `80E84400 + 132z` read `00xx0000` at frames 3300, 9000, 16000
+    and 26000, so the u16 at +2 stayed at the 0 the patch wrote for 23,000 frames of play, the pointer unmoved.
+  - **× 0 fights none, × 1 fights:** `soak.py check --expect-map 116a --frames` passed both. × 0: **0 battles**,
+    all 50 accelerator peeks at 100000 or more, so it was not an accelerator that did nothing, and the frame at
+    25000 is Vyse walking the prison's corridor. × 1: **5 battles** (4420, 9801, 17001, 20107, 22401) and game overs
+    at 11890 and 25710, against S3's 5 on the same recipe with no mod; the patch applied at all 3 loads of `a116a`
+    (24 log lines) and passed over 6 null pointers. Two questions, both known: S3's LINEPTWIDTH in a battle, and a
+    BP_MASK carried into BP 00 after `a090a` loaded.
+  - **A new fact, about the pointer** [V]: in a battle the pointer still names the field's table while its memory
+    holds something else. At × 1, frame 9000 (inside the battle from 4420), `0x803474BC` read `80E84400` and the
+    words there `3F3020C5` and `00000000`. After the game over at 11890 and on the title it is null. M6's `*=` runs
+    only on `on_map_load`, so nothing writes through it then; a mod that wrote through this pointer on `every_frame`
+    would write into whatever the battle put there. That is a reason to keep pointer patches on load triggers, and a
+    case for M16 and T10's guide to state.
+- **R5c's Done** [V], from a package staged at 1c1fefd (`build\r5c\P`; `guard --tree` clean, `package.py check`
+  `1747c42488ed`, the same as HEAD):
+  - **The command line:** `--show-build --android` ended `--target windows --target android-arm64`; without
+    `--android` it had no `--target`. (Setup is a windowed program, so PowerShell does not wait for it and
+    `$LASTEXITCODE` is empty; `Start-Process -Wait` gives the code.)
+  - **A real run:** `Setup.exe --disc extracted\disc.iso --build --android` built both and the window ended on the
+    built words, three lines with room to spare at 100%. Its `libsoa_game.so` and `player_build.py --target
+    android-arm64` from the same package into `build\r5c\R2` (70 s) are the same bytes,
+    `fffc7833b3fbb8bfdd2583523b4445cac0121a85af2aa53cb7345d2f59ee4c86`.
+  - **The bar, from that run's own log:** through `--bar --android --exit 0`, 57 positions that never go down, 60
+    at `done soa.exe`, 100 at the end, then the built words.
+  - **The split, timed** on a machine with no other suite running: the window was captured every 5 s and the
+    bar's green measured in each capture; Windows reached 60 between 76 and 81 s and the run ended at about 133 s,
+    so 59/41, as the cloud derived from R5b's timings, and 60 stands. Windows' phase: the extraction 2.0 s, the
+    translation 8.1 + 6.7 s, the compile 35.2 s, the link 13.7 s; the phone's: 8.3 + 7.1 s, 38.1 s and 2.8 s of links.
+  - **The bar is lumpy, and never goes back** [V]: it holds about 6% for 20 s while Windows' C is written, jumps from
+    19% to 54% as Windows' units finish together, and holds 64% for 40 s while the phone's compile, then reaches 100
+    in about 15 s [I: a unit's line arrives when it finishes, and one target's units, compiled side by side, finish
+    close together].
+    Whether that is worth smoothing is the owner's to say on the review page; nothing is changed.
+  - **The extraction's progress runs together in the log box:** the lines it redraws in place with `\r` show as one
+    line, `disc.iso 33.0% 460.0 MB disc.iso 58.0% …`. Cosmetic, and in code R5c did not change.
+  - **The tests:** `pytest -p noskip tools/tests/test_setup.py`: 16 passed in 6.37 s, none skipped. The whole suite,
+    the five rows of TESTING's table, measured at 1c1fefd (1553 tests): 1512 passed and 41 skipped; 1493 and 42
+    without capstone; 1071 and 482 without MSVC; 1052 and 483 without either; 1469 and 84 without llvm-mingw, whose
+    43 extra skips were counted by file (24, 13, 4 and 2) with `-rs`. Another session (soa-fa, the README progress
+    tracker) added 13 uncommitted tests to the tree during these runs, so two rows were taken again with
+    `test_progress.py` left out. The second "neither" run failed two of `test_gxv_scale.py`'s six on
+    `copydiff.txt`'s `unlink` (a Windows lock) with no other suite running; the file alone passed six of six with
+    MSVC hidden and without, and the first "neither" run had passed them. A flake, recorded in TESTING beside the row.
+  - **Not done here: the capture at 150%.** This PC is docked to the 3440x1440 display at 100% (96 dpi), and changing
+    the owner's display scale to take one capture is the owner's to do; the Ally X's own screen runs at 150%, so the
+    capture belongs to the owner's sitting (PLAN-NEXT §0, PC step 3), where R4's run with the box ticked is already
+    asked. The review page is `build/setup-review/index.html` (local): the box during the build, the start of the
+    phone's half, the built words, the other statuses' words from recorded logs, the space refusal from `setup.c`,
+    and §1.3's questions.

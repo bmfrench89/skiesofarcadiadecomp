@@ -658,7 +658,9 @@ those files on its first Android build (D-34).
 
 *Built 2026-10-14 in a cloud session (FINDINGS "R5c"), but for the Done lines that need the owner's PC (the real
 run, the captures, the tests under `noskip` there) and the owner's first bless. What differed from this text is
-recorded there and corrected below.*
+recorded there and corrected below. **Done on the owner's PC the same day** (FINDINGS "R5c and M6 on the PC"), but
+for the capture at 150%, which goes with the owner's sitting on the Ally X; the owner's look is
+`build/setup-review/index.html`.*
 
 **Purpose.** A player ticks one box. Setup then builds `soa.exe` and `libsoa_game.so` in one run, with one progress
 bar, and says plainly how to put the library and the disc on the phone.

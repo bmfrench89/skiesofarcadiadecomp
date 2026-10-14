@@ -419,6 +419,30 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-14)
 
+**The state at the stop (2026-10-14, the PC session after the cloud's R5c and M6):** the cloud branch is merged
+(`main` fast-forwarded to 1c1fefd and pushed, CI green), and PLAN-NEXT §0's PC step 1 is done (FINDINGS "R5c and M6
+on the PC"):
+- **M6 is done.** The contract held here (`--link`, the self test, the replay 23/23, `title` 4 of 4). Part G with the
+  accelerator fought 0 battles with `examples/mods/encounter-scale` at × 0 and 5 at × 1, and the eight rate words
+  logged at `a116a`'s load agreed with peeks 23,000 frames later. New: in a battle `0x803474BC` still names the
+  field's table while its memory holds something else, so pointer patches belong on load triggers. `build\m6\` holds
+  the runs (game data).
+- **R5c's Done is met but for the capture at 150%**, which goes with the owner's sitting on the Ally X. The real run
+  built both targets in about 133 s, the bar's split measured 59/41 (60 stands), and its library equals
+  `player_build`'s. The owner's first bless of its words, and §1.3's questions, are on
+  `build/setup-review/index.html` (local). `build\r5c\` holds the package and both roots; delete it when its space is
+  wanted.
+- **TESTING's count table is measured again at 1c1fefd** (1553 tests, five rows). A second session in this checkout,
+  soa-fa, has a README progress tracker uncommitted in the tree (`tools/progress.py`, 13 tests, and count edits in
+  several docs). This session's commits staged only their own hunks, so that work is still in the tree untouched,
+  for its owner to commit.
+
+**Next for the PC session: PLAN-NEXT §0's PC step 2,** the scripted runs into what no run has reached. Its first
+slice writes down the runs (a boss or event battle, Items in battle, a ship battle to its end, the story between
+the part-select jump points, effect packages beyond the 20 of 576 ever loaded) and the invariants each must hold,
+before any is run. `docs/research/plan-gaps.md`'s Arena entry (event records, op 112) and FINDINGS §11 are where
+to start. Step 3, the owner's sitting, now also holds R5c's 150% capture and the review page.
+
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch
 `ccr-ff7e48fb-uaiw45`, not to `main`. **Merge that branch into `main` before anything else on this PC**, and read

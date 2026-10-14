@@ -30,7 +30,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
 | 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` and `test_android_build.py` under `noskip` | 43 s | llvm-mingw, the sysroot (`python tools/fetch_android_sysroot.py`), and MSVC for `elfcheck.c`'s half |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (409 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (441 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -385,7 +385,7 @@ Linux (CI's Linux legs run both).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 409 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 441 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

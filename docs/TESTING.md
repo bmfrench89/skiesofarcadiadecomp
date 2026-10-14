@@ -146,7 +146,7 @@ its own and run it, some of the C as well:
 
 Anything that needs a C compiler or an optional package skips itself rather
 than failing, so the number you see depends on what is installed. Measured on
-this machine on 2026-10-09 by hiding one at a time, with a pytest plugin that
+this machine on 2026-10-14, at 1c1fefd, by hiding one at a time, with a pytest plugin that
 makes `toolchain.msvc_env` answer None or `import capstone` fail (FINDINGS
 "L3a's review"), and for the last row `SOA_MINGW` naming an empty folder, which is
 what a fresh clone and CI's Tests jobs see (no llvm-mingw, so no Android sysroot
@@ -154,26 +154,33 @@ build and no `Setup.exe`); there is no clang here, so every row has the two FMA 
 
 | Installed | Result |
 |---|---|
-| everything (MSVC + capstone + llvm-mingw and the Android sysroot) | `1475 passed, 41 skipped` |
-| no capstone | `1456 passed, 42 skipped` |
-| no MSVC | `1066 passed, 450 skipped` |
-| neither | `1047 passed, 451 skipped` |
-| no llvm-mingw | `1437 passed, 79 skipped`: 24 more in `test_android_build.py`, 8 in `test_setup.py`, 4 in `test_android_sysroot.py` and 2 in `test_mingw.py` |
+| everything (MSVC + capstone + llvm-mingw and the Android sysroot) | `1512 passed, 41 skipped` |
+| no capstone | `1493 passed, 42 skipped` |
+| no MSVC | `1071 passed, 482 skipped` |
+| neither | `1052 passed, 483 skipped` (two runs, below) |
+| no llvm-mingw | `1469 passed, 84 skipped`: 24 more in `test_android_build.py`, 13 in `test_setup.py`, 4 in `test_android_sysroot.py` and 2 in `test_mingw.py` |
 
-R5c (2026-10-14) added five tests to `test_setup.py`, which run where its others
-do, on Windows with llvm-mingw, and M6 32 to `test_mods.py`, built with the
-profile `SOA_CC` names (MSVC when it is unset), so the table's 1516 are now 1553
-and its rows are to be measured again here [I: 37 more passed in the first
-row; without MSVC M6's 32 skip, and without llvm-mingw R5c's five]. In the cloud session that wrote them (Linux, no
+These are 1553 tests: R5c (2026-10-14) added five to `test_setup.py`, which run
+where its others do, on Windows with llvm-mingw, and M6 32 to `test_mods.py`,
+built with the profile `SOA_CC` names (MSVC when it is unset), so without MSVC
+M6's 32 skip with the rest. In the cloud session that wrote them (Linux, no
 MSVC, llvm-mingw's Linux build, capstone) the suite gave `999 passed, 522
-skipped`, `test_setup.py`'s 13 Windows-only tests among the skips.
+skipped`, `test_setup.py`'s 13 Windows-only tests among the skips. The
+"neither" row took two runs. The first, with another session's 13 uncommitted
+tests in the tree, gave `1065 passed, 483 skipped`. The second, with that file
+left out, gave `2 failed, 1050 passed, 483 skipped`: two of
+`test_gxv_scale.py`'s six failed on `copydiff.txt`'s `unlink` (a Windows file
+lock) with no other suite running, and the file alone then passed six of six,
+with MSVC hidden and without. That is a flake at `gpuspike.py copydiff`'s unlink
+of its one fixed output file (what held it is not known), not a fault in the scaled copies (FINDINGS "R5c and M6 on
+the PC").
 
 No row is a CI leg. CI installs no capstone, its Windows runner ships LLVM,
 and a few tests are Windows-only, so read CI's counts from CI: at 4441a80
 the Windows Tests job printed `1102 passed, 4 skipped` and the Ubuntu one
 `723 passed, 383 skipped` (`gh run view <id> --log | grep passed`).
 
-Two things follow. The 409 compiler-gated tests are the ones that build runtime
+Two things follow. The 441 compiler-gated tests are the ones that build runtime
 files, or the GPU spike, and run them — the renderer's queue and lifetimes, the tripwires, the memory
 guard, the pad recorder, the profiler, the native-twin build — so on Linux the
 Python is checked and the C is not, but for the modules that build with the
@@ -2004,7 +2011,7 @@ perfectly the whole time.
 | `validate_assets.py` | **yes** | no | no | no | no | no |
 
 ¹ One test (`test_image_every_word_agrees`) skips without `extracted/sys/main.dol`.
-² 450 of the 1516 measured on 2026-10-09 skip here without MSVC (R5c's five more need no MSVC; M6's 32 do, by default): 409 build runtime files or the GPU spike with MSVC and run them (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
+² 482 of the 1553 measured on 2026-10-14 skip here without MSVC (R5c's five need none; M6's 32 do, by default): 441 build runtime files or the GPU spike with MSVC and run them (M6's 32 among them, building `runtime/mod.c` and their test mods) (two of them `runtime/elfcheck.c`, to hold it to the Python), the two FMA probes want a clang, `test_mingw.py`'s archive test wants symbolic links, `test_window_sdl.py` wants an X display and SDL, `test_seam.py`'s 17 an ELF system and `test_import.py`'s 20 Linux, which no Windows run has.
 ³ `--replay` takes the capture as its argument, but `main.c` still opens the
 disc directory.
 ⁴ It also needs `vendor/` (`tools/fetch_gpu.py`) and a Vulkan driver, which CI's runners lack;

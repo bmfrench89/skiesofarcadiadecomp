@@ -534,7 +534,7 @@ Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only,
 
 **M6. Patches relative to a pointer, and read-modify-write** — *a day, `--link`.*
 
-*Built 2026-10-14 in the cloud session (FINDINGS "M6"): widths, signed ones too, pointers, runs of targets with `for z=A..B`, and `*=` on `on_map_load` that never compounds, tested on the fake guest under gcc and clang with seven mutations; `examples/mods/encounter-scale` is the first use. The Done's game runs below are the owner's PC's.*
+*Built 2026-10-14 in the cloud session (FINDINGS "M6"): widths, signed ones too, pointers, runs of targets with `for z=A..B`, and `*=` on `on_map_load` that never compounds, tested on the fake guest under gcc and clang with seven mutations; `examples/mods/encounter-scale` is the first use. **Done 2026-10-14** with the game runs on the owner's PC (FINDINGS "R5c and M6 on the PC"): the eight words logged at `a116a`'s load and a peek 23,000 frames later agreeing; part G with the accelerator fought 0 battles at × 0 and 5 at × 1; the contract held.*
 - Extend M1's format with widths (u8, u16, u32) and with addresses relative to a pointer (`[0x803474BC] + 2 + z*132`, for z in 0–7).
 - Add a read-modify-write operator (`*= k`, clamped to the width).
 - The trigger is `on_map_load`, keyed on the map word, and each load is applied once. A repeated trigger must never compound.
