@@ -8299,6 +8299,12 @@ the driver's.** 2026-10-04.
     - every width written as a whole word;
     - the code check on a pointer's target taken out;
     - `*=` allowed on every trigger.
+- **Through Windows' loader** [V]: built by llvm-mingw (`SOA_CC=mingw`, `mods.exe` and each `mod.dll`) and run under
+  Wine 9.0, `test_mods.py` passed all 164 under `noskip` in 466.53 s, so `LoadLibrary` takes M6's mods as `dlopen`
+  does.
+- **On CI** [V]: run 38505622390 at 6b8718d, all 12 jobs green. `runtime/mod.c` compiled under MSVC, clang-cl,
+  gcc, clang, ARM64 and llvm-mingw; the three Linux legs ran the 164 under `noskip`; the Windows Tests job built them
+  with MSVC.
 - **What the test's numbers showed:** at the third load, zone 4's rate is 0, which halves to the 0 the patch wrote
   there, so that zone is not written again: 15 log lines over the three loads, not 16. Same word, as above.
 - **Not run, each needing the owner's PC** (the spec's Done):
