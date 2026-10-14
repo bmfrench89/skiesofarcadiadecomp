@@ -29,6 +29,27 @@
  * (0x80311AC0 and the byte at 0x80311AC8; 0x80311AC4 is the picker's working
  * copy, FINDINGS "131e renders").
  *
+ * M6 (docs/PLAN-60FPS-MODS.md) widens the line without changing it: an
+ * optional width before the address, u8, u16 or u32 (the default), or s8,
+ * s16 or s32, whose values may be negative and whose products clamp signed;
+ * an address that is the word at another taken as a pointer, plus an offset
+ * (`[0x803474bc]+2`); a run of targets, `+z*132` on the address and
+ * `for z=0..7` after the value, one target per z; and `*= k` in place of
+ * `= value`, which multiplies what is there by k (up to 65535, with up to
+ * four decimals), clamped to the width:
+ *
+ *       on_map_load  u16  [0x803474bc]+2+z*132  *= 0.5  for z=0..7
+ *
+ * halves the eight zones' encounter rates of the table the map loaded
+ * (docs/research/encounters.md). `*=` runs on_map_load only, and remembers
+ * what it wrote at each target: a load that left the word as it was finds
+ * its own value there and leaves it, so a factor never compounds. Map 099
+ * keeps its encounter table apart (fn_800C1A50), so a patch on that pointer
+ * is not applied there, and one that names the map is refused. A pointer
+ * that is null is passed over; a target outside RAM, off its width's
+ * alignment or in the game's code is passed over and said once. An M6
+ * patch applied on a map load logs each target as `address: was -> now`.
+ *
  * A mod with any fault is refused whole and says why, with the file and
  * line: a mod half-applied is worse than one that is not there. Refused are
  * a badly spelled address (a lowercase 0x and exactly eight hex digits, the
@@ -80,18 +101,32 @@
 #define MAP_LETTER 0x80311AC8u
 #define FIELD_RUNNING 8u
 #define STORY_FLAGS 0x80310B3Cu
+#define ENCOUNTER_TABLE 0x803474BCu /* the map's .ect, loaded in state 3 (research/encounters.md) */
+#define WORLD_MAP 99u               /* whose encounters read a sub-table of their own (fn_800C1A50) */
+#define FOR_MAX 64                  /* targets one `for` may run */
+#define SLOT_MAX 4096               /* *= targets across all mods */
 
 enum { T_EVERY_FRAME, T_ONCE, T_MAP_LOAD };
 static const char* const k_trigger[] = {"every_frame", "once", "on_map_load"};
 
 typedef struct {
-    uint32_t ea, value;
+    uint32_t ea, value; /* the address, or the pointer's (ptr); the value, or the factor's numerator (mul) */
     uint8_t trigger, has_scene, has_state, has_map, fired;
+    uint8_t width, sign, ptr, mul, warned; /* M6: bytes, signed, through a pointer, *=, said once */
+    uint32_t off, stride, z0, z1, den;     /* M6: the pointer's offset, the step and run of z, the factor's divisor */
+    unsigned slot;                         /* M6: *= its first target's place in g_slots */
     uint32_t scene, state, map_number;
     uint8_t map_letter;
     unsigned mod, line, first_frame;
-    unsigned long long applied;
+    unsigned long long applied, nulls;
 } Patch;
+
+/* What a *= patch last wrote at one target, and at which map: a load that
+ * left the word as it was finds this there, and nothing compounds (M6). */
+typedef struct {
+    uint32_t key, addr, wrote;
+    uint8_t set;
+} Slot;
 
 typedef struct {
     char dir[64];   /* the folder's name: what the recording names a version 1 mod by */
@@ -109,6 +144,8 @@ static Mod g_mods[MOD_MAX];
 static int g_mod_n;
 static Patch g_patches[PATCH_MAX];
 static unsigned g_patch_n;
+static Slot g_slots[SLOT_MAX];
+static unsigned g_slot_n;
 static uint32_t g_last_map = 0xFFFFFFFFu;
 static int g_patch_reload; /* a load state (3 or 5) seen at a frame end since the field last ran */
 static char g_describe[300]; /* fits si.c's config line; later mods are left off */
@@ -127,14 +164,15 @@ static uint32_t fnv1a(uint32_t h, const char* p, size_t n)
 
 static uint32_t be32p(const uint8_t* p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 
-/* The text section `ea` falls in, or -1. Sections 0-6 of a DOL are code. */
-static int in_text(const uint8_t* dol, size_t size, uint32_t ea, uint32_t* lo, uint32_t* hi)
+/* The text section the `n` bytes at `ea` touch, or -1. Sections 0-6 of a DOL
+ * are code. */
+static int in_text(const uint8_t* dol, size_t size, uint32_t ea, uint32_t n, uint32_t* lo, uint32_t* hi)
 {
     int i;
     if (size < 0x100) return -1;
     for (i = 0; i < 7; i++) {
         uint32_t addr = be32p(dol + 0x48 + i * 4), len = be32p(dol + 0x90 + i * 4);
-        if (len && ea + 3 >= addr && ea < addr + len) {
+        if (len && ea + (n - 1) >= addr && ea < addr + len) {
             *lo = addr;
             *hi = addr + len;
             return i;
@@ -245,50 +283,253 @@ static void parse_condition(Where* w, Patch* p, char* t)
     }
 }
 
+/* ---- M6: widths, pointers, runs of targets, *= ------------------------- */
+
+typedef struct {
+    const char* name;
+    uint8_t width, sign;
+} Width;
+static const Width k_width[] = {{"u8", 1, 0}, {"u16", 2, 0}, {"u32", 4, 0}, {"s8", 1, 1}, {"s16", 2, 1}, {"s32", 4, 1}};
+
+static const Width* find_width(const char* t)
+{
+    size_t i;
+    for (i = 0; i < sizeof k_width / sizeof k_width[0]; i++)
+        if (!strcmp(t, k_width[i].name)) return &k_width[i];
+    return NULL;
+}
+
+static const char* width_name(const Patch* p)
+{
+    size_t i;
+    for (i = 0; i < sizeof k_width / sizeof k_width[0]; i++)
+        if (k_width[i].width == p->width && k_width[i].sign == p->sign) return k_width[i].name;
+    return "u32";
+}
+
+/* `0x` and exactly eight hex digits at *s, and no ninth: the binding lists' rule. */
+static int scan_address(const char** s, uint32_t* out)
+{
+    char buf[11];
+    if (strlen(*s) < 10 || is_hex((*s)[10])) return 0;
+    memcpy(buf, *s, 10);
+    buf[10] = '\0';
+    if (!parse_address(buf, out)) return 0;
+    *s += 10;
+    return 1;
+}
+
+/* A number at *s, up to the next '+' or the end: parse_u32's spellings. */
+static int scan_number(const char** s, uint32_t* out)
+{
+    char buf[16];
+    size_t n = strcspn(*s, "+");
+    if (!n || n >= sizeof buf) return 0;
+    memcpy(buf, *s, n);
+    buf[n] = '\0';
+    if (!parse_u32(buf, out)) return 0;
+    *s += n;
+    return 1;
+}
+
+/* The address: `0x80346d28`, or `[0x803474bc]`, the word there taken as a
+ * pointer, which may add `+N`; either may end `+z*N`, the step between the
+ * targets a `for` runs. */
+static int parse_target(Where* w, Patch* p, const char* t)
+{
+    const char* s = t;
+    int has_off = 0;
+    if (*s == '[') {
+        s++;
+        if (!scan_address(&s, &p->ea) || *s++ != ']') goto bad;
+        p->ptr = 1;
+    } else if (!scan_address(&s, &p->ea)) {
+        goto bad;
+    }
+    while (*s == '+') {
+        s++;
+        if (s[0] == 'z' && s[1] == '*') {
+            s += 2;
+            if (p->stride || !scan_number(&s, &p->stride) || !p->stride || p->stride > 0xFFFF) goto bad;
+        } else if (!p->ptr || has_off || p->stride || !scan_number(&s, &p->off) || p->off > 0xFFFFFF) {
+            goto bad;
+        } else {
+            has_off = 1;
+        }
+    }
+    if (!*s) return 1;
+bad:
+    refuse(w, "`%s` is not an address: a lowercase 0x and exactly eight hex digits, as in 0x80346d28, or "
+              "the word at one taken as a pointer, as in [0x803474bc]+2, either with +z*N to step a `for`%s", t, "");
+    return 0;
+}
+
+/* `z=A..B`, A no more than B. */
+static int parse_range(const char* t, uint32_t* a, uint32_t* b)
+{
+    char buf[16];
+    const char* dots;
+    if (strncmp(t, "z=", 2) != 0) return 0;
+    t += 2;
+    dots = strstr(t, "..");
+    if (!dots || dots == t || (size_t)(dots - t) >= sizeof buf) return 0;
+    memcpy(buf, t, (size_t)(dots - t));
+    buf[dots - t] = '\0';
+    return parse_u32(buf, a) && parse_u32(dots + 2, b) && *a <= *b && *b <= 0xFFFF;
+}
+
+/* A factor for *=: 0 to 65535, with up to four decimals (`2`, `0.5`). */
+static int parse_factor(const char* t, uint32_t* num, uint32_t* den)
+{
+    unsigned long long n = 0;
+    uint32_t d = 1;
+    int digits = 0, frac = -1;
+    if (t[0] == '0' && isdigit((unsigned char)t[1])) return 0; /* 05: no leading zero, as values */
+    for (; *t; t++) {
+        if (*t == '.' && frac < 0) {
+            frac = 0;
+            continue;
+        }
+        if (*t < '0' || *t > '9' || (frac >= 0 && ++frac > 4)) return 0;
+        n = n * 10 + (unsigned)(*t - '0');
+        if (frac >= 0) d *= 10;
+        if (++digits > 9) return 0;
+    }
+    if (!digits || frac == 0 || n > 65535ull * d) return 0;
+    *num = (uint32_t)n;
+    *den = d;
+    return 1;
+}
+
+/* A value for `=` that the width holds: 0x and hex digits or decimal, and a
+ * signed width's negative in decimal. */
+static int parse_value(const char* t, const Patch* p, uint32_t* out)
+{
+    uint32_t v, max = p->width == 4 ? 0xFFFFFFFFu : (1u << (8 * p->width)) - 1;
+    if (p->sign && t[0] == '-') {
+        if (t[1] < '1' || t[1] > '9' || !parse_u32(t + 1, &v) || v > (max >> 1) + 1) return 0;
+        *out = (0u - v) & max;
+        return 1;
+    }
+    if (!parse_u32(t, &v) || v > max) return 0;
+    if (p->sign && t[0] != '0' && v > (max >> 1)) return 0; /* a decimal past the signed range */
+    *out = v;
+    return 1;
+}
+
 static void parse_patch(Where* w, char* line, const uint8_t* dol, size_t dol_size, unsigned mod)
 {
     char* tok[16];
-    char where[64];
-    int n = split(line, tok, 16), i;
-    uint32_t lo, hi;
+    char where[64], addr[16];
+    int n = split(line, tok, 16), i, at = 1;
+    uint32_t lo, hi, z;
+    const Width* wd;
     Patch p;
     if (n == 0) return;
     memset(&p, 0, sizeof p);
+    p.width = 4;
+    p.den = 1;
     if (n < 0) { refuse(w, "too many words on one line%s%s", "", ""); return; }
-    if (n < 4 || strcmp(tok[2], "=") != 0) {
-        refuse(w, "a patch is `trigger 0x80346d28 = value [when condition...]`%s%s", "", "");
+    if (n > 1 && (wd = find_width(tok[1])) != NULL) {
+        p.width = wd->width;
+        p.sign = wd->sign;
+        at = 2;
+    }
+    if (at == 1 && n > 2 && tok[1][0] != '0' && tok[1][0] != '[' && strcmp(tok[2], "=") != 0 &&
+        strcmp(tok[2], "*=") != 0) {
+        refuse(w, "`%s` is not a width: u8, u16, u32, s8, s16 or s32%s", tok[1], "");
+        return;
+    }
+    if (n < at + 3 || (strcmp(tok[at + 1], "=") != 0 && strcmp(tok[at + 1], "*=") != 0)) {
+        refuse(w, "a patch is `trigger [width] 0x80346d28 = value [for z=A..B] [when condition...]`%s%s", "", "");
         return;
     }
     for (i = 0; i < 3 && strcmp(tok[0], k_trigger[i]) != 0; i++) {}
     if (i == 3) { refuse(w, "`%s` is not a trigger: every_frame, once or on_map_load%s", tok[0], ""); return; }
     p.trigger = (uint8_t)i;
-    if (!parse_address(tok[1], &p.ea)) {
-        refuse(w, "`%s` is not an address: a lowercase 0x and exactly eight hex digits, as in "
-                  "0x80346d28%s", tok[1], "");
-        return;
-    }
-    if (is_mmio(p.ea)) { refuse(w, "%s is in the hardware window, not memory%s", tok[1], ""); return; }
+    if (!parse_target(w, &p, tok[at])) return;
+    snprintf(addr, sizeof addr, "0x%08x", p.ea);
+    if (is_mmio(p.ea)) { refuse(w, "%s is in the hardware window, not memory%s", addr, ""); return; }
     if (p.ea < 0x80000000u || p.ea >= 0x80000000u + MEM1_SIZE) {
-        refuse(w, "%s is outside the console's 24 MB of RAM, 0x80000000-0x817fffff%s", tok[1], "");
+        refuse(w, "%s is outside the console's 24 MB of RAM, 0x80000000-0x817fffff%s", addr, "");
         return;
     }
-    if (p.ea & 3) { refuse(w, "%s is not word-aligned, and a patch writes a whole 32-bit word%s", tok[1], ""); return; }
-    if ((i = in_text(dol, dol_size, p.ea, &lo, &hi)) >= 0) {
-        snprintf(where, sizeof where, "text section %d, %08x-%08x", i, lo, hi);
-        refuse(w, "%s is inside the game's code (%s); a patch writes data only", tok[1], where);
+    if (p.ptr && (p.ea & 3)) {
+        refuse(w, "the pointer at %s is not word-aligned, and a pointer is a whole 32-bit word%s", addr, "");
         return;
     }
-    if (!parse_u32(tok[3], &p.value)) {
-        refuse(w, "`%s` is not a 32-bit value: 0x and up to eight hex digits, or decimal%s", tok[3], "");
+    if (!p.ptr && (p.ea & (p.width - 1u))) {
+        if (p.width == 4) refuse(w, "%s is not word-aligned, and a patch writes a whole 32-bit word%s", addr, "");
+        else refuse(w, "%s is not aligned for a %s, which a patch writes whole", addr, width_name(&p));
         return;
     }
-    if (n > 4) {
-        if (strcmp(tok[4], "when") != 0 || n == 5) {
-            refuse(w, "after the value comes `when` and one or more conditions, not `%s`%s", tok[4], "");
+    if ((p.off | p.stride) & (p.width - 1u)) {
+        refuse(w, "%s steps or offsets by bytes a %s cannot start on: each must be a multiple of its size", tok[at],
+               width_name(&p));
+        return;
+    }
+    p.mul = tok[at + 1][0] == '*';
+    if (p.mul && p.trigger != T_MAP_LOAD) {
+        refuse(w, "`*=` multiplies what is there, so it runs once a map load: on_map_load, not %s%s", tok[0], "");
+        return;
+    }
+    if (p.mul && !parse_factor(tok[at + 2], &p.value, &p.den)) {
+        refuse(w, "`%s` is not a factor: 0 to 65535, with up to four decimals, as in 0.5%s", tok[at + 2], "");
+        return;
+    }
+    if (!p.mul && !parse_value(tok[at + 2], &p, &p.value)) {
+        if (p.width == 4 && !p.sign)
+            refuse(w, "`%s` is not a 32-bit value: 0x and up to eight hex digits, or decimal%s", tok[at + 2], "");
+        else
+            refuse(w, "`%s` is not a value a %s holds: 0x and hex digits, or decimal (negative for an s width)",
+                   tok[at + 2], width_name(&p));
+        return;
+    }
+    i = at + 3;
+    if (i < n && !strcmp(tok[i], "for")) {
+        if (i + 1 == n || !parse_range(tok[i + 1], &p.z0, &p.z1)) {
+            refuse(w, "`for` takes z=A..B, A no more than B, as in for z=0..7%s%s", "", "");
             return;
         }
-        for (i = 5; i < n && !w->failed; i++) parse_condition(w, &p, tok[i]);
+        if (!p.stride) { refuse(w, "`for` runs z through the address's +z*N, and %s has none%s", tok[at], ""); return; }
+        if (p.z1 - p.z0 >= FOR_MAX) { refuse(w, "%s runs more than 64 targets%s", tok[i + 1], ""); return; }
+        i += 2;
+    } else if (p.stride) {
+        refuse(w, "%s steps by z, and no `for z=A..B` after the value says how far%s", tok[at], "");
+        return;
+    }
+    if (i < n) {
+        if (strcmp(tok[i], "when") != 0 || i + 1 == n) {
+            refuse(w, "after the value comes `when` and one or more conditions (a `for z=A..B` before them when the "
+                      "address steps), not `%s`%s", tok[i], "");
+            return;
+        }
+        for (i++; i < n && !w->failed; i++) parse_condition(w, &p, tok[i]);
         if (w->failed) return;
+    }
+    if (p.ptr && p.ea == ENCOUNTER_TABLE && p.has_map && p.map_number == WORLD_MAP) {
+        refuse(w, "map 099 keeps its encounter table apart (fn_800C1A50), so %s is not its%s", tok[at], "");
+        return;
+    }
+    for (z = p.z0; !p.ptr && z <= p.z1; z++) {
+        unsigned long long ea = (unsigned long long)p.ea + (unsigned long long)z * p.stride;
+        if (ea + (p.width - 1u) >= 0x80000000ull + MEM1_SIZE) {
+            snprintf(where, sizeof where, "z=%u is %llx", z, ea);
+            refuse(w, "%s runs outside the console's 24 MB of RAM (%s)", tok[at], where);
+            return;
+        }
+        if ((i = in_text(dol, dol_size, (uint32_t)ea, p.width, &lo, &hi)) >= 0) {
+            snprintf(where, sizeof where, "text section %d, %08x-%08x", i, lo, hi);
+            refuse(w, "%s is inside the game's code (%s); a patch writes data only", z ? tok[at] : addr, where);
+            return;
+        }
+    }
+    if (p.mul) {
+        unsigned count = p.z1 - p.z0 + 1;
+        if (g_slot_n + count > SLOT_MAX) { refuse(w, "more than 4096 `*=` targets across all mods%s%s", "", ""); return; }
+        p.slot = g_slot_n;
+        memset(&g_slots[g_slot_n], 0, count * sizeof g_slots[0]);
+        g_slot_n += count;
     }
     if (g_patch_n == PATCH_MAX) { refuse(w, "more than 1024 patches across all mods%s%s", "", ""); return; }
     p.mod = mod;
@@ -812,7 +1053,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     char num[16];
     Where w;
     Mod m;
-    unsigned before = g_patch_n;
+    unsigned before = g_patch_n, slots_before = g_slot_n;
     (void)s;
     memset(&m, 0, sizeof m);
     snprintf(m.dir, sizeof m.dir, "%s", dir);
@@ -931,6 +1172,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     }
     if (w.failed) {
         g_patch_n = before; /* refused whole */
+        g_slot_n = slots_before;
     } else {
         m.hash = fnv1a(fnv1a(2166136261u, ini, ini_n), patches ? patches : "", patches_n) ^ dll_hash;
         m.first = before;
@@ -1032,6 +1274,124 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
 
 /* ---- every frame ------------------------------------------------------- */
 
+static int is_m6(const Patch* p) { return p->width != 4 || p->sign || p->ptr || p->mul || p->stride; }
+
+/* Whether a patch may write the `n` bytes at `ea`: in RAM, on its alignment,
+ * and outside the DOL's code. A pointer's target is known only now. */
+static int target_ok(unsigned long long ea, uint32_t n)
+{
+    int i;
+    if (ea < 0x80000000ull || ea + n > 0x80000000ull + MEM1_SIZE || (ea & (n - 1u))) return 0;
+    for (i = 0; i < 7; i++)
+        if (g_text[i][1] > g_text[i][0] && ea < g_text[i][1] && ea + n > g_text[i][0]) return 0;
+    return 1;
+}
+
+static uint32_t read_n(CpuState* s, uint32_t ea, uint32_t n)
+{
+    return n == 1 ? mem_r8(s, ea) : n == 2 ? mem_r16(s, ea) : mem_r32(s, ea);
+}
+
+static void write_n(CpuState* s, uint32_t ea, uint32_t n, uint32_t v)
+{
+    if (n == 1) mem_w8(s, ea, (uint8_t)v);
+    else if (n == 2) mem_w16(s, ea, (uint16_t)v);
+    else mem_w32(s, ea, v);
+}
+
+/* was times the factor, toward zero, clamped to the width: unsigned, or for
+ * an s width signed, as the game would read it back. */
+static uint32_t scaled(uint32_t was, const Patch* p)
+{
+    unsigned bits = 8u * p->width;
+    uint32_t mask = bits == 32 ? 0xFFFFFFFFu : (1u << bits) - 1;
+    if (p->sign) {
+        long long hi = (1ll << (bits - 1)) - 1, lo = -hi - 1, v = (long long)(was & mask);
+        if (v > hi) v -= 1ll << bits;
+        v = v * (long long)p->value / (long long)p->den;
+        return (uint32_t)(v < lo ? lo : v > hi ? hi : v) & mask;
+    } else {
+        unsigned long long v = (unsigned long long)(was & mask) * p->value / p->den;
+        return v > mask ? mask : (uint32_t)v;
+    }
+}
+
+/* The patch as its line wrote it, for the log and the report. */
+static void describe_patch(const Patch* p, char* buf, size_t cap)
+{
+    char target[48], value[24];
+    int n = p->ptr ? snprintf(target, sizeof target, "[%08X]", p->ea) : snprintf(target, sizeof target, "%08X", p->ea);
+    if (p->ptr && p->off) n += snprintf(target + n, sizeof target - (size_t)n, "+%u", p->off);
+    if (p->stride) snprintf(target + n, sizeof target - (size_t)n, "+z*%u", p->stride);
+    if (!p->mul) snprintf(value, sizeof value, "= %0*X", 2 * p->width, p->value);
+    else if (p->den == 1) snprintf(value, sizeof value, "*= %u", p->value);
+    else {
+        int digits = p->den == 10 ? 1 : p->den == 100 ? 2 : p->den == 1000 ? 3 : 4;
+        snprintf(value, sizeof value, "*= %u.%0*u", p->value / p->den, digits, p->value % p->den);
+    }
+    if (p->stride)
+        snprintf(buf, cap, "%s %s %s %s for z=%u..%u", k_trigger[p->trigger], width_name(p), target, value, p->z0, p->z1);
+    else
+        snprintf(buf, cap, "%s %s %s %s", k_trigger[p->trigger], width_name(p), target, value);
+}
+
+/* An M6 patch's targets written; how many. A null pointer is passed over (a
+ * map without an encounter table has one), and so is a target a patch may
+ * not write, said once. *= leaves a target holding what it wrote there at
+ * this map, so a load that did not put the word back is not multiplied
+ * again. */
+static unsigned apply_patch(CpuState* s, Patch* p, uint32_t key, unsigned frame)
+{
+    unsigned long long base = p->ea, ea;
+    uint32_t z, was, now;
+    unsigned written = 0;
+    if (p->ptr) {
+        if (p->ea == ENCOUNTER_TABLE && key >> 8 == WORLD_MAP) {
+            if (!(p->warned & 2))
+                fprintf(stderr, "[mod] %s patches.txt:%u: not applied on map 099, which keeps its encounter table "
+                                "apart (fn_800C1A50); said once\n", g_mods[p->mod].dir, p->line);
+            p->warned |= 2;
+            return 0;
+        }
+        base = mem_r32(s, p->ea);
+        if (!base) {
+            p->nulls++;
+            return 0;
+        }
+        base += p->off;
+    }
+    for (z = p->z0; z <= p->z1; z++) {
+        ea = base + (unsigned long long)z * p->stride;
+        if (!target_ok(ea, p->width)) {
+            if (!(p->warned & 1))
+                fprintf(stderr, "[mod] %s patches.txt:%u: at frame %u, z=%u is %08llX, which is outside RAM, off a "
+                                "%s's alignment or in the game's code: not written, here or later; said once\n",
+                        g_mods[p->mod].dir, p->line, frame, z, ea, width_name(p));
+            p->warned |= 1;
+            continue;
+        }
+        was = read_n(s, (uint32_t)ea, p->width);
+        if (p->mul) {
+            Slot* sl = &g_slots[p->slot + (z - p->z0)];
+            if (sl->set && sl->key == key && sl->addr == (uint32_t)ea && sl->wrote == was) continue;
+            now = scaled(was, p);
+            sl->set = 1;
+            sl->key = key;
+            sl->addr = (uint32_t)ea;
+            sl->wrote = now;
+        } else {
+            now = p->value;
+        }
+        gxr_hook_hazard((uint32_t)ea, p->width);
+        write_n(s, (uint32_t)ea, p->width, now);
+        written++;
+        if (p->trigger == T_MAP_LOAD)
+            fprintf(stderr, "[mod] %s patches.txt:%u: %08X: %0*X -> %0*X\n", g_mods[p->mod].dir, p->line,
+                    (uint32_t)ea, 2 * p->width, was, 2 * p->width, now);
+    }
+    return written;
+}
+
 void mod_frame(CpuState* s, unsigned frame)
 {
     uint32_t scene, state, number, key;
@@ -1058,8 +1418,12 @@ void mod_frame(CpuState* s, unsigned frame)
         if (p->has_scene && scene != p->scene) continue;
         if (p->has_state && state != p->state) continue;
         if (p->has_map && (number != p->map_number || letter != p->map_letter)) continue;
-        gxr_hook_hazard(p->ea, 4);
-        mem_w32(s, p->ea, p->value);
+        if (is_m6(p)) {
+            if (!apply_patch(s, p, key, frame)) continue;
+        } else {
+            gxr_hook_hazard(p->ea, 4);
+            mem_w32(s, p->ea, p->value);
+        }
         if (!p->applied) p->first_frame = frame;
         p->applied++;
         p->fired = 1;
@@ -1106,6 +1470,22 @@ void mod_report(void)
         }
         for (i = g_mods[m].first; i < g_mods[m].first + g_mods[m].count; i++) {
             const Patch* p = &g_patches[i];
+            if (is_m6(p)) {
+                char what[160], why[160] = "";
+                size_t k;
+                describe_patch(p, what, sizeof what);
+                if (p->nulls) snprintf(why, sizeof why, "; its pointer was null %llu time(s)", p->nulls);
+                k = strlen(why);
+                if (p->warned & 2) k += (size_t)snprintf(why + k, sizeof why - k, "; passed over on map 099");
+                if (p->warned & 1) snprintf(why + k, sizeof why - k, "; a target it may not write passed over");
+                if (p->applied)
+                    fprintf(stderr, "[mod] %s patches.txt:%u: %s applied %llu time(s), first at frame %u%s\n",
+                            g_mods[m].dir, p->line, what, p->applied, p->first_frame, why);
+                else
+                    fprintf(stderr, "[mod] %s patches.txt:%u: %s never applied%s\n", g_mods[m].dir, p->line, what,
+                            why[0] ? why : ": its conditions never held");
+                continue;
+            }
             if (p->applied)
                 fprintf(stderr, "[mod] %s patches.txt:%u: %s %08X = %08X applied %llu time(s), first at frame %u\n",
                         g_mods[m].dir, p->line, k_trigger[p->trigger], p->ea, p->value, p->applied, p->first_frame);

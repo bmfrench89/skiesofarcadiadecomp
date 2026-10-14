@@ -500,6 +500,232 @@ def test_the_switch_is_documented():
 
 
 # --------------------------------------------------------------------------
+# M6: widths, pointers, runs of targets and *= (PLAN-60FPS-MODS M6), on the
+# encounter table's layout (docs/research/encounters.md): the word at
+# 0x803474BC points to eight zones of 132 bytes, each one's rate the u16 at +2.
+# --------------------------------------------------------------------------
+
+TABLE = 0x80400000  # free RAM in the fake guest, standing in for a map's .ect
+POINTER = "803474bc"
+RATES = "on_map_load u16 [0x803474bc]+2+z*132 *= {k} for z=0..7\n"
+
+
+def at_map(number: int, letter: str = "a", state: int = 8) -> str:
+    """The field at a map, in a state: loading (3 or 5) or running (8)."""
+    return (
+        f"set 803475cc 6 set 80311aec {state:x} set 80311ac0 {number:x} "
+        f"setb 80311ac8 {ord(letter):x} "
+    )
+
+
+def load(number: int, letter: str = "a", state: int = 3) -> str:
+    """A map load as mod.c sees one: a frame loading, then one running."""
+    return at_map(number, letter, state) + "frame " + at_map(number, letter) + "frame "
+
+
+def table(rates: list[int]) -> str:
+    """The pointer at a table whose zones' rates are `rates`, each zone's
+    stage, the u16 before it, 0x0011."""
+    words = (f"set {TABLE + z * 132:x} {0x00110000 | r:x} " for z, r in enumerate(rates))
+    return f"set {POINTER} {TABLE:x} " + "".join(words)
+
+
+def gets() -> str:
+    return "".join(f"get {TABLE + z * 132:x} " for z in range(8))
+
+
+def read_rates(out: str) -> list[list[int]]:
+    """Each gets()'s eight rates; every zone's stage must be untouched."""
+    words = [int(v, 16) for v in re.findall(r"^8040[0-9A-F]{4}=([0-9A-F]{8})$", out, re.M)]
+    assert all(w >> 16 == 0x0011 for w in words), out
+    return [[w & 0xFFFF for w in words[i : i + 8]] for i in range(0, len(words), 8)]
+
+
+@needs_cc
+def test_m6_scales_each_zones_rate_once_a_load_and_never_compounds(driver, tmp_path):
+    """The eight rates halved at a load, each logged `address: was -> now`.
+    A reload that left the table as the patch made it is not halved again --
+    the mutation, the patch's memory of what it wrote taken out, halves them
+    twice -- and a reload that put the disc's table back is halved once."""
+    mod(tmp_path, "rates", patches=RATES.format(k="0.5"))
+    disc = [100, 50, 7, 1, 0, 300, 65535, 2]
+    script = (
+        table(disc)
+        + load(116)
+        + gets()
+        + load(116, state=5)  # back from a battle, the table left as it was
+        + gets()
+        + table(disc)
+        + load(116, state=5)  # back from a battle, the table loaded again
+        + gets()
+        + "report"
+    )
+    out, err = play(driver, tmp_path, script)
+    first, kept, again = read_rates(out)
+    assert first == [50, 25, 3, 0, 0, 150, 32767, 1], out
+    assert kept == first and again == first, out
+    logged = [ln.split(": ", 1)[1] for ln in err.splitlines() if "rates patches.txt:1: 8040" in ln]
+    assert logged[:2] == ["80400002: 0064 -> 0032", "80400086: 0032 -> 0019"], err
+    # eight at the first load, and seven at the third: zone 4's rate is 0, and
+    # 0 halved is what the patch wrote there already, so it is left alone
+    assert len(logged) == 15 and "80400212: 0000 -> 0000" in logged[:8], err
+    assert "80400212: 0000 -> 0000" not in logged[8:], err
+    assert (
+        "rates patches.txt:1: on_map_load u16 [803474BC]+2+z*132 *= 0.5 for z=0..7 applied 2 time(s)"
+        in err
+    ), err
+
+
+@needs_cc
+def test_m6_writes_each_width_at_its_own_bytes_big_endian(driver, tmp_path):
+    mod(
+        tmp_path,
+        "widths",
+        patches=(
+            "once u8 0x80346d29 = 0xaa\n"
+            "once u16 0x80346d2e = 0xbeef\n"
+            "once s16 0x80346d30 = -2\n"
+            "once s8 0x80346d37 = -128\n"
+            "every_frame u16 0x80346d38+z*2 = 0x0102 for z=0..3\n"
+        ),
+    )
+    script = (
+        "set 80346d28 11223344 set 80346d2c 55667788 set 80346d30 99aabbcc "
+        "set 80346d34 ddeeff00 frame "
+        "get 80346d28 get 80346d2c get 80346d30 get 80346d34 get 80346d38 get 80346d3c"
+    )
+    out, err = play(driver, tmp_path, script)
+    for word in ("11AA3344", "5566BEEF", "FFFEBBCC", "DDEEFF80"):
+        assert word in out, out
+    assert "80346D38=01020102" in out and "80346D3C=01020102" in out, out
+    assert " -> " not in err, err  # only a map load's M6 patches log what they wrote
+
+
+@needs_cc
+def test_m6_multiplies_clamped_to_the_width_signed_or_not(driver, tmp_path):
+    mod(
+        tmp_path,
+        "clamp",
+        patches=(
+            "on_map_load u8 0x80346d28 *= 2\n"  # 0x90 -> 0xff, clamped
+            "on_map_load s8 0x80346d29 *= 2\n"  # 80 -> 127
+            "on_map_load s8 0x80346d2a *= 2\n"  # -80 -> -128
+            "on_map_load s16 0x80346d2c *= 0.25\n"  # -100 -> -25, toward zero
+            "on_map_load u32 0x80346d30 *= 1.5\n"  # 3 -> 4
+            "on_map_load u16 0x80346d34 *= 0\n"
+        ),
+    )
+    script = (
+        "set 80346d28 9050b000 set 80346d2c ff9c1234 set 80346d30 3 set 80346d34 ffff5678 "
+        + load(116)
+        + "get 80346d28 get 80346d2c get 80346d30 get 80346d34"
+    )
+    out, _ = play(driver, tmp_path, script)
+    for word in (
+        "80346D28=FF7F8000",
+        "80346D2C=FFE71234",
+        "80346D30=00000004",
+        "80346D34=00005678",
+    ):
+        assert word in out, out
+
+
+@needs_cc
+def test_m6_passes_over_a_null_pointer_the_world_map_and_a_target_in_code(driver, tmp_path):
+    """A map with no table has a null pointer; map 099 keeps a table of its
+    own; a pointer into the game's code is never written through. Each is
+    passed over, the last two said once, and the report says why the patch
+    never applied."""
+    mod(tmp_path, "rates", patches=RATES.format(k="2"))
+    script = (
+        f"set {POINTER} 0 "
+        + load(116)
+        + table([1] * 8)
+        + load(99, "a")
+        + load(99, "a")
+        + gets()
+        + f"set {POINTER} 80003100 "
+        + load(117)
+        + load(118)
+        + "report"
+    )
+    out, err = play(driver, tmp_path, script)
+    assert read_rates(out) == [[1] * 8], out
+    assert err.count("not applied on map 099") == 1, err
+    assert err.count("in the game's code: not written") == 1, err
+    report = next(ln for ln in err.splitlines() if "never applied" in ln)
+    assert (
+        "its pointer was null 1 time(s); passed over on map 099; a target it may not write passed over"
+        in report
+    ), report
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "line, why",
+    [
+        ("every_frame u8 0x80346d28 = 256", "is not a value a u8 holds"),
+        ("every_frame s8 0x80346d28 = 128", "is not a value a s8 holds"),
+        ("every_frame s8 0x80346d28 = -129", "is not a value a s8 holds"),
+        ("every_frame u16 0x80346d29 = 1", "is not aligned for a u16"),
+        ("every_frame u32 0x80346d2a = 1", "not word-aligned"),
+        ("every_frame u16 [0x803474bc]+2 *= 2", "runs once a map load"),
+        ("on_map_load u16 0x80346d28 *= 65536", "is not a factor"),
+        ("on_map_load u16 0x80346d28 *= 0.12345", "is not a factor"),
+        ("on_map_load u16 0x80346d28 *= 05", "is not a factor"),
+        ("on_map_load u16 0x80346d28 *= 2.", "is not a factor"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= 2", "no `for z=A..B`"),
+        ("on_map_load u16 [0x803474bc]+2 *= 2 for z=0..7", "has none"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= 2 for z=0..64", "more than 64 targets"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= 2 for z=7..0", "`for` takes z=A..B"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= 2 for 0..7", "`for` takes z=A..B"),
+        ("on_map_load u16 [0x803474bd]+2 = 1", "a pointer is a whole 32-bit word"),
+        ("on_map_load u16 [0x803474bc]+3 = 1", "cannot start on"),
+        ("on_map_load u16 [0x803474bc]+2+z*131 = 1 for z=0..7", "cannot start on"),
+        (
+            "on_map_load u16 [0x803474bc]+2 = 1 when map=099a",
+            "map 099 keeps its encounter table apart",
+        ),
+        ("on_map_load u16 [0x803474bc]+0x1000000 = 1", "is not an address"),
+        ("every_frame u32 0x80346d28+4 = 1", "is not an address"),
+        ("every_frame u32 0x80346d28+z*4 = 1 for z=0..2 when", "after the value comes `when`"),
+        ("every_frame u16 0x80003100 = 1", "inside the game's code"),
+        ("every_frame u8 0x800030fc+z*1 = 1 for z=0..7", "inside the game's code"),
+        ("every_frame u32 0x817ffff0+z*4 = 1 for z=0..7", "runs outside the console's 24 MB"),
+        ("every_frame u64 0x80346d28 = 1", "`u64` is not a width"),
+        ("every_frame [0xcc008000] = 1", "hardware window"),
+    ],
+)
+def test_m6_each_fault_refuses_the_mod_out_loud(driver, tmp_path, line, why):
+    mod(tmp_path, "bad", patches=line + "\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and why in err, err
+
+
+@needs_cc
+def test_the_m6_example_halves_the_rates(driver, tmp_path):
+    """examples/mods/encounter-scale is the grammar's example: it parses
+    under the DOL config.yml pins and does what its comment says."""
+    src = ROOT / "examples" / "mods" / "encounter-scale"
+    pinned = next(
+        line.split(":", 1)[1].strip()
+        for line in (ROOT / "config" / "GEAE8P" / "config.yml").read_text().splitlines()
+        if line.startswith("hash:")
+    )
+    ini = (src / "mod.ini").read_text(encoding="utf-8")
+    assert f"dol_sha1 = {pinned}" in ini
+    d = tmp_path / "encounter-scale"
+    d.mkdir()
+    (d / "mod.ini").write_text(ini.replace(pinned, SHA), encoding="utf-8")
+    (d / "patches.txt").write_text(
+        (src / "patches.txt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    out, err = play(driver, tmp_path, table([40] * 8) + load(116) + gets())
+    assert "loaded 1" in out, err
+    assert read_rates(out) == [[20] * 8], out
+
+
+# --------------------------------------------------------------------------
 # M3: mod.dll on SoaModApi. Each test DLL is built here from one source with
 # a few switches, against runtime/soa_mod.h, the header a mod author uses.
 # --------------------------------------------------------------------------

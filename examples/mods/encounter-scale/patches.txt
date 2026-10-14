@@ -1,0 +1,12 @@
+# trigger    width  address                    factor   targets
+#
+# A map's load puts its encounter table (.ect) at the word 0x803474BC
+# points to: eight zones of 132 bytes, each zone's rate the u16 at +2
+# (docs/research/encounters.md). Once a load, each of the eight is
+# multiplied by the factor, clamped to a u16, and the log names each one,
+# `address: was -> now`: 0 turns random battles off in every field with a
+# table, 1 leaves them as the disc has them, 0.5 halves them. A reload that
+# leaves the table where it was is not multiplied again, the world map (099)
+# keeps a table of its own and is left alone, and a map with no table has a
+# null pointer, which is passed over.
+on_map_load  u16    [0x803474bc]+2+z*132    *= 0.5   for z=0..7
