@@ -99,6 +99,11 @@ object reached by walking, once U4's object positions are known, which is the ru
 *Can it fail:* the same job with `entry` naming 4004 (gated by temp flag 1794) must leave flag 303 clear and
 `check --expect-flag 303=1` must FAIL.
 
+**Run 2026-10-14** (FINDINGS "Reach U1"): started by `entry` from where Vyse stood; lost three times on A presses
+alone, each loss the game's "try again" (and `--expect-flag 304` FAILs on that log, the control used in place of
+the 4004 job); won with `hold-hp`, flag 304 set by the after-scene, every invariant held, the frames opened. Left:
+the fight entered by walking (U4's positions) and won without `hold-hp` (scripted tactics).
+
 ## 3. U2: an item used in battle
 
 **What is known:** the wheel opens on Attack, slot 3, and slot 5 is Item; a plain press moves two slots, so a

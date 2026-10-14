@@ -8378,3 +8378,34 @@ the driver's.** 2026-10-04.
     asked. The review page is `build/setup-review/index.html` (local): the box during the build, the start of the
     phone's half, the built words, the other statuses' words from recorded logs, the space refusal from `setup.c`,
     and §1.3's questions.
+
+**Reach U1: the first boss battle, part G's Vigoro, fought, lost, tried again and won.** 2026-10-14,
+`build/reach/u1-try1` and `build/reach/u1-hold` (logs, cards, snapshots; game data, kept here).
+
+- **What it is:** docs/specs/reach.md U1, the first boss or event battle this port has run (README.md:54 said none
+  had; FINDINGS:1324, only kind-0 battles). Part G's card lands on `a116a`, the prison, whose entry `M04005` is
+  gated by `IF FLAG[303]==0` and runs `BATTLE (1) (19) (33) (1)`: event 19 [V `python tools/sct.py 116a`, 0b7d4 and
+  0b9fc]. The lab mod's `entry:3300:4005` started it the way the A press does at its check object (reach U0), from
+  where Vyse stood; then A every 150 frames.
+- **u1-try1, A presses only** [V log, `soak.py check`]: the entry started at frame 3300 and flag 303 went 0 → 1 at
+  3356 (`0x80310B60` `300F` → `B00F`); the event's own model `a116ag04.mld` loaded; the battle at 5810 (`stsicon`),
+  scene 7 from 5861. The boss is Vigoro, with Vyse, Aika and Gilder (frame 12000). A presses, Attack every turn,
+  lose: at 12600 the party is down, and at 12700 and 18700 the battle loads again in scene 7 with no field between,
+  event 19's defeat rule 1, "try again", working as the game has it. Three battles, 20,000 frames, every invariant
+  held: no `[mem]`, no stop line, 0 unknown FIFO bytes of 9.5 GB, 0 bad vertex references over 211 million. With
+  `--expect-flag 304` it FAILs (304 stays 0), the negative control the spec asks for.
+- **u1-hold, the party's HP held** (the lab's `hold-hp`: the fight is the game's, but no member standing can fall
+  below full HP at a safe point, so this run tests the port's battle to its end, not a player's chance): one battle,
+  5810 to 17590, 17 top-ups; Vyse fell anyway to a single hit beyond his maximum (frame 10000). `PCWIN.MLK` loaded,
+  scene 7 → 6 at 17590, the field states 0, 1, 4, then 5, 7, 8 by 18424, `a116a` loaded again, and flag 304 set at
+  18430, which `me116ag05`'s first op sets [V sct 163c8]: the after-scene ran. `soak.py check --expect-flag 303
+  --expect-flag 304` passes, with one battle, no game over and the same clean invariants over 30,000 frames.
+- **The frames, opened:** 10000, Aika and Gilder against Vigoro with Vyse down; 17500, Gilder's victory pose in the
+  cell block; 18600, Vigoro on the floor and Aika's "Heh... Looks like you were all talk." All drawn as the game
+  draws them, nothing black, nothing missing.
+- **Effect packages:** the boss fight loaded three no log here had held, `F050008D.MLK`, `F290608D.MLK` and
+  `PCP04.MLK`. The ledger `build/reach/beff.json`, seeded from every log in `build/`, holds 22 of the disc's 576.
+- **One renderer question, known:** S3's LINEPTWIDTH (BP 22 `00060D`, 2.17 px) at frame 10010, in this fight.
+- **Not shown yet:** the fight entered by walking to object 4005 (U4 needs object positions; the volume's shape
+  words are the local box, -0.5 to 0.5, shared by every check object in the cell block, so the position is the
+  owning object's, still to find), and the fight won without `hold-hp`, which needs scripted tactics (U2's `turn`).
