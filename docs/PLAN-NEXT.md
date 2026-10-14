@@ -205,10 +205,11 @@ The owner answered four questions, with the research behind them summarised in t
     (H17a) and widescreen (M10).
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
-       are `@needs_msvc` today.
-    2. M16, declared options.
-    3. M17, load order and conflict reports.
-    4. M6, richer patches.
+       were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").
+    2. M6, richer patches, moved ahead of M16, whose options for a byte need M6's widths (research/plan-gaps.md).
+       **Built 2026-10-14** (FINDINGS "M6"); its game runs are this PC's.
+    3. M16, declared options.
+    4. M17, load order and conflict reports.
     5. T10, a modding guide and tool.
 
     Each is proven on this PC before it is called done.

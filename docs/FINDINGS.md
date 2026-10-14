@@ -8201,6 +8201,10 @@ the driver's.** 2026-10-04.
     a line if the built words do not fit;
   - `pytest -p noskip tools/tests/test_setup.py` there.
   CI's `android-route` Windows leg runs the tests on a GitHub runner meanwhile.
+- **On CI** [V]: run 38503380177, dispatched on the branch at 9745809, all 12 jobs green. The `android-route`
+  Windows leg's new step built `Setup.exe` with the pinned llvm-mingw and ran `test_setup.py` under `noskip`: 16
+  passed in 2.75 s, R5c's five among them, none skipped. The Windows Tests job printed `1370 passed, 133 skipped`,
+  which is all 1521 with capstone's 19 as one skip.
 - **What differed from the design's text** (each now corrected in §1.3):
   - **The sysroot's bar position:** the phone's `sysroot` line stands with the check, at 1, not at 61. The design's
     own line order (§6.1, and `player_build.py`) prints `[build] android sysroot` before `[build] extract`, so at 61
@@ -8247,6 +8251,59 @@ the driver's.** 2026-10-04.
 - **What is left to check:** MSVC's builds changed shape with this: the driver in two steps, and the test mods
   without `/Fo`, since their working folder is already theirs. CI's Windows Tests job builds them with MSVC on
   GitHub's runner; the owner's PC is the other MSVC check.
+- **On CI** [V]: run 38504201890 at 2a9b10f, all 12 jobs green. The gcc, clang and ARM64 legs ran `test_mods.py`
+  under `noskip` (their mod step went from about 2 s to 6-11 s), and the Windows Tests job built it with MSVC.
 - **Not done:** PLAN-GAMEPLAY-MODS's "Mods in CI" also asks for a compile-time `offsetof` check of every `SoaModApi`
   member, which is not built. It also asks for a mod built against a frozen v1 header: the two old-header tests strip
   the latest appends, which comes near that but is not v1.
+
+**M6: patches of any width, through a pointer, over a run of targets, and `*=`.** 2026-10-14.
+
+- **What it is:** docs/PLAN-60FPS-MODS.md M6, built in the cloud session ahead of M16, whose options for a byte
+  need its widths (PLAN-NEXT §0, D-38). A `patches.txt` line is still
+  `trigger address = value [when …]`, and every line valid before parses and applies as it did. What is new:
+  - **A width** before the address: `u8`, `u16`, `u32` (the default), or `s8`, `s16`, `s32`, whose values may be
+    negative decimals and whose products clamp signed. A width is written at its own bytes, big-endian. Signed
+    widths are beyond the spec's text: the encounter multiplier the game sign-extends (research/plan-gaps.md) needs
+    a clamp at 127.
+  - **A pointer:** `[0x803474bc]` is the word there taken as an address, plus `+N` (under 16 MB). The pointer's
+    address must be word-aligned RAM; its target is checked only when it is written: in RAM, on the width's
+    alignment, outside the DOL's code. A null pointer is passed over and counted, since a map with no encounter
+    table has one. A bad target is passed over and said once.
+  - **A run:** `+z*N` on the address and `for z=A..B` after the value, one target per z, at most 64. Each must have
+    the other.
+  - **`*= k`:** multiplies what is there by k, 0 to 65535 with up to four decimals, toward zero, clamped to the
+    width. It is refused on any trigger but `on_map_load`. Each target remembers the map, the address and what it
+    wrote there, so a load that left the word as the patch made it is not multiplied again. Only one case is
+    passed over that would otherwise be written: the same map, with the word equal to what the patch wrote. A
+    reload of a map puts back the disc's word w, so that case means w scaled is w, and the skip gives the same
+    word. Nothing compounds.
+  - **Map 099:** its encounters read a sub-table of their own (fn_800C1A50). A patch through the encounter table's
+    pointer, 0x803474BC, is not applied there, and is said once; one whose conditions name map 099 is refused.
+  - **The log:** an M6 patch applied on a map load logs each target, `address: was -> now`, as the Done asks. The
+    report describes an M6 patch as its line reads, and says why one never applied (a null pointer, map 099, a
+    target it may not write), or that its conditions never held.
+  - `examples/mods/encounter-scale` halves every zone's rate. It is the first use, and the grammar's example;
+    `mods/encounter-rate` stays the player's setting (PLAN-GAMEPLAY-MODS P1).
+- **In the cloud container** [V]:
+  - `compile_runtime.py` compiled all 39 runtime files under gcc, clang and llvm-mingw.
+  - `test_mods.py` is 164 cases, 32 of them new: the eight rates halved, then left alone by a reload that kept them,
+    then halved once by one that reloaded them; each width at its own bytes; clamps, signed and not; the three
+    pass-overs and their report; 27 faults, each refusing the mod; the example's halving. Under gcc and clang, with
+    `test_mod_library.py`: 170 passed each, none skipped.
+  - Seven mutations, each failing its test under gcc, the file restored after:
+    - the memory of what `*=` wrote taken out (the rates halved twice);
+    - no unsigned clamp;
+    - a signed width read as unsigned;
+    - map 099 written;
+    - every width written as a whole word;
+    - the code check on a pointer's target taken out;
+    - `*=` allowed on every trigger.
+- **What the test's numbers showed:** at the third load, zone 4's rate is 0, which halves to the 0 the patch wrote
+  there, so that zone is not written again: 15 log lines over the three loads, not 16. Same word, as above.
+- **Not run, each needing the owner's PC** (the spec's Done):
+  - the eight rate words logged at a real map load, and a peek later in the map agreeing;
+  - on part G at 116a with S3's accelerator, rate × 0 fighting no battles and rate × 1 fighting at least one, with
+    `examples/mods/encounter-scale`'s factor set to each;
+  - the contract: `--link`, the self test, the replay and `title --check`, since `runtime/mod.c` changed. With
+    `SOA_MODS` unset nothing here runs.

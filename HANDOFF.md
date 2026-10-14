@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1521 |
+| Python tests | 1553 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -432,7 +432,7 @@ Done (android-sysroot.md §1.3):
 - time that two-target first run to settle the bar's 60/40 split (FINDINGS "R5c" derives 59/41 from R5b's
   timings);
 - capture the window at 100% and 150% for the review page `build/setup-review/index.html`;
-- run `pytest -p noskip tools/tests/test_setup.py` there, and the whole suite's five configurations (now 1521
+- run `pytest -p noskip tools/tests/test_setup.py` there, and the whole suite's five configurations (now 1553
   tests; TESTING's count table).
 
 The owner's first bless of the words and §1.3's three small questions come after that page. Nothing in R5c
@@ -448,6 +448,10 @@ changed. Everything the 2026-10-09 paragraph below says this PC holds is as it w
     end, the story between the jump points, effect packages beyond the 20 of 576 seen), fixing what breaks;
   - one owner sitting at 60 or 120 Hz that confirms what is built but unchecked.
 - **The cloud session takes the mod framework,** starting with the mod tests' driver building without MSVC.
+  Done (FINDINGS "The mod tests without MSVC"), and M6 built after it (FINDINGS "M6"). M6 changed `runtime/mod.c`,
+  so on this PC: `--link`, the self test, the replay and `title --check` (CLAUDE.md's contract; with `SOA_MODS`
+  unset none of the new code runs). Then M6's game runs: the eight rate words logged at a real map load with
+  `examples/mods/encounter-scale`, a peek agreeing, and part G's rate x0 and x1 (PLAN-60FPS-MODS M6's Done).
 - **Decompilation stays targeted.**
 
 What the owner chooses after the sitting (mods, 60 fps or widescreen) is §0's to record.
