@@ -8222,3 +8222,31 @@ the driver's.** 2026-10-04.
   - the release gate: no release whose Setup shows the box is published before the release APK (D-33). Every draft
     the release workflow makes from now on shows it;
   - R4's run on the Ally X, with the box ticked.
+
+**The mod tests without MSVC.** 2026-10-14.
+
+- **What it is:** the cloud session's first mod-framework step (PLAN-NEXT §0, D-38). Until now `test_mods.py` built
+  its fake guest and every test mod with `toolchain.cl` alone. So 67 of its 73 tests (all but six of its 132 cases)
+  skipped wherever MSVC was absent, on CI's Linux legs among other places. They are now built by the profile
+  `SOA_CC` names, as `test_memguard.py` and `test_mod_library.py` already were:
+  - the driver is compiled, then linked;
+  - each test mod is a shared library (`mod.so` off Windows) against `runtime/soa_mod.h`, exporting its
+    `soa_mod_init` through `SOA_MOD_EXPORT` rather than `__declspec`;
+  - the shipped mods are built by `recompile.py`'s own line for the profile (`mod_dll_command` under MSVC,
+    `gnu_mod_dll_command` otherwise);
+  - every expectation that named `mod.dll` now names the profile's library.
+
+  With `SOA_CC` unset the module builds with MSVC, as before. CI's gcc, clang and ARM64 legs now run it under
+  `noskip`, beside `test_mod_library.py`.
+- **In the cloud container** [V]:
+  - `SOA_CC=gcc`: 132 passed in 8.43 s; `SOA_CC=clang`: 132 passed in 10.78 s. Under `noskip`, the CI step's whole
+    command passed 140 under each.
+  - Two mutations of `runtime/mod.c` each failed under gcc, and the file was restored from git byte for byte after.
+    With the patch parser's alignment refusal removed, two tests failed: that refusal's own case, and one bad mod
+    beside a good one. With the API's alignment check removed, the API's refusal test failed.
+- **What is left to check:** MSVC's builds changed shape with this: the driver in two steps, and the test mods
+  without `/Fo`, since their working folder is already theirs. CI's Windows Tests job builds them with MSVC on
+  GitHub's runner; the owner's PC is the other MSVC check.
+- **Not done:** PLAN-GAMEPLAY-MODS's "Mods in CI" also asks for a compile-time `offsetof` check of every `SoaModApi`
+  member, which is not built. It also asks for a mod built against a frozen v1 header: the two old-header tests strip
+  the latest appends, which comes near that but is not v1.

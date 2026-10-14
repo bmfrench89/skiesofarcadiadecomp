@@ -469,7 +469,10 @@ jobs:
 
       # portability L9: a mod's mod.so through the real loader (the recording
       # names it; one with no soa_mod_init is refused in dlerror's words), and
-      # since L10 each shipped mod built, loaded and switched on; SOA_WAV's
+      # since L10 each shipped mod built, loaded and switched on; since
+      # 2026-10-14 the mod tests' whole fake guest (test_mods.py: patches,
+      # the API's refusals, the callbacks, the filters, call_guest, the
+      # shipped mods' behaviour), which only MSVC used to build; SOA_WAV's
       # file, and soa.ini's search order, built with this leg's compiler; a
       # skip is a failure here
       - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
@@ -477,7 +480,7 @@ jobs:
         env:
           SOA_CC: ${{ matrix.cc }}
           PYTHONPATH: tools/citest
-        run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
+        run: python -m pytest -p noskip tools/tests/test_mods.py tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
 
       # specs/android.md L12a: the seam between the runtime and a split game
       # library -- a game of two functions loaded through the real loader and
@@ -641,7 +644,10 @@ jobs:
 
       # portability L9: a mod's mod.so through the real loader (the recording
       # names it; one with no soa_mod_init is refused in dlerror's words), and
-      # since L10 each shipped mod built, loaded and switched on; SOA_WAV's
+      # since L10 each shipped mod built, loaded and switched on; since
+      # 2026-10-14 the mod tests' whole fake guest (test_mods.py: patches,
+      # the API's refusals, the callbacks, the filters, call_guest, the
+      # shipped mods' behaviour), which only MSVC used to build; SOA_WAV's
       # file, and soa.ini's search order, built with this leg's compiler; a
       # skip is a failure here
       - name: A mod's mod.so, SOA_WAV and soa.ini off Windows, no skips
@@ -649,7 +655,7 @@ jobs:
         env:
           SOA_CC: gcc
           PYTHONPATH: tools/citest
-        run: python -m pytest -p noskip tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
+        run: python -m pytest -p noskip tools/tests/test_mods.py tools/tests/test_mod_library.py tools/tests/test_audio_wav.py "tools/tests/test_settings.py::test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working_directory" -v
 
       # specs/android.md L12a, on AArch64, the machine a phone's library is for
       - name: The seam to a split game library, no skips

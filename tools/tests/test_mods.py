@@ -9,7 +9,9 @@ silently lost a line would be a mod that silently does something else.
 
 These build mod.c on its own with a driver that plays the game's side: a
 fake DOL with one code section, and a script of memory writes and frame ends
-on stdin. That the patches do what they say in the game is a run: FINDINGS
+on stdin. The driver and every test mod are built by the toolchain profile
+SOA_CC names (MSVC when it is unset; gcc and clang on CI's Linux legs, where
+a mod's library is mod.so), so they run wherever runtime/mod.c does. That the patches do what they say in the game is a run: FINDINGS
 "M1" records the encounters-off pair.
 """
 
@@ -22,9 +24,21 @@ from pathlib import Path
 
 import pytest
 
-from test_memguard import needs_msvc
+import test_memguard  # noqa: F401  (it puts tools/ on the path)
+from soa import toolchain  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# The compiler the fake guest and the test mods are built with: SOA_CC's
+# profile, MSVC when it is unset. Until 2026-10-14 these were MSVC's alone,
+# so 67 of them ran on Windows only; a mod's library is mod.so off Windows.
+PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
+needs_cc = pytest.mark.skipif(
+    toolchain.compiler_path(PROFILE) is None,
+    reason=f"no {PROFILE.name}: the fake guest cannot be built here",
+)
+LIB = "mod.dll" if os.name == "nt" or PROFILE.name == "mingw" else "mod.so"
+SHARED = ["/LD"] if PROFILE.style == "msvc" else ["-shared", "-fPIC"]
 
 TEXT_START, TEXT_LEN = 0x80003100, 0x1000
 
@@ -191,34 +205,52 @@ def fake_dol() -> bytes:
     return bytes(head) + bytes(range(256)) * 17
 
 
-def build_driver(tmp_path_factory, *defines: str):
-    from soa import toolchain
+def cc(args: list[str], cwd: Path) -> None:
+    """PROFILE's compiler, the arguments in cl's grammar (toolchain.cc)."""
+    proc = toolchain.cc(args, cwd, PROFILE)
+    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
 
-    if toolchain.cl_path() is None:
-        pytest.skip("no MSVC")
+
+def build_driver(tmp_path_factory, *defines: str):
+    """The fake guest: mod.c and what it needs, with DRIVER as the game.
+    Compiled, then linked, since cl's one-step /Fo<dir> has no gcc spelling."""
+    if toolchain.compiler_path(PROFILE) is None:
+        pytest.skip(f"no {PROFILE.name}")
     out = tmp_path_factory.mktemp("mods")
     (out / "driver.c").write_text(DRIVER, encoding="utf-8")
-    exe = out / "mods.exe"
-    proc = toolchain.cl(
-        [
-            *toolchain.CFLAGS,
-            *[f"/D{d}" for d in defines],
-            "/I",
-            str(ROOT / "runtime"),
-            str(ROOT / "runtime" / "mod.c"),
-            str(ROOT / "runtime" / "sha1.c"),  # disc-layer I1
-            str(ROOT / "runtime" / "tick.c"),
-            *map(str, toolchain.runtime_support_sources()),  # plat.c (portability L9)
-            str(out / "driver.c"),
-            "/Fo" + str(out) + os.sep,
-            "/Fe" + str(exe),
-        ],
-        cwd=out,
-    )
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    runtime = ROOT / "runtime"
+    sources = [
+        runtime / "mod.c",
+        runtime / "sha1.c",  # disc-layer I1
+        runtime / "tick.c",
+        *toolchain.runtime_support_sources(),  # plat.c (portability L9)
+        out / "driver.c",
+    ]
+    flags = [*PROFILE.cflags, *(f"/D{d}" for d in defines), "/I", str(runtime)]
+    cc([*flags, "/c", *map(str, sources), "/Fo" + str(out) + os.sep], out)
+    exe = out / ("mods" + PROFILE.exeext)
+    objs = [str(out / (s.stem + PROFILE.objext)) for s in sources]
+    cc([*PROFILE.cflags, *objs, "/Fe" + str(exe), *PROFILE.linker], out)
     dol = out / "fake.dol"
     dol.write_bytes(fake_dol())
     return exe, dol
+
+
+def library(folder: Path, source: Path, *defines: str, include: Path = ROOT / "runtime") -> None:
+    """`source` built as a mod's library in `folder`, against the soa_mod.h in
+    `include`, with `defines` as /D switches."""
+    cc(
+        [
+            *PROFILE.cflags,
+            *SHARED,
+            "/I",
+            str(include),
+            *(f"/D{x}" for x in defines),
+            str(source),
+            "/Fe" + str(folder / LIB),
+        ],
+        folder,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -261,7 +293,7 @@ def play(driver, mods: Path, script: str = "", **env_set) -> tuple[str, str]:
     return proc.stdout, proc.stderr
 
 
-@needs_msvc
+@needs_cc
 def test_a_good_mod_loads_and_says_so(driver, tmp_path):
     mod(tmp_path, "encounters-off")
     out, err = play(driver, tmp_path)
@@ -269,7 +301,7 @@ def test_a_good_mod_loads_and_says_so(driver, tmp_path):
     assert "[mod] loaded encounters-off" in err and "1 patch(es)" in err, err
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "line, why",
     [
@@ -309,7 +341,7 @@ def test_each_fault_refuses_the_whole_mod_out_loud(driver, tmp_path, line, why):
     assert "80346D28=00001234" in out, out
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "ini, why",
     [
@@ -331,7 +363,7 @@ def test_a_bad_mod_ini_is_refused(driver, tmp_path, ini, why):
     assert "loaded 0" in out and why in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_the_sha1_is_the_dol_s(driver, tmp_path):
     """What the refusal quotes is the real SHA-1 of the bytes booted, so a mod
     author can copy it; hashlib agrees with mod.c's own implementation."""
@@ -343,7 +375,7 @@ def test_the_sha1_is_the_dol_s(driver, tmp_path):
     assert "loaded 1" in out, err
 
 
-@needs_msvc
+@needs_cc
 def test_no_patches_and_an_empty_list_are_refused(driver, tmp_path):
     mod(tmp_path / "a", "m", patches=None)
     out, err = play(driver, tmp_path / "a")
@@ -353,7 +385,7 @@ def test_no_patches_and_an_empty_list_are_refused(driver, tmp_path):
     assert "loaded 0" in out and "no patches in it" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_one_bad_mod_does_not_take_a_good_one_with_it(driver, tmp_path):
     mod(tmp_path, "b-good")
     mod(tmp_path, "a-bad", patches="every_frame 0x80346d29 = 0\n")
@@ -366,7 +398,7 @@ def test_one_bad_mod_does_not_take_a_good_one_with_it(driver, tmp_path):
     assert "describe [mods=b-good:" in out and ",c-good:" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_every_frame_applies_only_while_its_conditions_hold(driver, tmp_path):
     mod(tmp_path, "m")
     script = """
@@ -386,7 +418,7 @@ def test_every_frame_applies_only_while_its_conditions_hold(driver, tmp_path):
     assert "every_frame 80346D28 = 00000000 applied 2 time(s), first at frame 1" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_once_applies_the_first_frame_its_conditions_hold(driver, tmp_path):
     mod(tmp_path, "m", patches="once 0x80346d28 = 0x186a0 when state=8\n")
     script = """
@@ -399,7 +431,7 @@ def test_once_applies_the_first_frame_its_conditions_hold(driver, tmp_path):
     assert got == ["80346D28=00000000", "80346D28=000186A0", "80346D28=00000007"]
 
 
-@needs_msvc
+@needs_cc
 def test_on_map_load_fires_on_every_load_of_its_map(driver, tmp_path):
     """Keyed on the committed map (0x80311AC0, letter byte at 0x80311AC8),
     once the field is running after a load: the reload after a battle puts
@@ -433,14 +465,14 @@ def test_on_map_load_fires_on_every_load_of_its_map(driver, tmp_path):
     assert got == ["0", "1", "0", "0", "1", "0", "1"], out
 
 
-@needs_msvc
+@needs_cc
 def test_a_patch_that_never_applied_says_so(driver, tmp_path):
     mod(tmp_path, "m", patches="every_frame 0x80346d28 = 0 when scene=99\n")
     out, err = play(driver, tmp_path, "frame frame report")
     assert "never applied: its conditions never held" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_folder_that_is_not_there_says_so(driver, tmp_path):
     out, err = play(driver, tmp_path / "nope")
     assert "loaded 0" in out and "is not a folder this port can read" in err, err
@@ -563,7 +595,7 @@ static void hostfe(void* u) { (void)u; snprintf(b, sizeof b, "host %X", A->host_
 static void pf(void* u, uint32_t frame, SoaPad* p) { (void)u; if (frame >= 10) p->buttons &= ~SOA_PAD_START; }
 #endif
 
-__declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
+SOA_MOD_EXPORT int INIT(const SoaModApi* api, uint32_t version)
 {
     uint32_t v = 0;
     uint8_t c = 0;
@@ -624,29 +656,14 @@ __declspec(dllexport) int INIT(const SoaModApi* api, uint32_t version)
 
 
 def dll(tmp_path: Path, name: str, *defines: str, patches: str | None = None) -> Path:
-    """A mod folder holding mod.ini and a mod.dll built from DLL_SOURCE."""
-    from soa import toolchain
-
+    """A mod folder holding mod.ini and a library built from DLL_SOURCE."""
     d = mod(tmp_path, name, patches=patches)
     (d / "mod_src.c").write_text(DLL_SOURCE, encoding="utf-8")
-    proc = toolchain.cl(
-        [
-            *toolchain.CFLAGS,
-            "/LD",
-            "/I",
-            str(ROOT / "runtime"),
-            *(f"/D{x}" for x in defines),
-            str(d / "mod_src.c"),
-            "/Fo" + str(d) + os.sep,
-            "/Fe" + str(d / "mod.dll"),
-        ],
-        cwd=d,
-    )
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    library(d, d / "mod_src.c", *defines)
     return d
 
 
-@needs_msvc
+@needs_cc
 def test_a_mod_dll_loads_and_the_api_refuses_what_a_patch_would(driver, tmp_path):
     """The same refusals as a patches.txt line, made at the call: code,
     the hardware window, unaligned, outside RAM, a bulk write over code.
@@ -654,7 +671,7 @@ def test_a_mod_dll_loads_and_the_api_refuses_what_a_patch_would(driver, tmp_path
     dll(tmp_path, "native")
     out, err = play(driver, tmp_path, "get 80346D20")
     assert "loaded 1" in out, err
-    assert "loaded native (" in err and "and mod.dll" in err, err
+    assert "loaded native (" in err and f"and {LIB}" in err, err
     assert "[mod] native: init version 1 size " in err, err
     assert "[mod] native: refusals 000000" in err, err
     assert "[mod] native: bytes 11 float 3FC00000 1.50" in err, err
@@ -662,7 +679,7 @@ def test_a_mod_dll_loads_and_the_api_refuses_what_a_patch_would(driver, tmp_path
     assert "80346D20=11223344" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_the_callbacks_fire_where_they_say(driver, tmp_path):
     """on_frame_end from the frame hook; on_safe_point, a scene change, and a
     map load -- the field running after a load state -- from the top of the
@@ -692,10 +709,10 @@ def test_the_callbacks_fire_where_they_say(driver, tmp_path):
     assert "[mod] native: scene 6 -> 7" in err and "[mod] native: scene 7 -> 6" in err, err
     assert err.count("[mod] native: safe point") == 6, err
     assert "[mod] the safe point saw 2 map load(s)" in err, err
-    assert "[mod] native mod.dll: 4 callback(s)" in err, err
+    assert f"[mod] native {LIB}: 4 callback(s)" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_dll_that_refuses_itself_takes_its_callbacks_and_patches_with_it(driver, tmp_path):
     dll(tmp_path, "shy", "RC=3", patches=PATCH)
     out, err = play(driver, tmp_path, "set 803475cc 6 set 80346d28 1234 frame safe get 80346d28")
@@ -704,51 +721,37 @@ def test_a_dll_that_refuses_itself_takes_its_callbacks_and_patches_with_it(drive
     assert "80346D28=00001234" in out and "safe point" not in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_dll_without_the_export_is_refused(driver, tmp_path):
     dll(tmp_path, "mute", "INIT=something_else")
     out, err = play(driver, tmp_path)
     assert "loaded 0" in out and "it exports no soa_mod_init" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_dll_mod_is_named_in_the_recording_with_its_bytes(driver, tmp_path):
     """The hash covers mod.dll, so a rebuilt DLL is a different mod to a
     recording made with the old one."""
     d = dll(tmp_path, "native")
     first, _ = play(driver, tmp_path, "describe")
-    (d / "mod.dll").write_bytes((d / "mod.dll").read_bytes() + b"\0")
+    (d / LIB).write_bytes((d / LIB).read_bytes() + b"\0")
     second, _ = play(driver, tmp_path, "describe")
     h1 = first.split("describe [mods=native:")[1][:8]
     h2 = second.split("describe [mods=native:")[1][:8]
     assert h1 != h2, (first, second)
 
 
-@needs_msvc
+@needs_cc
 def test_the_example_dll_builds_and_loads(driver, tmp_path):
     """examples/mods/map-log is the template a mod author copies: it has to
     build against runtime/soa_mod.h and load under this port."""
-    from soa import toolchain
-
     d = tmp_path / "map-log"
     d.mkdir()
     ini = (ROOT / "examples" / "mods" / "map-log" / "mod.ini").read_text(encoding="utf-8")
     (d / "mod.ini").write_text(
         ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
     )
-    proc = toolchain.cl(
-        [
-            *toolchain.CFLAGS,
-            "/LD",
-            "/I",
-            str(ROOT / "runtime"),
-            str(ROOT / "examples" / "mods" / "map-log" / "mod.c"),
-            "/Fo" + str(d) + os.sep,
-            "/Fe" + str(d / "mod.dll"),
-        ],
-        cwd=d,
-    )
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    library(d, ROOT / "examples" / "mods" / "map-log" / "mod.c")
     script = (
         "set 803475cc 6 set 80311aec 3 safe set 80311aec 8 set 80311ac0 74 setb 80311ac8 61 safe"
     )
@@ -757,7 +760,7 @@ def test_the_example_dll_builds_and_loads(driver, tmp_path):
     assert "[mod] map-log: map-log loaded" in err and "[mod] map-log: entered a116a" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_pad_filter_changes_what_the_game_reads(driver, tmp_path):
     """The filter sees each read with its frame and may change it: this one
     drops START from frame 10 and leaves A alone. si.c calls it after the
@@ -769,7 +772,7 @@ def test_a_pad_filter_changes_what_the_game_reads(driver, tmp_path):
     assert "3 controller read(s)" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_without_a_filter_si_c_is_never_handed_one(driver, tmp_path):
     """A mod that registers none leaves the read path exactly as it was."""
     dll(tmp_path, "native")
@@ -777,7 +780,7 @@ def test_without_a_filter_si_c_is_never_handed_one(driver, tmp_path):
     assert "pad 20 1100 unfiltered" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_a_projection_filter_sees_each_projection_and_may_change_it(driver, tmp_path):
     """gxr.c hands over GXSetProjection's six parameters once per new
     projection; this filter widens the 3D view and leaves the 2D layer,
@@ -794,14 +797,14 @@ def test_a_projection_filter_sees_each_projection_and_may_change_it(driver, tmp_
     assert "2 projection(s)" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_without_a_projection_filter_gxr_c_is_never_handed_one(driver, tmp_path):
     dll(tmp_path, "native")
     out, _ = play(driver, tmp_path, "proj 0 1.5 0 2 0 -1 -0.1")
     assert "proj 1.5000 0.0000 2.0000 0.0000 -1.0000 -0.1000 unfiltered" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_a_texture_provider_replaces_by_source_hash(driver, tmp_path):
     """Asked once per decode with the source hash -- the cache's key, stable
     from run to run -- it replaces the textures it knows and leaves the rest;
@@ -813,7 +816,7 @@ def test_a_texture_provider_replaces_by_source_hash(driver, tmp_path):
     assert "2 texture(s)" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_among_providers_the_first_that_answers_wins(driver, tmp_path):
     """Mods load in folder order, and the first provider to answer 1 is the
     one whose image is used; a later one is not asked."""
@@ -822,11 +825,11 @@ def test_among_providers_the_first_that_answers_wins(driver, tmp_path):
     out, err = play(driver, tmp_path, "tex 42 4 4 report")
     assert "tex replaced 2x2 first 640000FF" in out, out
     assert (
-        "[mod] b-pack mod.dll:" in err and "0 texture(s)" in err.split("[mod] b-pack mod.dll:")[1]
+        f"[mod] b-pack {LIB}:" in err and "0 texture(s)" in err.split(f"[mod] b-pack {LIB}:")[1]
     ), err
 
 
-@needs_msvc
+@needs_cc
 def test_without_a_provider_the_renderer_is_never_handed_one(driver, tmp_path):
     dll(tmp_path, "native")
     out, _ = play(driver, tmp_path, "tex 42 4 4")
@@ -838,7 +841,7 @@ def test_without_a_provider_the_renderer_is_never_handed_one(driver, tmp_path):
 # --------------------------------------------------------------------------
 
 
-@needs_msvc
+@needs_cc
 def test_a_callback_registered_after_init_is_refused(driver, tmp_path):
     """The dispatchers are wired when loading ends, so a later registration
     would be accepted and never called; now it returns 0, and the filter it
@@ -849,7 +852,7 @@ def test_a_callback_registered_after_init_is_refused(driver, tmp_path):
     assert "pad 5 1100 unfiltered" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_a_line_too_long_to_read_whole_is_refused(driver, tmp_path):
     """Cut at 511 characters, `state=18` would read as `state=1`."""
     long_line = "every_frame 0x80346d28 = 0 when scene=6" + " " * 480 + "state=18\n"
@@ -858,7 +861,7 @@ def test_a_line_too_long_to_read_whole_is_refused(driver, tmp_path):
     assert "loaded 0" in out and "patches.txt:1: a line longer than 511 characters" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_folder_the_table_cannot_hold_is_named(driver, tmp_path):
     name = "a" * 70
     mod(tmp_path, name)
@@ -867,7 +870,7 @@ def test_a_folder_the_table_cannot_hold_is_named(driver, tmp_path):
     assert f"{name}: a mod's folder name has to be under 64 characters; not read" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_mods_past_the_recording_line_are_counted_not_cut(driver, tmp_path):
     """The config line keeps whole entries and names the rest as a count and
     one hash, never a folder name with half a hash."""
@@ -883,7 +886,7 @@ def test_mods_past_the_recording_line_are_counted_not_cut(driver, tmp_path):
     assert count == f"+{12 - len(whole)} more" and len(digest) == 8, line
 
 
-@needs_msvc
+@needs_cc
 def test_an_image_too_large_is_refused_and_the_next_provider_asked(driver, tmp_path):
     dll(tmp_path, "a-huge", "TEX=100", "BIG")
     dll(tmp_path, "b-pack", "TEX=200")
@@ -897,7 +900,7 @@ def test_an_image_too_large_is_refused_and_the_next_provider_asked(driver, tmp_p
 # --------------------------------------------------------------------------
 
 
-@needs_msvc
+@needs_cc
 def test_call_guest_runs_at_a_safe_point_and_puts_every_register_back(driver, tmp_path):
     """From a safe-point callback the game's function runs with the
     arguments in r3 and r4 and its answer comes back; what it clobbered --
@@ -909,7 +912,7 @@ def test_call_guest_runs_at_a_safe_point_and_puts_every_register_back(driver, tm
     assert "r14 14141414 gqr3 00000000 f14 0.0" in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_call_guest_is_refused_everywhere_else(driver, tmp_path):
     """In soa_mod_init, at a frame end (inside the XFB copy), and at an
     address that is not the start of a function -- which dispatched would
@@ -924,14 +927,14 @@ def test_call_guest_is_refused_everywhere_else(driver, tmp_path):
     assert "dispatch of" not in out, out
 
 
-@needs_msvc
+@needs_cc
 def test_call_guest_refuses_when_r2_and_r13_are_not_the_games(driver, tmp_path):
     dll(tmp_path, "caller", "CALL")
     _, err = play(driver, tmp_path, "safe")
     assert "call at safe point 0" in err and "are not the game's 80350000 and 8034E720" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_call_guest_is_refused_inside_an_interrupt_handler(driver, tmp_path):
     """A safe point reached while a handler runs is not a point where the
     game's code may be called: the handler owns the registers."""
@@ -949,7 +952,7 @@ def test_call_guest_is_refused_inside_an_interrupt_handler(driver, tmp_path):
 V2 = f"manifest = 2\nid = enc\nversion = 1.2\nname = Enc\nauthors = someone\napi = 1\ndol_sha1 = {SHA}\n"
 
 
-@needs_msvc
+@needs_cc
 def test_a_manifest_2_mod_loads_and_the_recording_names_it_by_id(driver, tmp_path):
     mod(tmp_path, "some-folder", ini=V2)
     mod(tmp_path, "v1-folder")
@@ -962,7 +965,7 @@ def test_a_manifest_2_mod_loads_and_the_recording_names_it_by_id(driver, tmp_pat
     assert line.startswith("describe [mods=enc@1.2:") and ",v1-folder:" in line, line
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "ini, why",
     [
@@ -1012,7 +1015,7 @@ def test_a_bad_manifest_2_is_refused(driver, tmp_path, ini, why):
     assert "loaded 0" in out and why in err and "the mod is not loaded" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_an_x_key_is_noted_and_the_mod_loads(driver, tmp_path):
     """A key a later port may define: this one says it does not know it and
     loads the mod; a misspelled key without the prefix still refuses it."""
@@ -1022,7 +1025,7 @@ def test_an_x_key_is_noted_and_the_mod_loads(driver, tmp_path):
     assert "mod.ini:8: `x_homepage` is not a key this port knows" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_two_mods_with_one_id_the_second_is_refused_and_names_the_first(driver, tmp_path):
     mod(tmp_path, "a-first", ini=V2)
     mod(tmp_path, "b-second", ini=V2.replace("version = 1.2", "version = 2.0"))
@@ -1059,7 +1062,7 @@ def driver_api2(tmp_path_factory):
     return build_driver(tmp_path_factory, "MOD_API=2")
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize("need, loads", [("1", True), ("2", True), ("3", False)])
 def test_api_is_the_least_the_mod_needs(driver_api2, tmp_path, need, loads):
     mod(tmp_path, "m", ini=V2.replace("api = 1", f"api = {need}"))
@@ -1069,14 +1072,14 @@ def test_api_is_the_least_the_mod_needs(driver_api2, tmp_path, need, loads):
         assert "api = 3, and this port speaks api 2" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_manifest_2_without_api_is_told_what_is_missing(driver, tmp_path):
     mod(tmp_path, "m", ini=V2.replace("api = 1\n", ""))
     out, err = play(driver, tmp_path)
     assert "loaded 0" in out and "no `api = `" in err and "no `api = 1`" not in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_manifest_2_mod_past_the_recording_line_is_keyed_by_id_not_folder(driver, tmp_path):
     """The `+N more` hash takes each mod by the name the line would have
     given it: renaming the folder of a manifest 2 mod that did not fit --
@@ -1114,7 +1117,6 @@ def shipped(tmp_path: Path, source: str | None = None, folder: Path = ENC) -> Pa
     line --link uses, into a folder whose mod.ini pins the fake DOL -- or,
     given `source`, a mutation of it."""
     import recompile
-    from soa import toolchain
 
     d = tmp_path / folder.name
     d.mkdir(parents=True)
@@ -1124,8 +1126,10 @@ def shipped(tmp_path: Path, source: str | None = None, folder: Path = ENC) -> Pa
     )
     src = d / "mod.c"
     src.write_text(source or (folder / "mod.c").read_text(encoding="utf-8"), encoding="utf-8")
-    proc = toolchain.cl(recompile.mod_dll_command(src), cwd=d)
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    if PROFILE.style == "msvc":
+        cc(recompile.mod_dll_command(src), d)
+    else:
+        cc(recompile.gnu_mod_dll_command(PROFILE, src, d), d)
     return d
 
 
@@ -1139,7 +1143,7 @@ def multipliers(out: str) -> list[int]:
 
 
 def writes(err: str) -> int:
-    line = next(ln for ln in err.splitlines() if "encounter-rate mod.dll:" in ln)
+    line = next(ln for ln in err.splitlines() if f"encounter-rate {LIB}:" in ln)
     return int(line.rsplit(";", 1)[1].split()[0])
 
 
@@ -1154,7 +1158,7 @@ def test_every_shipped_mod_is_built_by_link():
     )
 
 
-@needs_msvc
+@needs_cc
 def test_encounter_rate_unset_writes_nothing(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(driver, tmp_path, FIELD + "frame " * 100 + BYTE + "report")
@@ -1164,7 +1168,7 @@ def test_encounter_rate_unset_writes_nothing(driver, tmp_path):
     assert writes(err) == 0 and multipliers(out) == [0], (out, err)
 
 
-@needs_msvc
+@needs_cc
 def test_encounter_rate_presets_without_an_accessory(driver, tmp_path):
     shipped(tmp_path)
     for preset, want in (("half", 25), ("double", 100), ("off", 0)):
@@ -1178,7 +1182,7 @@ def test_encounter_rate_presets_without_an_accessory(driver, tmp_path):
         assert writes(err) == 1, (preset, err)
 
 
-@needs_msvc
+@needs_cc
 def test_encounter_rate_works_from_the_accessory_as_the_game_does(driver, tmp_path):
     """Base is the effect-84 value of the last character whose accessory has
     one: 210 on character 0 gives 100, and 211 on character 1 after it 5."""
@@ -1196,7 +1200,7 @@ def test_encounter_rate_works_from_the_accessory_as_the_game_does(driver, tmp_pa
     assert multipliers(out) == [2] and "base 5 (character 1's accessory 211)" in err, (out, err)
 
 
-@needs_msvc
+@needs_cc
 def test_encounter_rate_writes_only_in_the_field(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(
@@ -1214,7 +1218,7 @@ HOLD = (
 )
 
 
-@needs_msvc
+@needs_cc
 def test_hold_b_at_normal_writes_zero_then_puts_the_game_s_value_back_once(driver, tmp_path):
     """Thirty frames with B held read 0; the first frame after B is let go
     writes the game's own 0xFF, and after that nothing more is written."""
@@ -1224,14 +1228,14 @@ def test_hold_b_at_normal_writes_zero_then_puts_the_game_s_value_back_once(drive
     assert writes(err) == 31, err
 
 
-@needs_msvc
+@needs_cc
 def test_hold_b_restores_the_accessory_s_value_not_ff(driver, tmp_path):
     shipped(tmp_path)
     out, _ = play(driver, tmp_path, ACC_210 + HOLD.replace("setb 8030b7ad ff", "setb 8030b7ad 64"))
     assert multipliers(out)[30:] == [0x64] * 5, out
 
 
-@needs_msvc
+@needs_cc
 def test_hold_b_off_leaves_the_controller_alone(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(driver, tmp_path, HOLD + "report", SOA_ENCOUNTERS_HOLD_B="0")
@@ -1239,7 +1243,7 @@ def test_hold_b_off_leaves_the_controller_alone(driver, tmp_path):
     assert "holding B keeps them away off" in err and writes(err) == 0, err
 
 
-@needs_msvc
+@needs_cc
 def test_a_preset_the_mod_does_not_know_is_the_game_s_rate(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(driver, tmp_path, FIELD + "frame " + BYTE + "report", SOA_ENCOUNTERS="HALF")
@@ -1247,7 +1251,7 @@ def test_a_preset_the_mod_does_not_know_is_the_game_s_rate(driver, tmp_path):
     assert writes(err) == 0 and multipliers(out) == [0], (out, err)
 
 
-@needs_msvc
+@needs_cc
 def test_the_mutations_fail_the_checks(driver, tmp_path):
     """The spec's two mutations: halving the byte read back instead of base
     compounds frame on frame (50, 25, 12, ...), and a build without the
@@ -1306,7 +1310,7 @@ def pressed(out: str) -> list[int]:
     return got
 
 
-@needs_msvc
+@needs_cc
 def test_autotext_presses_a_once_per_complete_page_after_the_delay(driver, tmp_path):
     """State 4 and no flags: the wait starts at the first read, and 45
     frames on (SOA_AUTOTEXT=on) A goes down for two frames and up for two;
@@ -1319,7 +1323,7 @@ def test_autotext_presses_a_once_per_complete_page_after_the_delay(driver, tmp_p
     assert "[mod] autotext: frame 108 page advanced after 45 frames" in err, err
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "state, flags, task",
     [
@@ -1337,7 +1341,7 @@ def test_autotext_never_presses_where_the_game_decides(driver, tmp_path, state, 
     assert pressed(out) == [], pressed(out)
 
 
-@needs_msvc
+@needs_cc
 def test_autotext_leaves_a_page_the_person_pressed_on(driver, tmp_path):
     shipped(tmp_path, folder=AUTO)
     script = window(4) + reads(1, 5) + reads(6, 6, 0x0100) + reads(7, 60)
@@ -1345,7 +1349,7 @@ def test_autotext_leaves_a_page_the_person_pressed_on(driver, tmp_path):
     assert pressed(out) == [6], pressed(out)  # theirs, and no press of the mod's
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize("value", ["0", "", "soon"])
 def test_autotext_off_never_presses(driver, tmp_path, value):
     shipped(tmp_path, folder=AUTO)
@@ -1355,7 +1359,7 @@ def test_autotext_off_never_presses(driver, tmp_path, value):
         assert "SOA_AUTOTEXT=soon is not 0, 1, on or a number of frames" in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_autotext_mutations_fail_the_checks(driver, tmp_path):
     """Without the flags guard it presses on a page the game turns itself;
     the test switch presses in a choice box."""
@@ -1376,7 +1380,7 @@ def test_autotext_mutations_fail_the_checks(driver, tmp_path):
     assert pressed(out) == [11, 12], pressed(out)
 
 
-@needs_msvc
+@needs_cc
 def test_host_buttons_reach_a_mod_as_si_gives_them(driver, tmp_path):
     """host_buttons (CH1) is si.c's g_host, through the setter main.c calls:
     here a stub the driver's `host` command sets."""
@@ -1389,11 +1393,10 @@ def test_host_buttons_reach_a_mod_as_si_gives_them(driver, tmp_path):
     ], err
 
 
-@needs_msvc
+@needs_cc
 def test_a_mod_built_against_the_header_before_host_buttons_still_loads(driver, tmp_path):
     """The table grows only at the end: map-log built against soa_mod.h as it
     was before CH1 appended host_buttons loads and runs on this port."""
-    from soa import toolchain
 
     header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
     start = header.index("    /* Appended (CH1).")
@@ -1411,19 +1414,7 @@ def test_a_mod_built_against_the_header_before_host_buttons_still_loads(driver, 
     (d / "mod.ini").write_text(
         ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
     )
-    proc = toolchain.cl(
-        [
-            *toolchain.CFLAGS,
-            "/LD",
-            "/I",
-            str(inc),
-            str(ROOT / "examples" / "mods" / "map-log" / "mod.c"),
-            "/Fo" + str(d) + os.sep,
-            "/Fe" + str(d / "mod.dll"),
-        ],
-        cwd=d,
-    )
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    library(d, ROOT / "examples" / "mods" / "map-log" / "mod.c", include=inc)
     out, err = play(driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe")
     assert "loaded 1" in out and "[mod] map-log: map-log loaded" in err, (out, err)
 
@@ -1432,7 +1423,7 @@ def skipping(state: int, flags: int = 0) -> str:
     return window(state, flags) + "host 1 "
 
 
-@needs_msvc
+@needs_cc
 def test_hold_to_skip_presses_in_states_3_and_4_while_lb_is_held(driver, tmp_path):
     """P11b: with the host LB held, A on the two-on, two-off cadence in state 3
     (text appearing) and 4 (a complete page) -- at once, not after the
@@ -1456,7 +1447,7 @@ def test_hold_to_skip_presses_in_states_3_and_4_while_lb_is_held(driver, tmp_pat
     assert pressed(out)[6:] == [], pressed(out)
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "state, flags", [(6, 0x10), (4, 0x10), (4, 0x40), (3, 0x40), (8, 0), (1, 0)]
 )
@@ -1466,7 +1457,7 @@ def test_hold_to_skip_never_presses_where_the_game_decides(driver, tmp_path, sta
     assert pressed(out) == [], pressed(out)
 
 
-@needs_msvc
+@needs_cc
 def test_without_lb_it_only_auto_advances(driver, tmp_path):
     shipped(tmp_path, folder=AUTO)
     out, err = play(
@@ -1702,7 +1693,7 @@ if __name__ == "__main__":
     sys.exit("usage: python tools/tests/test_mods.py p11b <log> | p10b <log> <pad recording>")
 
 
-@needs_msvc
+@needs_cc
 def test_read_pad_gives_port_2_and_nothing_else(driver, tmp_path):
     """read_pad (P10a) is si.c's port 2 through the setter main.c calls: here
     the driver's stub. Ports 1 and 3 answer 0; with nothing on port 2, 2 does."""
@@ -1712,10 +1703,9 @@ def test_read_pad_gives_port_2_and_nothing_else(driver, tmp_path):
     assert got == ["read_pad 1:0 3:0 2:0 0000", "read_pad 1:0 3:0 2:1 1100"], err
 
 
-@needs_msvc
+@needs_cc
 def test_a_mod_built_before_read_pad_still_loads(driver, tmp_path):
     """map-log built against soa_mod.h without the read_pad append loads."""
-    from soa import toolchain
 
     header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
     start = header.index("    /* Appended (P10a).")
@@ -1733,19 +1723,7 @@ def test_a_mod_built_before_read_pad_still_loads(driver, tmp_path):
     (d / "mod.ini").write_text(
         ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
     )
-    proc = toolchain.cl(
-        [
-            *toolchain.CFLAGS,
-            "/LD",
-            "/I",
-            str(inc),
-            str(ROOT / "examples" / "mods" / "map-log" / "mod.c"),
-            "/Fo" + str(d) + os.sep,
-            "/Fe" + str(d / "mod.dll"),
-        ],
-        cwd=d,
-    )
-    assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+    library(d, ROOT / "examples" / "mods" / "map-log" / "mod.c", include=inc)
     out, err = play(driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe")
     assert "loaded 1" in out and "[mod] map-log: map-log loaded" in err, (out, err)
 
@@ -1768,7 +1746,7 @@ def buttons_read(out: str) -> dict[int, int]:
     return got
 
 
-@needs_msvc
+@needs_cc
 def test_coop_follows_the_member_and_phase_words(driver, tmp_path):
     """SOA_COOP=1: on slot 0's turn port 1's own A reaches the game; from
     slot 1's turn the game reads pad 2 -- neutral while pad 2 still holds
@@ -1809,7 +1787,7 @@ def test_coop_follows_the_member_and_phase_words(driver, tmp_path):
     assert err.count(" forwarded") == 1, err
 
 
-@needs_msvc
+@needs_cc
 def test_coop_handover_holds_neutral_while_the_incoming_pad_holds_a(driver, tmp_path):
     """The turn passes to pad 2 with its A down, a thumb resting on it: the
     game reads neutral until a read with every button up, and only the next
@@ -1838,7 +1816,7 @@ def test_coop_handover_holds_neutral_while_the_incoming_pad_holds_a(driver, tmp_
     assert pressed(out)[:1] == [6], pressed(out)
 
 
-@needs_msvc
+@needs_cc
 def test_coop_without_pad_2_port_1_plays_everyone(driver, tmp_path):
     shipped(tmp_path, folder=COOP)
     out, err = play(driver, tmp_path, turn(1, 1) + reads(1, 3, 0x0100), SOA_COOP="1")
@@ -1846,7 +1824,7 @@ def test_coop_without_pad_2_port_1_plays_everyone(driver, tmp_path):
     assert err.count("pad 2 is not connected: port 1 plays every member") == 1, err
 
 
-@needs_msvc
+@needs_cc
 @pytest.mark.parametrize(
     "value, told",
     [
@@ -1864,7 +1842,7 @@ def test_coop_off_or_refused_never_filters(driver, tmp_path, value, told):
     assert told in err, err
 
 
-@needs_msvc
+@needs_cc
 def test_coop_forwards_all_of_pad_2_and_holds_it_all_neutral(driver, tmp_path):
     """Sticks and triggers too: during a handover's hold the game reads all of
     the pad neutral, so port 1's stick cannot turn the next member's wheel;
@@ -1896,7 +1874,7 @@ def test_coop_forwards_all_of_pad_2_and_holds_it_all_neutral(driver, tmp_path):
     assert reads_of(tmp_path / "c")[1] != want[1]
 
 
-@needs_msvc
+@needs_cc
 def test_coop_only_in_a_battle(driver, tmp_path):
     """Outside scene 7 the phase and member words are leftovers: reading as
     slot 1's party input in the field (scene 6), port 1 keeps its own pad.
