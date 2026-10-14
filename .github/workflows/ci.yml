@@ -375,6 +375,16 @@ jobs:
           SOA_CC: ${{ runner.os == 'Linux' && 'gcc' || 'msvc' }}
         run: python -m pytest -p noskip tools/tests/test_android_sysroot.py tools/tests/test_android_build.py -v
 
+      # R5c: Setup.exe, built by this llvm-mingw as the package builds it, and
+      # its Android box -- the command line Build starts, the bar over a
+      # recorded two-target run, the status for each row of the spec's table,
+      # the space -- with R4's checks, which until now ran only in release.yml
+      - name: Setup.exe and its Android box, no skips
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        env:
+          PYTHONPATH: tools/citest
+        run: python -m pytest -p noskip tools/tests/test_setup.py -v
+
   # The same checks under gcc and clang on Linux (portability.md 3.12, L4b).
   # These are the first runs of plat.h's POSIX half -- pthread_create, the
   # futex wait and CLOCK_MONOTONIC -- and of the native twins on a host where

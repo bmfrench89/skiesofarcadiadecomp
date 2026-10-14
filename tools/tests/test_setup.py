@@ -10,6 +10,14 @@ tools/package.py's own build, with llvm-mingw and the manifest; two builds of
 one source are one file. These skip, saying why, without llvm-mingw or off
 Windows. What no test here reaches -- the window, its build and Play with no
 console window -- is FINDINGS "R4"'s run.
+
+R5c (specs/android-sysroot.md 1.3) adds the Android box, and three windows
+onto it: --show-build prints the command line Build would start, --bar reads
+a run's [build] lines on stdin and prints where each puts the bar, then the
+status the window would end on, and --assume-free sets the free space
+--check sees. The recorded runs below are written from the lines
+player_build.py and recompile.py print (that spec's 6.1); FINDINGS "R5c"'s
+run is the window itself, building both from a real disc.
 """
 
 import os
@@ -25,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import package  # noqa: E402
+import player_build  # noqa: E402
 from soa import toolchain  # noqa: E402
 
 SETUP_C = ROOT / "tools" / "setup" / "setup.c"
@@ -58,6 +67,9 @@ def test_the_lists_here_are_setup_cs():
     files = re.search(r"PACKAGE\[\] = \{(.*?)\};", text, re.S).group(1)
     assert [f.replace("\\\\", "/") for f in re.findall(r'L"([^"]*)"', files)] == PACKAGE
     assert f"#define SETUP_DEEPEST {DEEPEST}" in text
+    # R5c: the space Setup asks for the phone's build is the build's own
+    mib = re.search(r"#define ANDROID_FREE \((\d+)ull << 20\)", text).group(1)
+    assert int(mib) << 20 == player_build.ANDROID_FREE
 
 
 def test_package_leaves_room_for_the_deepest_file(tmp_path):
@@ -180,3 +192,229 @@ def test_the_console_flag_is_what_starts_python_and_the_game():
     starts = re.findall(r"CreateProcessW\((.*?)\)\)?\s*[{;]", text, re.S)
     assert len(starts) == 2 and all("NO_CONSOLE" in s for s in starts)
     assert "#define NO_CONSOLE CREATE_NO_WINDOW" in text
+
+
+# ---- R5c: the Android box ----------------------------------------------------
+
+UNITS = ["dispatch.c", *(f"chunk_{n:03}.c" for n in range(18))]  # recompile's 19
+REFUSAL = 'this is not the North American GameCube release (GEAE8P); game.iso is GALE01 "SUPER SMASH BROS"'
+
+
+def one_target(pre: str = "") -> list[str]:
+    """One target's lines as player_build relays recompile's: its record moved,
+    the translation, each unit, the link (the phone's stubs first), done."""
+    lines = [
+        f"[build] {pre}translate: no record of the last translation",
+        f"[build] {pre}translate",
+    ]
+    lines += [f"[build] {pre}{n}/{len(UNITS)} {unit}" for n, unit in enumerate(UNITS, 1)]
+    if pre:
+        lines += [f"[build] android stub {lib}" for lib in ("libc.so", "libm.so", "libdl.so")]
+        lines += ["[build] android stub libsoa_runtime.so", "[build] android link"]
+        return [*lines, "[build] android done libsoa_game.so sha256 " + "cd" * 32]
+    lines += [
+        "[build] link",
+        "[build] mod autotext",
+        "[build] mod coop",
+        "[build] mod encounter-rate",
+    ]
+    return [*lines, "[build] done soa.exe sha256 " + "ab" * 32]
+
+
+def first_run(android: bool = True) -> list[str]:
+    """A package's first run, as player_build prints it: the check, the
+    phone's sysroot built from the package's sources, the extraction, then
+    soa.exe and the phone's library."""
+    lines = ["[build] check"]
+    if android:
+        lines += [
+            "[build] android sysroot",
+            "  44 of 44 bionic files the build reads, at 06356e41 (android-17.0.0_r1), are as pinned",
+        ]
+    lines += ["[build] extract", *one_target()]
+    return [*lines, *one_target("android ")] if android else lines
+
+
+def show_build(exe: Path, *args: str) -> tuple[int, str]:
+    proc = subprocess.run([str(exe), "--show-build", *args], capture_output=True, timeout=60)
+    return proc.returncode, proc.stdout.decode("utf-8").strip()
+
+
+def bar(exe: Path, lines: list[str], *args: str) -> tuple[list[tuple[int, str]], str]:
+    """--bar over a recorded run: (position, line) for each line that moved
+    the bar, then the status the window would end on."""
+    feed = "".join(f"{line}\n" for line in lines).encode("utf-8")
+    proc = subprocess.run([str(exe), "--bar", *args], input=feed, capture_output=True, timeout=60)
+    assert proc.returncode == 0
+    out = proc.stdout.decode("utf-8").replace("\r\n", "\n").split("\n")
+    rows = []
+    while out and out[0].startswith("bar "):
+        _, pos, line = out.pop(0).split(" ", 2)
+        rows.append((int(pos), line))
+    assert out and out[0].startswith("status "), out
+    return rows, "\n".join(out).removeprefix("status ").strip()
+
+
+def test_the_android_box_adds_both_targets(setup_exe):
+    disc = "C:\\Games\\Skies\\game.rvz"
+    code, ticked = show_build(setup_exe, "--disc", disc, "--android")
+    assert code == 0 and ticked.endswith(" --target windows --target android-arm64")
+    code, plain = show_build(setup_exe, "--disc", disc)
+    assert code == 0 and "--target" not in plain
+    assert plain == ticked.removesuffix(" --target windows --target android-arm64")
+    # the package's python and build script, from the folder Setup is in
+    command = re.fullmatch(
+        r'"(?P<root>.+)\\python\\python\.exe" -X utf8 "(?P=root)\\source\\tools\\player_build\.py" '
+        r'--disc "(?P<disc>[^"]+)" --root "(?P=root)"',
+        plain,
+    )
+    assert command and command["disc"] == disc
+    assert show_build(setup_exe)[0] == 1  # no disc, no command
+
+
+def test_the_bar_never_goes_back_with_android(setup_exe):
+    rows, status = bar(setup_exe, first_run(), "--android", "--exit", "0")
+    positions = [pos for pos, _ in rows]
+    assert positions == sorted(positions)  # the mutation: no phase map
+    done = next(i for i, (_, line) in enumerate(rows) if line.startswith("[build] done soa.exe"))
+    assert rows[done][0] == 60 and all(pos > 60 for pos, _ in rows[done + 1 :])
+    assert rows[-1] == (100, first_run()[-1])
+    units = [line for _, line in rows if re.match(r"\[build\] (android )?\d+/19 ", line)]
+    assert len(units) == 2 * len(UNITS)  # every unit of both moves it
+    # the folder holds no soa.exe, so not the built words; their row is below
+    assert status.startswith("The build finished, but soa.exe is not in this folder")
+
+
+def test_without_the_box_the_bar_is_r4s(setup_exe):
+    rows, _ = bar(setup_exe, first_run(android=False), "--exit", "0")
+    assert [pos for pos, _ in rows[:2]] == [2, 4]  # the check, the extraction
+    assert [pos for pos, _ in rows] == sorted(pos for pos, _ in rows)
+    assert rows[-1] == (100, first_run(android=False)[-1])
+    # an Android line is not this run's: it moves nothing
+    rows, _ = bar(setup_exe, ["[build] check", "[build] android 1/19 dispatch.c"], "--exit", "1")
+    assert rows == [(2, "[build] check")]
+
+
+def test_the_status_says_what_this_run_built(setup_exe, tmp_path):
+    """One recorded run per row of 1.3's table, into a folder already holding
+    a soa.exe, as a Rebuild's is: the status is this run's, never the
+    folder's (the mutation: on_done by built())."""
+    built = lay_out(tmp_path / "built", setup_exe)
+    (built.parent / "soa.exe").write_bytes(b"")
+    empty = lay_out(tmp_path / "empty", setup_exe)
+    run, plain = first_run(), first_run(android=False)
+    windows_done = run.index(next(line for line in run if line.startswith("[build] done soa.exe")))
+    compile_failed = run.index("[build] 7/19 chunk_005.c")
+    android_compile = run.index("[build] android 7/19 chunk_005.c")
+    log = "build\\setup.log: send that file with any report."
+    why = "the compile of chunk_005.c failed; the lines above say why"
+    space = "the Android build needs about 384 MB free in C:\\Games\\Skies, and there are 120 MB: free some space and build again"
+    rows = [
+        # exit 0, both built: the built words, with what to put on the phone
+        (
+            built,
+            "--android",
+            0,
+            run,
+            "The game is built. Press Play to play here.\nFor your Android device: copy libsoa_game.so and "
+            "extracted\\disc.iso from this folder to it, then open the SoA port app and pick each when it asks, "
+            "libsoa_game.so first.",
+        ),
+        # without the box, R4's
+        (
+            built,
+            "",
+            0,
+            plain,
+            "The game is built. Press Play. From now on, soa.exe in this folder starts it too.",
+        ),
+        # exit 0 with no soa.exe made, or none left in the folder (Windows Security)
+        (
+            built,
+            "--android",
+            0,
+            run[:windows_done],
+            "The build finished, but soa.exe is not in this folder.",
+        ),
+        (empty, "--android", 0, run, "The build finished, but soa.exe is not in this folder."),
+        # exit 2: the disc's refusal
+        (
+            built,
+            "--android",
+            2,
+            ["[build] check", f"[build] refused: {REFUSAL}"],
+            f"This disc image cannot be used: {REFUSAL}",
+        ),
+        # exit 1, the phone's build refused before the extraction: nothing built
+        (
+            built,
+            "--android",
+            1,
+            ["[build] check", f"[build] android failed: {space}"],
+            f"Nothing was built: {space}\nUntick the Android box to build for Windows alone.",
+        ),
+        # exit 1, soa.exe built and the phone's build stopped, with its reason or without one
+        (
+            built,
+            "--android",
+            1,
+            [
+                *run[:android_compile],
+                f"  FAIL chunk_005.c: error: {why}",
+                f"[build] android failed: {why}",
+            ],
+            f"soa.exe is built: press Play to play here. The Android build stopped: {why}",
+        ),
+        (
+            built,
+            "--android",
+            1,
+            [*run[: windows_done + 1], "Traceback (most recent call last):"],
+            "soa.exe is built: press Play to play here. The Android build stopped: its log is below, and saved as",
+        ),
+        # exit 1 anywhere else: the build stopped, over the folder's old soa.exe too
+        (
+            built,
+            "--android",
+            1,
+            [*run[:compile_failed], "  FAIL chunk_005.c: error: expected ';'", "[build] failed"],
+            "The build stopped. Its log is below, and saved as",
+        ),
+        (
+            built,
+            "",
+            1,
+            [*plain[:compile_failed], "[build] failed"],
+            "The build stopped. Its log is below",
+        ),
+    ]
+    for exe, box, code, lines, words in rows:
+        _, status = bar(exe, lines, *([box] if box else []), "--exit", str(code))
+        assert status.startswith(words), (code, lines[-1], status)
+        if status.startswith(
+            (
+                "The build stopped",
+                "soa.exe is built: press Play to play here. The Android build stopped: its",
+            )
+        ):
+            assert status.endswith(log), status
+
+
+def test_a_built_folder_with_the_box_ticked_checks_the_android_space(setup_exe, tmp_path):
+    exe = lay_out(tmp_path / "p", setup_exe)
+    folder, mib = exe.parent, 1 << 20
+    # not built: R4's 2 GB, and with the box the phone's 384 MB beside them
+    assert check(exe, "--assume-free", str(1024 * mib))[0] == "SPACE"
+    assert check(exe, "--assume-free", str(2100 * mib)) == ("OK", "ready\n")
+    code, words = check(exe, "--android", "--assume-free", str(2100 * mib))
+    assert code == "SPACE" and "need about 2.4 GB free here, and this drive has 2.1 GB" in words
+    assert "untick the Android box" in words
+    # built: the phone's alone, until its library is there too (the mutation:
+    # the rule ignoring the box once soa.exe is built)
+    (folder / "soa.exe").write_bytes(b"")
+    assert check(exe, "--assume-free", str(120 * mib))[0] == "OK"
+    code, words = check(exe, "--android", "--assume-free", str(120 * mib))
+    assert code == "SPACE" and "need about 0.4 GB free here, and this drive has 0.1 GB" in words
+    assert check(exe, "--android", "--assume-free", str(400 * mib))[0] == "OK"
+    (folder / "libsoa_game.so").write_bytes(b"")
+    assert check(exe, "--android", "--assume-free", str(120 * mib))[0] == "OK"
