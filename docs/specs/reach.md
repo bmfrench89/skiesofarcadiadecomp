@@ -127,6 +127,11 @@ peeked.
 
 *Can it fail:* the same job without the scripted turn must show no type 5 and an unchanged `0x8030BF08`.
 
+**Run 2026-10-14** (FINDINGS "Reach U2"): five presses, not four (the Items tab is its own step); member 1, Gilder
+in this party, since Vyse can fall before his first input. Command type 5 logged, the crystal taken at its turn,
+Gilder's HP raised to its maximum, `0x8030BF08` written back `FFFF00FF` after the win. The control: the run with
+four presses, whose crystal was handed back and whose command was not 5.
+
 ## 4. U3: a ship battle fought to its end
 
 **What is known:** the one ship battle with a part-L party (`build/scenario-sky550.log`) entered `550a` by the

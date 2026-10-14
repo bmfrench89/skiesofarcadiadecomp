@@ -443,7 +443,7 @@ static void on_safe_point(void* user)
             if (it->state == 0) try_entry(it);
         } else if (it->kind == ITEM_HOLD_HP) {
             if (f <= it->to) hold_hp(it);
-        } else if (f <= it->to) {
+        } else if (it->kind == ITEM_PEEK && f <= it->to) {
             uint32_t addr = 0, value = 0;
             if (!read_chain(it, &addr, &value)) {
                 if (it->state != 2) logf_("peek %s: frame %u: the chain left RAM", it->text, f);
@@ -459,7 +459,7 @@ static void on_safe_point(void* user)
 
 static void on_map_loaded(void* user, uint32_t map)
 {
-    uint32_t v, id, w[4];
+    uint32_t v, id, w[4], cls;
     uint16_t type, state, nshapes;
     int guard = 0, n = 0, i;
     (void)user;
@@ -473,9 +473,13 @@ static void on_map_loaded(void* user, uint32_t map)
         g_api->read16(v + 12, &nshapes);
         for (i = 0; i < 4; i++)
             if (!g_api->read32(v + 52 + 4 * (uint32_t)i, &w[i])) w[i] = 0;
-        logf_("objects a%03u%c: %08X id %u type %u state %d shapes %d, shape 0: %08X %08X %08X %08X",
-              (unsigned)(map >> 8), (char)(map & 0xFF), v, id, type, (int16_t)state, (int16_t)nshapes, w[0], w[1],
-              w[2], w[3]);
+        /* +16: the hit class (the 0x802EE7C0 table's third word: goscript
+         * 0x80000008, man 0x78400016), which the overlap test copies aside
+         * (fn_80222B30, 80222B58); seen in a116a's 45 volumes, 2026-10-14. */
+        if (!g_api->read32(v + 16, &cls)) cls = 0;
+        logf_("objects a%03u%c: %08X id %u type %u class %08X state %d shapes %d, shape 0: %08X %08X %08X %08X",
+              (unsigned)(map >> 8), (char)(map & 0xFF), v, id, type, cls, (int16_t)state, (int16_t)nshapes, w[0],
+              w[1], w[2], w[3]);
         n++;
         if (!g_api->read32(v + 48, &v)) break;
     }
@@ -489,6 +493,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     char buf[2048];
     char* item;
     char* save = NULL;
+    char whole[128];
     int i;
     if (version < 1 || api->size < SOA_MOD_HAS(call_guest)) return 1;
     g_api = api;
@@ -505,9 +510,10 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
         save = strchr(item, ';');
         if (save) *save++ = '\0';
         if (!*item) continue;
+        snprintf(whole, sizeof whole, "%s", item); /* the parsers cut the item as they read it */
         if (!parse_hold(item) && !parse_turn(item) && !parse_item(item)) {
             char line[160];
-            snprintf(line, sizeof line, "lab: SOA_LAB item not understood: %.120s", item);
+            snprintf(line, sizeof line, "lab: SOA_LAB item not understood: %.120s", whole);
             api->log(line);
             return 1;
         }

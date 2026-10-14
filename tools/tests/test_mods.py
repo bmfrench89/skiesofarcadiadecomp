@@ -1085,7 +1085,7 @@ def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver
     edge the members' command types are logged."""
     lab(tmp_path)
     script = (
-        "set 803475cc 7 set 8034733c 1 set 80347330 1 pad 90 0100 "  # member 1: not ours
+        "set 803475cc 7 set 8034733c 1 set 80347330 1 safe pad 90 0100 "  # member 1: not ours
         "set 80347330 0 pad 100 0100 pad 165 0000 pad 175 0000 pad 230 0000 pad 300 0100 "
         "pad 400 0100 "  # done for this battle: passed through
         "set 80309174 5 set 8034733c 2 pad 410 0000 "
@@ -1107,6 +1107,7 @@ def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver
         "pad 600 0000 filtered",  # a new battle's turn: the lead-in again
     ], out
     assert "lab: turn: member 0's input at frame 100: pressing left/a" in err, err
+    assert "lab: peek" not in err, err  # a turn is not a peek at the safe points
     assert "lab: turn: member 0's input at frame 600" in err, err
     assert "lab: commands at frame 410: 0=5" in err, err
 
@@ -1118,7 +1119,7 @@ def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns):
         out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
-        assert "loaded 0" in out and "SOA_LAB item not understood" in err, (bad, err)
+        assert "loaded 0" in out and f"SOA_LAB item not understood: {bad}" in err, (bad, err)
 
 
 @needs_cc

@@ -8409,3 +8409,34 @@ the driver's.** 2026-10-04.
 - **Not shown yet:** the fight entered by walking to object 4005 (U4 needs object positions; the volume's shape
   words are the local box, -0.5 to 0.5, shared by every check object in the cell block, so the position is the
   owning object's, still to find), and the fight won without `hold-hp`, which needs scripted tactics (U2's `turn`).
+
+**Reach U2: an item used in battle, Gilder's Sacri Crystal.** 2026-10-14, `build/reach/u2-item*` (game data, kept
+here).
+
+- **What it is:** docs/specs/reach.md U2, the first item any run has used in a battle. Part G's card on S3's recipe
+  (walk mix seed 33, the accelerator), with the lab mod's `turn:3300-9000:M:left/a/a/a/a`: at member M's first
+  command input of the first battle, Item on the wheel (a plain `left` from Attack moves two slots, FINDINGS:1209),
+  then A four times: the menu, the Items tab, the crystal, the target.
+- **The proof** [V, `build/reach/u2-item3/run.log`]: member 1 (Gilder, in this party) took the input at frame 5122;
+  the battle's inventory copy (`*0x80347390 + 56`) went `00F001FF` → `FFFF00FF` at 5393, the crystal reserved by the
+  menu; at the phase 1 → 2 edge (5464) the command types read `0=0 1=5`, 5 being Item; at 5465 phase 2 handed it
+  back (`00F001FF`, battle-system.md:210) and at 5471 the item's turn took it for good (`FFFF00FF`), with the effect
+  package `D2400600.MLK` loading in the same frames; Gilder's HP (`*0x80309DE8 + 20`) went `0xADA` (2778) → `0xB4A`
+  (2890) at 5561, his maximum: `min(HP + 500, max)` as the item's flat heal has it (battle-system.md:286-287). The
+  battle was won (`hrsbinpcwin.bin`, `pcwindow.mld`), and at 9193 the field inventory `0x8030BF08` was written back
+  `FFFF00FF`: the crystal is gone from the save. Frame 5500 shows the "Sacri Crystal" banner over Gilder.
+  `soak.py check`: pass, two battles, no game over, the base invariants held over 15,000 frames.
+- **What it took:** two runs that did not prove it, each a finding about scripting a battle, not about the port:
+  - with four presses the item was reserved and the target screen opened (frames 4800 and 4900: "Sacri Crystal
+    1", then Vyse targeted), and the walk script's later B cancelled it, handing the crystal back; a fifth A is
+    the target;
+  - with Vyse as the user, the enemies acted first in another run and took his 373 HP before his first input (the
+    RNG is reseeded on every map load, so the same presses meet another fight). Member 1 stood in every battle seen.
+- **Effect packages:** `D2400600.MLK` with the item; the ledger is unchanged at 22 (every name this run loaded was
+  already in some log).
+- **The lab mod, three fixes from these runs:** a `turn` item was also walked as a peek at the safe points (and
+  logged "the chain left RAM"); a refused item was quoted cut short ("turn"), since the parsers cut it as they read;
+  and `objects` read the volume's +16 as a matrix, which it is not: it is the hit class (`0x80000008` goscript,
+  `0x78400016` man, the 0x802EE7C0 table's third word, content-systems.md:66), now logged as such. The first U2 run
+  also used a `mod.dll` older than its source (`--link` had not run since `turn` was added), so the run script now
+  refuses a lab DLL older than `mod.c`.
