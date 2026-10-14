@@ -103,4 +103,6 @@ session, and into SPEC.md if they change the goal.
 - Add a FINDINGS entry, with each claim's evidence.
 - Measure every count you change, and fix every copy of it
   (`grep -rn "<old number>" --include="*.md" .`).
+- If a row of README's Status tables changed state, change it and the date
+  above them; the decompilation table is `python tools/progress.py`'s.
 - Read CI after each push.

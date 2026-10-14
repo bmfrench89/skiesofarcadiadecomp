@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1553 |
+| Python tests | 1566 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -456,7 +456,7 @@ Done (android-sysroot.md §1.3):
 - time that two-target first run to settle the bar's 60/40 split (FINDINGS "R5c" derives 59/41 from R5b's
   timings);
 - capture the window at 100% and 150% for the review page `build/setup-review/index.html`;
-- run `pytest -p noskip tools/tests/test_setup.py` there, and the whole suite's five configurations (now 1553
+- run `pytest -p noskip tools/tests/test_setup.py` there, and the whole suite's five configurations (now 1566
   tests; TESTING's count table).
 
 The owner's first bless of the words and §1.3's three small questions come after that page. Nothing in R5c

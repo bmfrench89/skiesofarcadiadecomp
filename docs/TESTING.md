@@ -37,8 +37,8 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 1475 passed, 41 skipped in 977.75s
 ```
 
-1553 tests in 90 files, none of which reads the disc (the run above is 2026-10-09's, at 1516, before
-R5c's five in `test_setup.py` and M6's 32 in `test_mods.py`). The two FMA probes of
+1566 tests in 91 files, none of which reads the disc (the run above is 2026-10-09's, at 1516, before
+R5c's five in `test_setup.py`, M6's 32 in `test_mods.py` and `test_progress.py`'s 13). The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -111,6 +111,7 @@ its own and run it, some of the C as well:
 | `test_gxr_tripwires.py` | 14 | each unmodelled renderer feature warns exactly once, and what the game really programs stays silent |
 | `test_matchcheck_relocs.py` | 14 | what a relocated word is allowed to hide — every case is a thing the old oracle called a MATCH |
 | `test_peek.py` | 14 | `SOA_PEEK` refuses a malformed item out loud and keeps its own list; a watch aimed with `SOA_WATCH_FROM` prints only from that frame, and every watch line carries its frame (against the real `trace.c`) |
+| `test_progress.py` | 13 | README.md's progress section: it equals a fresh render of `config/decompiled.tsv`, which covers exactly the units in `units.txt`, each listed function still in its source and its size the inventory's; each of those checks shown failing on the mistake it is for (a unit never measured, a function renamed, a number edited by hand); and, where the compiler and your dump are, that the committed list is a fresh `--measure` |
 | `test_gx_dlrecord.py` | 13 | display lists recorded into guest memory and drawn at their call (C5b), on the renderer built alone with the SDK's Begin/End/Call played by hand: a list recorded, drawn over, then called lands on top; a CPU FIFO that is not DisplayListFifo (the logo screen's) is drawn at once; only what a list holds at its call is drawn, and an uncalled one never; an overflowing list is empty; each capture holds its lists inline, once, and replays to the live picture; `fifo.py` and `fifopair` read the inline list. Five hand mutations each turn it red (FINDINGS "C5b") |
 | `test_regs.py` | 12 | which GPR an instruction actually writes |
 | `test_fifo_verts.py` | 11 | vertex-attribute dumping, on streams built byte by byte |
@@ -165,7 +166,11 @@ where its others do, on Windows with llvm-mingw, and M6 32 to `test_mods.py`,
 built with the profile `SOA_CC` names (MSVC when it is unset), so without MSVC
 M6's 32 skip with the rest. In the cloud session that wrote them (Linux, no
 MSVC, llvm-mingw's Linux build, capstone) the suite gave `999 passed, 522
-skipped`, `test_setup.py`'s 13 Windows-only tests among the skips. The
+skipped`, `test_setup.py`'s 13 Windows-only tests among the skips.
+`test_progress.py`'s 13, added the same day by another session after these rows
+were measured, need no compiler (one compares with a fresh measurement where the
+vendored Metrowerks compiler and your dump are, and skips itself elsewhere): with it
+the suite is 1566 (1566 collected, measured 2026-10-14), and each row above gains 13 passed. The
 "neither" row took two runs. The first, with another session's 13 uncommitted
 tests in the tree, gave `1065 passed, 483 skipped`. The second, with that file
 left out, gave `2 failed, 1050 passed, 483 skipped`: two of

@@ -338,7 +338,10 @@ fn_802394C4              MATCH  88/93 words, 5 need a link  (object 372 bytes, e
 Builds every unit in `config/GEAE8P/units.txt` with the Metrowerks compiler it
 names and compares every function **and every data object** against the
 executable's bytes. Today: 21 units, 83 functions, 17 data objects, nothing
-differs, exit 0. One object on its own:
+differs, exit 0. After a change here, `python tools/progress.py --measure`
+records what matches in `config/decompiled.tsv` and rewrites README.md's
+progress table from it; `test_progress.py` fails until you do. One object on
+its own:
 
 ```
 python tools/matchcheck.py build/src/strcpy.o
@@ -370,8 +373,8 @@ python -m pytest tools/tests -q
 1475 passed, 41 skipped in 977.75s
 ```
 
-1553 tests in 90 files, none of which reads the disc (the counts below are 2026-10-09's, at 1516, before
-R5c's five in `test_setup.py`, which run on Windows with llvm-mingw, and M6's 32 in `test_mods.py`). The count you see depends
+1566 tests in 91 files, none of which reads the disc (the counts below are 2026-10-09's, at 1516, before
+R5c's five in `test_setup.py`, which run on Windows with llvm-mingw, M6's 32 in `test_mods.py` and `test_progress.py`'s 13). The count you see depends
 on what is installed, and the tool tells you: `1456 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
 into one module-level skip), `1066 passed, 450 skipped` without MSVC, and

@@ -44,7 +44,7 @@ Then, only if you touched the matching thing:
 | `runtime/` | `python tools/citest/compile_runtime.py`, then `--link` and `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | CI compiles every runtime file and has caught breakage the author did not |
 | `runtime/gx*.c`, or anything a draw passes through | `python tools/scenario.py replay` (18 s) | the only check that will tell you a pixel moved |
 | `runtime/gxv.c`, `runtime/gxv/` (the GPU backend) | `python tools/gpuspike.py selftest`, then `contrast --set corpus,perfset,gpuset` (5 min) | the replay above runs the CPU renderer only; these are what draw on the GPU |
-| `src/`, `include/`, `config/GEAE8P/units.txt` | `python tools/decomp.py` (4 s) | 83 functions across 21 units still match byte for byte |
+| `src/`, `include/`, `config/GEAE8P/units.txt` | `python tools/decomp.py` (4 s), then `python tools/progress.py --measure` | 83 functions across 21 units still match byte for byte; the second rewrites `config/decompiled.tsv` and README's progress table, which `test_progress.py` holds to units.txt and the sources |
 | `config/hle.txt` | `--compile --optimize --link`, then the self test | see below; selftest case 73 is what checks the swap |
 | `config/scenarios/`, `tools/scenario.py`, `runtime/si.c` | `python tools/scenario.py run title --check` (71 s) | the pad grammar lives in two places |
 | `runtime/game.c`, `elfcheck.c`, `soa_game.h`, `tools/soa/seam.py`, `config/seam.txt` | in a Linux container: `recompile.py --cc gcc --split --compile --optimize --link`, the self test, replay and title on `gen/linux-split/soa`, and `test_seam.py` | single-file builds never load a game library; only the split build and CI's Linux legs exercise the seam |

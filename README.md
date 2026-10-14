@@ -38,16 +38,113 @@ supply your own dump of a disc you own.
 
 ## Status
 
-The game boots, plays its intro, reaches the title screen, starts a new
-game and plays through the opening cutscenes, the first battle and into
-the first fields (the Valuan ship's hold and the room the story carries it
-to next: the stick, the minimap, menus and random encounters), with dialogue text, music and sound, rendered by a
-software implementation of the GameCube's graphics pipeline in a window
-with keyboard or gamepad input, on Windows and, since portability L10, natively
-on Linux through SDL3 (checked in a container; nobody has played it there yet).
-It mounts a memory card and the game
-formats one itself, but no save has been written or loaded yet. See the
-roadmap for what is done and what is not.
+✅ works  ·  🟡 built, but partial or not yet confirmed  ·  ❌ not started
+
+The two tables below are written by hand and were last checked on 2026-10-14
+against [HANDOFF.md](HANDOFF.md) and [docs/FINDINGS.md](docs/FINDINGS.md), which
+hold the evidence for each row; [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) says what
+comes next. The decompilation table after them is generated, and a test fails
+when it falls behind.
+
+### The game
+
+| | | Where it stands |
+|---|:-:|---|
+| Boot, title, New Game, the opening, the first battle and the first fields | ✅ | Scripted runs play it with keyboard or pad: dialogue, menus, the minimap, random encounters |
+| The rest of the game | 🟡 | All 255 warpable maps have loaded without a fault, and the developers' part select jumps to later chapters. That covers the game's data, not a playthrough: no boss or event battle, no item used in battle and no ship battle fought to its end has been run yet |
+| The ending | ✅ | Plays to "the End" and returns to the title (reached by a jump) |
+| Saving and loading | ✅ | A save written at a save point loads back through Continue |
+| Dolphin saves (`.gci`) | 🟡 | Import and export are built; no real Dolphin save has been tried |
+| Music, sound effects, voices | ✅ | Music checked against the disc's own streams; plays at its true rate since 2026-09-25 |
+| Picture: CPU renderer | ✅ | A software GameCube graphics pipeline; the heaviest field runs at the game's 30 fps cap |
+| Picture: GPU renderer (Vulkan) | 🟡 | Built for Windows (`SOA_GPU=vulkan`, up to 3x resolution), not yet checked in a play session; no GPU path on Linux or Android yet |
+| Widescreen | ❌ | Slice M10 |
+| 60 fps | ❌ | Slice H17a; `SOA_UNCAP` runs everything faster, which is not the same thing |
+| Mods | 🟡 | Loader and API built (slices M1 to M6); three mods ship: `encounter-rate`, `autotext` and `coop`. Texture packs are not built yet (M9) |
+
+### Platforms
+
+| | | Where it stands |
+|---|:-:|---|
+| Windows PCs and handhelds (x86-64; the ROG Ally X) | ✅ | The development machine; keyboard and XInput pads |
+| Linux | 🟡 | Native through SDL3 since slice L10, checked in a container; nobody has played it there yet |
+| Steam Deck | 🟡 | Through Proton: the Windows build passes its checks under Wine 10.0 in a container, but has not been tried on a Deck |
+| Android | 🟡 | Runs in the x86-64 emulator and imports the game through the file picker; not yet run on a phone, and no touch controls (L12e) |
+
+### Decompilation
+
+<!-- progress:begin, written by python tools/progress.py: edit that, not this -->
+
+Every one of the game's **7,144 functions already runs natively**: the static
+recompiler translates the original PowerPC machine code into C. Decompilation is the
+slower second layer — rewriting functions as readable C that the original Metrowerks
+compiler turns back into exactly the bytes on the disc, checked word for word by
+`tools/decomp.py`. A decompiled function can then replace its recompiled twin in the
+port, be read and changed like any other source, and be built for any machine.
+
+| Layer | Functions | Code | Progress |
+|---|---:|---:|---|
+| Recompiled to native code | 7,144 of 7,144 | 2,784,028 bytes | `████████████████████` 100% |
+| Decompiled, matching byte for byte | 83 of 7,144 | 8,084 bytes | `░░░░░░░░░░░░░░░░░░░░` 0.29% |
+
+12 of the 83 decompiled functions (1,052 bytes) already run in the port in place of their recompiled
+twins (`config/hle.txt`); the rest are proven matches whose recompiled twins, which do
+the same thing, still run. Progress is by code size, so one large function counts for
+more than many small ones. **By area** (the ranges in `config/GEAE8P/splits.txt`):
+
+| Area | Functions decompiled | Code decompiled | Progress |
+|---|---:|---:|---|
+| Start-up code (`.init`) | 3 of 13 | 316 of 1,388 bytes | `█████░░░░░░░░░░░░░░░` 22.77% |
+| Game code | 6 of 5,362 | 776 of 2,278,368 bytes | `░░░░░░░░░░░░░░░░░░░░` 0.03% |
+| SDK: PowerPC architecture | 17 of 17 | 240 of 240 bytes | `████████████████████` 100% |
+| SDK: operating system | 0 of 144 | 0 of 28,820 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| SDK: debugger hooks | 0 of 4 | 0 of 236 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| SDK: matrix and vector maths | 25 of 25 | 2,872 of 2,872 bytes | `████████████████████` 100% |
+| SDK: disc drive | 0 of 86 | 0 of 17,440 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| SDK: video output | 0 of 40 | 0 of 15,308 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| SDK: controller, ARAM, audio, DSP, memory card | 14 of 139 | 1,664 of 40,076 bytes | `█░░░░░░░░░░░░░░░░░░░` 4.15% |
+| SDK: GX graphics | 0 of 176 | 0 of 32,924 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| MetroTRK debug monitor | 0 of 119 | 0 of 27,124 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| C library (MSL) | 18 of 141 | 2,216 of 36,800 bytes | `█░░░░░░░░░░░░░░░░░░░` 6.02% |
+| SDK: EXI bus | 0 of 51 | 0 of 10,588 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| SDK: serial bus | 0 of 20 | 0 of 5,244 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+| Rendering middleware | 0 of 807 | 0 of 286,600 bytes | `░░░░░░░░░░░░░░░░░░░░` 0% |
+
+<details><summary><b>The 21 decompiled units</b>, each a source file in <code>src/</code></summary>
+
+| Unit | Functions | Bytes | Match | Native twin | Swapped in |
+|---|---:|---:|---|---|---:|
+| [`src/sdk/msl/string.c`](src/sdk/msl/string.c) | 7 | 340 | verified | yes | 7 |
+| [`src/sdk/msl/mem.c`](src/sdk/msl/mem.c) | 2 | 128 | verified | yes | 2 |
+| [`src/soa/aramcache.c`](src/soa/aramcache.c) | 3 | 108 | link pending | — | — |
+| [`src/sdk/msl/strcpy.c`](src/sdk/msl/strcpy.c) | 1 | 184 | verified | yes | 1 |
+| [`src/sdk/msl/strcmp.c`](src/sdk/msl/strcmp.c) | 1 | 296 | verified | yes | 1 |
+| [`src/sdk/msl/fillmem.c`](src/sdk/msl/fillmem.c) | 1 | 188 | verified | yes | — |
+| [`src/sdk/msl/strstr.c`](src/sdk/msl/strstr.c) | 1 | 104 | verified | yes | 1 |
+| [`src/sdk/msl/misc.c`](src/sdk/msl/misc.c) | 3 | 480 | link pending | — | — |
+| [`src/soa/aramcache_valid.c`](src/soa/aramcache_valid.c) | 1 | 132 | link pending | — | — |
+| [`src/soa/aramcache_find.c`](src/soa/aramcache_find.c) | 1 | 188 | link pending | — | — |
+| [`src/sdk/ar/arq.c`](src/sdk/ar/arq.c) | 7 | 964 | link pending | — | — |
+| [`src/sdk/ar/ar.c`](src/sdk/ar/ar.c) | 7 | 700 | link pending | — | — |
+| [`src/sdk/msl/wide.c`](src/sdk/msl/wide.c) | 3 | 416 | link pending | — | — |
+| [`src/soa/aramcache_fetch.c`](src/soa/aramcache_fetch.c) | 1 | 348 | link pending | — | — |
+| [`src/sdk/msl/strto.c`](src/sdk/msl/strto.c) | 2 | 396 | link pending | — | — |
+| [`src/sdk/ppc/ppcarch.c`](src/sdk/ppc/ppcarch.c) | 17 | 240 | verified | — | — |
+| [`src/sdk/mtx/mtx.c`](src/sdk/mtx/mtx.c) | 2 | 308 | link pending | — | — |
+| [`src/sdk/mtx/psmtx.c`](src/sdk/mtx/psmtx.c) | 16 | 1,480 | link pending | — | — |
+| [`src/sdk/mtx/psmtxrot.c`](src/sdk/mtx/psmtxrot.c) | 4 | 576 | link pending | — | — |
+| [`src/sdk/mtx/psvec.c`](src/sdk/mtx/psvec.c) | 2 | 136 | link pending | — | — |
+| [`src/sdk/mtx/quat.c`](src/sdk/mtx/quat.c) | 1 | 372 | link pending | — | — |
+
+*verified*: every word compared, and identical. *link pending*: identical wherever it
+can be compared, but something in it — usually a word pointing at a global this
+project has no address for yet — only a link could settle. A *native twin* is also
+compiled for the PC, and *swapped in* counts its functions that `config/hle.txt` runs
+in place of the recompiled ones.
+
+</details>
+
+<!-- progress:end -->
 
 ## Building and running
 
@@ -379,7 +476,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1553 tests; any that need a dump skip themselves
+python -m pytest                     # 1566 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes
@@ -396,7 +493,7 @@ Those two need your dump; pytest and ruff do not.
 
 ## Repository layout
 
-- `tools/` — disc extraction (`extract.py`, `checkdump.py`), analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, the decompilation pipeline (`decomp.py`, `matchcheck.py`), the scenario library (`scenario.py`), the memory-card formatter (`cardformat.py`), the CI checks (`tools/citest/`), tests
+- `tools/` — disc extraction (`extract.py`, `checkdump.py`), analysis, the recompiler (`tools/soa/`), disassembler, capture decoders, the decompilation pipeline (`decomp.py`, `matchcheck.py`, and `progress.py`, which writes the progress table above), the scenario library (`scenario.py`), the memory-card formatter (`cardformat.py`), the CI checks (`tools/citest/`), tests
 - `runtime/` — the native runtime: CPU helpers, memory and MMIO, device models, threads, the software GX, the window
 - `config/` — analysis metadata: the function inventory, HLE bindings, hooks, tracepoints, the scenarios and the frame-hash manifest; `config/GEAE8P/` is the decomp-toolkit project (splits, symbols and the executable's sha1)
 - `src/`, `include/` — hand-decompiled units, compiled with the original Metrowerks compiler and checked word for word against the executable (`tools/decomp.py`)

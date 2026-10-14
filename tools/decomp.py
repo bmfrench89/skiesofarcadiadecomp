@@ -92,6 +92,21 @@ def missing_compilers(units, vendor: Path) -> dict[str, list[Path]]:
     return out
 
 
+def compile_unit(
+    src: Path, version: str, flags: list[str], vendor: Path, out: Path
+) -> tuple[Path, subprocess.CompletedProcess]:
+    """Build one unit to ``out/<stem>.o``; tools/progress.py builds them the same way."""
+    obj = out / (src.stem + ".o")
+    # -nosyspath stops the compiler looking beside the source for "quoted" headers
+    proc = subprocess.run(
+        [str(vendor / version / "mwcceppc.exe"), "-c", *flags, "-i", str(src.parent), str(src)]
+        + ["-o", str(obj)],
+        capture_output=True,
+        text=True,
+    )
+    return obj, proc
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -121,16 +136,9 @@ def main() -> int:
 
     failures = unverified = matched = 0
     for src, version, flags in units:
-        cc = args.vendor / version / "mwcceppc.exe"
-        if not cc.exists():
+        if not (args.vendor / version / "mwcceppc.exe").exists():
             continue
-        obj = args.out / (src.stem + ".o")
-        # -nosyspath stops the compiler looking beside the source for "quoted" headers
-        proc = subprocess.run(
-            [str(cc), "-c", *flags, "-i", str(src.parent), str(src), "-o", str(obj)],
-            capture_output=True,
-            text=True,
-        )
+        obj, proc = compile_unit(src, version, flags, args.vendor, args.out)
         if proc.returncode != 0:
             print(f"{src}: compile failed\n{proc.stdout}{proc.stderr}")
             failures += 1
