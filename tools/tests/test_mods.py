@@ -986,6 +986,141 @@ def test_the_example_dll_builds_and_loads(driver, tmp_path):
     assert "[mod] map-log: map-log loaded" in err and "[mod] map-log: entered a116a" in err, err
 
 
+def lab(tmp_path: Path) -> Path:
+    """examples/mods/lab (docs/specs/reach.md U0), built into tmp_path/lab
+    with the fake DOL's hash in its mod.ini."""
+    d = tmp_path / "lab"
+    d.mkdir()
+    ini = (ROOT / "examples" / "mods" / "lab" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "examples" / "mods" / "lab" / "mod.c")
+    return d
+
+
+@needs_cc
+def test_the_lab_follows_a_pointer_chain_and_logs_each_change(driver, tmp_path):
+    """`0x80347390*+56` is the word the pointer at 0x80347390 names, plus 56:
+    the battle's inventory copy. It is logged at the first read and again only
+    when it changes, inside its frames; a peek of one frame reads once."""
+    lab(tmp_path)
+    script = (
+        "set 80347390 80400000 set 80400038 00f00105 safe frame safe "
+        "set 80400038 ffff0000 frame safe frame safe frame safe"
+    )
+    chain = "peek:0-2:0x80347390*+56"
+    out, err = play(driver, tmp_path, script, SOA_LAB=f"{chain};peek:0:0x80347390")
+    assert "loaded 1" in out, err
+    lines = [x for x in err.splitlines() if x.startswith("[mod] lab: peek ")]
+    assert lines == [
+        f"[mod] lab: peek {chain}: frame 0: 80400038 = 00F00105",
+        "[mod] lab: peek peek:0:0x80347390: frame 0: 80347390 = 80400000",
+        f"[mod] lab: peek {chain}: frame 2: 80400038 = FFFF0000",
+    ], err
+
+
+@needs_cc
+def test_the_lab_starts_an_entry_only_where_the_a_press_could(driver, tmp_path):
+    """An entry waits, saying why each time the reason changes: outside the
+    running field, while flag 1087 (an event) is set, and while no live hit
+    volume carries its id. With one there it asks the game's own condition,
+    fn_8021067C, which the fake guest does not have, so the call is refused
+    out loud and nothing is started."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 7 safe "
+        "set 803475cc 6 set 80311aec 8 set 80310bc0 80000000 safe "
+        "set 80310bc0 0 safe "
+        "set 80347524 80400100 set 80400108 fa5 set 80400114 ffff0000 safe "
+        "set 80400114 0 safe"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="entry:0:4005")
+    assert "loaded 1" in out, err
+    waits = [x.split(": ", 3)[-1] for x in err.splitlines() if "lab: entry 4005: waiting" in x]
+    assert waits == [
+        "the field is not running",
+        "an event runs (flag 1087)",
+        "no live hit volume has this id",
+    ], err
+    assert "call_guest(8021067C) refused" in err, err
+    assert "started" not in err, err
+
+
+@needs_cc
+def test_the_lab_holds_only_the_standing_partys_hp_and_only_in_battle(driver, tmp_path):
+    """hold-hp: in scene 7, a party actor still standing (status & 0x2100
+    clear) has HP put back to its maximum; one who is out is left out, an
+    empty slot is passed over, the field is never touched, and the battle's
+    top-ups are counted when it ends."""
+    lab(tmp_path)
+    actors = (
+        "set 80309de4 80400000 set 80309de8 80400200 set 80309dec 0 set 80309df0 0 "
+        "set 80400014 5 set 80400018 64 set 8040001c 0 "
+        "set 80400214 7 set 80400218 32 set 8040021c 2000 "
+    )
+    script = (
+        actors + "set 803475cc 6 safe get 80400014 "
+        "set 803475cc 7 safe get 80400014 get 80400214 "
+        "set 80400014 9 safe get 80400014 set 803475cc 6 safe"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="hold-hp:0-100")
+    assert "loaded 1" in out, err
+    reads = [x for x in out.splitlines() if x.startswith("80400")]
+    assert reads == [
+        "80400014=00000005",  # the field: untouched
+        "80400014=00000064",  # standing: 5 -> 100
+        "80400214=00000007",  # out (0x2000): left at 7
+        "80400014=00000064",  # hit again, held again
+    ], out
+    assert "hold-hp: the battle ended by frame 0; 2 top-up(s)" in err, err
+
+
+@needs_cc
+def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver, tmp_path):
+    """turn:F-G:M:SEQ waits for member M's input (scene 7, phase 1, the member
+    word M), holds 60 frames of nothing while the wheel turns in, then each
+    press for 10 frames with 60 after; what SOA_PAD presses meanwhile is held
+    back. Once a battle: M's next input is the person's. At the phase 1 -> 2
+    edge the members' command types are logged."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 7 set 8034733c 1 set 80347330 1 pad 90 0100 "  # member 1: not ours
+        "set 80347330 0 pad 100 0100 pad 165 0000 pad 175 0000 pad 230 0000 pad 300 0100 "
+        "pad 400 0100 "  # done for this battle: passed through
+        "set 80309174 5 set 8034733c 2 pad 410 0000 "
+        "set 803475cc 6 pad 500 0000 set 803475cc 7 set 8034733c 1 pad 600 0000"  # a new battle
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="turn:0-1000:0:left/a")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 90 0100 filtered",  # another member's input
+        "pad 100 0000 filtered",  # the lead-in
+        "pad 165 0001 filtered",  # left
+        "pad 175 0000 filtered",  # the gap
+        "pad 230 0100 filtered",  # a
+        "pad 300 0100 filtered",  # finished: the input is the person's again
+        "pad 400 0100 filtered",
+        "pad 410 0000 filtered",
+        "pad 500 0000 filtered",
+        "pad 600 0000 filtered",  # a new battle's turn: the lead-in again
+    ], out
+    assert "lab: turn: member 0's input at frame 100: pressing left/a" in err, err
+    assert "lab: turn: member 0's input at frame 600" in err, err
+    assert "lab: commands at frame 410: 0=5" in err, err
+
+
+@needs_cc
+def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
+    lab(tmp_path)
+    bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
+    turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
+    for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns):
+        out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
+        assert "loaded 0" in out and "SOA_LAB item not understood" in err, (bad, err)
+
+
 @needs_cc
 def test_a_pad_filter_changes_what_the_game_reads(driver, tmp_path):
     """The filter sees each read with its frame and may change it: this one

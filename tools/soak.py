@@ -313,6 +313,19 @@ RE_SCENARIO_EXIT = re.compile(r"^\[scenario\] \S+ exited (-?\d+):")
 RE_SCENARIO_KILLED = re.compile(r"^\[scenario\] \S+ killed after ([\d.]+)s")
 RE_SCENARIO_EVENTS = re.compile(r"^\[scenario\] \d+ frames, (\d+) pad events;")
 RE_MAP_NAME = re.compile(r"a?(\d{3}[a-z])")
+# A word read by SOA_PEEK (main.c) or by the lab mod's chains (examples/mods/lab):
+# the address and the value, for --expect-flag (docs/specs/reach.md U0).
+RE_PEEK_WORD = re.compile(r"^\[peek\] frame \d+: ([0-9A-Fa-f]{8}) = ([0-9A-Fa-f]{8})")
+RE_LAB_PEEK = re.compile(
+    r"^\[mod\] lab: peek \S+: frame (\d+): ([0-9A-Fa-f]{8}) = ([0-9A-Fa-f]{8})"
+)
+# A battle effect package, as LoadStart prints it ("/BEFF/X.MLK") and as
+# LoadCrew does, in two strings ("/BEFF/" "X.MLD").
+RE_BEFF = re.compile(r'"/BEFF/(?:"\s*")?([^"/\s]+)"', re.IGNORECASE)
+# The ship battle's results screen (ship-worldmap.md: state 4 loads it).
+RE_SHIP_RESULTS = re.compile(r"HRS_BEND", re.IGNORECASE)
+SHIP_STAGES = range(500, 584)  # the 5xx maps; a ship battle is the field scene on one
+FLAGS = 0x80310B3C  # flag n: bit n % 32, from the least significant, of FLAGS + n // 32 * 4
 
 
 @dataclass
@@ -349,6 +362,13 @@ class Seen:
     poke_trouble: str | None = None
     frames: int | None = None
     wall_seconds: float | None = None
+    # Each word a peek read: address -> [(frame, value)], in log order.
+    words: dict[int, list[tuple[int | None, int]]] = field(default_factory=dict)
+    # Each effect package the first time it loads: (name, frame).
+    beff: list[tuple[str, int | None]] = field(default_factory=list)
+    # Field map loads (not de-duplicated) and ship results, in log order, for
+    # the ship battles: ("map", name, frame) or ("results", "", frame).
+    ship_events: list[tuple[str, str, int | None]] = field(default_factory=list)
 
     @property
     def game_overs(self) -> list[int | None]:
@@ -372,11 +392,21 @@ def read_seen(text: str) -> Seen:
             b = RE_BUTTONS.match(line)
             if b and int(b.group(1), 16) & DPAD:
                 s.dpad_presses += 1
+            p = RE_PEEK_WORD.match(line)
+            if p:
+                s.words.setdefault(int(p.group(1), 16), []).append((frame, int(p.group(2), 16)))
             continue
         if line.startswith("[trace] "):
             s.traced = True
+            for b in RE_BEFF.finditer(line):
+                name = b.group(1).upper()
+                if all(name != n for n, _ in s.beff):
+                    s.beff.append((name, frame))
+            if RE_SHIP_RESULTS.search(line):
+                s.ship_events.append(("results", "", frame))
             m = RE_FIELD_MAP.search(line)
             if m:
+                s.ship_events.append(("map", m.group(1), frame))
                 if in_battle and s.after_battle and s.after_battle[-1] is None:
                     s.after_battle[-1] = (m.group(1), frame)
                 in_battle = False
@@ -391,6 +421,10 @@ def read_seen(text: str) -> Seen:
             continue
         if RE_MEM.match(line):
             s.mem_lines.append(line)
+        elif m := RE_LAB_PEEK.match(line):
+            s.words.setdefault(int(m.group(2), 16), []).append(
+                (int(m.group(1)), int(m.group(3), 16))
+            )
         elif m := RE_PIPELINE.match(line):
             s.pipelines.append((m.group(1) == "on the draw path", float(m.group(2)), len(s.maps)))
         elif line.startswith("[gxr] "):
@@ -434,6 +468,73 @@ def map_name(text: str) -> str:
 
 def at(frame: int | None) -> str:
     return f"frame {frame}" if frame is not None else "an unstamped frame"
+
+
+def flag_spec(text: str) -> tuple[int, int]:
+    """`303` or `303=1` (set at the end), `303=0` (clear at the end)."""
+    n, _, v = text.partition("=")
+    try:
+        flag, want = int(n), int(v) if v else 1
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a flag like 303, 303=1 or 303=0"
+        ) from None
+    if not 0 <= flag < 854 * 32 or want not in (0, 1):
+        raise argparse.ArgumentTypeError(f"{text!r}: a flag is 0-27327, and its value 0 or 1")
+    return flag, want
+
+
+def flag_word(n: int) -> tuple[int, int]:
+    """The word flag n lives in, and its bit (801F6D38-801F6D44: n & 31 from the bottom)."""
+    return FLAGS + (n >> 5) * 4, 1 << (n & 31)
+
+
+def flag_check(s: Seen, n: int, want: int) -> scenario.Check:
+    """A story claim read from the flag itself: the last peek of its word
+    decides, and the first one says whether the run changed it."""
+    addr, bit = flag_word(n)
+    name = f"flag {n} is {want} at the end"
+    reads = s.words.get(addr)
+    if not reads:
+        why = f"no peek read 0x{addr:08X}, the word flag {n} is in (SOA_PEEK it, or a lab peek)"
+        return scenario.Check(name, FAIL, why)
+    frame, value = reads[-1]
+    got = 1 if value & bit else 0
+    first_frame, first_value = reads[0]
+    was = 1 if first_value & bit else 0
+    history = f"{was} at the first read ({at(first_frame)}), {got} at the last ({at(frame)})"
+    if got != want:
+        return scenario.Check(name, FAIL, f"0x{addr:08X} = {value:08X}: {history}")
+    return scenario.Check(name, PASS, f"0x{addr:08X} = {value:08X}: {history}")
+
+
+def ship_battles(s: Seen) -> list[dict]:
+    """Each 5xx stage the run entered, and how it ended: "results" (the results
+    screen loaded), "lost" (a090a), "left" (another map loaded with neither) or
+    None (the log ends inside it). The stage loading again is a retry."""
+    out: list[dict] = []
+    cur: dict | None = None
+    for kind, name, frame in s.ship_events:
+        if kind == "results":
+            if cur is not None and cur["end"] is None:
+                cur["end"], cur["end_frame"] = "results", frame
+            continue
+        if cur is not None:
+            if name == cur["stage"] and cur["end"] is None:
+                cur["retries"] += 1
+                continue
+            if cur["end"] is None:
+                cur["end"] = "lost" if name == GAME_OVER else "left"
+                cur["end_frame"] = frame
+            cur["after"] = name
+            out.append(cur)
+            cur = None
+        if int(name[1:4]) in SHIP_STAGES:
+            cur = {"stage": name, "frame": frame, "end": None, "end_frame": None, "retries": 0}
+            cur["after"] = None
+    if cur is not None:
+        out.append(cur)
+    return out
 
 
 def _canon(path: Path) -> str:
@@ -568,6 +669,8 @@ def judge(
     expect_map: str | None = None,
     expect_reach: str | None = None,
     frames_dir: Path | None = None,
+    expect_flags: list[tuple[int, int]] | None = None,
+    expect_ship_end: bool = False,
 ) -> dict:
     """Everything `check` says about one log, as the object summary.json holds."""
     r = scenario.parse_report(text)
@@ -619,8 +722,11 @@ def judge(
             checks.append(scenario.Check(name, FAIL, f"it never loaded; maps: {seen}"))
         else:
             checks.append(scenario.Check(name, PASS, f"at {at(reached[0])}"))
+    for n, want in expect_flags or ():
+        checks.append(flag_check(s, n, want))
     card, card_questions = card_check(s)
     checks.append(card)
+    ships = ship_battles(s) if s.traced else None
 
     setup: list[scenario.Check] = []
     if r.scripted_events is None and s.pad_file_changes is None and not r.pad_trouble:
@@ -658,6 +764,21 @@ def judge(
         setup.append(scenario.Check("it fought what it claims", DID_NOT_TEST, said))
     else:
         setup.append(scenario.Check("it fought what it claims", PASS, f"{claim}: {battles}"))
+    if expect_ship_end:
+        name = "a ship battle reached its end"
+        ended = [b for b in ships or () if b["end"] in ("results", "lost")]
+        if ships is None:
+            setup.append(scenario.Check(name, SKIP, no_trace))
+        elif ended:
+            b = ended[0]
+            said = f"{b['stage']} from {at(b['frame'])}: {b['end']} at {at(b['end_frame'])}"
+            setup.append(scenario.Check(name, PASS, said))
+        else:
+            said = (
+                "; ".join(f"{b['stage']}: {b['end'] or 'unfinished'}" for b in ships)
+                or "no ship stage"
+            )
+            setup.append(scenario.Check(name, DID_NOT_TEST, said))
 
     def placed(line: str, frame: int | None, last_map: str | None) -> str:
         where = f"after {last_map} loaded" if last_map else "before any field map"
@@ -711,6 +832,8 @@ def judge(
         "wall_seconds": s.wall_seconds,
         "pad_events": r.scripted_events,
         "pipelines": pipeline_summary(s, landing),
+        "beff": [{"name": n, "frame": f} for n, f in s.beff] if s.traced else None,
+        "ship_battles": ships,
     }
 
 
@@ -762,6 +885,13 @@ def print_result(res: dict) -> None:
         print("[seen] maps " + (" > ".join(m["map"] for m in res["maps"]) or "none"))
     else:
         print("[seen] battles and maps not available: this log has no [trace] lines")
+    if res.get("beff"):
+        names = ", ".join(b["name"] for b in res["beff"])
+        print(f"[seen] {len(res['beff'])} effect package(s): {names}")
+    for b in res.get("ship_battles") or ():
+        end = f"{b['end']} at {at(b['end_frame'])}" if b["end"] else "unfinished"
+        retry = f", {b['retries']} retry(ies)" if b["retries"] else ""
+        print(f"[seen] ship battle {b['stage']} from {at(b['frame'])}: {end}{retry}")
     pipes = res.get("pipelines")
     if pipes:
         where = f"after {res['landing_map']} loaded" if res["landing_map"] else "after a landing"
@@ -821,11 +951,22 @@ def cmd_check(args: argparse.Namespace) -> int:
         else:
             text = path.read_text(encoding="utf-8", errors="replace")
             frames = Path(args.frames) if args.frames else None
-            res = judge(text, log, args.expect_battles, args.expect_map, args.expect_reach, frames)
+            res = judge(
+                text,
+                log,
+                args.expect_battles,
+                args.expect_map,
+                args.expect_reach,
+                frames,
+                args.expect_flag,
+                args.expect_ship_end,
+            )
         print_result(res)
         results.append(res)
     if len(results) > 1:
         print_table(results)
+    if args.beff_ledger:
+        beff_ledger(Path(args.beff_ledger), results)
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -833,6 +974,27 @@ def cmd_check(args: argparse.Namespace) -> int:
             json.dump(results, fh, indent=2)
             fh.write("\n")
     return 1 if any(r["verdict"] == FAIL for r in results) else 0
+
+
+def beff_ledger(path: Path, results: list[dict]) -> list[str]:
+    """Add these logs' effect packages to the ledger at `path` (a JSON list of
+    names, made if missing) and say which are new; returns the new ones."""
+    known: list[str] = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+    new = []
+    for res in results:
+        for b in res.get("beff") or ():
+            if b["name"] not in known and b["name"] not in new:
+                new.append(b["name"])
+    names = sorted(set(known) | set(new))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        json.dump(names, fh, indent=1)
+        fh.write("\n")
+    print(
+        f"[ledger] {len(names)} effect package(s) in {path}, {len(new)} new"
+        + (": " + ", ".join(new) if new else "")
+    )
+    return new
 
 
 def at_least_one(text: str) -> int:
@@ -908,6 +1070,24 @@ def main(argv: list[str] | None = None) -> int:
         metavar="DIR",
         help="the job's own snapshots: a return to the field after a battle whose snapshots "
         "are all black is a question",
+    )
+    c.add_argument(
+        "--expect-flag",
+        type=flag_spec,
+        action="append",
+        metavar="N[=0|1]",
+        help="story flag N is set (or with =0 clear) at the run's end, read from the last peek of "
+        "its word; no peek of it FAILs (repeatable)",
+    )
+    c.add_argument(
+        "--expect-ship-end",
+        action="store_true",
+        help="the job claims a ship battle fought to its results or its loss",
+    )
+    c.add_argument(
+        "--beff-ledger",
+        metavar="PATH",
+        help="add the effect packages these logs loaded to the JSON list at PATH, and say which are new",
     )
     c.add_argument("--json", metavar="PATH", help="write one object per log to PATH")
     a = p.parse_args(argv)

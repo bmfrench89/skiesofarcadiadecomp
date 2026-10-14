@@ -3,6 +3,7 @@ si.c reads whole -- a fault found by seed 7 is only useful if seed 7 replays
 the same presses, and a script si.c stops parsing halfway through would soak
 nothing and say so only in the log."""
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -484,3 +485,113 @@ def test_a_snapshot_the_port_did_not_write_is_refused(tmp_path):
     p.write_bytes(bytes(d))
     with pytest.raises(ValueError, match="not 8-bit RGBA"):
         soak.is_black(p)
+
+
+# --------------------------------------------------------------------------
+# docs/specs/reach.md U0: flags, effect packages and ship battles
+# --------------------------------------------------------------------------
+
+
+def peek(frame: int, addr: int, value: int) -> str:
+    return f"[peek] frame {frame}: {addr:08X} = {value:08X} (retrace {frame * 2})"
+
+
+def lab_peek(frame: int, addr: int, value: int) -> str:
+    return f"[mod] lab: peek peek:2600-20000:0x{addr:08X}: frame {frame}: {addr:08X} = {value:08X}"
+
+
+def test_a_flag_is_read_from_the_last_peek_of_its_word():
+    """Flag 303 is bit 15 of 0x80310B60 (801F6D38: n & 31 from the bottom);
+    the last read decides, from SOA_PEEK and the lab mod alike, and the
+    detail says what the first read held, so a flag set before the run began
+    is visible as such."""
+    assert soak.flag_word(303) == (0x80310B60, 0x8000)
+    assert soak.flag_word(0) == (0x80310B3C, 1)
+    play = [lab_peek(2650, 0x80310B60, 0x300F), *ONE_BATTLE, peek(5400, 0x80310B60, 0xB00F)]
+    res = soak.judge(soak_log(play), "x.log", expect_flags=[(303, 1), (304, 0)])
+    assert status(res, "flag 303 is 1 at the end") == "pass"
+    assert status(res, "flag 304 is 0 at the end") == "pass"
+    detail = next(c["detail"] for c in res["checks"] if c["name"] == "flag 303 is 1 at the end")
+    assert "0 at the first read (frame 2650), 1 at the last (frame 5400)" in detail
+
+
+@pytest.mark.parametrize(
+    "play, why",
+    [
+        ([lab_peek(2650, 0x80310B60, 0x300F)], "the bit is clear"),
+        ([lab_peek(2650, 0x80310B60, 0xB00F), peek(5400, 0x80310B60, 0x300F)], "cleared again"),
+        ([lab_peek(2650, 0x80310B5C, 0xFFFFFFFF)], "another word"),
+        ([], "no peek at all"),
+    ],
+    ids=["clear", "cleared-again", "wrong-word", "no-peek"],
+)
+def test_a_flag_claim_fails_unless_its_own_bit_ends_set(play, why):
+    res = soak.judge(soak_log(play + ONE_BATTLE), "x.log", expect_flags=[(303, 1)])
+    assert res["verdict"] == "FAIL", why
+    assert status(res, "flag 303 is 1 at the end") == "FAIL", why
+
+
+def test_a_flag_spec_refuses_what_is_not_a_flag():
+    assert soak.flag_spec("303") == (303, 1) and soak.flag_spec("303=0") == (303, 0)
+    for bad in ("x", "303=2", "27328", "-1"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            soak.flag_spec(bad)
+
+
+def test_effect_packages_are_listed_once_in_both_spellings(tmp_path, capsys):
+    """LoadStart prints "/BEFF/X.MLK"; LoadCrew prints "/BEFF/" "X.MLD"."""
+    beff = [
+        si(4800),
+        '[trace] LoadStart                pc 801C63EC lr 801CBEF8 "/BEFF/F0500000.MLK"',
+        '[trace] LoadCrew                 pc 8006EB88 lr 8006E968 "/BEFF/" "E6700017.MLD"',
+        si(4900),
+        '[trace] LoadStart                pc 801C63EC lr 801CBEF8 "/BEFF/F0500000.MLK"',
+    ]
+    res = soak.judge(soak_log(beff + ONE_BATTLE), "x.log")
+    assert res["beff"] == [
+        {"name": "F0500000.MLK", "frame": 4800},
+        {"name": "E6700017.MLD", "frame": 4800},
+    ]
+    ledger = tmp_path / "beff.json"
+    ledger.write_text('["E6700017.MLD", "PCWIN.MLK"]\n', encoding="utf-8")
+    assert soak.beff_ledger(ledger, [res]) == ["F0500000.MLK"]
+    assert json.loads(ledger.read_text(encoding="utf-8")) == [
+        "E6700017.MLD",
+        "F0500000.MLK",
+        "PCWIN.MLK",
+    ]
+    assert soak.beff_ledger(ledger, [res]) == []
+    assert "3 effect package(s)" in capsys.readouterr().out
+
+
+SHIP_HUD = '[trace] LoadAsset pc 801DB244 "/field/stsicon.mld"'
+RESULTS = '[trace] LoadStart                pc 801C63EC lr 801CBEF8 "/field/HRS_BEND.BIN"'
+
+
+def ship(*events: str) -> list[str]:
+    return [si(3300), field_map("a550a"), SHIP_HUD, *events]
+
+
+@pytest.mark.parametrize(
+    "play, end, verdict",
+    [
+        (ship(si(9000), RESULTS, si(9300), field_map("a126a")), "results", "pass"),
+        (ship(si(9000), field_map("a090a")), "lost", "pass"),
+        (
+            ship(si(9000), field_map("a550a"), si(12000), RESULTS, field_map("a126a")),
+            "results",
+            "pass",
+        ),
+        (ship(si(9000)), None, soak.DID_NOT_TEST),
+        (ship(si(3900), field_map("a551a")), "left", soak.DID_NOT_TEST),
+    ],
+    ids=["won", "lost", "retried-then-won", "frame-limit", "warped-away"],
+)
+def test_a_ship_battle_is_fought_to_its_end_only_by_results_or_a_loss(play, end, verdict):
+    """The sky550 run of 2026-09-23 reached round 3 and met its frame limit:
+    that is "did not test", as is a stage left by a warp to the next one."""
+    res = soak.judge(soak_log(play), "x.log", expect_ship_end=True)
+    assert res["ship_battles"][0]["stage"] == "a550a"
+    assert res["ship_battles"][0]["end"] == end
+    assert res["verdict"] == verdict, res["setup"]
+    assert res["battles"] == 0

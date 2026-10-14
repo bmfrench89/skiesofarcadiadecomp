@@ -57,6 +57,21 @@ The checks below need four things the tree lacks [V: no such code today]:
 chain read is held by a test on the fake guest (`test_mods.py`'s driver); the mutation of each (the flag bit off by
 one, a ship stage with no end counted as fought, the chain read skipping a dereference) turns its test red.
 
+**Built 2026-10-14.** `soak.py check --expect-flag N[=0|1]`, `--expect-ship-end` and `--beff-ledger PATH`, and the
+`[seen]` lines for effect packages and ship battles; `examples/mods/lab` with `entry`, `peek` and `objects`, built
+by `--link`, and two items the first runs showed were needed: `hold-hp:F-G`, the standing party's HP put back to
+its maximum in battle (U1: A presses alone lose to the boss), and `turn:F-G:M:SEQ`, a member's first command input
+of each battle played through the pad filter, with the command types logged at each phase 1 -> 2 edge (U2). Twelve
+tests in `test_soak.py` and five in `test_mods.py` (passing under MSVC and llvm-mingw); six mutations, each red: the
+flag's bit counted from the top, a ship stage that met the frame limit counted as ended, an effect package listed
+each time it loads, the chain read skipping its dereference, `hold-hp` topping up a member who is out, and a turn
+played again within its battle. The `entry` item's own
+reading of the code: `fn_8021067C(id)` only evaluates the entry's `LABEL` condition (it formats `M%05d`, finds the
+entry and runs `scptAnarize` on the next word); `fn_80210550(id)` starts it, refusing while `0x8030E714` is 1; the
+player's scan calls the first, then the second, then stores 1 at `r13-29464` and the volume at `r13-29396`
+(80117E78-80117EA0), which is what the lab does. The list it walks: head `r13-29180` (80223024), next at +48, live
+while the s16 at +20 is not negative, the object id at +8.
+
 ## 2. U1: a boss battle, from the story
 
 **The target** [V, `python tools/sct.py 116a`]: part G's card lands on `a116a` (FINDINGS:1517-1526; the card's
