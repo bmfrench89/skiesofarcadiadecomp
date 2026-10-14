@@ -201,6 +201,11 @@ The owner answered four questions, with the research behind them summarised in t
        - the story between the part-select jump points;
        - effect packages beyond the 20 of 576 ever loaded, with gxr's tripwires for the unmodelled GX features
          watched (`runtime/gxr.c`'s warn-once list).
+
+       **Specified 2026-10-14** in [specs/reach.md](specs/reach.md), as U0 (the checks and a lab mod the runs need)
+       and U1-U5 (the boss of part G's prison, an item in battle, a ship battle to its end, the story between the
+       jump points by an entry walker, and the effect packages part by part), each with its invariants and the run
+       that proves its check can fail. The owner's words that day: "continue with PC step 2 and keep going I want to game finished".
     3. One owner sitting, the display at 60 or 120 Hz, confirming what is built but never checked: sessions A and B
        (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked, its window
        captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`).
