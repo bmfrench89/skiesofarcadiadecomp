@@ -1439,6 +1439,14 @@ Prototype Cannons on the list, **round 3 of 41** -- the rounds advance under
 the scripted A presses. So the round-2 stall above was the part-A save's
 empty ship, and ship battles run.
 
+> Correction, 2026-10-14 (FINDINGS "Reach U3"): "3/41" is the spirit gauge, 3 of
+> 41 SP, not a round. The same entry at 60,000 frames (`build/reach/u3-ship`)
+> shows frame 8000 and frame 40000 identical: Aika's turn on the cannon list,
+> where every Prototype Cannon costs 6 SP, so an A press chooses nothing, and
+> both ships' HP bytes (B[261], B[262]) sat at 100 from frame 3387 to the end.
+> The rounds did not advance; the A-only script stalls here, by the game's
+> rule. Whether ship battles run to their end is reach U3's.
+
 
 **A battle the story allows: two non-Attack commands, a win, and the field
 fades back in by itself.** `build/scenario-fairbattle.log`, 2026-09-23, from

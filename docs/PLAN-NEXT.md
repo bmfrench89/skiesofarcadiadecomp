@@ -197,7 +197,8 @@ The owner answered four questions, with the research behind them summarised in t
        writes down the runs and the invariants each must hold before any is run:
        - a boss or event battle;
        - Items used in battle;
-       - a ship battle fought to its end (one reached round 3 of 41, FINDINGS §11);
+       - a ship battle fought to its end (one stalled at its first turn with 3 of 41 SP, which FINDINGS §11
+         first read as round 3 of 41; corrected in FINDINGS "Reach U3");
        - the story between the part-select jump points;
        - effect packages beyond the 20 of 576 ever loaded, with gxr's tripwires for the unmodelled GX features
          watched (`runtime/gxr.c`'s warn-once list).

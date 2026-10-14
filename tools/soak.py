@@ -325,6 +325,9 @@ RE_BEFF = re.compile(r'"/BEFF/(?:"\s*")?([^"/\s]+)"', re.IGNORECASE)
 # The ship battle's results screen (ship-worldmap.md: state 4 loads it).
 RE_SHIP_RESULTS = re.compile(r"HRS_BEND", re.IGNORECASE)
 SHIP_STAGES = range(500, 584)  # the 5xx maps; a ship battle is the field scene on one
+SHIP_RESULTS_FLAG = 0x80347280  # 1: the next load is the results screen (fn_8012A26C)
+SHIP_OUTCOME = 0x80347278  # how it ended: 2 ran (reach U3), 1 or 3 a ship sank
+SHIP_RAN = 2
 FLAGS = 0x80310B3C  # flag n: bit n % 32, from the least significant, of FLAGS + n // 32 * 4
 
 
@@ -510,8 +513,10 @@ def flag_check(s: Seen, n: int, want: int) -> scenario.Check:
 
 def ship_battles(s: Seen) -> list[dict]:
     """Each 5xx stage the run entered, and how it ended: "results" (the results
-    screen loaded), "lost" (a090a), "left" (another map loaded with neither) or
-    None (the log ends inside it). The stage loading again is a retry."""
+    screen: HRS_BEND in the trace, or a peek of the results flag at 1), "ran"
+    (results after the party fled), "lost" (a090a), "left" (another map
+    loaded with none of these) or None (the log ends inside it). The stage
+    loading again is a retry."""
     out: list[dict] = []
     cur: dict | None = None
     for kind, name, frame in s.ship_events:
@@ -534,6 +539,32 @@ def ship_battles(s: Seen) -> list[dict]:
             cur["after"] = None
     if cur is not None:
         out.append(cur)
+    # The trace never shows HRS_BEND (reach U3's runs), so a peek of the
+    # results flag decides when there is one: fn_8012A26C sets 0x80347280 to 1
+    # when the next load is the results screen. 0x80347278 then says how the
+    # fight ended: 2 when the party ran (reach U3, frame 8100's wheel on Run),
+    # 1 or 3 when a ship sank (battle-system.md 7, the applier).
+    results = s.words.get(SHIP_RESULTS_FLAG, [])
+    outcomes = s.words.get(SHIP_OUTCOME, [])
+    for b in out:
+        start, stop = b["frame"] or 0, b["end_frame"]
+        inside = [
+            (f, v) for f, v in outcomes if (f or 0) >= start and (stop is None or (f or 0) <= stop)
+        ]
+        b["outcome_word"] = inside[-1][1] if inside else None
+        if b["end"] in (None, "left"):
+            hit = next(
+                (
+                    f
+                    for f, v in results
+                    if v == 1 and (f or 0) >= start and (stop is None or (f or 0) <= stop)
+                ),
+                None,
+            )
+            if hit is not None:
+                b["end"], b["end_frame"] = "results", hit
+        if b["end"] == "results" and b["outcome_word"] == SHIP_RAN:
+            b["end"] = "ran"
     return out
 
 
@@ -891,7 +922,9 @@ def print_result(res: dict) -> None:
     for b in res.get("ship_battles") or ():
         end = f"{b['end']} at {at(b['end_frame'])}" if b["end"] else "unfinished"
         retry = f", {b['retries']} retry(ies)" if b["retries"] else ""
-        print(f"[seen] ship battle {b['stage']} from {at(b['frame'])}: {end}{retry}")
+        word = b.get("outcome_word")
+        how = f", outcome word {word}" if word is not None else ""
+        print(f"[seen] ship battle {b['stage']} from {at(b['frame'])}: {end}{retry}{how}")
     pipes = res.get("pipelines")
     if pipes:
         where = f"after {res['landing_map']} loaded" if res["landing_map"] else "after a landing"

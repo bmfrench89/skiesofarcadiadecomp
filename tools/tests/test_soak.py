@@ -584,8 +584,31 @@ def ship(*events: str) -> list[str]:
         ),
         (ship(si(9000)), None, soak.DID_NOT_TEST),
         (ship(si(3900), field_map("a551a")), "left", soak.DID_NOT_TEST),
+        # The trace never shows HRS_BEND; the results flag's peek does.
+        (
+            ship(
+                peek(8143, 0x80347278, 1), peek(8206, 0x80347280, 1), si(8209), field_map("a126a")
+            ),
+            "results",
+            "pass",
+        ),
+        (
+            ship(
+                peek(8143, 0x80347278, 2), peek(8206, 0x80347280, 1), si(8209), field_map("a126a")
+            ),
+            "ran",
+            soak.DID_NOT_TEST,
+        ),
     ],
-    ids=["won", "lost", "retried-then-won", "frame-limit", "warped-away"],
+    ids=[
+        "won",
+        "lost",
+        "retried-then-won",
+        "frame-limit",
+        "warped-away",
+        "results-flag",
+        "ran-away",
+    ],
 )
 def test_a_ship_battle_is_fought_to_its_end_only_by_results_or_a_loss(play, end, verdict):
     """The sky550 run of 2026-09-23 reached round 3 and met its frame limit:

@@ -135,8 +135,9 @@ four presses, whose crystal was handed back and whose command was not 5.
 ## 4. U3: a ship battle fought to its end
 
 **What is known:** the one ship battle with a part-L party (`build/scenario-sky550.log`) entered `550a` by the
-opcode-210 recipe (seven pokes at frame 3300, `run_sky550.log:2`) [V] and reached round 3 of 41 by A every 150
-frames, when the frame limit ended it: no fault, no hang [V log]. No log here holds `HRS_BEND` [V grep]: no ship
+opcode-210 recipe (seven pokes at frame 3300, `run_sky550.log:2`) [V] and ran under A every 150 frames until the
+frame limit ended it: no fault, no hang [V log]. (Its "round 3 of 41" was the SP gauge, 3 of 41; it had stalled at
+its first turn, as U3's first run shows.) No log here holds `HRS_BEND` [V grep]: no ship
 battle has reached its results. The script ends one by `B[261] <= 0` (lose) or `B[262] <= 0` (win)
 (battle-system.md:521-529) [D].
 

@@ -20,8 +20,13 @@
  *                  final word is the one logged: 0x80347390*+56 is the first
  *                  word of the battle's inventory copy.
  *   objects        at each map load, log every hit volume in the game's list:
- *                  its object id, hit type, state and shape words, for finding
- *                  where things are.
+ *                  its object id, hit type, class, state and shape words, and
+ *                  where its object's actor stands (op 154's lookup by id,
+ *                  act+56..64), then the player's position.
+ *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
+ *                  (a multiple of 4, at most 8192) from the address the chain
+ *                  C ends on (C's steps as peek's; *0x8034727C is the ship
+ *                  battle's state), eight words a line.
  *   hold-hp:F-G    in battle (scene 7) at each safe point of frames F to G,
  *                  every party member still standing (actor+28 & 0x2100 clear,
  *                  the game's own test, fn_80078610) has its HP put back to its
@@ -63,6 +68,9 @@
 #define FN_ENTRY_LIVE 0x8021067Cu
 #define FN_ENTRY_START 0x80210550u
 #define FLAG_EVENT 1087u
+#define FN_FIND_OBJECT 0x8015F1A0u /* the object with id r3: its actor, or 0 (op 154's lookup) */
+#define PLAYER 0x80347450u         /* the player's actor (content-systems.md 2, 80101030) */
+#define ACTOR_POS 56u              /* x, y, z floats */
 #define ENTRY_PATIENCE 3600u
 
 #define SCENE_BATTLE 7u
@@ -84,7 +92,7 @@
 #define MAX_ITEMS 64
 #define MAX_STEPS 8
 
-enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN };
+enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP };
 
 typedef struct Item {
     int kind;
@@ -212,6 +220,15 @@ static int parse_item(char* s)
     } else if (strcmp(s, "peek") == 0) {
         it->kind = ITEM_PEEK;
         if (!parse_frames(a, it) || !parse_chain(b, it)) return 0;
+    } else if (strcmp(s, "dump") == 0) {
+        /* dump:F:CHAIN:BYTES -- the chain's address, then BYTES from there */
+        char* n = strrchr(b, ':');
+        char* end;
+        it->kind = ITEM_DUMP;
+        if (!n) return 0;
+        *n++ = '\0';
+        if (!parse_frames(a, it) || it->to != it->from || !parse_chain(b, it)) return 0;
+        if (!parse_u32(n, &end, &it->id) || *end || !it->id || it->id > 8192 || it->id % 4) return 0;
     } else {
         return 0;
     }
@@ -431,6 +448,30 @@ static void try_entry(Item* it)
     it->state = 1;
 }
 
+/* dump: once, at the first safe point at or after its frame, eight words a
+ * line from the chain's address (the chain's last step is an address here,
+ * not a word to read). */
+static void dump(Item* it)
+{
+    uint32_t a = it->base, off, w[8];
+    int i, k;
+    it->state = 1;
+    for (i = 0; i < it->nsteps; i++) {
+        if (it->deref[i] && !g_api->read32(a, &a)) {
+            logf_("dump %s: frame %u: the chain left RAM", it->text, g_api->frame());
+            return;
+        }
+        a += (uint32_t)it->add[i];
+    }
+    logf_("dump %s: frame %u: %u bytes from %08X", it->text, g_api->frame(), it->id, a);
+    for (off = 0; off < it->id; off += 32) {
+        for (k = 0; k < 8; k++)
+            if (off + 4u * (uint32_t)k >= it->id || !g_api->read32(a + off + 4u * (uint32_t)k, &w[k])) w[k] = 0;
+        logf_("dump +%04X: %08X %08X %08X %08X %08X %08X %08X %08X", off, w[0], w[1], w[2], w[3], w[4], w[5], w[6],
+              w[7]);
+    }
+}
+
 static void on_safe_point(void* user)
 {
     uint32_t f = g_api->frame();
@@ -443,6 +484,8 @@ static void on_safe_point(void* user)
             if (it->state == 0) try_entry(it);
         } else if (it->kind == ITEM_HOLD_HP) {
             if (f <= it->to) hold_hp(it);
+        } else if (it->kind == ITEM_DUMP) {
+            if (it->state == 0) dump(it);
         } else if (it->kind == ITEM_PEEK && f <= it->to) {
             uint32_t addr = 0, value = 0;
             if (!read_chain(it, &addr, &value)) {
@@ -457,10 +500,40 @@ static void on_safe_point(void* user)
     }
 }
 
+/* An actor's position, act+56..64 (content-systems.md 2: the MLD entry's
+ * +0x44 copied there), as "(x y z)"; 0 when it cannot be read. */
+static int position(uint32_t act, char* out, size_t cap)
+{
+    float p[3];
+    if (!g_api->read_f32(act + ACTOR_POS, &p[0]) || !g_api->read_f32(act + ACTOR_POS + 4, &p[1]) ||
+        !g_api->read_f32(act + ACTOR_POS + 8, &p[2]))
+        return 0;
+    snprintf(out, cap, "(%.2f %.2f %.2f)", p[0], p[1], p[2]);
+    return 1;
+}
+
+/* The object with this id, as op 154 finds it (fn_8015F1A0: its MLD entry's
+ * actor, +36, or 0), and where it stands. Called at a map load, where
+ * call_guest is allowed. */
+static void actor_at(uint32_t id, char* out, size_t cap)
+{
+    uint32_t args[1], act = 0;
+    char pos[64];
+    snprintf(out, cap, "no actor");
+    if (id == 0 || id >= 65535) return;
+    args[0] = id;
+    if (!g_api->call_guest(FN_FIND_OBJECT, args, 1, NULL, 0, &act, NULL) || !act) return;
+    if (position(act, pos, sizeof pos))
+        snprintf(out, cap, "actor %08X at %s", act, pos);
+    else
+        snprintf(out, cap, "actor %08X", act);
+}
+
 static void on_map_loaded(void* user, uint32_t map)
 {
-    uint32_t v, id, w[4], cls;
+    uint32_t v, id, w[4], cls, player = 0;
     uint16_t type, state, nshapes;
+    char where[96];
     int guard = 0, n = 0, i;
     (void)user;
     if (!g_api->read32(LIST_HEAD, &v)) return;
@@ -477,12 +550,15 @@ static void on_map_loaded(void* user, uint32_t map)
          * 0x80000008, man 0x78400016), which the overlap test copies aside
          * (fn_80222B30, 80222B58); seen in a116a's 45 volumes, 2026-10-14. */
         if (!g_api->read32(v + 16, &cls)) cls = 0;
-        logf_("objects a%03u%c: %08X id %u type %u class %08X state %d shapes %d, shape 0: %08X %08X %08X %08X",
+        actor_at(id, where, sizeof where);
+        logf_("objects a%03u%c: %08X id %u type %u class %08X state %d shapes %d, shape 0: %08X %08X %08X %08X, %s",
               (unsigned)(map >> 8), (char)(map & 0xFF), v, id, type, cls, (int16_t)state, (int16_t)nshapes, w[0],
-              w[1], w[2], w[3]);
+              w[1], w[2], w[3], where);
         n++;
         if (!g_api->read32(v + 48, &v)) break;
     }
+    if (g_api->read32(PLAYER, &player) && player && position(player, where, sizeof where))
+        logf_("objects a%03u%c: the player %08X at %s", (unsigned)(map >> 8), (char)(map & 0xFF), player, where);
     logf_("objects a%03u%c: %d hit volume(s) at frame %u", (unsigned)(map >> 8), (char)(map & 0xFF), n,
           g_api->frame());
 }

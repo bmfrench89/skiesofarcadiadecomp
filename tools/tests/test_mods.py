@@ -1113,11 +1113,31 @@ def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver
 
 
 @needs_cc
+def test_the_lab_dumps_from_where_a_chain_ends_once(driver, tmp_path):
+    """dump:F:C:N reads N bytes from the address C ends on (a trailing `*`
+    takes the word there as the address), eight words a line, once."""
+    lab(tmp_path)
+    script = (
+        "set 8034727c 80400100 set 80400100 11111111 set 8040011c 88888888 set 80400120 99999999 "
+        "safe frame safe"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="dump:0:0x8034727C*:36")
+    assert "loaded 1" in out, err
+    lines = [x for x in err.splitlines() if "lab: dump" in x]
+    assert lines == [
+        "[mod] lab: dump dump:0:0x8034727C*:36: frame 0: 36 bytes from 80400100",
+        "[mod] lab: dump +0000: 11111111 00000000 00000000 00000000 00000000 00000000 00000000 88888888",
+        "[mod] lab: dump +0020: 99999999 00000000 00000000 00000000 00000000 00000000 00000000 00000000",
+    ], err
+
+
+@needs_cc
 def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     lab(tmp_path)
     bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
-    for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns):
+    dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
+    for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns, *dumps):
         out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
         assert "loaded 0" in out and f"SOA_LAB item not understood: {bad}" in err, (bad, err)
 
