@@ -656,6 +656,10 @@ those files on its first Android build (D-34).
 
 ### 1.3 R5c. Setup's checkbox and words
 
+*Built 2026-10-14 in a cloud session (FINDINGS "R5c"), but for the Done lines that need the owner's PC (the real
+run, the captures, the tests under `noskip` there) and the owner's first bless. What differed from this text is
+recorded there and corrected below.*
+
 **Purpose.** A player ticks one box. Setup then builds `soa.exe` and `libsoa_game.so` in one run, with one progress
 bar, and says plainly how to put the library and the disc on the phone.
 
@@ -684,8 +688,10 @@ bar, and says plainly how to put the library and the disc on the phone.
 - **The checkbox:** "Also build the game for an Android phone or handheld (64-bit ARM)". Off by default, unless the
   owner says otherwise (question 2).
 - **The bar.** When it is ticked, the Windows lines map to 0-60, and the `[build] android …` lines to 60-100, the
-  prefix taken off before the same parse (`sysroot` 61, `translate` 64, `n/m` 66-94, `stub …` 95, `link` 96,
-  `done` 100). The Windows `done` puts it at 60. The split is set by measurement on the Ally X.
+  prefix taken off before the same parse (`translate` 64, `n/m` 66-94, `stub …` 95, `link` 96, `done` 100). The
+  Windows `done` puts it at 60. The phone's `sysroot` line comes before the extraction (§6.1's order), built once and
+  in seconds, so it stands with the check, at 1; this text first said 61, which would put the bar back at the
+  extraction. The split is set by measurement on the Ally X.
 - **Space.** The need is `(built() ? 0 : NEED_FREE) + (ticked && no <root>\libsoa_game.so ? ANDROID_FREE : 0)`.
   It is checked when the window opens, when the box is ticked, when Build or Rebuild is pressed with it ticked, and
   by `--check --android`. `player_build`'s preflight checks again, with the gen folders' sizes counted (§6.1).
@@ -693,12 +699,14 @@ bar, and says plainly how to put the library and the disc on the phone.
 
   | Exit | This run's lines | Status |
   |---|---|---|
-  | 0 | `done soa.exe`, and `android done` when ticked | the built words |
-  | 0 | no `done soa.exe` | today's "finished, but soa.exe is not in this folder" (Windows Security) |
+  | 0 | `done soa.exe`, and `android done` when ticked; `soa.exe` still in the folder | the built words |
+  | 0 | no `done soa.exe`, or no `soa.exe` left in the folder | today's "finished, but soa.exe is not in this folder" (Windows Security) |
   | 2 | — | today's disc refusal |
   | 1 | `android failed: <why>` before `extract` | the Android-cannot-start words, with `<why>` |
-  | 1 | `done soa.exe`, then `android failed: <why>` | the Windows-built, Android-not words, with `<why>` |
+  | 1 | `done soa.exe`, ticked, no `android done` | the Windows-built, Android-not words, with `<why>` when an `android failed: <why>` line gave one |
   | 1 | anything else | today's "The build stopped" words |
+
+  Any other exit code, a crash's among them, is read as 1.
 
 - **The words** are drafts, under CLAUDE.md's first-bless rule, and do not say where the app comes from: no release
   carries an APK until D-33.
@@ -736,8 +744,9 @@ bar, and says plainly how to put the library and the disc on the phone.
 2. **`bar_position` without the phase map:** the positions fall back after `done soa.exe`, and the test fails.
 3. **`on_done` by `built()`:** a recorded log whose Windows build failed over an existing `soa.exe` shows the built
    words, and the test fails.
-4. **The space rule ignoring the box once `soa.exe` is built:** `--check --android --assume-free <1 GB>` in a built
-   folder passes where it must be `SPACE`, and the test fails.
+4. **The space rule ignoring the box once `soa.exe` is built:** `--check --android --assume-free <less than
+   ANDROID_FREE>` in a built folder passes where it must be `SPACE`, and the test fails. (120 MiB in the test: with
+   `ANDROID_FREE` at 384 MiB, 1 GB passes the correct rule too.)
 
 *Emulator:* none. Setup builds arm64 only; the Thor runs it (§1.4).
 
@@ -1776,7 +1785,9 @@ That is the player's own path on GitHub's Windows machine: the package's Python 
 package's sources, offline, held to the pins. It writes into the unzipped check folder, after the guard has run, and
 never into the zip.
 
-**R5c.** `& "$pkg\Setup.exe" --check --android`, beside `--check`.
+**R5c.** `& "$pkg\Setup.exe" --check --android`, beside `--check`. Beyond this text, `ci.yml`'s `android-route`
+job runs `test_setup.py` under `noskip` on its Windows leg, which has llvm-mingw already, so Setup's tests run on
+every push and not only when a release is drafted.
 
 ---
 

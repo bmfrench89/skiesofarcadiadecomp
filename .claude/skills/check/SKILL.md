@@ -370,7 +370,8 @@ python -m pytest tools/tests -q
 1475 passed, 41 skipped in 977.75s
 ```
 
-1516 tests in 90 files, none of which reads the disc. The count you see depends
+1521 tests in 90 files, none of which reads the disc (the counts below are 2026-10-09's, at 1516, before
+R5c's five in `test_setup.py`, which run on Windows with llvm-mingw). The count you see depends
 on what is installed, and the tool tells you: `1456 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
 into one module-level skip), `1066 passed, 450 skipped` without MSVC, and

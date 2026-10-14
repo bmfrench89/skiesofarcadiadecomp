@@ -367,14 +367,21 @@ hands.*
 `recompile.py` stopping at `import fetch_sdl`; the owner's run takes one staged since (FINDINGS
 "R5-0").*
 
+*R5c, 2026-10-14: the window gains one row, the Android box under the disc row (android-sysroot.md
+§1.3), and its status at a run's end comes from that run's own lines. `--show-build`, `--bar` and
+`--assume-free` let a test see the command line, the bar and the status with no window (FINDINGS
+"R5c"). The owner's run takes a package staged after it, with the box ticked.*
+
 ### R5. Android: a runtime-only APK and a game library from the PC
 
 *Settled 2026-10-07 in [android-sysroot.md](android-sysroot.md) (D-34 to D-36), which owns R5's
 slices from then, R5-0 to R5c, and supersedes this section where they differ. R5-0, R5a and R5b are done
 (FINDINGS "R5-0", "R5a part 1", "R5a part 2", "R5b"): `player_build.py --target android-arm64` builds the
-phone's library from a player's package, offline, with what it carries. **The release gate:** no published
-release shows Setup's Android box (R5c) before the release APK exists (D-33); the owner publishes every
-release (Q-D4).*
+phone's library from a player's package, offline, with what it carries. R5c, Setup's Android box, is built
+but for its run on the owner's PC and the owner's first bless of its words (FINDINGS "R5c"). **The release
+gate:** no published release shows Setup's Android box (R5c) before the release APK exists (D-33); the
+owner publishes every release (Q-D4). Every release workflow run since R5c drafts a package whose Setup
+shows the box, so until D-33 such a draft is for testing, never for publishing.*
 
 *Specified with L12; recorded here so L12 does not miss what route C2 needs. Prerequisites: L12, R2.*
 

@@ -177,7 +177,12 @@ The owner answered four questions, with the research behind them summarised in t
   workflow drafted; on the emulator, a library built from the package passed the self test, the replay 23/23 at
   1-8 threads, `title` and the player's path. Its two owner items are open, and neither blocks: the licence
   texts' look (`build/r5-licences/index.html`, local), and one line on how the design read D-34 (its row
-  below). **Next: R5c,** Setup's checkbox and words, built as drafts that wait for the owner's first bless.
+  below). **R5c is built** (FINDINGS "R5c", 2026-10-14, in a cloud session): Setup's Android box builds `soa.exe`
+  and `libsoa_game.so` in one run, with a two-phase bar, a status chosen from the run's own lines and the phone's
+  space counted; its four mutations are caught under Wine, and CI's `android-route` Windows leg runs its tests.
+  What waits is its Done on the owner's PC (the real run from the disc, the window captured at 100% and 150%, the
+  tests there) and the owner's first bless of its words, with §1.3's three small questions.
+
 - **Still open, and still the owner's:** the primary
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
@@ -372,7 +377,7 @@ changed since 24d9235).
 | [specs/gpu-backend.md](specs/gpu-backend.md) | C5a-C5c (proposed for PLAN.md Track C), V0 to V12, and the gate | Reviewed twice, then checked with this file |
 | [specs/distribution.md](specs/distribution.md) | R1 to R5: the runtime package that builds the game on the player's machine (G3's route) | Written 2026-10-04, reviewed once against the code the same day |
 | [specs/android.md](specs/android.md) | L12a to L12g: the Android shell, and the game library from the PC (R5's own slices are android-sysroot.md's) | Written 2026-10-05, reviewed once against the code the same day |
-| [specs/android-sysroot.md](specs/android-sysroot.md) | R5-0 to R5c: the phone's game library built on the player's PC, through llvm-mingw and this repository's own Android sysroot (D-31, D-34 to D-36) | Settled 2026-10-07 after four adversarial reviews; R5-0, R5a and R5b done |
+| [specs/android-sysroot.md](specs/android-sysroot.md) | R5-0 to R5c: the phone's game library built on the player's PC, through llvm-mingw and this repository's own Android sysroot (D-31, D-34 to D-36) | Settled 2026-10-07 after four adversarial reviews; R5-0, R5a and R5b done; R5c built, but for its run on the owner's PC and the first bless of its words |
 | [specs/now.md](specs/now.md) | The first rows after the pivot | **Superseded**: every row has landed or is replaced (B3) |
 | `docs/ROADMAP.md`, `HANDOFF.md`, `docs/FINDINGS.md` | What is done, what is known, what was tried | Unchanged in role |
 
@@ -695,7 +700,8 @@ count kept before it starts.
   through the app's own picker, each refusal in the player's words, the disc read in place through its
   descriptor; since its stop box, a run the disc layer stops mid-play (exit 9) says why on the screen. **Next: L12's Done on the
   Thor,** which needs the owner; without the owner, R5's own Android sysroot, as the owner answered (§0):
-  R5-0, R5a and R5b are done, and R5c is next ([specs/android-sysroot.md](specs/android-sysroot.md)).
+  R5-0, R5a and R5b are done, and R5c is built but for its run on the owner's PC and the first bless of its words
+  ([specs/android-sysroot.md](specs/android-sysroot.md)).
 
 The portability spec orders them straight after M4a, and does not tie them to the GPU decision. **This
 plan runs them after the gate by default** (D-10), for two reasons:

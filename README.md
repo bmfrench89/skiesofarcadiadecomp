@@ -84,7 +84,9 @@ and `python tools/package.py --out <dir>` zips it (R3), which `.github/workflows
 checks with `python tools/guard.py --tree` and `python tools/package.py check` (its baked inputs
 against the commit's, R5-0), and leaves as a draft release for the owner to publish.
 A player never types either: the package's `Setup.exe` (`tools/setup/`, R4) checks the folder,
-builds from the disc image they pick with no console window, and starts the game.
+builds from the disc image they pick with no console window, and starts the game. Its one box,
+"Also build the game for an Android phone or handheld (64-bit ARM)" (R5c, off by default), builds
+`libsoa_game.so` beside `soa.exe` in the same run and says what to copy to the device.
 `SOA_CLANG_CL` names the compiler; the Android NDK's
 (`...\Android\Sdk\ndk\<version>\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe`)
 is enough,
@@ -377,7 +379,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1516 tests; any that need a dump skip themselves
+python -m pytest                     # 1521 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

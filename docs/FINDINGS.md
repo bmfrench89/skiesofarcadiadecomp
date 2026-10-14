@@ -8146,3 +8146,79 @@ the driver's.** 2026-10-04.
   79 without llvm-mingw (`SOA_MINGW` naming an empty folder, as a fresh clone and CI's Tests jobs have it): 24 more
   skips in `test_android_build.py`, 8 in `test_setup.py`, 4 in `test_android_sysroot.py` and 2 in `test_mingw.py`.
   The full run took 977.75 s.
+
+**R5c: Setup's Android box, built in a cloud session.** 2026-10-14.
+
+- **What it is:** the fourth slice of R5 (docs/specs/android-sysroot.md §1.3). Setup gains one box under the disc
+  row, "Also build the game for an Android phone or handheld (64-bit ARM)", off by default; the window is one row
+  taller. Ticked, Build and Rebuild pass `--target windows --target android-arm64`, so one run builds `soa.exe` and
+  then `libsoa_game.so` beside it. The bar gives the Windows build 0-60 and the phone's lines 60-100. The status at the
+  run's end comes from the run's own `[build]` lines, by the spec's table, never from a `soa.exe` the folder already
+  held. The space Setup asks for counts the phone's 384 MiB (`ANDROID_FREE`, held to `player_build.py`'s by the test)
+  while `libsoa_game.so` is not there, checked when the window opens, when the box is ticked, on Build and Rebuild,
+  and by `--check --android`. A shortfall that only the box causes blocks nothing: unticking it is the way out.
+  - Three switches for the tests, none of which opens the window: `--show-build` prints the command line Build would
+    start; `--bar [--android] [--exit N]` reads a run's lines on stdin, prints `bar <position> <line>` for each line
+    that moves the bar, then `status <words>` for a run ending with N; and `--assume-free <bytes>` is the free space
+    `--check` sees, ignored anywhere else.
+  - The release workflow runs `Setup.exe --check --android` beside `--check`. `ci.yml`'s `android-route` job, whose
+    Windows leg already fetches llvm-mingw, now runs `test_setup.py` under `noskip` there on every push; until now
+    only `release.yml` ran Setup's tests on Windows.
+- **Where it was built** [V]: a cloud container, Linux x86-64, with no disc, captures, cards, Windows or MSVC. The
+  pinned llvm-mingw 20260922's Ubuntu build came from `tools/fetch_mingw.py` (5,208 files recorded), and
+  `package.build_setup` built `Setup.exe` with it, as the package does. Wine 9.0 (Ubuntu's `wine64`) ran its console
+  modes, nothing else:
+  - `--check` in a laid-out package said `ready`, exit 0; with `--disc game.wbfs`, the FORMAT words, exit 6;
+  - `--show-build --disc C:\Games\game.rvz` printed the command line with no `--target`; with `--android` it ended
+    ` --target windows --target android-arm64`; with no `--disc` it printed `--show-build needs --disc <image>`, exit 1;
+  - `test_setup.py`'s five R5c tests, and the four R4 tests that need no Windows-only path (the lists, a plain folder,
+    the zip, the formats), all passed. They were the module's own functions, run by a scratch harness that starts
+    each `.exe` under Wine, with the fixture's Windows check bypassed.
+- **Mutations** [V], §1.3's four, each a copy of `setup.c` built the same way, and each caught by its test under
+  Wine:
+  - `start_build` ignoring the box: `--show-build --android` lacked the targets;
+  - `bar_position` without the phase map: the bar fell back after `done soa.exe`;
+  - `done_status` deciding by `built()` instead of the run's `done soa.exe`: a Windows build that failed over an old
+    `soa.exe` said it was built;
+  - the space rule ignoring the box once `soa.exe` is built: `--check --android --assume-free` at 120 MiB said
+    `ready`.
+- **The tests:** 1521 in 90 files (`pytest --collect-only`, with capstone), five more than R5b's. In the container,
+  under a plain CPython 3.14 with pytest and capstone: `999 passed, 522 skipped in 25.53s`. All 13 of `test_setup.py`'s
+  Windows-only tests are among the skips. Inside a virtualenv two `test_citest.py` checks fail the same way at 285eb07:
+  the environment's `_virtualenv.py` startup hook is the import they see. guard, guard `--history` (2,638 paths), ruff
+  check and ruff format all passed. The five rows R5b measured on the owner's PC are to be measured again there.
+- **The split** [I from R5b's V, on the Ally X]: the phone's target took 50.6 s after the extraction, and both with
+  `--rebuild` 110 s, so Windows about 59 s. A first run adds the sysroot (1.7 s) and the extraction (about 11 s;
+  61.4 s against 50.6 s into a second root) to the Windows phase. That makes about 74 s against 51, or 59% and 41%,
+  so the design's 60 stands for a first run. A run that only adds the phone's library to a built folder spends about
+  15 s relinking Windows and 50 s on the phone's, so its bar waits near 60. One timed two-target first run on the PC
+  settles this.
+- **Not run, each needing the owner's PC:**
+  - the Done's real run, `Setup.exe --disc <image> --build --android` into a package staged after this, ending in the
+    built words, its `libsoa_game.so` with the sha256 of `player_build.py --target android-arm64` from the same
+    package into `build\r5c\R2`;
+  - the window captured at 100% and 150% for the review page `build/setup-review/index.html`, the status box grown by
+    a line if the built words do not fit;
+  - `pytest -p noskip tools/tests/test_setup.py` there.
+  CI's `android-route` Windows leg runs the tests on a GitHub runner meanwhile.
+- **What differed from the design's text** (each now corrected in §1.3):
+  - **The sysroot's bar position:** the phone's `sysroot` line stands with the check, at 1, not at 61. The design's
+    own line order (§6.1, and `player_build.py`) prints `[build] android sysroot` before `[build] extract`, so at 61
+    the bar would go back at the extraction, against its own Done.
+  - **The built words** need `soa.exe` still in the folder, as R4's did, so a run whose `soa.exe` Windows Security
+    took gets R4's words. The table had named only "no `done soa.exe`".
+  - **The Windows-built, Android-not words** cover a run that printed `done soa.exe` and then stopped with no
+    `android failed:` line, a traceback or a killed python. The design gave those words' no-`<why>` form, but its row
+    required the line.
+  - **Mutation 4's free space** is below `ANDROID_FREE`. The design's "1 GB" passes the correct rule too, since R5b
+    kept `ANDROID_FREE` at 384 MiB.
+  - **Beyond the design:** `test_without_the_box_the_bar_is_r4s` (unticked, the bar is R4's, and an Android line
+    moves nothing), and the CI step above.
+- **For the owner**, §1.3's list, unchanged:
+  - the first bless of the box's label, the four statuses and the space refusal, on the review page;
+  - whether the box is off by default (it is);
+  - which disc file the phone is told to pick. Setup's words name `extracted\disc.iso`, while the phone's prompt
+    calls `GEAE8P.soadisc` the better choice;
+  - the release gate: no release whose Setup shows the box is published before the release APK (D-33). Every draft
+    the release workflow makes from now on shows it;
+  - R4's run on the Ally X, with the box ticked.

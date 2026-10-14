@@ -138,7 +138,7 @@ these of its slices are done, each with a FINDINGS entry of the same name:
 Nothing found so far would stop a person playing. Two things that looked like
 it -- a black field after a battle and a trap on `a116c` -- were both the test
 recipe putting the game in a state retail cannot reach, and are written up as
-such. 1516 tests, the guard over the tree and over history, ruff, `decomp.py`,
+such. At R5b, 1516 tests, the guard over the tree and over history, ruff, `decomp.py`,
 the self test, `title --check` and the replay all passed before the last push.
 
 **History holds 24 reviewed blobs under `scratch/`, on purpose.** An audit
@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1516 |
+| Python tests | 1521 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,7 +417,28 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-09)
+## Where the last session stopped (2026-10-14)
+
+**The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
+with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch
+`ccr-ff7e48fb-uaiw45`, not to `main`. **Merge that branch into `main` before anything else on this PC**, and read
+CI on the merge. R5c is Setup's Android box: one run builds `soa.exe` and `libsoa_game.so`, with a two-phase bar,
+a status chosen from the run's own lines and the phone's space counted. Its four mutations are caught under Wine,
+and CI's `android-route` Windows leg now runs `test_setup.py` under `noskip`. **What waits for this PC** is R5c's
+Done (android-sysroot.md §1.3):
+- stage a package (`build\r5c\P`), then `P\Setup.exe --disc <image> --build --android`, ending in the built
+  words, its `libsoa_game.so` with the sha256 of `player_build.py --target android-arm64` from the same package
+  into `build\r5c\R2`;
+- time that two-target first run to settle the bar's 60/40 split (FINDINGS "R5c" derives 59/41 from R5b's
+  timings);
+- capture the window at 100% and 150% for the review page `build/setup-review/index.html`;
+- run `pytest -p noskip tools/tests/test_setup.py` there, and the whole suite's five configurations (now 1521
+  tests; TESTING's count table).
+
+The owner's first bless of the words and §1.3's three small questions come after that page. Nothing in R5c
+touches `runtime/`, `src/` or anything baked, so `baked=` did not move, and the emulator's APK and library stay
+valid. The cloud session did not run `decomp.py`, the self test, the replay or `title`: none of their inputs
+changed. Everything the 2026-10-09 paragraph below says this PC holds is as it was left.
 
 **The state at the stop (2026-10-09, after R5b):** R5b (1bc44b9, 3c268c4,
 and its docs with this section) is pushed; read CI for the last. R5's design
