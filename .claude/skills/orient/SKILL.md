@@ -40,6 +40,9 @@ gh run list --workflow ci.yml --limit 3
   planning session have shared this one checkout and this one branch. Commit
   by path (`git commit -- <paths>`), never `--amend`, and never switch
   branches here; build a branch in a scratch `git worktree` instead.
+- **A cloud session** (since 2026-10-14) works on a branch of its own, with no game data, and never
+  pushes to `main` (PLAN-NEXT §E item 10). On this PC, merge its branch into `main` first
+  (`git branch -r` names it), read CI on the merge, and run what its FINDINGS entries leave for this PC.
 - **One `soa.exe` at a time** (CLAUDE.md): two share `build/frames/` and the
   card.
 - **Then read**, in this order: HANDOFF.md's "Where the last session

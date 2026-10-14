@@ -440,6 +440,19 @@ touches `runtime/`, `src/` or anything baked, so `baked=` did not move, and the 
 valid. The cloud session did not run `decomp.py`, the self test, the replay or `title`: none of their inputs
 changed. Everything the 2026-10-09 paragraph below says this PC holds is as it was left.
 
+**Two sessions from 2026-10-14** (PLAN-NEXT §0, D-37 to D-39, and §E item 10). The owner wants the PC port
+"working 100%", with mods and improvements wherever they can go, beside the Android path.
+- **A session on this PC leads with making it 100%:**
+  - merge the cloud branch and finish R5c's Done here;
+  - scripted runs into what no run has reached (a boss or event battle, Items in battle, a ship battle to its
+    end, the story between the jump points, effect packages beyond the 20 of 576 seen), fixing what breaks;
+  - one owner sitting at 60 or 120 Hz that confirms what is built but unchecked.
+- **The cloud session takes the mod framework,** starting with the mod tests' driver building without MSVC.
+- **Decompilation stays targeted.**
+
+What the owner chooses after the sitting (mods, 60 fps or widescreen) is §0's to record.
+
+
 **The state at the stop (2026-10-09, after R5b):** R5b (1bc44b9, 3c268c4,
 and its docs with this section) is pushed; read CI for the last. R5's design
 is `docs/specs/android-sysroot.md`; R5-0, R5a and R5b are done, and R5c

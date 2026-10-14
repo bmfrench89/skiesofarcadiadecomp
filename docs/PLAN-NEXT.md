@@ -183,7 +183,42 @@ The owner answered four questions, with the research behind them summarised in t
   What waits is its Done on the owner's PC (the real run from the disc, the window captured at 100% and 150%, the
   tests there) and the owner's first bless of its words, with §1.3's three small questions.
 
+- **The owner's answers of 2026-10-14: two sessions, two tracks** (D-37 to D-39). The owner asked for the PC port to
+  move on beside the Android path: "I want that working 100% and focusing on mods and improvements wherever we can."
+  Two sessions now work at once. **The cloud session** has the repository and no game data, so it cannot run the
+  game, and pushes to its own branch (§E item 10). **The PC session** is a Claude Code session the owner opens on
+  this PC, and it runs the game.
+  - **The PC session: make it 100% first** (D-37). In order:
+    1. Merge the cloud branch into `main`, read CI, then R5c's Done lines that need this PC (HANDOFF).
+    2. Scripted runs into what no run has reached, fixing what breaks, each with a FINDINGS entry. Its first slice
+       writes down the runs and the invariants each must hold before any is run:
+       - a boss or event battle;
+       - Items used in battle;
+       - a ship battle fought to its end (one reached round 3 of 41, FINDINGS §11);
+       - the story between the part-select jump points;
+       - effect packages beyond the 20 of 576 ever loaded, with gxr's tripwires for the unmodelled GX features
+         watched (`runtime/gxr.c`'s warn-once list).
+    3. One owner sitting, the display at 60 or 120 Hz, confirming what is built but never checked: sessions A and B
+       (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked.
+
+    Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
+    (H17a) and widescreen (M10).
+  - **The cloud session, after R5c: the mod framework** (D-38).
+    1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
+       are `@needs_msvc` today.
+    2. M16, declared options.
+    3. M17, load order and conflict reports.
+    4. M6, richer patches.
+    5. T10, a modding guide and tool.
+
+    Each is proven on this PC before it is called done.
+  - **Decompilation stays targeted** (D-39): a function is decompiled only when a mod must change its insides
+    (F4-F7, PLAN-60FPS-MODS.md); the broad grind stays parked.
+  - This amends D-27's "gameplay milestone 2 waits": its framework items start in the cloud now, and its game-facing
+    items wait for the owner's choice after the PC session's step 3. The Android path keeps its place: L12's Done on
+    the Thor whenever the owner and the phone are free, and L12g and L12h after it, the owner's to place.
 - **Still open, and still the owner's:** the primary
+
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
 - **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
@@ -909,6 +944,9 @@ until you say otherwise.
 | D-34 | How R5's Android sysroot is made and shipped | R5 | R5 | **answered 2026-10-07: built where it is used**, from pinned sources, by the script every machine runs; the stub libraries from `config/seam.txt` at each link. Not published as a release asset. *Read as every machine that uses it, the player's PC included:* the package carries bionic's 44 pinned files, and the player's PC builds the sysroot from them, offline, in under two seconds, on its first Android build (R5b); the owner is asked whether that is what was meant |
 | D-35 | The sysroot's licences: Apache-2.0, Sun's fdlibm notice, a NetBSD 4-clause text and Linux UAPI headers under GPL-2.0 WITH Linux-syscall-note, beside BSD | R5 | R5's packaging | **answered 2026-10-07: shipped, with their texts in `licenses/`** |
 | D-36 | The library L12's Done runs on the Thor | R5 | L12's Done | **answered 2026-10-07: built through R5's route** (llvm-mingw and the sysroot), so the session proves both |
+| D-37 | What the PC session leads with, beside the Android path | owner, 2026-10-14 | the PC track | **answered 2026-10-14: make it 100% first**: scripted runs into what no run has reached, fixing what breaks, and one owner sitting at 60 or 120 Hz; then mods, 60 fps or widescreen, the owner's choice (§0) |
+| D-38 | What the cloud session takes on after R5c | owner, 2026-10-14 | the cloud track | **answered 2026-10-14: the mod framework**: the mod tests without MSVC, then M16, M17, M6 and T10, each proven on the owner's PC (§0) |
+| D-39 | Whether hand decompilation goes broader | owner, 2026-10-14 | F4-F7 | **answered 2026-10-14: keep it targeted**: only what a mod must change on the inside |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:
@@ -988,6 +1026,20 @@ until you say otherwise.
 9. **Deviations are allowed and written down.** The implementation session may depart from a spec
    when the code says otherwise. The commit and FINDINGS say why, and the planning session folds it
    back into the spec.
+10. **The cloud session and the PC session (2026-10-14, D-37 to D-39).**
+    - **The cloud session** runs in Anthropic's cloud with the repository alone: no disc, captures, cards,
+      Windows or MSVC. It pushes to its own branch, never to `main`, so CI runs there only when started by
+      hand (`workflow_dispatch`). It builds and tests what needs no game data, and Windows programs under
+      Wine. It writes FINDINGS for what it ran, and says in the same entry what waits for this PC.
+    - **The PC session** merges the cloud branch into `main` at its start (a merge commit, never a rebase of
+      the cloud's commits), reads CI on the merge, and runs whatever the cloud's FINDINGS left for this PC
+      before calling a slice done. It keeps every rule above, and CLAUDE.md's.
+    - **Before each push, the cloud session merges `main` into its branch**, so the PC's merge stays a fast
+      one. Both append to FINDINGS, HANDOFF and this file, and a conflict there keeps both sides' text.
+    - **One file, one session:** `runtime/`, `src/`, `config/` and `tools/scenario.py` are the PC session's
+      while it works on them. The cloud session's mod-framework slices touch `runtime/mod.c` and
+      `soa_mod.h`, so each starts by saying so in HANDOFF; the other session leaves those files alone until
+      it lands.
 
 ---
 
