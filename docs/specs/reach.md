@@ -151,6 +151,11 @@ loads (state 4) and the caller's map `a126a` loads after; on a loss, `a090a` or 
 
 *Can it fail:* the 12,000-frame `sky550` log must judge "did not reach its end".
 
+**Run 2026-10-14** (FINDINGS "Reach U3"): won, with the lab's `sturn` playing a cannon for Vyse and Focus for the
+other three each turn; the results screen paid 300 Gold and four levels. The controls: the A-only run (stalled,
+"unfinished") and the random-mix run (fled, "ran"), both "did not test". The results file is not in the trace; the
+end is read from `0x80347280`'s peek.
+
 ## 5. U4: the story between the jump points
 
 No run has played from one part's landing map to the next part's (FINDINGS §11) [V]. What stops a blind script:

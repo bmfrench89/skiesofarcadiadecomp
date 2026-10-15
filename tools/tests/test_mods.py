@@ -1113,6 +1113,32 @@ def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver
 
 
 @needs_cc
+def test_the_lab_plays_a_ship_crew_members_turn_each_time_its_wheel_is_ready(driver, tmp_path):
+    """sturn:F-G:M:SEQ keys on 0x80306738: state 9, step 2, member byte M is
+    M's wheel, ready. It plays SEQ then, and again the next time that wheel
+    comes ready (a ship battle asks every turn); another member's is passed."""
+    lab(tmp_path)
+    script = (
+        "set 80306738 09020100 pad 90 0100 "  # crew 1 ready: not ours
+        "set 80306738 09020000 pad 100 0100 pad 165 0000 "  # crew 0: lead-in, then a
+        "set 80306738 09050000 pad 300 0200 "  # chose: passed through
+        "set 80306738 09020000 pad 400 0000 pad 465 0000"  # ready again: played again
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="sturn:0-1000:0:a")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 90 0100 filtered",
+        "pad 100 0000 filtered",
+        "pad 165 0100 filtered",
+        "pad 300 0200 filtered",
+        "pad 400 0000 filtered",
+        "pad 465 0100 filtered",
+    ], out
+    assert err.count("lab: sturn: crew 0's input") == 2, err
+
+
+@needs_cc
 def test_the_lab_dumps_from_where_a_chain_ends_once(driver, tmp_path):
     """dump:F:C:N reads N bytes from the address C ends on (a trailing `*`
     takes the word there as the address), eight words a line, once."""

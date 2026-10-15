@@ -8448,3 +8448,36 @@ here).
   `0x78400016` man, the 0x802EE7C0 table's third word, content-systems.md:66), now logged as such. The first U2 run
   also used a `mod.dll` older than its source (`--link` had not run since `turn` was added), so the run script now
   refuses a lab DLL older than `mod.c`.
+
+**Reach U3: a ship battle fought to its end, and won.** 2026-10-14, `build/reach/u3-*` (game data, kept here).
+
+- **What it is:** docs/specs/reach.md U3, the first ship battle any run has carried to its result. Part L's card,
+  the opcode-210 entry into `550a` (seven pokes at frame 3300, `run_sky550.log:2`), the Delphinus against the Black
+  Pirates.
+- **Why A presses were never enough** [V frames]: the crew has 9 SP a turn and every Prototype Cannon costs 6. On
+  A presses Vyse fires one and the gauge shows the 3 left (frame 4000's "3/41", a preview while the list is open);
+  Aika's A then chooses nothing, and the fight stands still: frames 8000 and 40000 of a 60,000-frame run are the same
+  picture. FINDINGS' 2026-09-23 "round 3 of 41" was this gauge (corrected in place). On the soak's random battle mix
+  the party fled instead (frame 8100, the wheel on Run): the results screen with no reward and `0x80347278` = 2.
+- **The ship's command input, found** [V]: a RAM capture at Vyse's input and one at Aika's (`SOA_FIFO_DUMP` into the
+  run's own folder), compared, left two bytes going 0 → 1; peeks through a fight showed `0x80306738` is the menu: its
+  first byte the state (2, 3, 5, 6, 8, then 9 when a member chooses), its second the step (2 the member's wheel
+  ready, 5 and 6 as a choice is made, 0F done), its third the crew member, and, once B leaves the cannon list for
+  the wheel (state 6), its last byte the wheel position: a plain left or right moves it two, as in a character
+  battle. Positions 0 Run, 3 Attack (its cannon list open at once), 4 Magic, 5 Focus (frames 4375, 4650, 4350).
+  Each choice is placed on the turn's grid and confirmed by a second A. The other words the run peeked: `*0x8034727C`,
+  the ship state, did not change while a member chose; the character battle's `0x80347390`, `0x80347330` and
+  `0x8034733C` stay 0 in a ship battle.
+- **The fight** [V, `build/reach/u3-fight2`]: the lab's new `sturn` item (below) played Vyse `a/a` (a cannon) and
+  the three others `b/right/a/a` (Focus) at each of their inputs, 24 turns in all. The enemy's HP byte `B[262]`
+  went 100 → 72 → 48 → 21 → 0 by frame 24638 and the Delphinus's `B[261]` 100 → 50, `B[264]` counting rounds 0 to 5
+  (battle-system.md 7's table, which no run had checked: with no damage dealt both bytes sit at 100). The outcome
+  word `0x80347278` went to 1 at 24527, the results flag `0x80347280` to 1 at 24841, the results screen (frame
+  25000): 300 Gold, and Vyse, Aika and Fina from level 1 to 5, "LEVEL UP!!" four times; then `a126a` again.
+  `soak.py check --expect-ship-end` passes, with every base invariant held over 40,000 frames.
+- **What the earlier design got wrong:** the trace never shows `HRS_BEND` (ship-worldmap.md's results file), in any
+  of these runs, though the results state ran; `soak.py` now reads the end from a peek of `0x80347280`, and calls an
+  end with `0x80347278` = 2 "ran", which `--expect-ship-end` does not accept (tests for both).
+- **The lab mod:** `sturn:F-G:M:SEQ`, a ship crew member's input played each time that member's wheel comes ready
+  (every turn), and `dump:F:C:N`, a region dumped from where a chain ends. A fake-guest test each; a turn that
+  finished just as the wheel stopped being ready was never played again, which the `sturn` test caught.

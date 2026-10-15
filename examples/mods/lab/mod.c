@@ -45,6 +45,9 @@
  *                  what SOA_PAD presses is held back. At each phase 1 -> 2 edge
  *                  the members' command types are logged (the s32 at
  *                  0x80309174 + 32 * m: 3 Attack, 4 Guard, 5 Item).
+ *   sturn:F-G:M:SEQ the same for a ship battle's crew member M, each time
+ *                  that member's wheel comes ready (the word at 0x80306738:
+ *                  state byte 9, step byte 2, member byte M), every turn.
  *
  * Addresses: r13 is 0x8034E720 (runtime/selftest.c), so the list head
  * r13-29180 is 0x80347524 (fn_8022300C, 80223024), linked at +48 (802230DC),
@@ -92,7 +95,15 @@
 #define MAX_ITEMS 64
 #define MAX_STEPS 8
 
-enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP };
+enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN };
+
+/* A ship battle's command input (reach U3, found by RAM captures at two
+ * crew members' inputs and confirmed by peeks through a fight): the word at
+ * 0x80306738 holds the menu's state (byte 0), its step (byte 1) and the crew
+ * member choosing (byte 2); state 9, step 2 is a member's wheel, ready. */
+#define SHIP_INPUT 0x80306738u
+#define SHIP_READY_STATE 9u
+#define SHIP_READY_STEP 2u
 
 typedef struct Item {
     int kind;
@@ -250,17 +261,18 @@ static uint16_t button(const char* name)
     return 0;
 }
 
-/* "turn:F-G:M:SEQ" */
+/* "turn:F-G:M:SEQ", or "sturn:F-G:M:SEQ" for a ship battle's crew */
 static int parse_turn(char* s)
 {
     Item* it;
     char *frames, *member, *seq, *tok, *end, *save;
-    if (strncmp(s, "turn:", 5) != 0 || g_nitems == MAX_ITEMS) return 0;
+    int ship = strncmp(s, "sturn:", 6) == 0;
+    if ((!ship && strncmp(s, "turn:", 5) != 0) || g_nitems == MAX_ITEMS) return 0;
     it = &g_items[g_nitems];
     memset(it, 0, sizeof *it);
     snprintf(it->text, sizeof it->text, "%s", s);
-    it->kind = ITEM_TURN;
-    frames = s + 5;
+    it->kind = ship ? ITEM_STURN : ITEM_TURN;
+    frames = s + (ship ? 6 : 5);
     member = strchr(frames, ':');
     if (!member) return 0;
     *member++ = '\0';
@@ -296,23 +308,39 @@ static void log_commands(uint32_t frame)
 static void on_pad(void* user, uint32_t frame, SoaPad* pad)
 {
     static uint32_t last_phase = 0xFFFFFFFFu;
-    uint32_t phase = 0xFFFFFFFFu, member = 0xFFFFFFFFu;
+    uint32_t phase = 0xFFFFFFFFu, member = 0xFFFFFFFFu, ship = 0, crew = 0xFFFFFFFFu;
     int battle = g_api->scene() == SCENE_BATTLE, i;
     (void)user;
     if (battle) g_api->read32(PHASE, &phase);
     if (battle && last_phase == PHASE_INPUT && phase == PHASE_ORDER) log_commands(frame);
     last_phase = battle ? phase : 0xFFFFFFFFu;
     if (phase == PHASE_INPUT) g_api->read32(MEMBER, &member);
+    if (g_api->read32(SHIP_INPUT, &ship) && (ship >> 24) == SHIP_READY_STATE &&
+        ((ship >> 16) & 0xFFu) == SHIP_READY_STEP)
+        crew = (ship >> 8) & 0xFFu;
     for (i = 0; i < g_nitems; i++) {
         Item* it = &g_items[i];
         uint32_t step, into;
-        if (it->kind != ITEM_TURN) continue;
-        if (!battle) {
+        if (it->kind == ITEM_STURN) {
+            /* Every time the member's wheel comes ready, not once a battle:
+             * a ship battle asks each crew member every turn. */
+            if (!it->started) {
+                if (crew != it->member) {
+                    it->done = 0;
+                    continue;
+                }
+                if (it->done || frame < it->from || frame > it->to) continue;
+                it->started = frame;
+                logf_("sturn: crew %u's input at frame %u: pressing %s", it->member, frame,
+                      strrchr(it->text, ':') + 1);
+            }
+        } else if (it->kind != ITEM_TURN) {
+            continue;
+        } else if (!battle) {
             it->done = 0;
             it->started = 0;
             continue;
-        }
-        if (!it->started) {
+        } else if (!it->started) {
             if (it->done || frame < it->from || frame > it->to || member != it->member) continue;
             it->started = frame;
             logf_("turn: member %u's input at frame %u: pressing %s", it->member, frame, strrchr(it->text, ':') + 1);
@@ -323,7 +351,9 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
         step = into < PRESS_GAP ? 0 : (into - PRESS_GAP) / (PRESS_HOLD + PRESS_GAP);
         if (step >= (uint32_t)it->npresses) {
             it->started = 0;
-            it->done = 1;
+            /* A ship member's wheel that is no longer ready may come ready
+             * again next turn; one still ready would only replay the same. */
+            it->done = it->kind == ITEM_TURN || crew == it->member;
             continue;
         }
         if (into < PRESS_GAP)
@@ -596,7 +626,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     }
     if (g_nitems) api->on_safe_point(on_safe_point, NULL);
     for (i = 0; i < g_nitems; i++) {
-        if (g_items[i].kind != ITEM_TURN) continue;
+        if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN) continue;
         if (api->size < SOA_MOD_HAS(pad_filter) || !api->pad_filter(on_pad, NULL)) {
             api->log("lab: a turn item needs the pad filter, which this port does not offer");
             return 1;
