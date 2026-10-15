@@ -1146,7 +1146,10 @@ def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
     the fake guest has no fn_8021067C), and starts nothing it was not told is live."""
     lab(tmp_path)
     vol = "set 80347524 80400100 set 80400108 bbb set 80400114 0 set 80400130 80400200 "
-    vol += "set 80400208 1771 set 80400214 0 "  # 3003 (a talk) and 6001 (an exit)
+    # 3003 (a talk) and 6001 (an exit), then 4100 with class 7800002D: hit type
+    # 45, the low half at +18, a save point, which the walker passes over.
+    vol += "set 80400208 1771 set 80400214 0 set 80400230 80400300 "
+    vol += "set 80400308 1004 set 80400310 7800002d "
     script = (
         vol + "set 803475cc 7 safe "  # a battle: busy
         "set 803475cc 6 set 80311aec 8 frame safe "  # quiet from frame 1, not IDLE frames yet
@@ -1157,7 +1160,41 @@ def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
     asked = [x for x in err.splitlines() if "call_guest(" in x]
     assert asked and all("call_guest(8021067C) refused" in x for x in asked), err
     assert len(asked) == 2, err  # both candidates asked once, at frame 4 only
-    assert "walk:" not in err.replace("walk:0-100:3", ""), err  # nothing started
+    waits = [x.split(": ", 3)[-1] for x in err.splitlines() if "lab: walk: waiting" in x]
+    assert waits == [
+        "the field is not running (scene 7, state 0)",
+        "no live entry: 2 volume(s) in the talk, check and exit ranges, 2 asked",
+    ], err
+    assert "started" not in err, err
+
+
+@needs_cc
+def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_path):
+    """assist:F-G:EVERY: on the beat, A in scene 7 or while the field's message
+    window (task 0x80346E4C) holds a choice (state 6 at 0x80346E64); never on
+    a quiet field, a page that is not a choice, or off the beat."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 6 pad 100 0000 "  # the field, no window
+        "set 80346e4c 80400000 set 80346e64 00040000 pad 150 0000 "  # a page (state 4)
+        "set 80346e64 00060000 pad 200 0000 pad 201 0000 pad 202 0000 "  # a choice: on the beat only
+        "set 80346e4c 0 set 803475cc 7 pad 250 0000 "  # a battle
+        "set 803475cc 6 set 80311aec 4 pad 300 0000 "  # its results screen
+        "set 80311aec 8 pad 350 0000"  # the field running again
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="assist:0-1000:50")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 100 0000 filtered",
+        "pad 150 0000 filtered",
+        "pad 200 0100 filtered",
+        "pad 201 0100 filtered",
+        "pad 202 0000 filtered",
+        "pad 250 0100 filtered",
+        "pad 300 0100 filtered",
+        "pad 350 0000 filtered",
+    ], out
 
 
 @needs_cc
@@ -1185,7 +1222,7 @@ def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
-    walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x")
+    walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x", "assist:0-9:3")
     for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns, *dumps, *walks):
         out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
         assert "loaded 0" in out and f"SOA_LAB item not understood: {bad}" in err, (bad, err)

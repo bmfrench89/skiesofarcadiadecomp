@@ -8493,6 +8493,19 @@ here).
   `a004a`, where the story allows no battle, and fought none.
 - **The effect-package ledger** went from 22 to 32 names: `F0500022`, `D2401700`, `F2927122` and `E6700317.MLD`
   (part C), `F0500030` and `F2916230` (E), `F050000B`, `F0500032`, `F050001A` and `PCP08` (F).
+- **Parts G to K** [V, `soak.py check`], the same recipe (G with no warp, H 121b, I 123b, J 126b, K 126d): every
+  base invariant held in all five. Only I fought (three battles, a game over at 32984), and it brought ten names no
+  log had held, `F0500051`, `F0500059`, `PCP03`, `D2400200`, `F2926051`, `F2910654`, `D2402800`, `E6700417.MLD`,
+  `F2906854` and `E6700217.MLD`: the ledger holds 42 of 576. G, H, J and K met no battle: H's random walk left 121b
+  for 121a and 019a, J's crossed between 126a and 126b (38 loads of the two), and G and K stayed on maps whose
+  encounters did not come in 30,000 frames with the accelerator. One renderer question, known: LINEPTWIDTH (2.17
+  px) in a battle on 123b.
+- **Part L was cut off** at frame 14230 when this session's host restarted overnight: its log holds no stop line, no
+  `[mem]` line and no fault, and it had warped to 131e, fought a battle, met a game over and returned to the title.
+  It is run again with the next recipe.
+- **What the recipe wastes:** with random presses the first battle of a run is usually lost, and the rest of the
+  run is the title's attract demo. The next round adds the lab's `hold-hp`, so the accelerator keeps bringing
+  battles for the whole run.
 - **A port defect, fixed: BP_MASK was not applied.** Every game over logged S3's question, `[gxr] BP_MASK 080000 was
   in force for BP 00 000001 ...`: the SDK's `GXSetCoPlanar` writes mask 080000 (GEN_MODE's zfreeze bit) and then its
   shadowed GEN_MODE, and after a game over that shadow differs from the register outside the mask. The console keeps

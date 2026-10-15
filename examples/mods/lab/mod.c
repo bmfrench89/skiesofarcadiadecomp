@@ -31,6 +31,12 @@
  *                  before an exit (6000-6999), then the lower id. The game's
  *                  own LABEL conditions and gates keep the story in order;
  *                  what the walker skips is the walk. Each start is logged.
+ *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
+ *                  at its results screen (the field's state 4, 0x80311AEC),
+ *                  or while the field's message window holds a choice (state
+ *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
+ *                  reads them): what the walker needs where a pad script's A
+ *                  every 150 frames would talk to whatever stands nearest.
  *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
  *                  (a multiple of 4, at most 8192) from the address the chain
  *                  C ends on (C's steps as peek's; *0x8034727C is the ship
@@ -103,7 +109,15 @@
 #define MAX_ITEMS 64
 #define MAX_STEPS 8
 
-enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, ITEM_WALK };
+enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, ITEM_WALK, ITEM_ASSIST };
+
+/* The field's message window, as mods/autotext reads it: its task (0 when
+ * there is none) and its state, 6 being a choice. */
+#define WINDOW_TASK 0x80346E4Cu
+#define WINDOW_STATE 0x80346E64u
+#define WINDOW_CHOICE 6
+#define FIELD_RESULTS 4u /* the field's state while a battle's results screen waits */
+#define HIT_SAVE_POINT 45u /* a volume's hit type (u16 at +18) at a save point */
 
 /* The walker's memory: how often each map's entry has been started. */
 #define MAX_SEEN 1024
@@ -336,6 +350,11 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     for (i = 0; i < g_nitems; i++) {
         Item* it = &g_items[i];
         uint32_t step, into;
+        if (it->kind == ITEM_ASSIST) {
+            if (frame >= it->from && frame <= it->to && frame % it->id < 2 && assist_wanted())
+                pad->buttons |= SOA_PAD_A;
+            continue;
+        }
         if (it->kind == ITEM_STURN) {
             /* Every time the member's wheel comes ready, not once a battle:
              * a ship battle asks each crew member every turn. */
@@ -379,23 +398,39 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     }
 }
 
-/* "walk:F-G:IDLE" */
+/* "walk:F-G:IDLE", or "assist:F-G:EVERY" */
 static int parse_walk(char* s)
 {
     Item* it;
     char* idle;
     char* end;
-    if (strncmp(s, "walk:", 5) != 0 || g_nitems == MAX_ITEMS) return 0;
+    int assist = strncmp(s, "assist:", 7) == 0;
+    size_t skip = assist ? 7 : 5;
+    if ((!assist && strncmp(s, "walk:", 5) != 0) || g_nitems == MAX_ITEMS) return 0;
     it = &g_items[g_nitems];
     memset(it, 0, sizeof *it);
     snprintf(it->text, sizeof it->text, "%s", s);
-    it->kind = ITEM_WALK;
-    idle = strchr(s + 5, ':');
+    it->kind = assist ? ITEM_ASSIST : ITEM_WALK;
+    idle = strchr(s + skip, ':');
     if (!idle) return 0;
     *idle++ = '\0';
-    if (!parse_frames(s + 5, it) || !parse_u32(idle, &end, &it->id) || *end || !it->id) return 0;
+    if (!parse_frames(s + skip, it) || !parse_u32(idle, &end, &it->id) || *end || !it->id) return 0;
+    if (assist && it->id < 4) return 0; /* a press is two frames down and two up */
     g_nitems++;
     return 1;
+}
+
+/* assist: is A wanted now? In a battle, at the results screen after one (the
+ * field's state 4, which waits for A: reach U4's third run stood there), or
+ * at a choice box in the field. */
+static int assist_wanted(void)
+{
+    uint32_t task = 0;
+    uint16_t state = 0;
+    if (g_api->scene() == SCENE_BATTLE) return 1;
+    if (g_api->scene() == 6 && g_api->field_state() == FIELD_RESULTS) return 1;
+    return g_api->scene() == 6 && g_api->read32(WINDOW_TASK, &task) && task &&
+           g_api->read16(WINDOW_STATE, &state) && (int16_t)state == WINDOW_CHOICE;
 }
 
 static uint32_t* seen_runs(uint32_t map, uint32_t id)
@@ -412,14 +447,36 @@ static uint32_t* seen_runs(uint32_t map, uint32_t id)
 
 /* One safe point of the walker: it->started is the last frame the field was
  * busy (or an entry was started), it->last the number of entries started. */
+/* Logs why the walker waits, once each time the reason changes. */
+static void walk_wait(Item* it, const char* why)
+{
+    if (strcmp(it->why, why) != 0) {
+        snprintf(it->why, sizeof it->why, "%s", why);
+        logf_("walk: waiting at frame %u: %s", g_api->frame(), why);
+    }
+}
+
 static void walk(Item* it)
 {
     uint32_t f = g_api->frame(), map = g_api->map(), v = 0, vol, id, best_id = 0, best_vol = 0, args[1];
-    uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, *runs;
-    uint16_t state;
+    uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, *runs, asked = 0, seen = 0;
+    uint16_t state, type = 0;
     int guard = 0, best_exit = 1, exit_;
-    if (g_api->scene() != 6 || g_api->field_state() != 8 || g_api->story_flag(FLAG_EVENT) ||
-        (g_api->read32(ENTRY_BUSY, &busy) && busy == 1)) {
+    char why[96];
+    if (g_api->scene() != 6 || g_api->field_state() != 8) {
+        snprintf(why, sizeof why, "the field is not running (scene %u, state %u)", g_api->scene(),
+                 g_api->field_state());
+        walk_wait(it, why);
+        it->started = f;
+        return;
+    }
+    if (g_api->story_flag(FLAG_EVENT)) {
+        walk_wait(it, "an event runs (flag 1087)");
+        it->started = f;
+        return;
+    }
+    if (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) {
+        walk_wait(it, "a script entry is starting (0x8030E714 is 1)");
         it->started = f;
         return;
     }
@@ -431,12 +488,18 @@ static void walk(Item* it)
         if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read32(vol + 8, &id)) continue;
         exit_ = id >= 6000 && id <= 6999;
         if (!exit_ && (id < 3000 || id > 4999)) continue;
+        /* A save point (hit type 45: a116a's 4100, a126a's 4411) opens the
+         * save menu, which is never the story's way on and which nothing here
+         * answers: reach U4's fourth run stood in it for 30,000 frames. */
+        if (g_api->read16(vol + 18, &type) && type == HIT_SAVE_POINT) continue;
+        seen++;
         runs = seen_runs(map, id);
         if (!runs) continue;
         /* the fewest starts first; among equals, a talk or a check before an exit */
         if (*runs > best_runs || (*runs == best_runs && (exit_ > best_exit || (exit_ == best_exit && id >= best_id))))
             continue;
         args[0] = id;
+        asked++;
         if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
         best_runs = *runs;
         best_id = id;
@@ -444,7 +507,13 @@ static void walk(Item* it)
         best_exit = exit_;
     }
     it->started = f;
-    if (!best_vol) return;
+    if (!best_vol) {
+        snprintf(why, sizeof why, "no live entry: %u volume(s) in the talk, check and exit ranges, %u asked", seen,
+                 asked);
+        walk_wait(it, why);
+        return;
+    }
+    it->why[0] = '\0';
     args[0] = best_id;
     if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
     g_api->write32(PRESS_STARTED, 1);
@@ -720,7 +789,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     }
     if (g_nitems) api->on_safe_point(on_safe_point, NULL);
     for (i = 0; i < g_nitems; i++) {
-        if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN) continue;
+        if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN && g_items[i].kind != ITEM_ASSIST) continue;
         if (api->size < SOA_MOD_HAS(pad_filter) || !api->pad_filter(on_pad, NULL)) {
             api->log("lab: a turn item needs the pad filter, which this port does not offer");
             return 1;
