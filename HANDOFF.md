@@ -459,11 +459,11 @@ the review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch
-`ccr-ff7e48fb-uaiw45`, not to `main`. **Merge that branch into `main` before anything else on this PC**, and read
-CI on the merge. R5c is Setup's Android box: one run builds `soa.exe` and `libsoa_game.so`, with a two-phase bar,
+`ccr-ff7e48fb-uaiw45`, not to `main`. Merging that branch into `main` was the first thing to do on this PC:
+**done 2026-10-14** (`main` fast-forwarded to 1c1fefd, CI green; the paragraph above). R5c is Setup's Android box: one run builds `soa.exe` and `libsoa_game.so`, with a two-phase bar,
 a status chosen from the run's own lines and the phone's space counted. Its four mutations are caught under Wine,
 and CI's `android-route` Windows leg now runs `test_setup.py` under `noskip`. **What waits for this PC** is R5c's
-Done (android-sysroot.md §1.3):
+Done (android-sysroot.md §1.3), **all done 2026-10-14 but the 150% capture** (FINDINGS "R5c and M6 on the PC"):
 - stage a package (`build\r5c\P`), then `P\Setup.exe --disc <image> --build --android`, ending in the built
   words, its `libsoa_game.so` with the sha256 of `player_build.py --target android-arm64` from the same package
   into `build\r5c\R2`;
@@ -481,7 +481,8 @@ changed. Everything the 2026-10-09 paragraph below says this PC holds is as it w
 **Two sessions from 2026-10-14** (PLAN-NEXT §0, D-37 to D-39, and §E item 10). The owner wants the PC port
 "working 100%", with mods and improvements wherever they can go, beside the Android path.
 - **A session on this PC leads with making it 100%:**
-  - merge the cloud branch and finish R5c's Done here;
+  - merge the cloud branch and finish R5c's Done here (**done 2026-10-14**: merged at 1c1fefd; R5c's Done but the
+    150% capture);
   - scripted runs into what no run has reached (a boss or event battle, Items in battle, a ship battle to its
     end, the story between the jump points, effect packages beyond the 20 of 576 seen), fixing what breaks;
   - one owner sitting at 60 or 120 Hz that confirms what is built but unchecked.
