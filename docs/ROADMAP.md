@@ -23,7 +23,7 @@ Work is sliced so **every milestone is something you can look at**, not a percen
 | **M5** | First frame | Phase 5 | Something the game drew, in a window |
 | **M6** | Title screen | Phase 5 | The actual title screen, correct |
 | **M7** | Audio | Phase 6 | Music and SFX. **Reached in first form:** the AX mixer runs the driver's command lists and the AI DMA plays through waveOut |
-| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game, the opening cutscenes, the first battle (won) and free movement in the first field (the Valuan ship's hold, with the minimap) all run; saves not yet |
+| **M8** | Playable | Phase 7 | Field movement, battles, saves that round-trip. **Progress:** New Game, the opening cutscenes, the first battle (won) and free movement in the first field (the Valuan ship's hold, with the minimap) all run, and a save written in the field loads back through Continue (2026-09-23) |
 
 ---
 
@@ -117,7 +117,7 @@ and replace**. That is the whole point; see [SPEC.md](SPEC.md) §6.
 | `[x]` | **4.4** DVD | M | **Done at the DI register level** (`runtime/dvd.c` reads `extracted/disc.iso`); the SDK's DVD stack runs recompiled. Arena-hi must sit at the FST, as the apploader leaves it.  `DVDOpen`/`DVDReadAsync`/`DVDChangeDir` against `extracted/`. **Depends on 0.5** — see R9 |
 | `[x]` | **4.5** VI + retrace | M | **Done**: DI0 status bit, 60 Hz of guest timebase, `VIWaitForRetrace` sleeps and wakes the main thread every frame.  **New slice. This is the game loop.** 480i only (NTSC/MPAL/EURGB60), 59.94 Hz, `VIWaitForRetrace` drives everything. v1 buried this in three words inside 5.5 |
 | `[x]` | **4.6** PAD input | S | **Done**: SI model (`runtime/si.c`), keyboard and XInput gamepad through the window (`runtime/window.c`), and a scripted controller (`SOA_PAD=frame:buttons,...`) for headless runs.  SDL3 gamepad → `PADRead`. Rumble (`rdt_vibrate`) exists in the binary |
-| `[~]` | **4.7** CARD saves | M | **EXI bus and a slot-A memory card modelled** (`runtime/exi.c`: a 59-block image at `build/cards/slotA.raw` the game formats itself, reported unlocked so the DSP unlock microcode is never needed; RTC and a valid SRAM too). Not yet exercised by a save. Importing a save from a real card or Dolphin is still the acceptance test |
+| `[~]` | **4.7** CARD saves | M | **EXI bus and a slot-A memory card modelled** (`runtime/exi.c`: a 59-block image at `build/cards/slotA.raw` the game formats itself, reported unlocked so the DSP unlock microcode is never needed; RTC and a valid SRAM too). **A save written in the field loads back through Continue** (2026-09-23, FINDINGS). Importing a save from a real card or Dolphin is still the acceptance test: `.gci` import and export are built (P3), but no real Dolphin save has been tried |
 
 ---
 
@@ -158,7 +158,7 @@ Deferred until the game is visually running. **Size depends on slice 0.7.**
 | | Slice | Size | Acceptance |
 |---|---|---|---|
 | `[x]` | **7.1** Title to field | M | **Done:** New Game, the opening, the deck battle and the Valuan ship's hold as the first navigable field, with dialogue, menus and the minimap rendering |
-| `[~]` | **7.2** Battle system | M | **The tutorial battle and random encounters in `a101b` run start to finish** (command wheel, targeting, attacks, damage, turns, victory); magic, items, Focus and boss fights not yet exercised |
+| `[~]` | **7.2** Battle system | M | **The tutorial battle and random encounters in `a101b` run start to finish** (command wheel, targeting, attacks, damage, turns, victory). **Since 2026-10-14:** the first boss battle (part G's Vigoro) won, with its "try again" on a loss, and an item used in battle (FINDINGS "Reach U1", "Reach U2"); magic not yet exercised |
 | `[~]` | **7.3** Ship/overworld | M | Airship sections. **Reached, not driven:** the world map (`a099x`) loads and draws, and a warp to `500a` fought a ship battle against The Blackbeard; sailing controls and the game's own entry to a ship battle (opcode 210) are untested |
 | `[~]` | **7.4** Playthrough hardening | XL | The long tail. Save/load parity, every scene. **Started:** a save round-trips through Continue, the part select reaches parts B-L, the ending plays, and all 255 warpable maps load without a runtime fault |
 | `[ ]` | **7.5** Enhancements | **L, not M** | Widescreen, higher internal resolution. **Uncapped framerate is a re-architecture**, not a tweak: the engine is 480i-locked and retrace-driven |

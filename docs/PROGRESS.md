@@ -118,6 +118,8 @@ how it went.
 
 - Saves: the game formats a card, but has not yet saved or loaded one.
   That needs a save point, which needs recorded input to reach.
+  **Closed 2026-09-23:** a save written from the field loads back through
+  Continue (FINDINGS "A save written from the field loads back").
 - The battleship's searchlight beams render dark; every step matches the
   hardware rules as modelled, so a reference capture is needed.
 - Beyond the hold: the ship and overworld sections, and the long tail of
