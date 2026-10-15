@@ -151,14 +151,17 @@ int main(void)
         bp_w(&s, 0xF5, 0x000004u); /* ZTEX2: Z textures on */
         bp_w(&s, 0xF5, 0x000000u);
 
-        /* BP_MASK. GXSetCoPlanar writes the mask and then the whole shadowed
-         * GEN_MODE, so every bit outside the mask is already what it says:
-         * that must stay silent. A masked write that really does change a bit
-         * outside the mask must not. */
+        /* BP_MASK, applied (reach U5): GXSetCoPlanar writes the mask and then
+         * its shadowed GEN_MODE; only bit 19 may change. A shadow that differs
+         * from the register outside the mask (000011 against 000010) leaves
+         * the register's bits, and the mask lapses after one write. */
         bp_w(&s, 0xFE, 0x080000u);
         bp_w(&s, 0x00, 0x000010u);
         bp_w(&s, 0xFE, 0x080000u);
         bp_w(&s, 0x00, 0x000011u);
+        fprintf(stderr, "[driver] masked GEN_MODE %06X\n", gx_bp_regs()[0]);
+        bp_w(&s, 0x00, 0x000013u);
+        fprintf(stderr, "[driver] unmasked GEN_MODE %06X\n", gx_bp_regs()[0]);
         bp_w(&s, 0x00, 0x000010u);
 
         bp_w(&s, 0x43, 0x000041u); /* PE_CONTROL: EFB pixel format 1 */
@@ -226,7 +229,6 @@ CONDITIONS = [
     ("TMEM preload", "TMEM preload (BP 63 000001"),
     ("fog range", "FOGRANGE (BP E8 000556) enables fog range adjustment about x=342"),
     ("Z textures", "ZTEX2 (BP F5 000004) turns Z textures on"),
-    ("BP_MASK", "BP_MASK 080000 was in force for BP 00 000011"),
     ("wide lines", "asks for lines 4.00 pixels wide"),
     ("wide points", "asks for points 4.00 pixels across"),
     ("destination alpha", "blends with a destination-alpha factor"),
@@ -253,8 +255,8 @@ def test_what_the_game_really_programs_stays_silent(output):
     assert "1.17 pixels" not in output, output
     assert "EFB copy filter" not in output, output
     assert "BP 4E 000100" not in output, output
-    assert output.count("BP_MASK") == 1, output  # the real one, not the GXSetCoPlanar shape
-    # Every [gxr] line that is not one of the twelve conditions, the report, or
+    assert "[gxr] BP_MASK" not in output, output  # applied now, so nothing to warn of
+    # Every [gxr] line that is not one of the eleven conditions, the report, or
     # the driver's own. A new tripwire firing on this stream shows up here.
     strays = [
         ln
@@ -267,6 +269,19 @@ def test_what_the_game_really_programs_stays_silent(output):
         )
     ]
     assert not strays, "\n".join(strays)
+
+
+@needs_msvc
+def test_bp_mask_changes_only_the_bits_it_names_for_one_write(output):
+    """GXSetCoPlanar's shape after a game over (FINDINGS "Reach U5"): mask
+    080000, then a GEN_MODE shadow of 000011 against a register of 000010.
+    The console keeps the register's bit 0; the write after it is unmasked."""
+    assert output.count("[driver] masked GEN_MODE 000010") == 2, output
+    assert output.count("[driver] unmasked GEN_MODE 000013") == 2, output
+    # The parser names each (the first eight), with what it kept: once a pass.
+    said = "[gx] BP_MASK 080000 kept 000001 of BP 00 at frame "
+    assert output.count(said) == 2, output
+    assert "the write said 000011, the register becomes 000010" in output, output
 
 
 @needs_msvc

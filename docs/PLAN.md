@@ -177,7 +177,9 @@ in the corpus. BP_MASK fires on the *write* that the mask really does change
 bits outside of, not on the mask itself, because GXSetCoPlanar writes the
 mask and then the whole shadowed GEN_MODE and changes nothing outside it; the
 line-width threshold is two pixels, not "anything but exactly one", because
-the game programs 1.17 px in three captures.
+the game programs 1.17 px in three captures. (BP_MASK is applied since
+2026-10-14 and its tripwire is gone: after a game over the masked write does
+change GEN_MODE bits outside the mask, FINDINGS "Reach U5".)
 `tools/tests/test_gxr_tripwires.py` builds the renderer on its own the way
 `render_check.py` does and feeds it a synthetic stream: twelve conditions
 asked for twice, each saying exactly one line, and beside each one the value

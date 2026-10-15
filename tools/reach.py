@@ -136,6 +136,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 shutil.copy2(f, dest / f.name)
     shutil.copy2(card, folder / "card.raw")
     env = environment(args, folder, dict(os.environ))
+    if "SOA_FIFO_DIR" in env:  # the port does not make it, and says so per file
+        (ROOT / env["SOA_FIFO_DIR"]).mkdir(parents=True, exist_ok=True)
     log = folder / "run.log"
     start = time.monotonic()
     with log.open("wb") as out:

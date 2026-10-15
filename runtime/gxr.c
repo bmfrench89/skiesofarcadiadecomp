@@ -289,36 +289,17 @@ int gxr_enabled(void)
             fprintf(stderr, __VA_ARGS__);                               \
     } while (0)
 
-/* BP_MASK (BP 0xFE) says the next BP write changes only the bits it names,
- * and we apply all 24 of them. That is only wrong when the write really
- * carries a bit outside the mask that differs from what the register already
- * holds -- and the SDK's one use of it, GXSetCoPlanar (mask 080000, then
- * GEN_MODE), writes the whole shadowed GEN_MODE back, so every bit outside
- * the mask is already what it says. The game does that from its first frame,
- * so warning on the mask write itself is a line in every log of a port that
- * renders correctly. Our own copy of the previous value is what tells the two
- * apart; g_bp_seen keeps a register whose first write is masked from being
- * compared against a zero we never saw written. */
-static uint32_t g_bp_prev[256];
-static uint8_t g_bp_seen[256];
-static uint32_t g_bp_mask = 0xFFFFFFu;
+/* BP_MASK (BP 0xFE) is applied where the shadow takes each write (gx.c
+ * load_bp), so what arrives here is already what the register holds. Until
+ * reach U5 it was not: the port wrote all 24 bits, and this file warned when
+ * a masked write changed bits outside its mask -- every game over, where
+ * GXSetCoPlanar writes a GEN_MODE shadow that differs from the register
+ * (FINDINGS "Reach U5"). */
 
 /* The BP registers whose value alone says the game wants something we do not
  * have. Called for every BP write, after the shadow has taken it. */
 static void bp_tripwire(const uint32_t* bp, uint32_t reg, uint32_t v)
 {
-    uint32_t mask = g_bp_mask, prev = g_bp_prev[reg & 0xFFu];
-    int seen = g_bp_seen[reg & 0xFFu];
-    g_bp_prev[reg & 0xFFu] = v;
-    g_bp_seen[reg & 0xFFu] = 1;
-    g_bp_mask = 0xFFFFFFu; /* the mask covers one write, then lapses */
-    if (reg == 0xFE) {
-        g_bp_mask = v & 0xFFFFFFu;
-        return;
-    }
-    if (mask != 0xFFFFFFu && seen && ((v ^ prev) & ~mask & 0xFFFFFFu))
-        WARN_ONCE("[gxr] BP_MASK %06X was in force for BP %02X %06X, which also changes %06X outside the mask; we apply all 24 bits, so those changed too and the register now differs from the hardware's by that much\n",
-                  mask, reg, v, (v ^ prev) & ~mask & 0xFFFFFFu);
     switch (reg) {
     case 0x00: /* GEN_MODE */
         if ((v >> 16) & 7)

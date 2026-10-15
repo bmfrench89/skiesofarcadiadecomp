@@ -8481,3 +8481,34 @@ here).
 - **The lab mod:** `sturn:F-G:M:SEQ`, a ship crew member's input played each time that member's wheel comes ready
   (every turn), and `dump:F:C:N`, a region dumped from where a chain ends. A fake-guest test each; a turn that
   finished just as the wheel stopped being ready was never played again, which the `sturn` test caught.
+
+**Reach U5, first batch: battle soaks on parts C to F, and BP_MASK applied.** 2026-10-14, `build/reach/u5-*`
+(game data, kept here).
+
+- **The runs** [V, `soak.py check`]: `tools/reach.py run u5-partP`, each part's card warped to an encounter map of its
+  own part (docs/research/soak.md 1a: C 106a, D 109b, E 111b, F 115b), the battle mix, the accelerator, every frame
+  drawn (no `SOA_SNAP`), 33,500 frames, about 20 minutes a part. Every base invariant held in all four. C, E and F
+  each fought a battle and lost it to a game over (random presses), D fought none (109b's encounters are not open at
+  part D's flags: the "did not test" verdict, as the checker gives it). Part C's first try, with no warp, landed on
+  `a004a`, where the story allows no battle, and fought none.
+- **The effect-package ledger** went from 22 to 32 names: `F0500022`, `D2401700`, `F2927122` and `E6700317.MLD`
+  (part C), `F0500030` and `F2916230` (E), `F050000B`, `F0500032`, `F050001A` and `PCP08` (F).
+- **A port defect, fixed: BP_MASK was not applied.** Every game over logged S3's question, `[gxr] BP_MASK 080000 was
+  in force for BP 00 000001 ...`: the SDK's `GXSetCoPlanar` writes mask 080000 (GEN_MODE's zfreeze bit) and then its
+  shadowed GEN_MODE, and after a game over that shadow differs from the register outside the mask. The console keeps
+  every bit outside the mask (as Dolphin's BP loader does); the port wrote all 24. `runtime/gx.c` now applies the mask
+  where the shadow takes each BP write, so the renderer, the GPU backend and the captures all see what the register
+  holds, and the mask lapses after one write. The renderer's tripwire for it is gone (it can no longer fire), and the
+  parser instead names each masked write that kept a register bit (the first eight) and counts them in its report.
+  - **Where it happens** [V, `build/reach/u5-mask-F3`, `F5`]: twice a run here. At frame 0 (the boot's
+    `GXSetCoPlanar`, before anything wrote GEN_MODE: the write said `000001`, the register keeps `000000`), and once
+    after each game over (frame 4535 in one run, 4675 in another: the write said `000001`, one texture coordinate and
+    no colour channel, and the register keeps `000010`, none and one).
+  - **What it changes on screen: nothing seen.** Frame 4675, captured whole (`SOA_FIFO_DUMP` into the run's own
+    folder), renders the same hash with the fix and with a build without it, and it is black: the fade into the
+    game over. The replay corpus is unchanged at 1, 2, 3 and 8 threads (it holds no game over). So the fix makes the
+    register what the console's is, and no frame here was drawn wrong for want of it.
+  - **The checks:** `test_gxr_tripwires.py` holds the masked GEN_MODE to `000010` and the next, unmasked write to
+    `000013`, and the parser's line to its values; with the mask taken out again that test fails. The contract:
+    `compile_runtime.py` (39/39, and under clang-cl), `--link`, the self test (0 failures), the replay (23/23
+    unmoved), `title --check` (4 of 4).

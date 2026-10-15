@@ -428,9 +428,26 @@ void gxr_flush(void);
 void tex_epoch_advance(void);
 void gxr_source_hazard(uint32_t addr, uint32_t bytes); /* gxr.c: wait for a queued copy writing there */
 
+/* BP_MASK (BP 0xFE): the next BP write changes only the bits it names, and
+ * every other bit keeps what the register holds; the mask then lapses (as
+ * Dolphin's LoadBPReg has it). The SDK's GXSetCoPlanar writes mask 080000
+ * and then its shadowed GEN_MODE; after a game over the game's shadow and
+ * the register differ outside bit 19, so applying all 24 bits (as the port
+ * did until reach U5) left GEN_MODE with the shadow's texgen and TEV-stage
+ * counts rather than the register's. */
+static uint32_t g_bp_mask = 0xFFFFFFu;
+static unsigned g_bp_kept; /* masked writes that kept a register bit the write would have changed */
+
 static void load_bp(CpuState* s, uint32_t v)
 {
-    uint32_t reg = v >> 24;
+    uint32_t reg = v >> 24, mask = g_bp_mask, kept = (g_bp[reg] ^ v) & ~mask & 0xFFFFFFu;
+    if (kept && reg != 0xFE && g_bp_kept++ < 8)
+        fprintf(stderr,
+                "[gx] BP_MASK %06X kept %06X of BP %02X at frame %u: the write said %06X, the register "
+                "becomes %06X (the first 8 are said; the report counts them)\n",
+                mask, kept, reg, gx_frame_count(), v & 0xFFFFFFu, ((g_bp[reg] & ~mask) | (v & mask)) & 0xFFFFFFu);
+    v = (reg << 24) | ((g_bp[reg] & ~mask) | (v & mask)) & 0xFFFFFFu;
+    g_bp_mask = reg == 0xFE ? v & 0xFFFFFFu : 0xFFFFFFu;
     g_bp[reg] = v & 0xFFFFFFu;
     g_bp_loads++;
     switch (reg) {
@@ -747,6 +764,8 @@ void gx_report(void)
             (unsigned long long)g_dl_calls, (unsigned long long)g_dl_nonempty, (unsigned long long)g_dl_call_bytes,
             (unsigned long long)g_dl_recorded, (unsigned long long)g_dl_rec_bytes,
             g_dl_overflows ? ", some overflowed their buffers" : "");
+    if (g_bp_kept)
+        fprintf(stderr, "[gx] %u masked BP write(s) kept register bits outside their BP_MASK\n", g_bp_kept);
     gx_dllog_report();
     gxr_report();
 }
