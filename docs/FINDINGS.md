@@ -8560,3 +8560,13 @@ here).
   waited for input; whether the console holds that black as long is for a side-by-side look.
 - **Not yet:** the walk itself (positions, U4 step 1, are logged by `objects` since this run but not used), the
   fights won without `hold-hp`, and the step from the hangar into part H.
+- **Run 7** [V, `build/reach/u4-G7`, 195,000 frames]: the same way to the hangar (flag 312 at 121897), then the
+  escape: `a519a` loaded at about 125029, a ship battle against the "Fortress Gate" (frame 150000), where it stood
+  for the remaining 70,000 frames, since the walker's run drove no ship battle. The lab's `assist` now presses A on
+  a 5xx stage while no crew member chooses (the ship input's state not 9), and the next run carries U3's `sturn`
+  items (Vyse a cannon, the others Focus).
+- **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
+  each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
+  "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
+  files written"; seen both ways in a 320-frame run, with the self test, the replay (23/23) and `title` (4 of 4)
+  after it.

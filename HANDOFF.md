@@ -449,13 +449,17 @@ FINDINGS entry "Reach U<n>":
 - **U2 done:** a Sacri Crystal used in battle by Gilder, consumed and written back to the save.
 - **U3 done:** a ship battle won, once its command input was found (`0x80306738`); A presses alone stall at 3 SP,
   which FINDINGS had read as "round 3 of 41" (corrected).
-- **No port defect found yet** in any of these runs: every base invariant held, and every frame opened was drawn as
-  the game draws it. What they found were scripting facts and wrong claims in the docs, each corrected.
+- **U5, nine of ten parts run** (FINDINGS "Reach U5"): every base invariant held; the effect ledger at 44 of 576.
+  It found **the one port defect so far: BP_MASK was not applied** (fixed in b80f412: after every game over the
+  masked GEN_MODE write changed bits the console keeps; no frame seen drawn differently). Part L was cut off by the
+  host's restart and is to be run again, with `hold-hp` so a soak is not lost to its first game over.
+- **U4, part G played** (FINDINGS "Reach U4"): the walker, with `assist` and `autotext`, carried part G from
+  `a116a` through eight maps and flags 303 to 312 to the Delphinus's hangar. A 195,000-frame run from the same card
+  was going when this was written, to see past the hangar into part H.
 
-**Next:** U5's battle soaks per part card (C to L, every frame drawn, three parts per background job; the recipe
-is reach.md §6), and U4, the entry walker (`walk:F-G:IDLE`, built,
-not yet run in the game), from part G toward part H. Step 3, the owner's sitting, also holds R5c's 150% capture and
-the review page.
+**Next:** that run's result; U5's part L and a `hold-hp` round; then the walker on other parts (C to D is the
+shortest by flags). `tools/reach.py run` is how every run here is made (its `--help`, and each FINDINGS entry's
+recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch

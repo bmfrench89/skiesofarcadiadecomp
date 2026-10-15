@@ -33,6 +33,8 @@
  *                  what the walker skips is the walk. Each start is logged.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
+ *                  in a ship battle while no crew member chooses (a 5xx
+ *                  stage, the ship input's state not 9: sturn plays those),
  *                  or while the field's message window holds a choice (state
  *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
  *                  reads them): what the walker needs where a pad script's A
@@ -428,10 +430,17 @@ static int parse_walk(char* s)
  * at a choice box in the field. */
 static int assist_wanted(void)
 {
-    uint32_t task = 0;
+    uint32_t task = 0, ship = 0, stage = g_api->map() >> 8;
     uint16_t state = 0;
     if (g_api->scene() == SCENE_BATTLE) return 1;
     if (g_api->scene() == 6 && g_api->field_state() == FIELD_RESULTS) return 1;
+    /* A ship battle (a 5xx stage) needs A through its opening and between
+     * turns (reach U3's runs), but never while a crew member chooses: that
+     * menu (state 9 at 0x80306738) is sturn's. Reach U4's seventh run stood
+     * at the Fortress Gate for 70,000 frames without it. */
+    if (g_api->scene() == 6 && stage >= 500 && stage <= 583 && g_api->read32(SHIP_INPUT, &ship) &&
+        (ship >> 24) != SHIP_READY_STATE)
+        return 1;
     return g_api->scene() == 6 && g_api->read32(WINDOW_TASK, &task) && task &&
            g_api->read16(WINDOW_STATE, &state) && (int16_t)state == WINDOW_CHOICE;
 }

@@ -291,12 +291,18 @@ static void cap_inline_list(size_t back, const uint8_t* body, uint32_t size)
     cap_append(tail, n);
 }
 
-static void write_file(const char* path, const void* data, size_t len)
+/* 1 when the whole file was written. */
+static int write_file(const char* path, const void* data, size_t len)
 {
+    size_t wrote;
     FILE* f = fopen(path, "wb");
-    if (!f) { fprintf(stderr, "[gx] cannot write %s\n", path); return; }
-    fwrite(data, 1, len, f);
-    fclose(f);
+    if (!f) { fprintf(stderr, "[gx] cannot write %s\n", path); return 0; }
+    wrote = fwrite(data, 1, len, f);
+    if (fclose(f) != 0 || wrote != len) {
+        fprintf(stderr, "[gx] cannot write all of %s (%zu of %zu bytes)\n", path, wrote, len);
+        return 0;
+    }
+    return 1;
 }
 
 /* Where captures land. build/fifo is the corpus config/fifo_manifest.tsv
@@ -326,22 +332,28 @@ static void frame_end(CpuState* s)
     if (g_frame_hook) g_frame_hook(s, g_frame);
     if (frame_wanted(g_frame)) {
         const char* dir = dump_dir();
+        int written = 0;
         snprintf(path, sizeof path, "%s/%04u.regs", dir, g_frame);
         {
             FILE* f = fopen(path, "wb");
             if (f) {
-                fwrite(g_cap_cp, 4, 0x100, f);
-                fwrite(g_cap_xf, 4, 0x1100, f);
-                fwrite(g_cap_bp, 4, 0x100, f);
-                fclose(f);
-            } else fprintf(stderr, "[gx] cannot write %s (mkdir %s)\n", path, dir);
+                int whole = fwrite(g_cap_cp, 4, 0x100, f) == 0x100 && fwrite(g_cap_xf, 4, 0x1100, f) == 0x1100 &&
+                            fwrite(g_cap_bp, 4, 0x100, f) == 0x100;
+                if (fclose(f) == 0 && whole) written++;
+                else fprintf(stderr, "[gx] cannot write all of %s\n", path);
+            } else fprintf(stderr, "[gx] cannot write %s (the folder %s must exist)\n", path, dir);
         }
         snprintf(path, sizeof path, "%s/%04u.fifo", dir, g_frame);
-        write_file(path, g_cap, g_cap_len);
+        written += write_file(path, g_cap, g_cap_len);
         snprintf(path, sizeof path, "%s/%04u.ram", dir, g_frame);
-        write_file(path, s->mem, MEM1_SIZE);
-        fprintf(stderr, "[gx] captured frame %u into %s: %zu command bytes\n", g_frame, dir,
-                g_cap_len);
+        written += write_file(path, s->mem, MEM1_SIZE);
+        /* Said as it is: a capture whose files did not land is not a capture
+         * (reach U5's first try logged "captured" after three refusals). */
+        if (written == 3)
+            fprintf(stderr, "[gx] captured frame %u into %s: %zu command bytes\n", g_frame, dir, g_cap_len);
+        else
+            fprintf(stderr, "[gx] frame %u was not captured into %s: %d of its 3 files written\n", g_frame, dir,
+                    written);
     }
     g_frame++;
     if (g_frame_limit && g_frame >= g_frame_limit) {

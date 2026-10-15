@@ -1181,7 +1181,9 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
         "set 80346e64 00060000 pad 200 0000 pad 201 0000 pad 202 0000 "  # a choice: on the beat only
         "set 80346e4c 0 set 803475cc 7 pad 250 0000 "  # a battle
         "set 803475cc 6 set 80311aec 4 pad 300 0000 "  # its results screen
-        "set 80311aec 8 pad 350 0000"  # the field running again
+        "set 80311aec 8 pad 350 0000 "  # the field running again
+        "set 80311ac0 207 setb 80311ac8 61 set 80306738 06000003 pad 400 0000 "  # a519a, a ship battle
+        "set 80306738 09020003 pad 450 0000"  # a crew member chooses: sturn's, not assist's
     )
     out, err = play(driver, tmp_path, script, SOA_LAB="assist:0-1000:50")
     assert "loaded 1" in out, err
@@ -1195,6 +1197,8 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
         "pad 250 0100 filtered",
         "pad 300 0100 filtered",
         "pad 350 0000 filtered",
+        "pad 400 0100 filtered",
+        "pad 450 0000 filtered",
     ], out
 
 
