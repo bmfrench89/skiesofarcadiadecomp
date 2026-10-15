@@ -190,7 +190,13 @@ frame drawn), and U1's and U3's runs. U0's ledger counts the `/BEFF/` names; eac
 party's magic and moves.
 
 **Invariants:** §0's; every tripwire that fires is a finding with its frame captured and modelled or answered;
-the ledger grows. **Not here:** forcing events by the six-word request (0x803473CC-D8). It skips every gate and
+the ledger grows.
+
+**The recipe, as run on 2026-10-14:** for part P, a copy of `build/savetest/card-partP.raw`; `SOA_PAD` from
+`soak.py --seed <40 + P's distance from C> --battle`; `SOA_POKE` and `SOA_PEEK` from `soak.py --pokes|--peeks
+--encounter-every 600`; `SOA_MODS` naming a folder holding only `examples/mods/lab`, with `SOA_LAB=objects`;
+`SOA_STRICT=1`, `SOA_TRACE=1`, `SOA_SETTINGS=0`, `SOA_RENDER=1` and no `SOA_SNAP` (every frame drawn);
+`SOA_FRAMES=33500`; then `soak.py check <log> --beff-ledger build/reach/beff.json`. About 30 minutes a part here. **Not here:** forcing events by the six-word request (0x803473CC-D8). It skips every gate and
 soaks must never use it (soak.md:102 [D]; soak.py:205-208 asserts it is never poked [V]); a later slice may use it
 to reach packages no story run can, saying so.
 

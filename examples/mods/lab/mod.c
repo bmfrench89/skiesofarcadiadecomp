@@ -23,6 +23,14 @@
  *                  its object id, hit type, class, state and shape words, and
  *                  where its object's actor stands (op 154's lookup by id,
  *                  act+56..64), then the player's position.
+ *   walk:F-G:IDLE  the entry walker (reach U4): at a safe point in frames F to
+ *                  G where the field runs and nothing has been busy (an event,
+ *                  a starting entry, another scene) for IDLE frames, start one
+ *                  live entry of this map the way entry: does -- the one
+ *                  started fewest times here, a talk or check (3000-4999)
+ *                  before an exit (6000-6999), then the lower id. The game's
+ *                  own LABEL conditions and gates keep the story in order;
+ *                  what the walker skips is the walk. Each start is logged.
  *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
  *                  (a multiple of 4, at most 8192) from the address the chain
  *                  C ends on (C's steps as peek's; *0x8034727C is the ship
@@ -95,7 +103,14 @@
 #define MAX_ITEMS 64
 #define MAX_STEPS 8
 
-enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN };
+enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, ITEM_WALK };
+
+/* The walker's memory: how often each map's entry has been started. */
+#define MAX_SEEN 1024
+static struct {
+    uint32_t map, id, runs;
+} g_seen[MAX_SEEN];
+static int g_nseen;
 
 /* A ship battle's command input (reach U3, found by RAM captures at two
  * crew members' inputs and confirmed by peeks through a fight): the word at
@@ -364,6 +379,83 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     }
 }
 
+/* "walk:F-G:IDLE" */
+static int parse_walk(char* s)
+{
+    Item* it;
+    char* idle;
+    char* end;
+    if (strncmp(s, "walk:", 5) != 0 || g_nitems == MAX_ITEMS) return 0;
+    it = &g_items[g_nitems];
+    memset(it, 0, sizeof *it);
+    snprintf(it->text, sizeof it->text, "%s", s);
+    it->kind = ITEM_WALK;
+    idle = strchr(s + 5, ':');
+    if (!idle) return 0;
+    *idle++ = '\0';
+    if (!parse_frames(s + 5, it) || !parse_u32(idle, &end, &it->id) || *end || !it->id) return 0;
+    g_nitems++;
+    return 1;
+}
+
+static uint32_t* seen_runs(uint32_t map, uint32_t id)
+{
+    int i;
+    for (i = 0; i < g_nseen; i++)
+        if (g_seen[i].map == map && g_seen[i].id == id) return &g_seen[i].runs;
+    if (g_nseen == MAX_SEEN) return NULL;
+    g_seen[g_nseen].map = map;
+    g_seen[g_nseen].id = id;
+    g_seen[g_nseen].runs = 0;
+    return &g_seen[g_nseen++].runs;
+}
+
+/* One safe point of the walker: it->started is the last frame the field was
+ * busy (or an entry was started), it->last the number of entries started. */
+static void walk(Item* it)
+{
+    uint32_t f = g_api->frame(), map = g_api->map(), v = 0, vol, id, best_id = 0, best_vol = 0, args[1];
+    uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, *runs;
+    uint16_t state;
+    int guard = 0, best_exit = 1, exit_;
+    if (g_api->scene() != 6 || g_api->field_state() != 8 || g_api->story_flag(FLAG_EVENT) ||
+        (g_api->read32(ENTRY_BUSY, &busy) && busy == 1)) {
+        it->started = f;
+        return;
+    }
+    if (f - it->started < it->id) return;
+    if (!g_api->read32(LIST_HEAD, &v)) return;
+    while (v && guard++ < 4096) {
+        vol = v;
+        if (!g_api->read32(v + 48, &v)) v = 0;
+        if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read32(vol + 8, &id)) continue;
+        exit_ = id >= 6000 && id <= 6999;
+        if (!exit_ && (id < 3000 || id > 4999)) continue;
+        runs = seen_runs(map, id);
+        if (!runs) continue;
+        /* the fewest starts first; among equals, a talk or a check before an exit */
+        if (*runs > best_runs || (*runs == best_runs && (exit_ > best_exit || (exit_ == best_exit && id >= best_id))))
+            continue;
+        args[0] = id;
+        if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
+        best_runs = *runs;
+        best_id = id;
+        best_vol = vol;
+        best_exit = exit_;
+    }
+    it->started = f;
+    if (!best_vol) return;
+    args[0] = best_id;
+    if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
+    g_api->write32(PRESS_STARTED, 1);
+    g_api->write32(PRESS_VOLUME, best_vol);
+    runs = seen_runs(map, best_id);
+    if (runs) (*runs)++;
+    it->last++;
+    logf_("walk: a%03u%c entry %u started at frame %u (start %u here, %u in all)", (unsigned)(map >> 8),
+          (char)(map & 0xFF), best_id, f, runs ? *runs : 0, it->last);
+}
+
 /* "hold-hp:F-G": no third field. */
 static int parse_hold(char* s)
 {
@@ -516,6 +608,8 @@ static void on_safe_point(void* user)
             if (f <= it->to) hold_hp(it);
         } else if (it->kind == ITEM_DUMP) {
             if (it->state == 0) dump(it);
+        } else if (it->kind == ITEM_WALK) {
+            if (f <= it->to) walk(it);
         } else if (it->kind == ITEM_PEEK && f <= it->to) {
             uint32_t addr = 0, value = 0;
             if (!read_chain(it, &addr, &value)) {
@@ -617,7 +711,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
         if (save) *save++ = '\0';
         if (!*item) continue;
         snprintf(whole, sizeof whole, "%s", item); /* the parsers cut the item as they read it */
-        if (!parse_hold(item) && !parse_turn(item) && !parse_item(item)) {
+        if (!parse_hold(item) && !parse_turn(item) && !parse_walk(item) && !parse_item(item)) {
             char line[160];
             snprintf(line, sizeof line, "lab: SOA_LAB item not understood: %.120s", whole);
             api->log(line);

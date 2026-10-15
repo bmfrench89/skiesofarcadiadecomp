@@ -1139,6 +1139,28 @@ def test_the_lab_plays_a_ship_crew_members_turn_each_time_its_wheel_is_ready(dri
 
 
 @needs_cc
+def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
+    """walk:F-G:IDLE starts nothing while the field is not running or an event
+    holds flag 1087, nor until IDLE quiet frames have passed; then it asks the
+    game's own condition of each live talk and exit volume once (refused here:
+    the fake guest has no fn_8021067C), and starts nothing it was not told is live."""
+    lab(tmp_path)
+    vol = "set 80347524 80400100 set 80400108 bbb set 80400114 0 set 80400130 80400200 "
+    vol += "set 80400208 1771 set 80400214 0 "  # 3003 (a talk) and 6001 (an exit)
+    script = (
+        vol + "set 803475cc 7 safe "  # a battle: busy
+        "set 803475cc 6 set 80311aec 8 frame safe "  # quiet from frame 1, not IDLE frames yet
+        "frame frame frame safe"  # frame 4: IDLE 3 has passed
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-100:3")
+    assert "loaded 1" in out, err
+    asked = [x for x in err.splitlines() if "call_guest(" in x]
+    assert asked and all("call_guest(8021067C) refused" in x for x in asked), err
+    assert len(asked) == 2, err  # both candidates asked once, at frame 4 only
+    assert "walk:" not in err.replace("walk:0-100:3", ""), err  # nothing started
+
+
+@needs_cc
 def test_the_lab_dumps_from_where_a_chain_ends_once(driver, tmp_path):
     """dump:F:C:N reads N bytes from the address C ends on (a trailing `*`
     takes the word there as the address), eight words a line, once."""
@@ -1163,7 +1185,8 @@ def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
-    for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns, *dumps):
+    walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x")
+    for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns, *dumps, *walks):
         out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
         assert "loaded 0" in out and f"SOA_LAB item not understood: {bad}" in err, (bad, err)
 

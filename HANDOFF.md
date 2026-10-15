@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1587 |
+| Python tests | 1596 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -432,16 +432,30 @@ on the PC"):
   `player_build`'s. The owner's first bless of its words, and §1.3's questions, are on
   `build/setup-review/index.html` (local). `build\r5c\` holds the package and both roots; delete it when its space is
   wanted.
-- **TESTING's count table is measured again at 1c1fefd** (1553 tests, five rows). A second session in this checkout,
-  soa-fa, has a README progress tracker uncommitted in the tree (`tools/progress.py`, 13 tests, and count edits in
-  several docs). This session's commits staged only their own hunks, so that work is still in the tree untouched,
-  for its owner to commit.
+- **TESTING's count table is measured again at 1c1fefd** (1553 tests, five rows). soa-fa's README progress tracker
+  (`tools/progress.py`, 13 tests) has since been committed by that session (c0e9d74).
 
-**Next for the PC session: PLAN-NEXT §0's PC step 2,** the scripted runs into what no run has reached. Its first
-slice writes down the runs (a boss or event battle, Items in battle, a ship battle to its end, the story between
-the part-select jump points, effect packages beyond the 20 of 576 ever loaded) and the invariants each must hold,
-before any is run. `docs/research/plan-gaps.md`'s Arena entry (event records, op 112) and FINDINGS §11 are where
-to start. Step 3, the owner's sitting, now also holds R5c's 150% capture and the review page.
+**Then, the same day: PLAN-NEXT §0's PC step 2, the reach runs** (`docs/specs/reach.md`, U0-U5), each with a
+FINDINGS entry "Reach U<n>":
+- **U0, the tools:** `soak.py check --expect-flag`, the effect-package ledger (`--beff-ledger`, kept at
+  `build/reach/beff.json`, 22 of 576 names) and ship battles judged to their results; `examples/mods/lab`
+  (`SOA_LAB`): `entry` (the A press at an object, skipping only the walk), `peek` (pointer chains), `objects` (each
+  map's hit volumes and where their objects stand), `hold-hp`, `turn` and `sturn` (a battle member's or a ship crew
+  member's input played through the pad filter), `dump` and `walk` (below). The run script is
+  `labrun.ps1`'s pattern, written into each FINDINGS entry: own card copy, own folders, traced, strict,
+  `SOA_SETTINGS=0`, and a lab DLL no older than its source.
+- **U1 done:** part G's boss, Vigoro (event 19), started from `M04005`, lost three times into the game's "try
+  again", and won with `hold-hp`; the after-scene set flag 304.
+- **U2 done:** a Sacri Crystal used in battle by Gilder, consumed and written back to the save.
+- **U3 done:** a ship battle won, once its command input was found (`0x80306738`); A presses alone stall at 3 SP,
+  which FINDINGS had read as "round 3 of 41" (corrected).
+- **No port defect found yet** in any of these runs: every base invariant held, and every frame opened was drawn as
+  the game draws it. What they found were scripting facts and wrong claims in the docs, each corrected.
+
+**Next:** U5's battle soaks per part card (C to L, every frame drawn, three parts per background job; the recipe
+is reach.md §6), and U4, the entry walker (`walk:F-G:IDLE`, built,
+not yet run in the game), from part G toward part H. Step 3, the owner's sitting, also holds R5c's 150% capture and
+the review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch
