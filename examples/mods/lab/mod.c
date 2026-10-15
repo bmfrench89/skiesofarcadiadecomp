@@ -119,6 +119,8 @@ enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, IT
 #define FIELD_RESULTS 4u /* the field's state while a battle's results screen waits */
 #define HIT_SAVE_POINT 45u /* a volume's hit type (u16 at +18) at a save point */
 
+static int assist_wanted(void); /* below, beside the walker; on_pad calls it first */
+
 /* The walker's memory: how often each map's entry has been started. */
 #define MAX_SEEN 1024
 static struct {
