@@ -183,6 +183,10 @@ loaded drawn (a black field after a load is a finding, as at FINDINGS:1351-1361)
 **Order:** G → H first (the prison, then out; U1's boss is on it), then C → D, the shortest by flags (64 → 124)
 [D card decode].
 
+**Run 2026-10-15** (FINDINGS "Reach U4"): step 2, the walker, carried part G from `a116a` through eight maps and
+flags 303 to 312 to the Delphinus's hangar in 120,000 frames, with `assist` for A (battles, results, choices) and
+save points passed over. Steps 1 and 3 (positions, played legs) are not used yet.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

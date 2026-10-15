@@ -8525,3 +8525,38 @@ here).
     `000013`, and the parser's line to its values; with the mask taken out again that test fails. The contract:
     `compile_runtime.py` (39/39, and under clang-cl), `--link`, the self test (0 failures), the replay (23/23
     unmoved), `title --check` (4 of 4).
+
+**Reach U4: the story played by the entry walker, from part G's landing to the Delphinus.** 2026-10-15,
+`build/reach/u4-G*` (game data, kept here).
+
+- **What it is:** docs/specs/reach.md U4, the first run to play the story between two jump points. No run before had
+  gone from one part's landing map toward the next (FINDINGS §11). The lab mod's `walk:F-G:IDLE` starts, on a
+  quiet field, the live script entry of this map started fewest times, a talk or check before an exit: what the A
+  press at an object or a step into a trigger does, without the walk. The game's own `LABEL` conditions and gates
+  keep the story in order. `mods/autotext` turns dialogue pages, the lab's `assist` presses A in battles, at their
+  results screen and at choice boxes (the first option), and `hold-hp` keeps the party standing.
+- **Run 6** [V, `build/reach/u4-G6`, 120,000 frames, `soak.py check --expect-flag 312`: pass]:
+  - 63 entries started across `a116a`, `a116b`, `a116c`, `a116g`, `a116d`, `a116h`, `a116e` and `a116f`, in that
+    order of first arrival: the prison's cells, then its corridors and decks;
+  - part G's story flags 303 to 312 set one after another (`0x80310B60` from `0000300F` to `01FFB00F`, and flag 340
+    in the next word);
+  - four battles: two random, Vigoro (event 19, from `M04005`, which the walker reached by itself), and a long one on
+    `a116e` (90293 to 107749, 36 HP top-ups);
+  - the frames opened: the Vigoro fight and its after-scene, a Valuan soldier on `a116d` ("One of our cannons
+    exploded and the entire deck is on fire"), Vyse finding the Cannon Room Key won't open a door (`a116g`), the
+    fight on `a116e`, and at 119500 the Delphinus in its hangar, where part G's escape ends. The run met its frame
+    limit inside that event.
+  - every base invariant held over 120,000 frames: no `[mem]` line, no stop line, 0 unknown FIFO bytes, 0 bad vertex
+    references; two effect packages new to the ledger, `F050008E` and `F290308E` (44 of 576).
+- **What the first five runs taught the lab mod** (each fixed, with a fake-guest test):
+  - the walker now says why it waits;
+  - a pad script's A every 150 frames talked to whatever stood nearest each time, so the field was never quiet:
+    `assist` replaces it;
+  - the results screen after a battle (the field's state 4) waits for A: `assist` presses there too;
+  - save points open a menu nothing answers, and two runs stood in it for 30,000 frames: the walker passes over hit
+    types 44 and 45, which the hit-class table at `0x802EE7C0` names `wallmot` and `walluv`.
+- **A question, not a finding:** between `a116g` and `a116d` the picture fades to black at 52900 and stays black
+  until `a116d` loads at 53859, about 30 seconds, with no window on screen. The game went on by itself, so nothing
+  waited for input; whether the console holds that black as long is for a side-by-side look.
+- **Not yet:** the walk itself (positions, U4 step 1, are logged by `objects` since this run but not used), the
+  fights won without `hold-hp`, and the step from the hangar into part H.

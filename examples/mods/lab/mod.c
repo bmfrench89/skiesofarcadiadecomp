@@ -117,7 +117,8 @@ enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, IT
 #define WINDOW_STATE 0x80346E64u
 #define WINDOW_CHOICE 6
 #define FIELD_RESULTS 4u /* the field's state while a battle's results screen waits */
-#define HIT_SAVE_POINT 45u /* a volume's hit type (u16 at +18) at a save point */
+#define HIT_SAVE_POINT 45u     /* a volume's hit type (u16 at +18): "walluv", a save point */
+#define HIT_SAVE_POINT_MOT 44u /* "wallmot", the other save point */
 
 static int assist_wanted(void); /* below, beside the walker; on_pad calls it first */
 
@@ -490,10 +491,12 @@ static void walk(Item* it)
         if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read32(vol + 8, &id)) continue;
         exit_ = id >= 6000 && id <= 6999;
         if (!exit_ && (id < 3000 || id > 4999)) continue;
-        /* A save point (hit type 45: a116a's 4100, a126a's 4411) opens the
-         * save menu, which is never the story's way on and which nothing here
-         * answers: reach U4's fourth run stood in it for 30,000 frames. */
-        if (g_api->read16(vol + 18, &type) && type == HIT_SAVE_POINT) continue;
+        /* A save point opens the save menu, which is never the story's way on
+         * and which nothing here answers: reach U4's fourth and fifth runs
+         * stood in it for 30,000 frames and more. The hit-class table at
+         * 0x802EE7C0 names both kinds: "walluv" (type 45, a116a's 4100,
+         * a126a's 4411) and "wallmot" (type 44, a116g's 4100). */
+        if (g_api->read16(vol + 18, &type) && (type == HIT_SAVE_POINT || type == HIT_SAVE_POINT_MOT)) continue;
         seen++;
         runs = seen_runs(map, id);
         if (!runs) continue;

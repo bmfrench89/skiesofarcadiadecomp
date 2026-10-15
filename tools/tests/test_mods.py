@@ -1149,7 +1149,8 @@ def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
     # 3003 (a talk) and 6001 (an exit), then 4100 with class 7800002D: hit type
     # 45, the low half at +18, a save point, which the walker passes over.
     vol += "set 80400208 1771 set 80400214 0 set 80400230 80400300 "
-    vol += "set 80400308 1004 set 80400310 7800002d "
+    vol += "set 80400308 1004 set 80400310 7800002d set 80400330 80400400 "
+    vol += "set 80400408 1005 set 80400410 7800002c "  # 4101, wallmot (type 44): the other kind
     script = (
         vol + "set 803475cc 7 safe "  # a battle: busy
         "set 803475cc 6 set 80311aec 8 frame safe "  # quiet from frame 1, not IDLE frames yet

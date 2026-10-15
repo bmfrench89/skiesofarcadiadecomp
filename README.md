@@ -51,7 +51,7 @@ when it falls behind.
 | | | Where it stands |
 |---|:-:|---|
 | Boot, title, New Game, the opening, the first battle and the first fields | ✅ | Scripted runs play it with keyboard or pad: dialogue, menus, the minimap, random encounters |
-| The rest of the game | 🟡 | All 255 warpable maps have loaded without a fault, and the developers' part select jumps to later chapters. That covers the game's data, not a playthrough. The first boss battle (part G's Vigoro) has run to its win and after-scene, with its "try again" on a loss (FINDINGS "Reach U1"), an item used in battle (FINDINGS "Reach U2") and a ship battle fought to its win (FINDINGS "Reach U3"); the story between the jump points has not been played yet (docs/specs/reach.md) |
+| The rest of the game | 🟡 | All 255 warpable maps have loaded without a fault, and the developers' part select jumps to later chapters. That covers the game's data, not a playthrough. The first boss battle (part G's Vigoro) has run to its win and after-scene, with its "try again" on a loss (FINDINGS "Reach U1"), an item used in battle (FINDINGS "Reach U2") and a ship battle fought to its win (FINDINGS "Reach U3"). Part G's story has been played from its landing to the Delphinus by a script that starts the game's own events in turn (FINDINGS "Reach U4"); the rest of the story between the jump points has not (docs/specs/reach.md) |
 | The ending | ✅ | Plays to "the End" and returns to the title (reached by a jump) |
 | Saving and loading | ✅ | A save written at a save point loads back through Continue |
 | Dolphin saves (`.gci`) | 🟡 | Import and export are built; no real Dolphin save has been tried |
