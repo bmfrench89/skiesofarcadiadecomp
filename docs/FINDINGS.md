@@ -8673,8 +8673,36 @@ here).
     `D2403300`, `F0500084`, `F2902484`: 57 of 576).
 - **The aim corrected after that run:** a story does not set its flags in order (124 before 113), so the walker
   now aims at the lowest flag of its window still clear that the lines can reach from where it stands, not at
-  the lowest above the highest set; this run's walker, built before that, said "no flag left" after 124 and fell
+  the lowest above the highest set; u4-C8's walker, built before that, said "no flag left" after 124 and fell
   back to its own order, while the game's warps carried the story on.
+- **Galcian is a patrol, not a fight to have** [V, the script and the hit list]: `a107d`'s 6002 is a
+  `motscptCol` volume (hit type 28, the class table's name), carried by Galcian on his path along the walkway,
+  whose touch runs `M06002`: op 112 (1, 6, 13, 3), event battle 6, whose `epevent.evp` record has the defeat byte
+  0 (`fn_8006F424`: 1 is "try again", 2 a result the story goes on from, anything else the game over) and escape
+  1. A player keeps clear of him. The walker, which never moves the party, had waited its 300 quiet frames where
+  the map put the party, and he walked into it 311 frames after the load.
+- **Run u4-C9: past Galcian** [V, `build/reach/u4-C9`, `soak.py check`: pass, 160,000 frames, 0 unknown FIFO
+  bytes, 0 bad vertex references over 2.3 billion vertices]: with the corrected aim and a 90-frame quiet wait the
+  walker took `a107d`'s exit to `a107e` at 88403 (aiming at 116) before the patrol reached the party; 116 set at
+  88469. Then the game started event battle 9, two Royal Guards (defeat byte 1, a fight to win), at 89474, and it
+  was still going when the run ended at 160,000: A presses every 150 frames, a round about every 1,000. The
+  reason is the card, not the port: frame 159500 shows Vyse at level 1 with 420 HP. The part cards are made by
+  the developers' part select from a new game, which presets the story's flags and party but not their levels
+  (Drachma, who joins in part C, comes at 12); Antonio's 22,000 frames had the same cause. The lab's new
+  `finish:F-G:FRAMES` brings a long fight's standing enemies to 1 HP, once, so the game's own blows and victory
+  end it, said in the log; a run that uses it tests the port's battles to their ends, as `hold-hp` does, not a
+  party's strength.
+- **Runs u4-C10 and u4-C11: the Royal Guards beaten, part C to its ship battle** [V, `build/reach/u4-C10`,
+  `u4-C11`, both at `SOA_SPEED=4`, about 95 frames a second; C11's `soak.py check`: pass over 250,000 frames, 0 bad
+  vertex references over 2.5 billion vertices, its ship battle "unfinished"]: C10's `finish` brought both guards to 1 HP once, at
+  89718, and they healed back up (effect `D2403300` 29 times in 84 rounds) and stood to 174,000; so `finish` now
+  holds a standing enemy at 1 HP from its threshold on, a heal put back each time (a test). In C11 Antonio fell
+  14,000 frames after his fight began (52219; one heal put back), the Royal Guards at 103933 (four put back), and
+  the story went on by itself: `a107e` again, `a209a` (117 at 104911), `a243a` (118 at 109019), and at 111304 the
+  game's own warp to `a501a`, a ship battle. There the run stood: it held no `sturn` items for the crew's wheels,
+  and the walker's back-out, reading a minute of flag 1087 with no message window as a stuck menu, pressed B into
+  the ship's menu from 111689. The back-out now never acts on a 5xx stage (a test); the next run carries U3's
+  ship recipe (Vyse a cannon, the others Focus).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

@@ -37,7 +37,8 @@
  *                  thread anywhere but its loop (a cutscene the loop called,
  *                  named in the log). An event that holds
  *                  the field a minute with its window unmoved (a shop's menu)
- *                  gets B every 70 frames until the field is free.
+ *                  gets B every 70 frames until the field is free; never a
+ *                  ship battle (a 5xx stage), whose menu B would answer.
  *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
  *                  file SOA_LAB_STORY names holds `sct.py --story`'s lines,
  *                  each entry's flags set and maps warped to. The story's next
@@ -82,6 +83,14 @@
  *                  acts, what lands and when it ends. A run with this tests the
  *                  port's battle to its end, not a player's chance of winning,
  *                  and says so; it logs how many top-ups each battle took.
+ *   finish:F-G:FRAMES  in a battle in frames F to G that has gone FRAMES
+ *                  frames, every enemy still standing (slots 4 to 11, the
+ *                  same test) is held at 1 HP from then on (a heal is put
+ *                  back), so the game's own next blows and its victory end
+ *                  it; logged, with the put-backs counted at the end. For a
+ *                  party below the story's level: the part-select cards start
+ *                  Vyse at level 1, and two Royal Guards outlasted 70,000
+ *                  frames, and healed back up from 1 HP once.
  *   save:F-G:SEQ   once, on a quiet field in frames F to G with a live save
  *                  point (hit type 44 or 45) in the map, start its entry as
  *                  the A press would, then 120 frames later press SEQ into
@@ -164,7 +173,8 @@ enum {
     ITEM_WALK,
     ITEM_ASSIST,
     ITEM_SAVE,
-    ITEM_FLAG
+    ITEM_FLAG,
+    ITEM_FINISH
 };
 
 #define STORY_FLAG_WORDS 0x80310B3Cu /* flag n: bit n & 31 of the word +4 * (n >> 5) (story-flags.md 1) */
@@ -1038,7 +1048,10 @@ static void walk(Item* it)
         g_api->read32(WINDOW_TASK, &task);
         g_api->read16(WINDOW_STATE, &wstate);
         window = task ^ (uint32_t)wstate << 24;
-        if (!it->member || window != it->window) {
+        /* A ship battle (a 5xx stage) holds 1087 throughout, its menu is not
+         * the message window, and B there answers the crew's wheel: reach
+         * U4's part-C run pressed it into a501a's from 111689. Never stuck. */
+        if (!it->member || window != it->window || ((map >> 8) >= 500 && (map >> 8) <= 583)) {
             if (g_walk_backout && it->member) logf_("walk: the event moved on at frame %u: no more B", f);
             g_walk_backout = 0;
             it->member = f + 1;
@@ -1175,18 +1188,64 @@ static void walk(Item* it)
           (char)(map & 0xFF), best_id, f, s ? s->runs : 0, it->last, why);
 }
 
-/* "hold-hp:F-G": no third field. */
+/* "hold-hp:F-G": no third field; or "finish:F-G:FRAMES". */
 static int parse_hold(char* s)
 {
     Item* it;
-    if (strncmp(s, "hold-hp:", 8) != 0 || g_nitems == MAX_ITEMS) return 0;
+    char *frames, *end;
+    int finish = strncmp(s, "finish:", 7) == 0;
+    if ((!finish && strncmp(s, "hold-hp:", 8) != 0) || g_nitems == MAX_ITEMS) return 0;
     it = &g_items[g_nitems];
     memset(it, 0, sizeof *it);
     snprintf(it->text, sizeof it->text, "%s", s);
-    it->kind = ITEM_HOLD_HP;
-    if (!parse_frames(s + 8, it)) return 0;
+    it->kind = finish ? ITEM_FINISH : ITEM_HOLD_HP;
+    if (finish) {
+        frames = strchr(s + 7, ':');
+        if (!frames) return 0;
+        *frames++ = '\0';
+        if (!parse_frames(s + 7, it) || !parse_u32(frames, &end, &it->id) || *end || !it->id) return 0;
+    } else if (!parse_frames(s + 8, it)) {
+        return 0;
+    }
     g_nitems++;
     return 1;
+}
+
+/* One safe point of finish: it->started is one more than the frame this
+ * battle began (0: no battle), it->state 1 once its enemies are held at 1 HP
+ * (logged then), it->last how many times one was put back to 1. A part card
+ * made by the developers' part select starts Vyse at level 1 (reach U4's
+ * part-C run: Vyse 420 HP, two Royal Guards still up after 70,000 frames of
+ * attacks; brought to 1 HP once, they healed back up, effect D2403300 29
+ * times in 84 rounds); this ends a fight that party cannot, through the
+ * game's own blows and victory, and says so. */
+#define ENEMY_SLOTS 12u /* 0x80309DE4[4..11] are the enemies (battle-system.md 1) */
+static void finish_battle(Item* it)
+{
+    uint32_t f = g_api->frame(), slot, actor, status, hp, n = 0;
+    if (g_api->scene() != SCENE_BATTLE) {
+        if (it->state) logf_("finish: the battle ended by frame %u; %u enemy HP put back to 1", f, it->last);
+        it->started = 0;
+        it->state = 0;
+        it->last = 0;
+        return;
+    }
+    if (!it->started) it->started = f + 1;
+    if (f + 1 - it->started < it->id) return;
+    for (slot = 4; slot < ENEMY_SLOTS; slot++) {
+        if (!g_api->read32(ACTORS + 4 * slot, &actor) || !actor) continue;
+        if (!g_api->read32(actor + ACTOR_STATUS, &status) || (status & STATUS_OUT)) continue;
+        if (!g_api->read32(actor + ACTOR_HP, &hp) || (int32_t)hp <= 1) continue;
+        g_api->write32(actor + ACTOR_HP, 1);
+        n++;
+    }
+    if (!it->state)
+        logf_("finish: the battle from frame %u has gone %u frames: %u enemy(s) held at 1 HP from now, so the "
+              "game's own next blows end it",
+              it->started - 1, it->id, n);
+    else
+        it->last += n;
+    it->state = 1;
 }
 
 
@@ -1345,6 +1404,8 @@ static void on_safe_point(void* user)
             if (it->state == 0) try_entry(it);
         } else if (it->kind == ITEM_HOLD_HP) {
             if (f <= it->to) hold_hp(it);
+        } else if (it->kind == ITEM_FINISH) {
+            if (f <= it->to) finish_battle(it);
         } else if (it->kind == ITEM_DUMP) {
             if (it->state == 0) dump(it);
         } else if (it->kind == ITEM_SAVE) {

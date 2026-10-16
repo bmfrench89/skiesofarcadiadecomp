@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1612 |
+| Python tests | 1614 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -465,17 +465,21 @@ FINDINGS entry "Reach U<n>":
 - **U4 with a sense of the story (2026-10-16):** `sct.py --story` indexes every field script's flags set and warps
   (through calls, raw, so message opcodes hide nothing), plus 15 hooks, warps that wait for a flag only the game's
   code sets (the world map's: the ship reaching a spot). The lab's `story:LO-HI` (`reach.py --story 100-149`) aims
-  the walker at the next story flag by distance in warps, and sets a hook's flag in place of the sail. Part C ran
-  from Sailors' Island to Galcian (`build/reach/u4-C8`: flags 100 to 115 and 124, the Grand Fortress, Antonio)
-  with nothing set by hand, and lost Galcian's fight into a game over. Three walker defects found on the way and
-  fixed with tests: it now waits wherever the player's A press would do nothing, while a message window is up,
-  and while the map's script runs anything but its loop (`*0x8030CEA4`; a cutscene can clear flag 1087 first).
+  the walker at the next story flag by distance in warps, and sets a hook's flag in place of the sail. Part C now
+  runs from Sailors' Island through the Grand Fortress, Antonio, the palace (past Galcian's patrol) and the Royal
+  Guards to its ship battle at `a501a` (`build/reach/u4-C11`: flags 100 to 118 and 124, nothing set by hand, every
+  invariant held over 250,000 frames). Walker defects found on the way, each fixed with a test: it waits wherever
+  the player's A press would do nothing, while a message window is up, and while the map's script runs anything
+  but its loop (`*0x8030CEA4`); it aims at the lowest clear flag it can reach (flags are not set in order); its
+  back-out never presses B in a ship battle. The part cards start Vyse at level 1, so the lab's `finish` holds a
+  long fight's enemies at 1 HP and the game's own victory ends it, said in the log. Runs go at `SOA_SPEED=4`.
 
-**Next:** Galcian's fight in `a107d` (lost, survived or won by design? the scripts and the battle's own data
-say), then part C to its end and the other part cards the same way; U5's parts E, F, I and L with `hold-hp`
-(the batch was refused by `reach.py` for a lab DLL older than its source, as it should be). `tools/reach.py run`
-is how every run here is made (its `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting,
-also holds R5c's 150% capture and the review page.
+**Next:** part C's ship battle with U3's crew recipe (`u4-C12` was running at this writing), then the rest of
+part C and the other part cards the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
+cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
+`--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the
+review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch

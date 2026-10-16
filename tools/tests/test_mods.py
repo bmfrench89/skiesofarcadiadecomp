@@ -1077,6 +1077,49 @@ def test_the_lab_holds_only_the_standing_partys_hp_and_only_in_battle(driver, tm
 
 
 @needs_cc
+def test_the_lab_finishes_a_battle_that_has_gone_on_too_long_once(driver, tmp_path):
+    """finish:F-G:FRAMES: in scene 7, once the battle has gone FRAMES frames,
+    each enemy still standing (slots 4 to 11) goes to 1 HP and is held
+    there, a heal put back; one already out, one at 1 and the party are left
+    alone; said once a battle, the put-backs counted at its end, and again
+    in the next one."""
+    lab(tmp_path)
+    actors = (
+        "set 80309de4 80400000 set 80400014 64 "  # the party's slot 0: 100 HP
+        "set 80309df4 80400100 set 80400114 1388 "  # slot 4: 5000 HP
+        "set 80309df8 80400200 set 80400214 50 set 8040021c 2000 "  # slot 5: out
+        "set 80309dfc 80400300 set 80400314 1 "  # slot 6: 1 HP already
+    )
+    script = (
+        actors + "set 803475cc 7 safe frame frame safe get 80400114 "  # 2 frames in: not yet
+        "frame safe get 80400114 get 80400014 get 80400214 "  # 3: finished
+        "set 80400114 1388 frame safe get 80400114 "  # healed: put back
+        "set 803475cc 6 frame safe set 803475cc 7 set 80400114 1388 frame safe get 80400114 "
+        "frame frame frame safe get 80400114"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="finish:0-100:3")
+    assert "loaded 1" in out, err
+    reads = [x for x in out.splitlines() if x.startswith("80400")]
+    assert reads == [
+        "80400114=00001388",
+        "80400114=00000001",
+        "80400014=00000064",
+        "80400214=00000050",
+        "80400114=00000001",  # a heal, put back
+        "80400114=00001388",  # the next battle, 1 frame in
+        "80400114=00000001",  # 3 frames in
+    ], out
+    lines = [x.split("lab: ", 1)[1] for x in err.splitlines() if "lab: finish:" in x]
+    assert lines == [
+        "finish: the battle from frame 0 has gone 3 frames: 1 enemy(s) held at 1 HP from now, "
+        "so the game's own next blows end it",
+        "finish: the battle ended by frame 5; 1 enemy HP put back to 1",
+        "finish: the battle from frame 6 has gone 3 frames: 1 enemy(s) held at 1 HP from now, "
+        "so the game's own next blows end it",
+    ], err
+
+
+@needs_cc
 def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver, tmp_path):
     """turn:F-G:M:SEQ waits for member M's input (scene 7, phase 1, the member
     word M), holds 60 frames of nothing while the wheel turns in, then each
@@ -1351,6 +1394,24 @@ def test_the_walker_backs_out_of_an_event_that_holds_the_field_a_minute(driver, 
 
 
 @needs_cc
+def test_the_walker_never_backs_out_of_a_ship_battle(driver, tmp_path):
+    """A ship battle (a 5xx stage, here a501a) holds flag 1087 throughout
+    with its menu, not the message window, on screen: B there answers a
+    crew member's wheel, so a minute and more of it is never "stuck"."""
+    lab(tmp_path)
+    held = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 1f5 setb 80311ac8 61 "
+        "set 80310bc0 80000000 safe "
+    )
+    script = held + "frame " * 1820 + "safe pad 1820 0000 pad 1890 0000"
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:300")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == ["pad 1820 0000 filtered", "pad 1890 0000 filtered"], out
+    assert "pressing B" not in err, err
+
+
+@needs_cc
 def test_the_walker_never_backs_out_of_an_event_whose_dialogue_moves_on(driver, tmp_path):
     """A cutscene holds flag 1087 longer than a minute, but its message window
     changes (a page, then a choice): each change starts the minute again, so
@@ -1532,6 +1593,7 @@ def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     lab(tmp_path)
     bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
     bad_items += ("flag:4a:100", "flag:004a:27328", "flag:004a:x", "flag:004A:100")
+    bad_items += ("finish:0-9", "finish:0-9:0", "finish:9-0:5", "finish:0-9:x")
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
     walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x", "assist:0-9:3")
