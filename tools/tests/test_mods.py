@@ -1281,6 +1281,33 @@ def test_a_lab_press_can_be_held_shorter_than_the_games_repeat(driver, tmp_path)
 
 
 @needs_cc
+def test_the_walker_backs_out_of_an_event_that_holds_the_field_a_minute(driver, tmp_path):
+    """A shop's menu holds the field (flag 1087) for good: after 1800 frames
+    the walker's pad filter presses B every 70, and stops once it is free."""
+    lab(tmp_path)
+    held = "set 803475cc 6 set 80311aec 8 set 80310bc0 80000000 safe "
+    script = (
+        held
+        + "frame " * 1700
+        + "safe pad 1750 0000 "  # 1700 frames held: not yet
+        + "frame " * 100
+        + "safe pad 1820 0000 pad 1835 0000 "  # 1800 and more: B on the beat, not off it
+        + "set 80310bc0 0 safe pad 1890 0000"  # free: no more B
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:300")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 1750 0000 filtered",
+        "pad 1820 0200 filtered",
+        "pad 1835 0000 filtered",
+        "pad 1890 0000 filtered",
+    ], out
+    assert "held the field since frame 0: pressing B" in err, err
+    assert "the field is free again at frame 1800" in err, err
+
+
+@needs_cc
 def test_the_lab_dumps_from_where_a_chain_ends_once(driver, tmp_path):
     """dump:F:C:N reads N bytes from the address C ends on (a trailing `*`
     takes the word there as the address), eight words a line, once."""

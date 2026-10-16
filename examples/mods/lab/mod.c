@@ -31,6 +31,8 @@
  *                  before an exit (6000-6999), then the lower id. The game's
  *                  own LABEL conditions and gates keep the story in order;
  *                  what the walker skips is the walk. Each start is logged.
+ *                  An event that holds the field for a minute (a shop's
+ *                  menu) gets B every 70 frames until the field is free.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
  *                  in a ship battle where its menu waits for A (a 5xx stage,
@@ -165,6 +167,8 @@ static int g_nseen;
 #define SHIP_WAIT_STATE 6u /* the menu waits for A, unless a member's wheel is open */
 
 static int g_sturn_playing; /* an sturn sequence is under way: assist keeps off */
+static int g_walk_backout;  /* the walker found the field held too long: B presses */
+#define WALK_STUCK 1800u    /* frames an event may hold the field before B (a minute) */
 
 typedef struct Item {
     int kind;
@@ -426,6 +430,11 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     g_sturn_playing = 0;
     for (i = 0; i < g_nitems; i++)
         if (g_items[i].kind == ITEM_STURN && g_items[i].started) g_sturn_playing = 1;
+    if (g_walk_backout && frame % (PRESS_HOLD + PRESS_GAP) < PRESS_HOLD) {
+        pad->buttons = SOA_PAD_B;
+        pad->stick[0] = pad->stick[1] = 128;
+        return;
+    }
     for (i = 0; i < g_nitems; i++) {
         Item* it = &g_items[i];
         uint32_t step, into;
@@ -625,13 +634,29 @@ static void walk(Item* it)
                  g_api->field_state());
         walk_wait(it, why);
         it->started = f;
+        it->member = 0;
+        g_walk_backout = 0;
         return;
     }
     if (g_api->story_flag(FLAG_EVENT)) {
         walk_wait(it, "an event runs (flag 1087)");
         it->started = f;
+        /* it->member: one more than the frame this event began (0: none). A
+         * menu nothing answers (a shop: reach U4's part-C run stood in the
+         * Mystery Merchant's for 190,000 frames) holds the field for good;
+         * past WALK_STUCK frames the pad filter presses B, which backs out of
+         * the game's menus. */
+        if (!it->member) it->member = f + 1;
+        if (f + 1 - it->member >= WALK_STUCK && !g_walk_backout) {
+            g_walk_backout = 1;
+            logf_("walk: an event has held the field since frame %u: pressing B every %u frames", it->member - 1,
+                  PRESS_HOLD + PRESS_GAP);
+        }
         return;
     }
+    if (g_walk_backout) logf_("walk: the field is free again at frame %u", f);
+    it->member = 0;
+    g_walk_backout = 0;
     if (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) {
         walk_wait(it, "a script entry is starting (0x8030E714 is 1)");
         it->started = f;
@@ -952,7 +977,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     if (g_nitems) api->on_safe_point(on_safe_point, NULL);
     for (i = 0; i < g_nitems; i++) {
         if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN && g_items[i].kind != ITEM_ASSIST &&
-            g_items[i].kind != ITEM_SAVE)
+            g_items[i].kind != ITEM_SAVE && g_items[i].kind != ITEM_WALK)
             continue;
         if (api->size < SOA_MOD_HAS(pad_filter) || !api->pad_filter(on_pad, NULL)) {
             api->log("lab: a turn item needs the pad filter, which this port does not offer");
