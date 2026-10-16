@@ -5,6 +5,7 @@
     python tools/sct.py 103a M04100 me103aa19  # only these entries
     python tools/sct.py path/to/me103a.sct
     python tools/sct.py 103a --data D:/dumps/Skies.iso   # any extraction or image
+    python tools/sct.py --story                # every script: flags set, maps warped to
 
 A map's script decides what the map does -- which event plays, where the camera
 and the party go, which exit warps where -- and it decides from story flags.
@@ -33,6 +34,7 @@ there.
 
 import argparse
 import csv
+import re
 import struct
 import sys
 from pathlib import Path
@@ -213,6 +215,134 @@ def script(d: bytes, want: list[str] | None = None, names: dict[int, str] | None
         yield name, off, end, lines
 
 
+STORY_FLAGS = 1024  # 1024 up are the field's own: 1087 the event lock, 1856 up one map's
+_WARP_NAME = re.compile(rb"me(\d{3}[a-z])\.sct\0", re.IGNORECASE)
+
+
+def story(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
+    """For each entry: the flags below STORY_FLAGS it sets and the maps it warps
+    to, its own and those of every entry it CALLs, however deep.
+
+    A raw scan, not the disassembly, so an opcode the disassembler cannot size
+    (144, a message, desynchronises most of a town's entries) hides nothing:
+    FLAGSET n is the words [17, 0x04000000, n as a float, 29]; a WARP is [43,
+    a self-relative offset to "meNNNx.sct"]; a CALL is [11, an offset] landing
+    exactly on another entry's start. Op 238 (fn_802074B0) is the way back to
+    the world map at a position: its fn_800C8E44 warps to "me099a.sct", whose
+    letter the game then picks from the story (FINDINGS: map 99), so it counts
+    as a warp to 099a. What the scan cannot see is a flag set from an
+    expression, and a walk off an island's edge onto the world map."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    starts: dict[int, str] = {}
+    for off, name in ents:
+        starts.setdefault(off, name)
+    own: dict[str, tuple[set[int], set[str], set[str]]] = {}
+    for off, name in ents:
+        end = base + min(b for b in bounds if b > off)
+        sets, warps, calls = own.setdefault(name, (set(), set(), set()))
+        o = base + off
+        while o + 8 <= end:
+            w = _w(d, o)
+            if w == 17 and o + 16 <= len(d) and _w(d, o + 4) == 0x04000000 and _w(d, o + 12) == END:
+                v = struct.unpack(">f", d[o + 8 : o + 12])[0]
+                if v == int(v) and 0 <= v < STORY_FLAGS:
+                    sets.add(int(v))
+            elif w == 43:
+                m = _WARP_NAME.match(d, o + 4 + _w(d, o + 4))
+                if m:
+                    warps.add(m.group(1).decode("latin1").lower())
+            elif w == 238 and _w(d, o + 4) >= 0x04000000:  # an operand follows, not data
+                warps.add("099a")
+            elif w == 11:
+                target = starts.get(o + 4 + _rel(d, o + 4) - base)
+                if target and target != name:
+                    calls.add(target)
+            o += 4
+    out = {}
+    for name in own:
+        sets, warps, seen, todo = set(), set(), {name}, [name]
+        while todo:
+            s, w, c = own[todo.pop()]
+            sets |= s
+            warps |= w
+            todo += [n for n in c - seen]
+            seen |= c
+        out[name] = (sets, warps)
+    return out
+
+
+def flags_set(d: bytes) -> set[int]:
+    """Every flag a FLAGSET of a constant sets, anywhere in the script."""
+    out = set()
+    for o in range(0, len(d) - 15, 4):
+        if _w(d, o) == 17 and _w(d, o + 4) == 0x04000000 and _w(d, o + 12) == END:
+            v = struct.unpack(">f", d[o + 8 : o + 12])[0]
+            if v == int(v) and 0 <= v < 27328:
+                out.add(int(v))
+    return out
+
+
+def hooks(d: bytes) -> dict[int, set[str]]:
+    """The warps inside each `IF (FLAG[T] 1 ==)` block with T at STORY_FLAGS or
+    above: a warp that waits for a flag the field sets. On the world map these
+    are where the ship's arrival takes the story on: me099f's loop warps to
+    243a, part C's first cutscene, once flag 1766 is set, which no script sets
+    and a fldHakken object in a099f.mld carries (the ship sailing to it). The
+    block is the words [0, flag T, 0x04000000, 1.0, ==, END, offset], and runs
+    from after its offset to where the offset points."""
+    out: dict[int, set[str]] = {}
+    for o in range(0, len(d) - 27, 4):
+        w = struct.unpack(">7I", d[o : o + 28])
+        if (
+            w[0] != 0
+            or not 0x20000000 <= w[1] < 0x40000000
+            or w[2:6] != (0x04000000, 0x3F800000, 4, END)
+        ):
+            continue
+        flag, end = w[1] & 0xFFFFFF, o + 24 + _rel(d, o + 24)
+        if flag < STORY_FLAGS:
+            continue
+        for q in range(o + 28, min(end, len(d) - 7), 4):
+            if _w(d, q) == 43:
+                m = _WARP_NAME.match(d, q + 4 + _w(d, q + 4))
+                if m:
+                    out.setdefault(flag, set()).add(m.group(1).decode("latin1").lower())
+            elif _w(d, q) == 238 and _w(d, q + 4) >= 0x04000000:
+                out.setdefault(flag, set()).add("099a")
+    return out
+
+
+def story_lines(name: str, d: bytes, unset: set[int] | None = None) -> list[str]:
+    """`story` as text, one entry a line, for the entries that set or warp:
+    `004a M03005 w250a`. The lab's walker reads these (reach.md U4). With
+    `unset`, the flags no script sets, each hook on one of them is a line too,
+    named for its flag: `099f hook1766 w243a`."""
+    lines = []
+    for entry, (sets, warps) in story(d).items():
+        if sets or warps:
+            words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
+            lines.append(f"{name} {entry} {' '.join(words)}")
+    for flag, warps in sorted(hooks(d).items()) if unset is not None else ():
+        if flag in unset:
+            lines.append(f"{name} hook{flag} {' '.join(f'w{m}' for m in sorted(warps))}")
+    return lines
+
+
+def story_index(data: Path) -> list[str]:
+    """story_lines for every field script under `data`, in map order, with the
+    hooks on flags that no script sets."""
+    with disc.open_data(data) as src:
+        scripts = sorted(
+            (q.lower()[8:12], aklz.decompress(src.read_path(q)))
+            for q in src.paths()
+            if re.fullmatch(r"field/me\d{3}[a-z]\.sct", q.lower())
+        )
+    anywhere = set().union(*(flags_set(d) for _, d in scripts))
+    unset = set(range(STORY_FLAGS, 27328)) - anywhere
+    return [line for name, d in scripts for line in story_lines(name, d, unset)]
+
+
 def load(script: str, data: Path) -> bytes:
     """The raw (still compressed) script: a path as given, else a map name
     looked up under the data directory or in its image."""
@@ -224,7 +354,7 @@ def load(script: str, data: Path) -> bytes:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("script", help="a map like 103a, or a path to a .sct")
+    p.add_argument("script", nargs="?", help="a map like 103a, or a path to a .sct")
     p.add_argument("entry", nargs="*", help="only these entries")
     p.add_argument(
         "--data",
@@ -232,13 +362,30 @@ def main(argv=None) -> int:
         default=ROOT / "extracted",
         help="the extraction (or disc image) a map name is looked up in",
     )
+    p.add_argument(
+        "--story",
+        action="store_true",
+        help="print each entry's flags set and maps warped to (story_lines), of "
+        "this script or, with none named, of every field script",
+    )
     a = p.parse_args(argv)
+    if a.story and not a.script:
+        for line in story_index(a.data):
+            print(line)
+        return 0
+    if not a.script:
+        p.error("name a script, or give --story for every one")
     try:
         raw = load(a.script, a.data)
     except (FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     d = aklz.decompress(raw)
+    if a.story:
+        name = Path(a.script).stem.lower().removeprefix("me")
+        for line in story_lines(name, d):
+            print(line)
+        return 0
     beside = a.data if a.data.is_dir() else a.data.parent
     names = opcode_names(beside / "sys" / "main.dol")
     for name, off, end, lines in script(d, a.entry, names):

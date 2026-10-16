@@ -89,6 +89,16 @@ def test_env_sets_one_switch_and_refuses_anything_else():
             reach.environment(args("--env", bad), FOLDER, {})
 
 
+def test_story_adds_the_labs_item_and_names_the_runs_own_index():
+    env = reach.environment(args("--lab", "walk:3300-90000:300", "--story", "100-149"), FOLDER, {})
+    assert env["SOA_LAB"] == "walk:3300-90000:300;story:100-149"
+    assert env["SOA_LAB_STORY"] == "build/reach/x/story.txt"
+    assert reach.environment(args("--story", "100-149"), FOLDER, {})["SOA_LAB"] == "story:100-149"
+    for bad in ("149-100", "100", "100-1024"):
+        with pytest.raises(SystemExit):
+            args("--story", bad)
+
+
 def test_a_stale_lab_library_is_refused(tmp_path):
     src, lib = tmp_path / "mod.c", tmp_path / "mod.dll"
     lib.write_text("old")

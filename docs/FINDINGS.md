@@ -8506,6 +8506,13 @@ here).
 - **What the recipe wastes:** with random presses the first battle of a run is usually lost, and the rest of the
   run is the title's attract demo. The next round adds the lab's `hold-hp`, so the accelerator keeps bringing
   battles for the whole run.
+- **Second round, part C** [V, `build/reach/u5b-partC`, 2026-10-16, `soak.py check --expect-reach 106a`: pass]: the
+  same recipe with `hold-hp`. Three battles (3701, 12270, 17444) and no game over, every base invariant held, four
+  effect packages new to the ledger (`F0500011`, `D2403200`, `F2921111`, `F0500009`: 48 of 576), and the known
+  LINEPTWIDTH question (2.17 px, in a battle on 106a). Three, not the dozens the accelerator could bring: random
+  presses choose slowly, the first fight took 8,000 frames (16 top-ups) and the third, six enemies, was still going
+  when the run ended 16,000 frames later. Not a fault, a slow player; parts E, F and I were refused by `reach.py`
+  because the lab's `mod.c` had been edited since its DLL was built, as it should, and wait for the next batch.
 - **A port defect, fixed: BP_MASK was not applied.** Every game over logged S3's question, `[gxr] BP_MASK 080000 was
   in force for BP 00 000001 ...`: the SDK's `GXSetCoPlanar` writes mask 080000 (GEN_MODE's zfreeze bit) and then its
   shadowed GEN_MODE, and after a game over that shadow differs from the register outside the mask. The console keeps
@@ -8613,6 +8620,61 @@ here).
   story's way on, and the walker has no sense of which entries move the story: the prison of part G had few
   besides. The next step for U4 is that sense, from the scripts: rank each map's entries by whether they set the
   part's story flags (`sct.py` over the map's script), and start those first.
+- **The story index** [V, the scripts, 2026-10-16]: `sct.py --story` scans all 257 field scripts, raw (the message
+  opcode 144 desynchronises the listing of most of a town's entries), for each entry's flags set and maps warped
+  to through every entry it calls; op 238 counts as a warp to the world map (its `fn_800C8E44` warps to
+  `me099a.sct`). It shows why the walker stalled: each part's story flags are set by named cutscene entries
+  (`me243ac01` sets 100, part C's first) that a map's `loop` calls on arrival, and Sailors' Island's talks set
+  none of part C's. Part C goes on from the dock (`004a` `M04500`, the world-map exit), the world map, and
+  `me099f`'s loop, whose warp to `243a` waits inside `IF (FLAG[1766] 1 ==)`. No script sets 1766; a `fldHakken`
+  record in `a099f.mld` carries it, so the game sets it when the ship sails there. The index lists every such
+  warp as a hook: 15, eleven of them on the world map's stages a, f, h, l, m and o.
+- **What the walker does with it** (the lab's `story:LO-HI`, `reach.py --story`): it aims at the lowest flag of
+  the window above the highest set that a line sets, measures each map's distance in warps to a map that sets it,
+  and prefers an entry that sets it, then one that warps nearer, two starts each at most per aim; where a hook
+  ranks first it sets the hook's flag in place of the sail, and says so. That is the only skip beyond the walk.
+- **Run u4-C4, part C's opening** [V, `build/reach/u4-C4`, the hook's flag set by hand with the lab's new
+  `flag:099f:1766`]: the walker's first pick was the dock exit (rank 2); on `a099f` the flag went in at 3730; the
+  game's own loop warped to `a243a` and played the Grand Fortress cutscene (frame 5000: Drachma, "It's the only
+  entrance into the city of Valua... The Grand Fortress."), flag 100 at 4302; then `a116d`, flag 101 at 8903.
+- **Two walker defects that run found, both fixed with a test:**
+  - `a116d`'s loop clears flag 1087 and then calls its second cutscene, `me116dc02`, and warps to `243a` when it
+    returns; at 9202 the walker took the field for quiet and started an exit, which cut off that warp (the story
+    off its rails: flag 102 is set only on it). A probe through the cutscene (`build/reach/u4-C7probe`, peeks on
+    the player's action state, the held word, the window and flag 1087) showed why nothing the walker read could
+    tell: from 10115 the window waits for a message, the player stands (action state 1, which the A press
+    accepts) and is not held, and 1087 is clear, yet the cutscene runs on, and the old walker started the exit
+    at 10414 exactly as before. What does tell is the map script's main thread: its next instruction
+    (`*0x8030CEA4`) lies in `me116dc02`, not in `loop`, which the tick restarts at each RET (`fn_80212130`,
+    the name at r2-15588). The walker now waits while the thread is anywhere but its loop, naming the entry; and
+    also where the player's own A press would do nothing (`fn_80118204`: 0x80347508 at 1, `fn_8009763C()` at
+    12), and while a message window is up (states 2 to 8; the window's task is there from every map load,
+    waiting in state 1, which a first try counted as open and so stood still at Sailors' Island);
+  - the back-out (B once an event has held the field a minute) fired inside the Grand Fortress cutscene, where B
+    at a choice would answer it: the minute now starts again whenever the message window moves.
+- **Run u4-C8: part C from its landing to Galcian** [V, `build/reach/u4-C8`, 2026-10-16, the walker with the
+  story index and its hooks, no hand-set flag]:
+  - the walker's picks followed the index: the dock exit (rank 2), the world map's hook (flag 1766 at 4030),
+    then the game's own cutscene warps; it held through `me116dc02` from 9773 to 14454 ("the map's script runs
+    me116dc02", Vigoro's introduction at frame 12000), after which the game warped back to `243a` itself and
+    set 102; then 3014 in `a005b` (rank 0, flag 104), 6111 (105, 106), the way to `a106b` (107);
+  - the Grand Fortress arena: Antonio, 40162 to 61943, won with A presses and `hold-hp` (41 top-ups), flag 108;
+  - then `a106c` (109), `a106a` (110), `a230a` (111), `a107a` (112, 114), `a209a`, where the loop sets 124
+    (`me209ac25`) before 113 and warps to `a253a` for it, then `a107d`, `a209a` again (115): flags 100 to 115
+    and 124 in 87,000 frames, 22 map loads;
+  - **the run ended at Galcian** (`a107d`, the battle from 88573: enemies `E9900000`/`E9901000`, his Devolver
+    at 89500, 659 on Vyse at 90000): the party fell, `a090a` at 90434, the flags cleared and the title at 91501.
+    `hold-hp` tops up only a member still standing, and a blow that fells the party at once is a game over
+    with it too. Whether this fight is one the story means to be lost, survived or won is the next question;
+    the game's own path here went to the game-over map, not on.
+  - Every invariant this run can show held: no stop line, no `[mem]` line, the card READY. It was stopped by
+    hand in the attract demo, so its report (FIFO bytes, vertex references) was never written; nine effect
+    packages were new to the ledger (`F0500083`, `F0500007`, `D2400000`, `D2402600`, `F2901183`, `F2925183`,
+    `D2403300`, `F0500084`, `F2902484`: 57 of 576).
+- **The aim corrected after that run:** a story does not set its flags in order (124 before 113), so the walker
+  now aims at the lowest flag of its window still clear that the lines can reach from where it stands, not at
+  the lowest above the highest set; this run's walker, built before that, said "no flag left" after 124 and fell
+  back to its own order, while the game's warps carried the story on.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

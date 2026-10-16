@@ -1170,6 +1170,49 @@ def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
 
 
 @needs_cc
+def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver, tmp_path):
+    """fn_80118204's other gates: the player held (0x80347508 is 1) and the
+    field's mode 12 (fn_8009763C: 2 at 0x80346C3C, 12 in the low byte at
+    0x80302F18); and a message window on screen (states 2 to 8), a scene
+    still talking with flag 1087 clear. Each makes the walker wait, saying
+    which; and the map script's main thread anywhere but its loop, which is
+    a cutscene the loop called (a116d's clears 1087 first). With none -- the
+    window's task there from the map load, waiting for a message in state 1;
+    the thread in its loop, or at a RET it is about to leave -- it looks for
+    an entry."""
+    lab(tmp_path)
+    # The script: code at 80400000; two entries, "loop" at 0 and "me116dc02"
+    # at 0x100, indexed at 80410000 (offset, then the name's 16 bytes).
+    script_ = (
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 "
+        "set 80410018 6d653131 set 8041001c 36646330 set 80410020 32000000 "
+    )
+    script = (
+        script_ + "set 803475cc 6 set 80311aec 8 set 8030cea4 80400008 set 80347508 1 safe "
+        "set 80347508 0 set 80346c3c 00020000 set 80302f18 000c0000 safe "
+        "set 80346c3c 0 set 80346e4c 80400000 set 80346e64 00040000 safe "
+        "set 80346e64 00010000 set 8030cea4 80400104 safe "  # in the cutscene
+        "set 80400104 c frame frame frame frame safe "  # at its RET: back to the loop next tick
+        "set 80400104 0 safe "  # in the cutscene again
+        "set 8030cea4 80400008 frame frame frame frame safe"  # the loop
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-100:3")
+    assert "loaded 1" in out, err
+    waits = [x.split(": ", 3)[-1] for x in err.splitlines() if "lab: walk: waiting" in x]
+    nothing = "no live entry: 0 volume(s) in the talk, check and exit ranges, 0 asked"
+    assert waits == [
+        "the player is held (0x80347508 is 1)",
+        "the field's mode is 12 (fn_8009763C)",
+        "a message window is open",
+        "the map's script runs me116dc02",
+        nothing,
+        "the map's script runs me116dc02",
+        nothing,
+    ], err
+
+
+@needs_cc
 def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_path):
     """assist:F-G:EVERY: on the beat, A in scene 7 or while the field's message
     window (task 0x80346E4C) holds a choice (state 6 at 0x80346E64); never on
@@ -1303,8 +1346,166 @@ def test_the_walker_backs_out_of_an_event_that_holds_the_field_a_minute(driver, 
         "pad 1835 0000 filtered",
         "pad 1890 0000 filtered",
     ], out
-    assert "held the field since frame 0: pressing B" in err, err
+    assert "held the field, its window unmoved, since frame 0: pressing B" in err, err
     assert "the field is free again at frame 1800" in err, err
+
+
+@needs_cc
+def test_the_walker_never_backs_out_of_an_event_whose_dialogue_moves_on(driver, tmp_path):
+    """A cutscene holds flag 1087 longer than a minute, but its message window
+    changes (a page, then a choice): each change starts the minute again, so
+    no B is pressed. Once the window stands still a minute, B comes; when it
+    moves again, B stops."""
+    lab(tmp_path)
+    held = "set 803475cc 6 set 80311aec 8 set 80310bc0 80000000 set 80346e4c 80400000 safe "
+    script = (
+        held
+        + "frame " * 1000
+        + "set 80346e64 00040000 safe "  # frame 1000: a page
+        + "frame " * 1000
+        + "set 80346e64 00060000 safe pad 2010 0000 "  # 2000: a choice; 2,000 frames held, no B
+        + "frame " * 1800
+        + "safe pad 3850 0000 "  # still since 2000: B, on the beat
+        + "set 80346e64 00040000 safe pad 3920 0000"  # it moved: no B on the next beat
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-9000:300")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == ["pad 2010 0000 filtered", "pad 3850 0200 filtered", "pad 3920 0000 filtered"], (
+        out
+    )
+    assert "its window unmoved, since frame 2000: pressing B" in err, err
+    assert "the event moved on at frame 3800: no more B" in err, err
+
+
+STORY = """# sct.py --story, cut down to part C's opening (reach U4)
+004a M03005 w250a
+004a M04010 s58
+250a loop s599 w099a w004a
+099f loop s59 w243a
+243a loop s100 s102 w116d
+116d M04001 s101
+355a b s100 s101 s102 s103
+"""
+
+
+@needs_cc
+def test_the_lab_story_aims_at_the_next_flag_and_measures_the_way_there(driver, tmp_path):
+    """story:LO-HI reads SOA_LAB_STORY's lines and, at each pick, aims at the
+    lowest flag of the window still clear that a line sets and the lines
+    reach from here, and finds this map's distance in warps to a map that
+    sets it: the town's dock talk, the sky over it, the world map (any letter
+    is one place), then the cutscene map whose loop sets 100. With 100 and
+    102 set (a story sets flags out of order), the aim is 101, one warp
+    further off. With 100 to 102 set, 103 is left, which only the part-select
+    room sets and no warp reaches: aimed at, and said so. Then nothing."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "frame frame frame frame safe "  # frame 4: the first pick in a004a
+        "set 80310b48 50 frame frame frame safe "  # flags 100 and 102
+        "set 80310b48 70 frame frame frame safe "  # 100 to 102
+        "set 80310b48 f0 frame frame frame safe"  # and 103
+    )
+    lab_items = "story:100-149;walk:0-100:3"
+    out, err = play(
+        driver, tmp_path, script, SOA_LAB=lab_items, SOA_LAB_STORY=str(tmp_path / "story.txt")
+    )
+    assert "loaded 1" in out, err
+    assert "lab: story: 7 line(s), 6 place(s) from" in err, err
+    aims = [
+        x.split("lab: story: ", 1)[1]
+        for x in err.splitlines()
+        if "lab: story: " in x and "line(s)" not in x
+    ]
+    assert aims == [
+        "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
+        "aiming at flag 101 (set in 116d); a004a is 4 warp(s) away",
+        "aiming at flag 103 (set in only the part-select room); "
+        "no warp the lines know leads there from a004a",
+        "no flag in 100-149 is left for a line to set",
+    ], err
+
+
+@needs_cc
+def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_at_most(driver, tmp_path):
+    """On the world map, `099f hook1766 w243a`: the loop warps to 243a, which
+    sets the aim, once flag 1766 is set, and no script sets it. With nothing
+    live ranked before it the walker sets the flag (the rest of its word
+    kept) and says why; cleared again it is set again, and after two tries at
+    one aim it is left alone."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(
+        "099f loop s59 w243a\n099f hook1766 w243a\n243a loop s100\n", encoding="utf-8"
+    )
+    script = (
+        "set 80310c18 1 set 803475cc 6 set 80311aec 8 set 80311ac0 63 setb 80311ac8 66 "
+        "frame frame frame frame safe get 80310c18 "  # frame 4: the hook
+        "set 80310c18 1 frame frame frame safe get 80310c18 "  # 7: cleared, set again
+        "set 80310c18 1 frame frame frame safe get 80310c18"  # 10: two tries made
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:100-149;walk:0-100:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("80310C18")] == [
+        "80310C18=00000041",
+        "80310C18=00000041",
+        "80310C18=00000001",
+    ], out
+    hooks = [x.split("lab: walk: ", 1)[1] for x in err.splitlines() if " hook: " in x]
+    assert hooks == [
+        "a099f hook: flag 1766 set at frame 4, in place of the arrival this map's script waits for "
+        "(the story's rank toward flag 100: 1)",
+        "a099f hook: flag 1766 set at frame 7, in place of the arrival this map's script waits for "
+        "(the story's rank toward flag 100: 1)",
+    ], err
+
+
+@needs_cc
+def test_the_lab_sets_a_flag_once_on_its_map_and_keeps_the_rest_of_the_word(driver, tmp_path):
+    """flag:MAP:N waits for MAP's field to run with no event, then sets flag N
+    alone (the other bits of its word kept) and says so, once."""
+    lab(tmp_path)
+    script = (
+        "set 80310b48 1 set 803475cc 6 set 80311aec 8 set 80311ac0 74 setb 80311ac8 61 safe "  # a116a
+        "set 80311ac0 4 set 80310bc0 80000000 safe "  # a004a, an event running
+        "set 80310bc0 0 frame safe get 80310b48 "  # quiet: flag 100, bit 4
+        "set 80310b48 1 frame safe get 80310b48"  # cleared again: not set twice
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="flag:004a:100")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("80310B48")] == [
+        "80310B48=00000011",
+        "80310B48=00000001",
+    ], out
+    assert err.count("lab: flag: ") == 1, err
+    assert "lab: flag: 100 set on a004a at frame 1 (80310B48: 00000001 -> 00000011)" in err, err
+
+
+@needs_cc
+def test_the_lab_story_refuses_a_file_it_cannot_read(driver, tmp_path):
+    """No file, a line that is not "MAP ENTRY sN.. wMAP..", a window past the
+    flags the scan keeps, or a second story item: each refuses the mod."""
+    lab(tmp_path)
+    good, bad = tmp_path / "story.txt", tmp_path / "bad.txt"
+    good.write_text(STORY, encoding="utf-8")
+    bad.write_text("004a M03005 w250a\n004a M03005 x9\n", encoding="utf-8")
+    cases = [
+        ("story:100-149", tmp_path / "missing.txt", "names no file that can be read"),
+        ("story:100-149", bad, "line 2 is not"),
+        ("story:100-1024", good, ""),
+        ("story:100-149;story:150-199", good, ""),
+    ]
+    for items, path, why in cases:
+        out, err = play(driver, tmp_path, "safe", SOA_LAB=items, SOA_LAB_STORY=str(path))
+        assert "loaded 0" in out and "SOA_LAB item not understood: story:" in err, (items, err)
+        assert why in err, (items, err)
 
 
 @needs_cc
@@ -1330,6 +1531,7 @@ def test_the_lab_dumps_from_where_a_chain_ends_once(driver, tmp_path):
 def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     lab(tmp_path)
     bad_items = ("peek:5-2:0x80000000", "entry:1-2:4005", "jump:1:2", "peek:1:0x80000000+")
+    bad_items += ("flag:4a:100", "flag:004a:27328", "flag:004a:x", "flag:004A:100")
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
     walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x", "assist:0-9:3")

@@ -195,6 +195,29 @@ flags to 315); part C stopped in a town's item shop. What U4 needs next, in orde
    either a world-map driver, or the game's own warp to the next story map, said as such.
 3. Step 1 above (positions), for the entries a script expects the party to have walked to.
 
+**Story first, as built 2026-10-16:** `sct.py --story` scans every field script (257) for each entry's flags set
+and maps warped to, through every entry it calls; a raw scan, because the message opcode (144) desynchronises the
+listing of most of a town's entries. Op 238 is the way back to the world map (its function warps to `me099a.sct`,
+whose letter the game picks), so it counts as a warp there. What the index shows [V, the scripts]: each part's story
+flags are set by named cutscene entries (`me243ac01` sets 100, the first of part C) that a map's `loop` calls on
+arrival when the flags before them are set; a town's `M0xxxx` talks set almost none. Part C's way on is the
+Sailors' Island dock (`004a` `M03005`, "set sail?", a warp to `250a`, the sky over an island), the world map, and
+`099f`'s loop, which warps to `243a` for the first cutscene. The lab's `story:LO-HI` reads the index
+(`reach.py --story`), aims at the window's next flag, measures every map's distance in warps to one that sets it,
+and has the walker prefer an entry that sets it, then one that warps nearer.
+
+**The world map, as built:** `099f`'s warp to `243a` waits inside `IF (FLAG[1766] 1 ==)`, and no script sets 1766:
+a `fldHakken` object in `a099f.mld` carries it, so the game sets it when the ship sails there. The index lists every
+such warp as a hook (`099f hook1766 w243a`; 15 in all, 11 of them on the world map's stages a, f, h, l, m and o),
+and the walker, where a hook ranks before every live entry, sets its flag in place of the sail, twice at most per
+aim, and says so. That is the one skip U4 makes beyond the walk: the sailing itself is not played, and every
+cutscene, map and fight it leads to is the game's own.
+
+**Run u4-C8** (FINDINGS "Reach U4"): part C from Sailors' Island through the Grand Fortress, Antonio, `a106`,
+`a107` and `a209` to Galcian in `a107d`, flags 100 to 115 and 124, every story step by the index, the one hook
+and the game's own warps, with no hand-set flag. The walker waits while the map's script runs anything but its
+loop (a cutscene can clear flag 1087 first). Next: Galcian's fight, which the party lost into a game over.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

@@ -7,6 +7,8 @@
     python tools/reach.py run u5-partC --card build/savetest/card-partC.raw --lab objects \\
         --soak-seed 40 --battle --accelerate 600 --snap 0
     python tools/soak.py check build/reach/u1-hold/run.log --expect-flag 304
+    python tools/reach.py run u4-C3 --card build/savetest/card-partC.raw --story 100-149 \\
+        --lab "walk:3300-120000:300;assist:3300-120000:150" --mod mods/autotext ...
 
 Each run gets its own folder, build/reach/<name>/: a copy of the card (the
 game writes to it), the lab mod alone in mods/ (so no other mod's patches
@@ -14,6 +16,8 @@ reach the run), the snapshots in frames/, and run.log. The port runs traced
 (SOA_TRACE=1), strict (SOA_STRICT=1), with the settings file off
 (SOA_SETTINGS=0) and drawing (SOA_RENDER=1); --snap 0 draws every frame and
 writes no snapshot, which is what the renderer's draw tripwires need.
+--story LO-HI writes `sct.py --story`'s lines for every field script to the
+run's story.txt and gives the lab `story:LO-HI` with SOA_LAB_STORY naming it.
 
 Refused before anything runs: a lab mod.dll older than its mod.c (build it
 with `python tools/recompile.py --link`), a missing card, and a name that is
@@ -36,12 +40,21 @@ import sys
 import time
 from pathlib import Path
 
-import soak  # tools/ is sys.path[0] when this runs as a script
+import sct  # tools/ is sys.path[0] when this runs as a script
+import soak
 
 ROOT = Path(__file__).resolve().parent.parent
 LAB = ROOT / "examples" / "mods" / "lab"
 EXE = ROOT / "gen" / ("soa.exe" if os.name == "nt" else "soa")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def story_window(text: str) -> str:
+    """The lab's window of story flags, like 100-149, below sct.STORY_FLAGS."""
+    m = re.fullmatch(r"(\d+)-(\d+)", text)
+    if not m or int(m[1]) > int(m[2]) or int(m[2]) >= sct.STORY_FLAGS:
+        raise argparse.ArgumentTypeError(f"{text!r}: give LO-HI, flags below {sct.STORY_FLAGS}")
+    return text
 
 
 def lab_library() -> Path:
@@ -81,8 +94,12 @@ def environment(args: argparse.Namespace, folder: Path, base: dict[str, str]) ->
         SOA_SETTINGS="0",
         SOA_RENDER="1",
     )
-    if args.lab:
-        env["SOA_LAB"] = args.lab
+    lab = args.lab
+    if getattr(args, "story", None):
+        lab = f"{lab};story:{args.story}" if lab else f"story:{args.story}"
+        env["SOA_LAB_STORY"] = f"{rel}/story.txt"
+    if lab:
+        env["SOA_LAB"] = lab
     if args.snap:
         env["SOA_SNAP"] = str(args.snap)
     pad = pad_script(args)
@@ -135,6 +152,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             if f.is_file() and f.suffix in (".ini", ".txt", ".dll", ".so"):
                 shutil.copy2(f, dest / f.name)
     shutil.copy2(card, folder / "card.raw")
+    if getattr(args, "story", None):
+        lines = sct.story_index(ROOT / "extracted")
+        (folder / "story.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"[reach] {args.name}: story.txt, {len(lines)} line(s) from every field script")
     env = environment(args, folder, dict(os.environ))
     if "SOA_FIFO_DIR" in env:  # the port does not make it, and says so per file
         (ROOT / env["SOA_FIFO_DIR"]).mkdir(parents=True, exist_ok=True)
@@ -184,6 +205,12 @@ def main(argv: list[str] | None = None) -> int:
         type=soak.map_name,
         metavar="NNNx",
         help="soak.py's warp by name at frame 3300; random play and the accelerator start once it settles",
+    )
+    r.add_argument(
+        "--story",
+        type=story_window,
+        metavar="LO-HI",
+        help="the lab's story:LO-HI, with sct.py --story's lines written to the run's story.txt",
     )
     r.add_argument("--poke", action="append", help="SOA_POKE items (repeatable)")
     r.add_argument("--peek", action="append", help="SOA_PEEK items (repeatable)")

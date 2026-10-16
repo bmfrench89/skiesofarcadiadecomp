@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1603 |
+| Python tests | 1612 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -462,10 +462,20 @@ FINDINGS entry "Reach U<n>":
   (`peek`, `dump`, `objects`); each item's comment in `examples/mods/lab/mod.c` says what it is for and which run
   showed it was needed.
 
-**Next:** the walker on each part card in turn (part C was running when this was written), each to its own
-world-map edge; U5's part L and a `hold-hp` round; and, to join the parts, a world-map driver or the game's warp at
-each edge. `tools/reach.py run` is how every run here is made (its `--help`, and each FINDINGS entry's recipe).
-Step 3, the owner's sitting, also holds R5c's 150% capture and the review page.
+- **U4 with a sense of the story (2026-10-16):** `sct.py --story` indexes every field script's flags set and warps
+  (through calls, raw, so message opcodes hide nothing), plus 15 hooks, warps that wait for a flag only the game's
+  code sets (the world map's: the ship reaching a spot). The lab's `story:LO-HI` (`reach.py --story 100-149`) aims
+  the walker at the next story flag by distance in warps, and sets a hook's flag in place of the sail. Part C ran
+  from Sailors' Island to Galcian (`build/reach/u4-C8`: flags 100 to 115 and 124, the Grand Fortress, Antonio)
+  with nothing set by hand, and lost Galcian's fight into a game over. Three walker defects found on the way and
+  fixed with tests: it now waits wherever the player's A press would do nothing, while a message window is up,
+  and while the map's script runs anything but its loop (`*0x8030CEA4`; a cutscene can clear flag 1087 first).
+
+**Next:** Galcian's fight in `a107d` (lost, survived or won by design? the scripts and the battle's own data
+say), then part C to its end and the other part cards the same way; U5's parts E, F, I and L with `hold-hp`
+(the batch was refused by `reach.py` for a lab DLL older than its source, as it should be). `tools/reach.py run`
+is how every run here is made (its `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting,
+also holds R5c's 150% capture and the review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch

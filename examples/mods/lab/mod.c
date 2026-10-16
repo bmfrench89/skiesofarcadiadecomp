@@ -31,8 +31,28 @@
  *                  before an exit (6000-6999), then the lower id. The game's
  *                  own LABEL conditions and gates keep the story in order;
  *                  what the walker skips is the walk. Each start is logged.
- *                  An event that holds the field for a minute (a shop's
- *                  menu) gets B every 70 frames until the field is free.
+ *                  Busy also means what stops the player's own A press
+ *                  (fn_80118204: flag 1087, 0x80347508 at 1, the field's mode
+ *                  12), a message window on screen, and the map script's main
+ *                  thread anywhere but its loop (a cutscene the loop called,
+ *                  named in the log). An event that holds
+ *                  the field a minute with its window unmoved (a shop's menu)
+ *                  gets B every 70 frames until the field is free.
+ *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
+ *                  file SOA_LAB_STORY names holds `sct.py --story`'s lines,
+ *                  each entry's flags set and maps warped to. The story's next
+ *                  flag is the lowest in LO..HI still clear that a line sets
+ *                  and the lines reach from here (a story's flags are not set
+ *                  in order); every map's distance in warps to one that sets
+ *                  it is found, and the walker prefers, before its own order,
+ *                  an entry that sets it, then one that warps nearer, each for
+ *                  two starts at most while that flag is the aim. Where the
+ *                  map itself sets it (its loop, on conditions), the walker
+ *                  stays and talks. The aim and the distance are logged. A
+ *                  line "MAP hookN wX..." is a warp in MAP's script that waits
+ *                  for flag N, which no script sets (the world map's: the ship
+ *                  reaching a spot); ranked before every live entry, the
+ *                  walker sets N in its place, twice at most per aim.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
  *                  in a ship battle where its menu waits for A (a 5xx stage,
@@ -42,6 +62,14 @@
  *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
  *                  reads them): what the walker needs where a pad script's A
  *                  every 150 frames would talk to whatever stands nearest.
+ *   flag:MAP:N     once, at the first safe point where map MAP (004a; 099f is
+ *                  the world map at that story stage) runs with no event,
+ *                  set flag N, its word read and written back with the bit
+ *                  in: what stands in for something the game sets it for and
+ *                  the walker cannot do. The world map's loop starts part C's
+ *                  first cutscene when flag 1766 is set (me099f, 01E20), which
+ *                  a fldHakken object in a099f.mld carries: the ship sailing
+ *                  there. Logged with the word before and after.
  *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
  *                  (a multiple of 4, at most 8192) from the address the chain
  *                  C ends on (C's steps as peek's; *0x8034727C is the ship
@@ -135,8 +163,12 @@ enum {
     ITEM_STURN,
     ITEM_WALK,
     ITEM_ASSIST,
-    ITEM_SAVE
+    ITEM_SAVE,
+    ITEM_FLAG
 };
+
+#define STORY_FLAG_WORDS 0x80310B3Cu /* flag n: bit n & 31 of the word +4 * (n >> 5) (story-flags.md 1) */
+#define FLAG_COUNT 27328u            /* 854 words */
 
 
 /* The field's message window, as mods/autotext reads it: its task (0 when
@@ -144,18 +176,67 @@ enum {
 #define WINDOW_TASK 0x80346E4Cu
 #define WINDOW_STATE 0x80346E64u
 #define WINDOW_CHOICE 6
+/* The task is there from each map load; state 1 waits for a message and 255
+ * is a warp's teardown, 2 to 8 a window opening, writing, waiting, scrolling,
+ * choosing or closing (FINDINGS "P11's spike") */
+#define WINDOW_OPENING 2
+#define WINDOW_LAST_OPEN 8
 #define FIELD_RESULTS 4u /* the field's state while a battle's results screen waits */
+#define PLAYER_HELD 0x80347508u /* r13-29208: the player's A press does nothing while it is 1 */
+/* The map script's main thread (fn_80212130): its code at *0x8030CEA0, its
+ * next instruction at *0x8030CEA4, which fn_80210550 points at an entry it
+ * starts and which the tick points back at "loop" (r2-15588) once it reaches
+ * a RET (op 12); the entries, 20 bytes each, an offset (its low two bits not
+ * part of it) and a name of 16, at *0x8030D6C0, *0x8030D6C4 of them. */
+#define SCRIPT_CODE 0x8030CEA0u
+#define SCRIPT_PC 0x8030CEA4u
+#define SCRIPT_INDEX 0x8030D6C0u
+#define SCRIPT_COUNT 0x8030D6C4u
+#define OP_RET 12u
+#define MODE_KIND 0x80346C3Cu   /* r13-31460: with 2 here, fn_8009763C is the s8 of ... */
+#define MODE_WORD 0x80302F18u   /* ... the s16 here, and 12 stops the A press too */
 #define HIT_SAVE_POINT 45u     /* a volume's hit type (u16 at +18): "walluv", a save point */
 #define HIT_SAVE_POINT_MOT 44u /* "wallmot", the other save point */
 
 static int assist_wanted(void); /* below, beside the walker; on_pad calls it first */
+static int story_load(const char* path); /* below, beside the walker; parse_story calls it first */
+static uint32_t story_map_word(const char* s); /* likewise, for parse_item's flag: */
 
-/* The walker's memory: how often each map's entry has been started. */
+/* The walker's memory: how often each map's entry has been started, and how
+ * often while the story aimed at flag `aim`. */
 #define MAX_SEEN 1024
-static struct {
-    uint32_t map, id, runs;
-} g_seen[MAX_SEEN];
+typedef struct {
+    uint32_t map, id, runs, aim, tries;
+} Seen;
+static Seen g_seen[MAX_SEEN];
 static int g_nseen;
+
+/* story: where the story goes, from `sct.py --story`'s lines in the file
+ * SOA_LAB_STORY names ("004a M03005 w250a": a map, an entry, the flags it
+ * sets and the maps it warps to, through every entry it calls). A map word
+ * is the API's map(), number << 8 | letter; the world map's letter is the
+ * story's (B[6]), so every 099x is one place to the distances. */
+#define STORY_LINES 4096
+#define STORY_WORDS 16384
+#define STORY_MAPS 512
+#define STORY_FAR 0xFFFFu
+#define STORY_TRIES 2u /* starts of one entry per aim before it stops counting */
+typedef struct {
+    uint32_t map, id; /* id: n for an entry named M%05d (the walker's), else 0 */
+    uint32_t hook;    /* n for a line named hookN: its warps wait for flag n, which no script sets */
+    uint32_t at;      /* its sets, then its warps, in g_story_words */
+    uint16_t nsets, nwarps;
+} StoryLine;
+static StoryLine g_story[STORY_LINES];
+static uint32_t g_story_words[STORY_WORDS];
+static int g_nstory, g_story_on;
+static uint32_t g_story_nwords, g_story_lo, g_story_hi;
+static uint32_t g_story_maps[STORY_MAPS];
+static uint16_t g_story_dist[STORY_MAPS];
+static int g_story_nmaps;
+static uint32_t g_story_aim, g_story_aim_map; /* what the last log named */
+#define STORY_FLAG_LIMIT 1024u                /* sct.py's STORY_FLAGS */
+static uint8_t g_story_settable[STORY_FLAG_LIMIT];
 
 /* A ship battle's command input (reach U3, found by RAM captures at two
  * crew members' inputs and confirmed by peeks through a fight): the word at
@@ -194,6 +275,7 @@ typedef struct Item {
     uint32_t turns;
     uint32_t member, started;
     int done;
+    uint32_t window; /* walk: the message window's task and state when last read */
 } Item;
 
 static const SoaModApi* g_api;
@@ -299,6 +381,11 @@ static int parse_item(char* s)
         it->kind = ITEM_ENTRY;
         if (!parse_frames(a, it) || it->to != it->from) return 0;
         if (!parse_u32(b, &end, &it->id) || *end) return 0;
+    } else if (strcmp(s, "flag") == 0) {
+        char* end;
+        it->kind = ITEM_FLAG;
+        if (!(it->base = story_map_word(a)) || !parse_u32(b, &end, &it->id) || *end || it->id >= FLAG_COUNT)
+            return 0;
     } else if (strcmp(s, "peek") == 0) {
         it->kind = ITEM_PEEK;
         if (!parse_frames(a, it) || !parse_chain(b, it)) return 0;
@@ -519,6 +606,19 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     }
 }
 
+/* "story:LO-HI": the window of story flags, and the file SOA_LAB_STORY names */
+static int parse_story(char* s)
+{
+    Item window;
+    if (strncmp(s, "story:", 6) != 0) return 0;
+    if (g_story_on || !parse_frames(s + 6, &window) || window.to >= STORY_FLAG_LIMIT) return 0;
+    if (!story_load(getenv("SOA_LAB_STORY"))) return 0;
+    g_story_lo = window.from;
+    g_story_hi = window.to;
+    g_story_on = 1;
+    return 1;
+}
+
 /* "walk:F-G:IDLE", or "assist:F-G:EVERY" */
 static int parse_walk(char* s)
 {
@@ -565,16 +665,298 @@ static int assist_wanted(void)
            g_api->read16(WINDOW_STATE, &state) && (int16_t)state == WINDOW_CHOICE;
 }
 
-static uint32_t* seen_runs(uint32_t map, uint32_t id)
+static Seen* seen_of(uint32_t map, uint32_t id)
 {
     int i;
     for (i = 0; i < g_nseen; i++)
-        if (g_seen[i].map == map && g_seen[i].id == id) return &g_seen[i].runs;
+        if (g_seen[i].map == map && g_seen[i].id == id) return &g_seen[i];
     if (g_nseen == MAX_SEEN) return NULL;
+    memset(&g_seen[g_nseen], 0, sizeof g_seen[0]);
     g_seen[g_nseen].map = map;
     g_seen[g_nseen].id = id;
-    g_seen[g_nseen].runs = 0;
-    return &g_seen[g_nseen++].runs;
+    return &g_seen[g_nseen++];
+}
+
+/* "004a" as a map word; 0 if it is not one */
+static uint32_t story_map_word(const char* s)
+{
+    if (strlen(s) != 4 || s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' ||
+        s[3] < 'a' || s[3] > 'z')
+        return 0;
+    return (uint32_t)((s[0] - '0') * 100 + (s[1] - '0') * 10 + (s[2] - '0')) << 8 | (uint32_t)s[3];
+}
+
+/* The distances' place for a map, every world map (099x) being one; -1 for
+ * a map no line names, unless `add` (the file's reading) makes it a place. */
+static int story_node(uint32_t map, int add)
+{
+    int i;
+    if (map >> 8 == 99) map = 99u << 8 | 'a';
+    for (i = 0; i < g_story_nmaps; i++)
+        if (g_story_maps[i] == map) return i;
+    if (!add || g_story_nmaps == STORY_MAPS) return -1;
+    g_story_maps[g_story_nmaps] = map;
+    return g_story_nmaps++;
+}
+
+/* The next word of a line, cut in place; NULL at its end. */
+static char* next_word(char** p)
+{
+    char* w = *p + strspn(*p, " \t\r\n");
+    if (!*w) return NULL;
+    *p = w + strcspn(w, " \t\r\n");
+    if (**p) *(*p)++ = '\0';
+    return w;
+}
+
+/* One line of the file into g_story; 0 if it does not parse or there is no
+ * room. A blank line or a '#' comment is 1 and adds nothing. */
+static int story_line(char* p)
+{
+    StoryLine* l;
+    char *tok = next_word(&p), *name;
+    if (!tok || tok[0] == '#') return 1;
+    if (g_nstory == STORY_LINES) return 0;
+    l = &g_story[g_nstory];
+    memset(l, 0, sizeof *l);
+    name = next_word(&p);
+    if (!name || !(l->map = story_map_word(tok)) || story_node(l->map, 1) < 0) return 0;
+    if (name[0] == 'M' && strlen(name) == 6 && strspn(name + 1, "0123456789") == 5)
+        l->id = (uint32_t)strtoul(name + 1, NULL, 10);
+    if (strncmp(name, "hook", 4) == 0 && name[4] && strspn(name + 4, "0123456789") == strlen(name + 4)) {
+        l->hook = (uint32_t)strtoul(name + 4, NULL, 10);
+        if (!l->hook || l->hook >= FLAG_COUNT) return 0;
+    }
+    l->at = g_story_nwords;
+    while ((tok = next_word(&p)) != NULL) {
+        uint32_t v = 0;
+        char* end;
+        if (g_story_nwords == STORY_WORDS) return 0;
+        if (tok[0] == 's' && !l->nwarps && parse_u32(tok + 1, &end, &v) && !*end && v < STORY_FLAG_LIMIT)
+            l->nsets++, g_story_settable[v] = 1;
+        else if (tok[0] == 'w' && (v = story_map_word(tok + 1)) != 0)
+            l->nwarps++;
+        else
+            return 0;
+        g_story_words[g_story_nwords++] = v;
+    }
+    g_nstory++;
+    return 1;
+}
+
+/* Reads the file; 0 (said why) if it cannot be read or a line does not parse. */
+static int story_load(const char* path)
+{
+    FILE* f = path && *path ? fopen(path, "r") : NULL;
+    char line[4096];
+    int n = 0, ok = 1;
+    if (!f) {
+        logf_("story: SOA_LAB_STORY names no file that can be read (%.150s)", path ? path : "unset");
+        return 0;
+    }
+    while (ok && fgets(line, sizeof line, f)) {
+        n++;
+        ok = strchr(line, '\n') != NULL || feof(f); /* a line longer than the buffer is refused */
+        if (ok) ok = story_line(line);
+    }
+    fclose(f);
+    if (!ok) {
+        logf_("story: %.150s line %d is not \"MAP ENTRY sN.. wMAP..\", or passes %d lines or %d words", path, n,
+              STORY_LINES, STORY_WORDS);
+        return 0;
+    }
+    logf_("story: %d line(s), %d place(s) from %.150s", g_nstory, g_story_nmaps, path);
+    return 1;
+}
+
+static void story_dists(uint32_t aim);
+static uint32_t story_dist(uint32_t map);
+
+/* The flag the story wants next, its distances measured: in the window, the
+ * lowest flag still clear that a line sets and that the lines can reach from
+ * `map`; else the lowest clear one a line sets (unreachable, logged so); 0
+ * when there is none. Not the lowest above the highest set: part C sets 124
+ * in a209a (me209ac25) before 113, 115 and 117, which come after it. */
+static uint32_t story_aim(uint32_t map)
+{
+    uint32_t f, first = 0;
+    for (f = g_story_lo; f <= g_story_hi; f++) {
+        if (!g_story_settable[f] || g_api->story_flag(f)) continue;
+        if (!first) first = f;
+        story_dists(f);
+        if (story_dist(map) != STORY_FAR) return f;
+    }
+    if (first) story_dists(first);
+    return first;
+}
+
+static int story_sets(const StoryLine* l, uint32_t flag)
+{
+    uint32_t k;
+    for (k = 0; k < l->nsets; k++)
+        if (g_story_words[l->at + k] == flag) return 1;
+    return 0;
+}
+
+/* Each place's distance in warps to one where a line sets `aim`: 0 there,
+ * then back along every line's warps until nothing shortens. */
+static void story_dists(uint32_t aim)
+{
+    int i, changed = 1;
+    uint32_t k;
+    for (i = 0; i < g_story_nmaps; i++) g_story_dist[i] = STORY_FAR;
+    for (i = 0; i < g_nstory; i++)
+        if (story_sets(&g_story[i], aim)) g_story_dist[story_node(g_story[i].map, 0)] = 0;
+    while (changed) {
+        changed = 0;
+        for (i = 0; i < g_nstory; i++) {
+            const StoryLine* l = &g_story[i];
+            int from = story_node(l->map, 0);
+            for (k = 0; k < l->nwarps; k++) {
+                int to = story_node(g_story_words[l->at + l->nsets + k], 0);
+                if (to >= 0 && g_story_dist[to] != STORY_FAR && g_story_dist[to] + 1u < g_story_dist[from]) {
+                    g_story_dist[from] = (uint16_t)(g_story_dist[to] + 1u);
+                    changed = 1;
+                }
+            }
+        }
+    }
+}
+
+static uint32_t story_dist(uint32_t map)
+{
+    int n = story_node(map, 0);
+    return n < 0 ? STORY_FAR : g_story_dist[n];
+}
+
+/* An entry's rank toward `aim`: 0 if its lines set it; else 1 + the distance
+ * of the nearest place it warps to that is nearer than this map; STORY_FAR if
+ * neither (in the place that sets it, the walker stays and talks). */
+static uint32_t story_score(uint32_t map, uint32_t id, uint32_t aim)
+{
+    uint32_t best = STORY_FAR, here = story_dist(map), k, d;
+    int i;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->map != map || l->id != id) continue;
+        if (story_sets(l, aim)) return 0;
+        for (k = 0; k < l->nwarps; k++) {
+            d = story_dist(g_story_words[l->at + l->nsets + k]);
+            if (d < here && d + 1 < best) best = d + 1;
+        }
+    }
+    return best;
+}
+
+/* This map's best hook toward `aim`: a line hookN here with flag N clear,
+ * warping nearer than this map, tried fewer than STORY_TRIES times at this
+ * aim; its rank (1 + where it warps) in *rank, else STORY_FAR and NULL. The
+ * walker's tries of a hook are kept as entry 0x80000000 | N. */
+static const StoryLine* story_hook(uint32_t map, uint32_t aim, uint32_t* rank)
+{
+    uint32_t here = story_dist(map), k, d;
+    const StoryLine* best = NULL;
+    Seen* s;
+    int i;
+    *rank = STORY_FAR;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->map != map || !l->hook || g_api->story_flag(l->hook)) continue;
+        s = seen_of(map, 0x80000000u | l->hook);
+        if (s && s->aim == aim && s->tries >= STORY_TRIES) continue;
+        for (k = 0; k < l->nwarps; k++) {
+            d = story_dist(g_story_words[l->at + l->nsets + k]);
+            if (d < here && d + 1 < *rank) {
+                *rank = d + 1;
+                best = l;
+            }
+        }
+    }
+    return best;
+}
+
+/* Logs the aim and how far this map is from it, each time either changes. */
+static void story_note(uint32_t map, uint32_t aim)
+{
+    int i, n = 0;
+    char where[64] = "";
+    if (aim == g_story_aim && map == g_story_aim_map) return;
+    g_story_aim = aim;
+    g_story_aim_map = map;
+    if (!aim) {
+        logf_("story: no flag in %u-%u is left for a line to set", g_story_lo, g_story_hi);
+        return;
+    }
+    for (i = 0; i < g_nstory && n < 3; i++) {
+        char one[8];
+        snprintf(one, sizeof one, "%03u%c", g_story[i].map >> 8, (char)(g_story[i].map & 0xFF));
+        /* 355a is the developers' part-select room, which sets every part's
+         * flags and which no warp reaches: not a place the story goes */
+        if (story_sets(&g_story[i], aim) && !strstr(where, one) && g_story[i].map != (355u << 8 | 'a')) {
+            size_t len = strlen(where);
+            snprintf(where + len, sizeof where - len, "%s%s", n++ ? " " : "", one);
+        }
+    }
+    if (!where[0]) snprintf(where, sizeof where, "only the part-select room");
+    if (story_dist(map) == STORY_FAR)
+        logf_("story: aiming at flag %u (set in %s); no warp the lines know leads there from a%03u%c", aim, where,
+              map >> 8, (char)(map & 0xFF));
+    else
+        logf_("story: aiming at flag %u (set in %s); a%03u%c is %u warp(s) away", aim, where, map >> 8,
+              (char)(map & 0xFF), story_dist(map));
+}
+
+/* The entry of the map's script that holds offset `off`, the last found kept. */
+static struct {
+    uint32_t code, lo, hi;
+    char name[17];
+} g_where;
+
+static int script_entry(uint32_t code, uint32_t off)
+{
+    uint32_t index = 0, count = 0, i, o, lo = 0, hi = 0xFFFFFFFFu, w;
+    int found = -1, k;
+    if (g_where.code == code && off >= g_where.lo && off < g_where.hi) return 1;
+    if (!g_api->read32(SCRIPT_INDEX, &index) || !g_api->read32(SCRIPT_COUNT, &count) || !index || count > 4096)
+        return 0;
+    for (i = 0; i < count; i++) {
+        if (!g_api->read32(index + 20u * i, &o)) return 0;
+        o &= ~3u;
+        if (o <= off && (found < 0 || o >= lo)) {
+            lo = o;
+            found = (int)i;
+        } else if (o > off && o < hi) {
+            hi = o;
+        }
+    }
+    if (found < 0) return 0;
+    for (k = 0; k < 4; k++) {
+        if (!g_api->read32(index + 20u * (uint32_t)found + 4u + 4u * (uint32_t)k, &w)) return 0;
+        g_where.name[4 * k] = (char)(w >> 24);
+        g_where.name[4 * k + 1] = (char)(w >> 16);
+        g_where.name[4 * k + 2] = (char)(w >> 8);
+        g_where.name[4 * k + 3] = (char)w;
+    }
+    g_where.name[16] = '\0';
+    g_where.code = code;
+    g_where.lo = lo;
+    g_where.hi = hi;
+    return 1;
+}
+
+/* Whether the map script's main thread is busy, with the entry it runs in
+ * `why`: anywhere but its "loop" or a RET. a116d's loop clears flag 1087 and
+ * then calls its second cutscene, which has stretches with no window and the
+ * player not held; reach U4's part-C walker started an exit in one, twice,
+ * and cut off the warp the loop makes when the cutscene returns. */
+static int script_busy(char* why, size_t cap)
+{
+    uint32_t code = 0, pc = 0, op = 0;
+    if (!g_api->read32(SCRIPT_CODE, &code) || !g_api->read32(SCRIPT_PC, &pc) || !code || pc < code) return 0;
+    if (g_api->read32(pc, &op) && op == OP_RET) return 0;
+    if (!script_entry(code, pc - code) || strcmp(g_where.name, "loop") == 0) return 0;
+    snprintf(why, cap, "the map's script runs %s", g_where.name);
+    return 1;
 }
 
 /* One safe point of the walker: it->started is the last frame the field was
@@ -625,9 +1007,11 @@ static void save_point(Item* it)
 static void walk(Item* it)
 {
     uint32_t f = g_api->frame(), map = g_api->map(), v = 0, vol, id, best_id = 0, best_vol = 0, args[1];
-    uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, *runs, asked = 0, seen = 0;
+    uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, asked = 0, seen = 0;
+    uint32_t aim = 0, score, best_score = 0xFFFFFFFFu;
     uint16_t state, type = 0;
     int guard = 0, best_exit = 1, exit_;
+    Seen* s;
     char why[96];
     if (g_api->scene() != 6 || g_api->field_state() != 8) {
         snprintf(why, sizeof why, "the field is not running (scene %u, state %u)", g_api->scene(),
@@ -639,24 +1023,64 @@ static void walk(Item* it)
         return;
     }
     if (g_api->story_flag(FLAG_EVENT)) {
+        uint32_t task = 0, window;
+        uint16_t wstate = 0;
         walk_wait(it, "an event runs (flag 1087)");
         it->started = f;
-        /* it->member: one more than the frame this event began (0: none). A
-         * menu nothing answers (a shop: reach U4's part-C run stood in the
-         * Mystery Merchant's for 190,000 frames) holds the field for good;
-         * past WALK_STUCK frames the pad filter presses B, which backs out of
-         * the game's menus. */
-        if (!it->member) it->member = f + 1;
+        /* it->member: one more than the frame this event began (0: none), or
+         * last moved. A menu nothing answers (a shop: reach U4's part-C run
+         * stood in the Mystery Merchant's for 190,000 frames) holds the field
+         * for good; past WALK_STUCK frames the pad filter presses B, which
+         * backs out of the game's menus. A cutscene whose dialogue moves on
+         * (the message window's task or state changing) is not stuck: the
+         * Grand Fortress's held the field longer than that, and B at a choice
+         * there would answer it. */
+        g_api->read32(WINDOW_TASK, &task);
+        g_api->read16(WINDOW_STATE, &wstate);
+        window = task ^ (uint32_t)wstate << 24;
+        if (!it->member || window != it->window) {
+            if (g_walk_backout && it->member) logf_("walk: the event moved on at frame %u: no more B", f);
+            g_walk_backout = 0;
+            it->member = f + 1;
+            it->window = window;
+        }
         if (f + 1 - it->member >= WALK_STUCK && !g_walk_backout) {
             g_walk_backout = 1;
-            logf_("walk: an event has held the field since frame %u: pressing B every %u frames", it->member - 1,
-                  PRESS_HOLD + PRESS_GAP);
+            logf_("walk: an event has held the field, its window unmoved, since frame %u: pressing B every %u frames",
+                  it->member - 1, PRESS_HOLD + PRESS_GAP);
         }
         return;
     }
     if (g_walk_backout) logf_("walk: the field is free again at frame %u", f);
     it->member = 0;
     g_walk_backout = 0;
+    {
+        /* The player's own A press and touch (fn_80118204, 80118228-8011824C)
+         * do nothing while flag 1087 is set, while fn_8009763C() is 12 (the
+         * s16 at r13-31460 = 0x80346C3C is 2 and the low byte of the s16 at
+         * 0x80302F18 is 12), or while r13-29208 = 0x80347508 is 1. And a
+         * message window on screen is a scene still talking: a116d's second
+         * cutscene clears 1087 while its dialogue runs, and reach U4's part-C
+         * walker, starting an exit then, cut off the cutscene's own warp. */
+        uint32_t held = 0, task = 0;
+        uint16_t kind = 0, mode = 0, wstate = 0;
+        const char* busy_why = NULL;
+        if (g_api->read32(PLAYER_HELD, &held) && held == 1)
+            busy_why = "the player is held (0x80347508 is 1)";
+        else if (g_api->read16(MODE_KIND, &kind) && (int16_t)kind == 2 && g_api->read16(MODE_WORD, &mode) &&
+                 (int8_t)(mode & 0xFF) == 12)
+            busy_why = "the field's mode is 12 (fn_8009763C)";
+        else if (g_api->read32(WINDOW_TASK, &task) && task && g_api->read16(WINDOW_STATE, &wstate) &&
+                 (int16_t)wstate >= WINDOW_OPENING && (int16_t)wstate <= WINDOW_LAST_OPEN)
+            busy_why = "a message window is open";
+        else if (script_busy(why, sizeof why))
+            busy_why = why;
+        if (busy_why) {
+            walk_wait(it, busy_why);
+            it->started = f;
+            return;
+        }
+    }
     if (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) {
         walk_wait(it, "a script entry is starting (0x8030E714 is 1)");
         it->started = f;
@@ -664,6 +1088,10 @@ static void walk(Item* it)
     }
     if (f - it->started < it->id) return;
     if (!g_api->read32(LIST_HEAD, &v)) return;
+    if (g_story_on) {
+        aim = story_aim(map);
+        story_note(map, aim);
+    }
     while (v && guard++ < 4096) {
         vol = v;
         if (!g_api->read32(v + 48, &v)) v = 0;
@@ -677,20 +1105,50 @@ static void walk(Item* it)
          * a126a's 4411) and "wallmot" (type 44, a116g's 4100). */
         if (g_api->read16(vol + 18, &type) && (type == HIT_SAVE_POINT || type == HIT_SAVE_POINT_MOT)) continue;
         seen++;
-        runs = seen_runs(map, id);
-        if (!runs) continue;
-        /* the fewest starts first; among equals, a talk or a check before an exit */
-        if (*runs > best_runs || (*runs == best_runs && (exit_ > best_exit || (exit_ == best_exit && id >= best_id))))
+        s = seen_of(map, id);
+        if (!s) continue;
+        /* With story: the nearer the story's next flag first, an entry counting
+         * toward it for STORY_TRIES starts at most. Then the fewest starts;
+         * among equals, a talk or a check before an exit; then the lower id. */
+        score = aim && (s->aim != aim || s->tries < STORY_TRIES) ? story_score(map, id, aim) : STORY_FAR;
+        if (score > best_score ||
+            (score == best_score && (s->runs > best_runs || (s->runs == best_runs && (exit_ > best_exit ||
+                                                                                     (exit_ == best_exit && id >= best_id))))))
             continue;
         args[0] = id;
         asked++;
         if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
-        best_runs = *runs;
+        best_score = score;
+        best_runs = s->runs;
         best_id = id;
         best_vol = vol;
         best_exit = exit_;
     }
     it->started = f;
+    if (aim) {
+        /* A hook ranked before every live entry: its flag is what the game sets
+         * when the ship reaches a spot on the world map, which the walker cannot
+         * sail to. Set here in its place, and the map's own loop goes on. */
+        uint32_t hook_rank, addr, w = 0;
+        const StoryLine* h = story_hook(map, aim, &hook_rank);
+        if (h && hook_rank < best_score) {
+            addr = STORY_FLAG_WORDS + 4u * (h->hook >> 5);
+            if (!g_api->read32(addr, &w)) return;
+            g_api->write32(addr, w | 1u << (h->hook & 31));
+            s = seen_of(map, 0x80000000u | h->hook);
+            if (s) {
+                s->runs++;
+                if (s->aim != aim) s->aim = aim, s->tries = 0;
+                s->tries++;
+            }
+            it->last++;
+            it->why[0] = '\0';
+            logf_("walk: a%03u%c hook: flag %u set at frame %u, in place of the arrival this map's script waits for "
+                  "(the story's rank toward flag %u: %u)",
+                  (unsigned)(map >> 8), (char)(map & 0xFF), h->hook, f, aim, hook_rank);
+            return;
+        }
+    }
     if (!best_vol) {
         snprintf(why, sizeof why, "no live entry: %u volume(s) in the talk, check and exit ranges, %u asked", seen,
                  asked);
@@ -702,11 +1160,19 @@ static void walk(Item* it)
     if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
     g_api->write32(PRESS_STARTED, 1);
     g_api->write32(PRESS_VOLUME, best_vol);
-    runs = seen_runs(map, best_id);
-    if (runs) (*runs)++;
+    s = seen_of(map, best_id);
+    if (s) {
+        s->runs++;
+        if (s->aim != aim) s->aim = aim, s->tries = 0;
+        s->tries++;
+    }
     it->last++;
-    logf_("walk: a%03u%c entry %u started at frame %u (start %u here, %u in all)", (unsigned)(map >> 8),
-          (char)(map & 0xFF), best_id, f, runs ? *runs : 0, it->last);
+    if (best_score == STORY_FAR)
+        snprintf(why, sizeof why, "%s", g_story_on ? "; the story's rank: none" : "");
+    else
+        snprintf(why, sizeof why, "; the story's rank toward flag %u: %u", aim, best_score);
+    logf_("walk: a%03u%c entry %u started at frame %u (start %u here, %u in all%s)", (unsigned)(map >> 8),
+          (char)(map & 0xFF), best_id, f, s ? s->runs : 0, it->last, why);
 }
 
 /* "hold-hp:F-G": no third field. */
@@ -848,6 +1314,25 @@ static void dump(Item* it)
     }
 }
 
+/* One safe point of flag:MAP:N: on MAP's running field with no event, flag
+ * N set (its word read, its bit or'd in, written back), once. */
+static void set_flag(Item* it)
+{
+    uint32_t addr = STORY_FLAG_WORDS + 4u * (it->id >> 5), w = 0;
+    if (g_api->map() != it->base || g_api->scene() != 6 || g_api->field_state() != 8 ||
+        g_api->story_flag(FLAG_EVENT) || !g_api->read32(addr, &w))
+        return;
+    it->state = 1;
+    if (w & (1u << (it->id & 31))) {
+        logf_("flag: %u was already set on a%03u%c at frame %u", it->id, it->base >> 8, (char)(it->base & 0xFF),
+              g_api->frame());
+        return;
+    }
+    g_api->write32(addr, w | 1u << (it->id & 31));
+    logf_("flag: %u set on a%03u%c at frame %u (%08X: %08X -> %08X), in place of what the game sets it for", it->id,
+          it->base >> 8, (char)(it->base & 0xFF), g_api->frame(), addr, w, w | 1u << (it->id & 31));
+}
+
 static void on_safe_point(void* user)
 {
     uint32_t f = g_api->frame();
@@ -866,6 +1351,8 @@ static void on_safe_point(void* user)
             if (f <= it->to) save_point(it);
         } else if (it->kind == ITEM_WALK) {
             if (f <= it->to) walk(it);
+        } else if (it->kind == ITEM_FLAG) {
+            if (it->state == 0) set_flag(it);
         } else if (it->kind == ITEM_PEEK && f <= it->to) {
             uint32_t addr = 0, value = 0;
             if (!read_chain(it, &addr, &value)) {
@@ -967,7 +1454,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
         if (save) *save++ = '\0';
         if (!*item) continue;
         snprintf(whole, sizeof whole, "%s", item); /* the parsers cut the item as they read it */
-        if (!parse_hold(item) && !parse_turn(item) && !parse_walk(item) && !parse_item(item)) {
+        if (!parse_hold(item) && !parse_turn(item) && !parse_walk(item) && !parse_story(item) && !parse_item(item)) {
             char line[160];
             snprintf(line, sizeof line, "lab: SOA_LAB item not understood: %.120s", whole);
             api->log(line);

@@ -85,6 +85,63 @@ def test_an_entry_is_disassembled_only_up_to_the_next():
     assert list(lines_of(d, ["b"])) == ["b"]
 
 
+def test_the_story_scan_sees_through_calls_and_what_desynchronises_the_listing():
+    """`story`: an entry's flags set and maps warped to include those of every
+    entry it calls, however deep, and a message (op 144, which the listing
+    cannot size) hides nothing after it. Op 238, the way back to the world
+    map, is a warp to 099a. A flag set from an expression, a flag at 1024 or
+    above (the field's own: 1087 the event lock), and a CALL that lands
+    mid-entry are not counted."""
+    talk = [144, 0xC824, 0x7FFFFFFF, 11, 0]  # a message, then a CALL patched below
+    talk += [17, *f(1087), END, 17, 0x20000000 | 5, END, 12]
+    sub = [17, *f(100), END, 11, 0, 12]  # 100, and a CALL to deeper
+    deeper = [43, 0, 238, 0x40000040, END, 12]  # a WARP, then op 238
+    d = bytearray(build([("M03005", talk), ("sub", sub), ("deeper", deeper)], b"me116d.sct\0\0"))
+    base = 12 + 3 * 20
+    sub_at, deeper_at = 4 * len(talk), 4 * (len(talk) + len(sub))
+    struct.pack_into(">i", d, base + 16, sub_at - 16)  # talk's CALL operand is word 4
+    struct.pack_into(">i", d, base + sub_at + 20, deeper_at - (sub_at + 20))
+    name_at = base + 4 * (len(talk) + len(sub) + len(deeper))
+    struct.pack_into(">I", d, base + deeper_at + 4, name_at - (base + deeper_at + 4))
+    got = sct.story(bytes(d))
+    assert got["deeper"] == (set(), {"116d", "099a"}), got
+    assert got["sub"] == ({100}, {"116d", "099a"}), got
+    assert got["M03005"] == ({100}, {"116d", "099a"}), got
+    assert sct.story_lines("004a", bytes(d)) == [
+        "004a M03005 s100 w099a w116d",
+        "004a sub s100 w099a w116d",
+        "004a deeper w099a w116d",
+    ]
+    # A CALL into the middle of an entry is not a call the scan follows.
+    struct.pack_into(">i", d, base + 16, sub_at + 4 - 16)
+    assert sct.story(bytes(d))["M03005"] == (set(), set()), sct.story(bytes(d))
+
+
+def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
+    """`IF (FLAG[1766] 1 ==)` around a warp, as me099f's loop has it: a hook,
+    listed only when no script sets the flag. A block on a story flag (below
+    1024) is not one, nor is a warp after the block ends."""
+    ONE = 0x3F800000
+    loop = [0, 0x20000000 | 1766, FLOAT, ONE, EQ, END, 0]  # the else-offset patched below
+    loop += [43, 0, 10, 0]  # the WARP inside, its name patched; a GOTO pads the block
+    loop += [0, 0x20000000 | 62, FLOAT, ONE, EQ, END, 0x10, 43, 0]  # a story flag's block
+    loop += [12]
+    d = bytearray(build([("loop", loop)], b"me243a.sct\0\0"))
+    base = 12 + 20
+    struct.pack_into(">i", d, base + 24, 4 * 11 - 24)  # the block ends at word 11
+    name_at = base + 4 * len(loop)
+    for word in (8, 19):
+        struct.pack_into(">I", d, base + 4 * word, name_at - (base + 4 * word))
+    assert sct.hooks(bytes(d)) == {1766: {"243a"}}
+    assert sct.story_lines("099f", bytes(d), unset={1766}) == [
+        "099f loop w243a",
+        "099f hook1766 w243a",
+    ]
+    assert sct.story_lines("099f", bytes(d), unset=set()) == ["099f loop w243a"]
+    struct.pack_into(">i", d, base + 24, 4 * 7 - 24)  # a block that ends before the warp
+    assert sct.hooks(bytes(d)) == {}
+
+
 def test_a_script_that_runs_off_its_end_says_so():
     """An expression with no END word reads past the buffer: that has to come
     out as a desynchronised entry, never as invented instructions."""
