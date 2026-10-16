@@ -8743,6 +8743,13 @@ here).
   --expect-ship-end`: pass over 300,000 frames, and a renderer question no run had raised: a destination-alpha
   blend at RGB8 (`PE_CMODE0 00563D`, frame 72136, after `a107a` loaded): a port defect, fixed (FINDINGS "Reach
   U5", the second).
+- **Run u4-C14: part C's 122, and an aim that cannot be met** [V, `build/reach/u4-C14`, stopped by hand]: the
+  renewed tries took the walker back to `a002e`'s exit 6100 at 147090, 9,000 frames after its second try, and 122
+  was set at 147125: flags 100 to 122 and 124. Then it aimed at 123, which the index has set by `a005a`'s talk
+  3005 (and `a005b`'s `c04YES`, a choice's yes): that talk sets it only inside `IF (FLAG[409] 1 ==)`, a part-I
+  flag, so 123 is a later visit's, and the walker crossed the world map's stage h (`a099h`, which has no landing
+  at Valua) looking for a way. An aim not reached in 30,000 frames is now passed over for the run, and said so
+  (a test).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

@@ -48,7 +48,8 @@
  *                  it is found, and the walker prefers, before its own order,
  *                  an entry that sets it, then one that warps nearer, each for
  *                  two starts while that flag is the aim, and two more 9,000
- *                  frames after the last (a talk may open it). Where the
+ *                  frames after the last (a talk may open it); an aim not
+ *                  reached in 30,000 frames is passed over. Where the
  *                  map itself sets it (its loop, on conditions), the walker
  *                  stays and talks. The aim and the distance are logged. A
  *                  line "MAP hookN wX..." is a warp in MAP's script that waits
@@ -255,6 +256,13 @@ static int g_story_nmaps;
 static uint32_t g_story_aim, g_story_aim_map; /* what the last log named */
 #define STORY_FLAG_LIMIT 1024u                /* sct.py's STORY_FLAGS */
 static uint8_t g_story_settable[STORY_FLAG_LIMIT];
+/* An aim not reached in this many frames is passed over, for the rest of the
+ * run: a flag set only in a branch the run did not take, or on a later visit
+ * (part C's 123: a005a's talk 3005 sets it only once flag 409 is set, a part I
+ * flag), would otherwise hold the walker for good. */
+#define STORY_AIM_PATIENCE 30000u
+static uint8_t g_story_passed[STORY_FLAG_LIMIT];
+static uint32_t g_story_aim_now, g_story_aim_from;
 
 /* A ship battle's command input (reach U3, found by RAM captures at two
  * crew members' inputs and confirmed by peeks through a fight): the word at
@@ -816,7 +824,7 @@ static uint32_t story_aim(uint32_t map)
 {
     uint32_t f, first = 0;
     for (f = g_story_lo; f <= g_story_hi; f++) {
-        if (!g_story_settable[f] || g_api->story_flag(f)) continue;
+        if (!g_story_settable[f] || g_story_passed[f] || g_api->story_flag(f)) continue;
         if (!first) first = f;
         story_dists(f);
         if (story_dist(map) != STORY_FAR) return f;
@@ -1128,6 +1136,17 @@ static void walk(Item* it)
     if (!g_api->read32(LIST_HEAD, &v)) return;
     if (g_story_on) {
         aim = story_aim(map);
+        if (aim != g_story_aim_now) {
+            g_story_aim_now = aim;
+            g_story_aim_from = f;
+        } else if (aim && f - g_story_aim_from >= STORY_AIM_PATIENCE) {
+            logf_("story: flag %u aimed at since frame %u and not set: passed over from frame %u", aim,
+                  g_story_aim_from, f);
+            g_story_passed[aim] = 1;
+            aim = story_aim(map);
+            g_story_aim_now = aim;
+            g_story_aim_from = f;
+        }
         story_note(map, aim);
     }
     while (v && guard++ < 4096) {

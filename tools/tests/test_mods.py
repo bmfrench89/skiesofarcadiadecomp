@@ -1585,6 +1585,40 @@ def test_the_lab_sets_a_flag_once_on_its_map_and_keeps_the_rest_of_the_word(driv
 
 
 @needs_cc
+def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tmp_path):
+    """A flag set only in a branch the run did not take, or on a later visit
+    (part C's 123), would hold the walker for good: aimed at for 30,000
+    frames and still clear, it is passed over, said so, and the next is the
+    aim."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "frame frame frame frame safe "  # frame 4: aim 100
+        + "frame " * 30000
+        + "safe"  # frame 30004: 100 not set in 30,000 frames
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:100-149;walk:0-40000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    lines = [
+        x.split("lab: story: ", 1)[1]
+        for x in err.splitlines()
+        if "lab: story: " in x and "line(s)" not in x
+    ]
+    assert lines == [
+        "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
+        "flag 100 aimed at since frame 4 and not set: passed over from frame 30004",
+        "aiming at flag 101 (set in 116d); a004a is 4 warp(s) away",
+    ], err
+
+
+@needs_cc
 def test_the_lab_story_refuses_a_file_it_cannot_read(driver, tmp_path):
     """No file, a line that is not "MAP ENTRY sN.. wMAP..", a window past the
     flags the scan keeps, or a second story item: each refuses the mod."""
