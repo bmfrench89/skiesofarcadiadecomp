@@ -218,6 +218,12 @@ cutscene, map and fight it leads to is the game's own.
 and the game's own warps, with no hand-set flag. The walker waits while the map's script runs anything but its
 loop (a cutscene can clear flag 1087 first). Next: Galcian's fight, which the party lost into a game over.
 
+**Runs u4-C9 to u4-C13** (FINDINGS "Reach U4"): Galcian is a patrol to keep clear of, which a shorter quiet wait
+does; the part cards' level-1 Vyse is met by the lab's `finish` (a long fight's enemies held at 1 HP) and, in a ship
+battle, `hold-hp` on the player's ship; the escape from Valua won at `a501a`; part C to Pirate Isle, flags 100 to
+121 and 124, at `SOA_SPEED=4`. An entry's tries renew 9,000 frames after its last, for a story step that opens
+behind a talk.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

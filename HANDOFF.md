@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1614 |
+| Python tests | 1615 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -466,16 +466,19 @@ FINDINGS entry "Reach U<n>":
   (through calls, raw, so message opcodes hide nothing), plus 15 hooks, warps that wait for a flag only the game's
   code sets (the world map's: the ship reaching a spot). The lab's `story:LO-HI` (`reach.py --story 100-149`) aims
   the walker at the next story flag by distance in warps, and sets a hook's flag in place of the sail. Part C now
-  runs from Sailors' Island through the Grand Fortress, Antonio, the palace (past Galcian's patrol) and the Royal
-  Guards to its ship battle at `a501a` (`build/reach/u4-C11`: flags 100 to 118 and 124, nothing set by hand, every
-  invariant held over 250,000 frames). Walker defects found on the way, each fixed with a test: it waits wherever
+  runs from Sailors' Island through the Grand Fortress, Antonio, the palace (past Galcian's patrol), the Royal
+  Guards and the escape's ship battle (won, the Little Jack held) to Pirate Isle (`build/reach/u4-C13`: flags 100 to
+  121 and 124, nothing set by hand; `u4-C11`'s 250,000 frames held every invariant). Walker defects found on the
+  way, each fixed with a test: it waits wherever
   the player's A press would do nothing, while a message window is up, and while the map's script runs anything
   but its loop (`*0x8030CEA4`); it aims at the lowest clear flag it can reach (flags are not set in order); its
-  back-out never presses B in a ship battle. The part cards start Vyse at level 1, so the lab's `finish` holds a
-  long fight's enemies at 1 HP and the game's own victory ends it, said in the log. Runs go at `SOA_SPEED=4`.
+  back-out never presses B in a ship battle; an entry's tries renew 9,000 frames after its last. The part cards
+  start Vyse at level 1, so the lab's `finish` holds a long fight's enemies at 1 HP and the game's own victory
+  ends it, and `hold-hp` holds the player's ship in a ship battle, each said in the log. Runs go at
+  `SOA_SPEED=4`.
 
-**Next:** part C's ship battle with U3's crew recipe (`u4-C12` was running at this writing), then the rest of
-part C and the other part cards the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Next:** part C's last steps at Pirate Isle (122 and on, with the renewed tries), then the other part cards the
+same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

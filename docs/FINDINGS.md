@@ -8703,6 +8703,24 @@ here).
   and the walker's back-out, reading a minute of flag 1087 with no message window as a stuck menu, pressed B into
   the ship's menu from 111689. The back-out now never acts on a 5xx stage (a test); the next run carries U3's
   ship recipe (Vyse a cannon, the others Focus).
+- **Run u4-C12: the Little Jack sinks, and the game tries again** [V, `build/reach/u4-C12`, stopped by hand at
+  frame 128,000]: with U3's recipe each crew wheel was answered (Vyse's cannon every turn, about 3,000 frames a
+  turn; frame 114500: Aika, level 8, on Focus, the Little Jack at 1970 HP in the red against a Valuan Cruiser
+  still most of the way up), and at 115525 the outcome word `0x80347278` went to 3, sunk. No game over: the stage
+  `a501a` loaded again at 116270 and the fight began afresh (the script's `_LOSE`, op 210), sank again at 127176,
+  and again began. So a ship battle the crew cannot win is a loop, and `hold-hp` now holds the player's ship too
+  (a test): the record of the 20-byte table at `0x80308EF8` whose `*(*(rec)+36)+378` halfword is the id at
+  `0x803472B0`, which `fn_80129DD0` reads `B[261]` (the HP % `_LOSE` tests) from, +8 against +12
+  (8012A0BC-8012A138), and the ship object's +24 against +20.
+- **Run u4-C13: the escape from Valua won, part C to Pirate Isle** [V, `build/reach/u4-C13`]: the ship battle at
+  `a501a` from 126154 with the Little Jack held (38 top-ups; peeks of `B[260..263]`: ours 100 throughout, the
+  cruiser's 100, 85, 70, 56, 42, 27, 13, 0 over eight turns), the outcome word 1 at 151326, the results flag at
+  151632; then `a243a` (119 at 151975, 120 at 154728) and `a002c`, Pirate Isle (121 at 155246). There the walker
+  stalled short of 122: `a002e`'s exit 6100 sets it only once flag 2548 is set, which talk 3024 there sets; the
+  walker had spent its two tries on 6100 (164922, 165012) before it started 3024 (168200), and never went back. An
+  entry's tries at an aim now begin again 9,000 frames after its last (a test). `soak.py check
+  --expect-ship-end`: pass over 300,000 frames, and a renderer question no run had raised: a destination-alpha
+  blend at RGB8 (`PE_CMODE0 00563D`, frame 72136, after `a107a` loaded), looked at next.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

@@ -47,7 +47,8 @@
  *                  in order); every map's distance in warps to one that sets
  *                  it is found, and the walker prefers, before its own order,
  *                  an entry that sets it, then one that warps nearer, each for
- *                  two starts at most while that flag is the aim. Where the
+ *                  two starts while that flag is the aim, and two more 9,000
+ *                  frames after the last (a talk may open it). Where the
  *                  map itself sets it (its loop, on conditions), the walker
  *                  stays and talks. The aim and the distance are logged. A
  *                  line "MAP hookN wX..." is a warp in MAP's script that waits
@@ -83,6 +84,9 @@
  *                  acts, what lands and when it ends. A run with this tests the
  *                  port's battle to its end, not a player's chance of winning,
  *                  and says so; it logs how many top-ups each battle took.
+ *                  In a ship battle (a 5xx stage) the player's ship is held
+ *                  the same way: its record at 0x80308EF8 that the driver
+ *                  reads B[261] from, and the ship object's HP.
  *   finish:F-G:FRAMES  in a battle in frames F to G that has gone FRAMES
  *                  frames, every enemy still standing (slots 4 to 11, the
  *                  same test) is held at 1 HP from then on (a heal is put
@@ -216,7 +220,7 @@ static uint32_t story_map_word(const char* s); /* likewise, for parse_item's fla
  * often while the story aimed at flag `aim`. */
 #define MAX_SEEN 1024
 typedef struct {
-    uint32_t map, id, runs, aim, tries;
+    uint32_t map, id, runs, aim, tries, at; /* at: the frame of the last start */
 } Seen;
 static Seen g_seen[MAX_SEEN];
 static int g_nseen;
@@ -231,6 +235,10 @@ static int g_nseen;
 #define STORY_MAPS 512
 #define STORY_FAR 0xFFFFu
 #define STORY_TRIES 2u /* starts of one entry per aim before it stops counting */
+/* ... until this many frames after its last: a002e's M06100 sets 122 only
+ * once a talk there has set 2548, and reach U4's part-C walker had spent
+ * both its tries on it before that talk; it never went back */
+#define STORY_RETRY_FRAMES 9000u
 typedef struct {
     uint32_t map, id; /* id: n for an entry named M%05d (the walker's), else 0 */
     uint32_t hook;    /* n for a line named hookN: its warps wait for flag n, which no script sets */
@@ -687,6 +695,23 @@ static Seen* seen_of(uint32_t map, uint32_t id)
     return &g_seen[g_nseen++];
 }
 
+/* Whether an entry (or a hook) still counts toward `aim` at frame f: not yet
+ * tried STORY_TRIES times at this aim, or not for STORY_RETRY_FRAMES. */
+static int story_fresh(const Seen* s, uint32_t aim, uint32_t f)
+{
+    return !s || s->aim != aim || s->tries < STORY_TRIES || f - s->at >= STORY_RETRY_FRAMES;
+}
+
+/* Counts a start toward `aim`, the tries begun again after a long gap. */
+static void story_count(Seen* s, uint32_t aim, uint32_t f)
+{
+    if (!s) return;
+    if (s->aim != aim || f - s->at >= STORY_RETRY_FRAMES) s->tries = 0;
+    s->aim = aim;
+    s->tries++;
+    s->at = f;
+}
+
 /* "004a" as a map word; 0 if it is not one */
 static uint32_t story_map_word(const char* s)
 {
@@ -873,7 +898,7 @@ static const StoryLine* story_hook(uint32_t map, uint32_t aim, uint32_t* rank)
         const StoryLine* l = &g_story[i];
         if (l->map != map || !l->hook || g_api->story_flag(l->hook)) continue;
         s = seen_of(map, 0x80000000u | l->hook);
-        if (s && s->aim == aim && s->tries >= STORY_TRIES) continue;
+        if (!story_fresh(s, aim, g_api->frame())) continue;
         for (k = 0; k < l->nwarps; k++) {
             d = story_dist(g_story_words[l->at + l->nsets + k]);
             if (d < here && d + 1 < *rank) {
@@ -1123,7 +1148,7 @@ static void walk(Item* it)
         /* With story: the nearer the story's next flag first, an entry counting
          * toward it for STORY_TRIES starts at most. Then the fewest starts;
          * among equals, a talk or a check before an exit; then the lower id. */
-        score = aim && (s->aim != aim || s->tries < STORY_TRIES) ? story_score(map, id, aim) : STORY_FAR;
+        score = aim && story_fresh(s, aim, f) ? story_score(map, id, aim) : STORY_FAR;
         if (score > best_score ||
             (score == best_score && (s->runs > best_runs || (s->runs == best_runs && (exit_ > best_exit ||
                                                                                      (exit_ == best_exit && id >= best_id))))))
@@ -1149,11 +1174,8 @@ static void walk(Item* it)
             if (!g_api->read32(addr, &w)) return;
             g_api->write32(addr, w | 1u << (h->hook & 31));
             s = seen_of(map, 0x80000000u | h->hook);
-            if (s) {
-                s->runs++;
-                if (s->aim != aim) s->aim = aim, s->tries = 0;
-                s->tries++;
-            }
+            if (s) s->runs++;
+            story_count(s, aim, f);
             it->last++;
             it->why[0] = '\0';
             logf_("walk: a%03u%c hook: flag %u set at frame %u, in place of the arrival this map's script waits for "
@@ -1174,11 +1196,8 @@ static void walk(Item* it)
     g_api->write32(PRESS_STARTED, 1);
     g_api->write32(PRESS_VOLUME, best_vol);
     s = seen_of(map, best_id);
-    if (s) {
-        s->runs++;
-        if (s->aim != aim) s->aim = aim, s->tries = 0;
-        s->tries++;
-    }
+    if (s) s->runs++;
+    story_count(s, aim, f);
     it->last++;
     if (best_score == STORY_FAR)
         snprintf(why, sizeof why, "%s", g_story_on ? "; the story's rank: none" : "");
@@ -1249,11 +1268,56 @@ static void finish_battle(Item* it)
 }
 
 
-/* One safe point of hold-hp: tops up the standing party; it->last counts this
- * battle's top-ups, logged when the battle ends. */
+/* A ship battle's HP, held the same way (battle-system.md 7): the driver
+ * fn_80129DD0 finds the player's ship among *0x8034729C records of 20 bytes
+ * at 0x80308EF8, the one whose *(*(rec)+36)+378 halfword is the id at
+ * 0x803472B0 (8012A0BC-8012A0C8), and takes B[261], the HP % the script's
+ * _LOSE tests, from its +8 HP and +12 maximum; the turn's applier writes
+ * the ship object's +24 (HP, +20 its maximum, *(*0x8034727C + 32)). Reach
+ * U4's part-C run sank the Little Jack against a Valuan Cruiser at a501a. */
+#define SHIP_RECORDS 0x80308EF8u
+#define SHIP_RECORD_COUNT 0x8034729Cu
+#define SHIP_PLAYER_ID 0x803472B0u
+#define SHIP_STATE 0x8034727Cu
+static uint32_t top_up(uint32_t hp_at, uint32_t max_at)
+{
+    uint32_t hp = 0, max = 0;
+    if (!g_api->read32(hp_at, &hp) || !g_api->read32(max_at, &max)) return 0;
+    if ((int32_t)hp <= 0 || (int32_t)hp >= (int32_t)max) return 0;
+    g_api->write32(hp_at, max);
+    return 1;
+}
+
+static uint32_t hold_ship(void)
+{
+    uint32_t n = 0, count = 0, id = 0, i, rec, p, q, s = 0, ship = 0;
+    uint16_t rec_id;
+    if (g_api->read32(SHIP_RECORD_COUNT, &count) && count <= 8 && g_api->read32(SHIP_PLAYER_ID, &id))
+        for (i = 0; i < count; i++) {
+            rec = SHIP_RECORDS + 20u * i;
+            if (g_api->read32(rec, &p) && p && g_api->read32(p + 36, &q) && q && g_api->read16(q + 378, &rec_id) &&
+                rec_id == id)
+                n += top_up(rec + 8, rec + 12);
+        }
+    if (g_api->read32(SHIP_STATE, &s) && s && g_api->read32(s + 32, &ship) && ship) n += top_up(ship + 24, ship + 20);
+    return n;
+}
+
+/* One safe point of hold-hp: tops up the standing party, or in a ship battle
+ * (a 5xx stage) the player's ship; it->last counts this battle's top-ups,
+ * logged when the battle ends. */
 static void hold_hp(Item* it)
 {
-    uint32_t slot, actor, status, hp, max;
+    uint32_t slot, actor, status, hp, max, stage = g_api->map() >> 8;
+    if (g_api->scene() == 6 && stage >= 500 && stage <= 583) {
+        if (it->state == 0) {
+            logf_("hold-hp: a ship battle from frame %u: the player's ship's HP is held at its maximum",
+                  g_api->frame());
+            it->state = 1;
+        }
+        it->last += hold_ship();
+        return;
+    }
     if (g_api->scene() != SCENE_BATTLE) {
         if (it->state == 1) {
             logf_("hold-hp: the battle ended by frame %u; %u top-up(s)", g_api->frame(), it->last);

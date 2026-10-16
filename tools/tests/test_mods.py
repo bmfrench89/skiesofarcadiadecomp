@@ -1077,6 +1077,38 @@ def test_the_lab_holds_only_the_standing_partys_hp_and_only_in_battle(driver, tm
 
 
 @needs_cc
+def test_the_lab_holds_the_players_ship_in_a_ship_battle(driver, tmp_path):
+    """hold-hp on a 5xx stage: the ship record the driver takes B[261] from
+    (the one of *0x8034729C at 0x80308EF8 whose *(*(rec)+36)+378 halfword
+    is the id at 0x803472B0) and the ship object's HP (*0x8034727C+32, +24
+    against +20) go back to their maximum; another ship's record is left
+    alone; the top-ups are counted when the stage is left."""
+    lab(tmp_path)
+    ships = (
+        "set 8034729c 2 set 803472b0 7 "
+        # record 0: id 7, ours (q + 378 = 0x80400100 + 0x17A, the halfword's word at 0x80400278)
+        "set 80308ef8 80400000 set 80400024 80400100 set 80400278 7 "
+        "set 80308f00 64 set 80308f04 7b2 "  # HP 100 of 1970
+        "set 80308f0c 80400400 set 80400424 80400500 set 80400678 9 "  # record 1: the enemy
+        "set 80308f14 32 set 80308f18 7b2 "
+        "set 8034727c 80400200 set 80400220 80400300 set 80400314 7b2 set 80400318 32 "
+    )
+    script = (
+        ships + "set 803475cc 6 set 80311aec 8 set 80311ac0 1f5 setb 80311ac8 61 safe "
+        "get 80308f00 get 80308f14 get 80400318 "
+        "set 80311ac0 4 frame safe"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="hold-hp:0-100")
+    assert "loaded 1" in out, err
+    reads = [x for x in out.splitlines() if x.startswith(("80308F", "80400318"))]
+    assert reads == ["80308F00=000007B2", "80308F14=00000032", "80400318=000007B2"], out
+    assert (
+        "hold-hp: a ship battle from frame 0: the player's ship's HP is held at its maximum" in err
+    ), err
+    assert "hold-hp: the battle ended by frame 1; 2 top-up(s)" in err, err
+
+
+@needs_cc
 def test_the_lab_finishes_a_battle_that_has_gone_on_too_long_once(driver, tmp_path):
     """finish:F-G:FRAMES: in scene 7, once the battle has gone FRAMES frames,
     each enemy still standing (slots 4 to 11) goes to 1 HP and is held
@@ -1490,12 +1522,13 @@ def test_the_lab_story_aims_at_the_next_flag_and_measures_the_way_there(driver, 
 
 
 @needs_cc
-def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_at_most(driver, tmp_path):
+def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_then_later(driver, tmp_path):
     """On the world map, `099f hook1766 w243a`: the loop warps to 243a, which
     sets the aim, once flag 1766 is set, and no script sets it. With nothing
     live ranked before it the walker sets the flag (the rest of its word
-    kept) and says why; cleared again it is set again, and after two tries at
-    one aim it is left alone."""
+    kept) and says why; cleared again it is set again, after two tries at one
+    aim it is left alone, and 9,000 frames after the last it is tried again
+    (a002e's exit sets 122 only once a talk there has set 2548)."""
     lab(tmp_path)
     (tmp_path / "story.txt").write_text(
         "099f loop s59 w243a\n099f hook1766 w243a\n243a loop s100\n", encoding="utf-8"
@@ -1504,13 +1537,15 @@ def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_at_most(driv
         "set 80310c18 1 set 803475cc 6 set 80311aec 8 set 80311ac0 63 setb 80311ac8 66 "
         "frame frame frame frame safe get 80310c18 "  # frame 4: the hook
         "set 80310c18 1 frame frame frame safe get 80310c18 "  # 7: cleared, set again
-        "set 80310c18 1 frame frame frame safe get 80310c18"  # 10: two tries made
+        "set 80310c18 1 frame frame frame safe get 80310c18 "  # 10: two tries made
+        + "frame " * 9000
+        + "safe get 80310c18"  # 9010: 9,003 frames after the last try
     )
     out, err = play(
         driver,
         tmp_path,
         script,
-        SOA_LAB="story:100-149;walk:0-100:3",
+        SOA_LAB="story:100-149;walk:0-20000:3",
         SOA_LAB_STORY=str(tmp_path / "story.txt"),
     )
     assert "loaded 1" in out, err
@@ -1518,14 +1553,14 @@ def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_at_most(driv
         "80310C18=00000041",
         "80310C18=00000041",
         "80310C18=00000001",
+        "80310C18=00000041",
     ], out
     hooks = [x.split("lab: walk: ", 1)[1] for x in err.splitlines() if " hook: " in x]
-    assert hooks == [
+    assert [h.split(" set at frame ")[1].split(",")[0] for h in hooks] == ["4", "7", "9010"], err
+    assert hooks[0] == (
         "a099f hook: flag 1766 set at frame 4, in place of the arrival this map's script waits for "
-        "(the story's rank toward flag 100: 1)",
-        "a099f hook: flag 1766 set at frame 7, in place of the arrival this map's script waits for "
-        "(the story's rank toward flag 100: 1)",
-    ], err
+        "(the story's rank toward flag 100: 1)"
+    ), err
 
 
 @needs_cc
