@@ -187,6 +187,14 @@ loaded drawn (a black field after a load is a finding, as at FINDINGS:1351-1361)
 flags 303 to 312 to the Delphinus's hangar in 120,000 frames, with `assist` for A (battles, results, choices) and
 save points passed over. Steps 1 and 3 (positions, played legs) are not used yet.
 
+**Runs 2026-10-16:** part G to its end (the Fortress Gate won with the Moon Stone Cannon, the Delphinus under way,
+flags to 315); part C stopped in a town's item shop. What U4 needs next, in order:
+1. **Story first:** rank each map's live entries by whether their scripts set the part's story flags (from
+   `sct.py`, as a list the lab reads), so a town's shops and chatter come after the story's entries.
+2. **The world map:** every part's story continues by sailing at some point (part G's at the Delphinus's bridge);
+   either a world-map driver, or the game's own warp to the next story map, said as such.
+3. Step 1 above (positions), for the entries a script expects the party to have walked to.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

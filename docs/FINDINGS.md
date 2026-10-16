@@ -8604,6 +8604,15 @@ here).
     nothing new: the story goes on by sailing, across the world map, which an entry walker cannot do. That is the
     edge of part G's played story here: from `a116a`'s cell to the Delphinus under way, every map, event, battle
     and the escape's ship battle, in one run, with every base invariant held.
+- **Part C, and where the entry walker stops being enough** [V, `build/reach/u4-C1`, `u4-C2`]: part C lands in
+  `a004a`, a town. The first run's first start (3000, a merchant) opened a shop menu nothing answered for 190,000
+  frames; the walker now presses B once an event has held the field a minute. The second run started six entries
+  and then 4010, the item shop's counter (`me004a` `M04010`: the keeper's talk, a camera move, the shop's call
+  `fn_8020A734`, then waits), which held flag 1087 for the remaining 188,000 frames with nothing on screen and B
+  ending nothing. No fault either time; the invariants held. A town is full of talks and shops that are not the
+  story's way on, and the walker has no sense of which entries move the story: the prison of part G had few
+  besides. The next step for U4 is that sense, from the scripts: rank each map's entries by whether they set the
+  part's story flags (`sct.py` over the map's script), and start those first.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
