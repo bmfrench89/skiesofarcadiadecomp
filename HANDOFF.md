@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1627 |
+| Python tests | 1628 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -487,10 +487,13 @@ FINDINGS entry "Reach U<n>":
   interior MLD, which loads only inside it; RAM captured by `u4-D4`). `sct.py` now lists messages and choices
   with their text. With `--story 150-199` (`u4-D9`): 150 by the world map's hook, 151, and 152 by the dancer's
   night once the walker learned houses: nothing warped to from inside one (flag 1024), doors asked again, and
-  the ground an entry is gated on (B[16], which a008a's doors test) stood on first.
+  the ground an entry is gated on (B[16], which a008a's doors test) stood on first. **Part D done
+  (`u4-D12`):** flags 150 to 162 by the game's own scripts, through the inn's two nights, the Temple of Pyrynn
+  and two ship battles (Belleza's ended by `finish`, which now holds an enemy ship at 1 HP too); its card,
+  saved at the temple, is `build/savetest/card-partD-end.raw`.
 
-**Next:** part D on from 153 (`u4-D9` was running from `card-partC-end.raw` with `--story 150-199`), then the
-other part cards the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Next:** part E from `card-partD-end.raw` with `--story 200-249`, then the later parts the same way; U5's
+parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

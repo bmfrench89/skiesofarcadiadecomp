@@ -237,6 +237,11 @@ on arriving in Maramba, 152 by the dancer's night at the inn. The walker learned
 warps away starts from inside one (flag 1024), a door asks again the entries paused for its residents, and an
 entry gated on the ground the player stands on (B[16]) has it set first, as walking there would.
 
+**Runs u4-D10 to u4-D12** (FINDINGS "Reach U4"): a story step with no volume here ranks the doors, a house's
+exit comes first inside it, and its own entries may warp; `finish` holds an enemy ship at 1 HP in a long ship
+battle. Part D played to its end, flags 150 to 162, and its card saved at the Temple of Pyrynn
+(`build/savetest/card-partD-end.raw`).
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

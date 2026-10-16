@@ -8836,6 +8836,22 @@ here).
     and still passed 153 over at 62648: inside the inn it would not start the innkeeper, whose entry warps to
     203a, and nothing that warped away started inside a house. Now only the street's are refused there, the
     volumes present when the walker opened the door; the house's own may warp (a test).
+- **Run u4-D11: part D through the Temple of Pyrynn to Belleza** [V, `build/reach/u4-D11`, stopped by hand at
+  frame 185000]: the innkeeper at 36198 took the party to `a203a`, 153 at 37048; 154 at 40823; the Temple of
+  Pyrynn (`a109a`, `a109g`, `a109e`) 155 to 158 by 64465; 159 at 68213; the ship battle at `a506a` won by 93367
+  with the Little Jack held, then 160 at 93486; then Belleza's flagship at `a507a`, in the desert canyon (frame
+  184500 looked at), from 95375, still afloat 90,000 frames on against the part card's level-1 crew. The lab's
+  `finish` now does in a ship battle what it does in a battle: past its frames the enemy ship's HP, +24 of the
+  object at *(*0x8034727C + 36), which the turn's applier damages and tests for the sink, is held at 1 (a test).
+  Run u4-D12, with it, followed u4-D11 frame for frame to the ship battles: at `a506a` the hold began at 82578
+  and the battle ended at 93367 all the same, its frame in u4-D11 too (that fight's end is not its enemy's HP
+  [I]); Belleza's, held from 107526, ended at 123823, and 161 was set at 124582.
+- **Run u4-D12: part D played to its end** [V, `build/reach/u4-D12`, stopped by hand at frame 175000]: 162 at
+  126441, and then "no flag in 150-199 is left for a line to set": part D's flags 150 to 162, every one set by
+  the game's own scripts, the walker standing in only for the sail to Nasr (the hook), for walking (entries
+  started where they stand, the ground set) and for two long fights (`finish`). The lab's `save` saved at the
+  Temple of Pyrynn's save point (`a109g` 4900) at 136622; the card, READY to `cardformat.py verify`, is kept as
+  `build/savetest/card-partD-end.raw` for part E.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
