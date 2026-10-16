@@ -8852,6 +8852,28 @@ here).
   started where they stand, the ground set) and for two long fights (`finish`). The lab's `save` saved at the
   Temple of Pyrynn's save point (`a109g` 4900) at 136622; the card, READY to `cardformat.py verify`, is kept as
   `build/savetest/card-partD-end.raw` for part E.
+- **Run u4-E1: part E to 213, and a gate the index did not know** [V, `build/reach/u4-E1`, stopped by hand at frame
+  180000]: from the part-D card (landing at `a109g`, the save point), with `--story 200-249`: 200 at 3967 by
+  `a099h`'s hooks, 201 to 203 in `a010a`/`a010b` by 31994, 204 at 37248 (hook 1771 to `a241a`), the ship battle at
+  `a509a` from 41700 to 83905 (held at 1 HP from 53700 and ending 30,000 frames later all the same, as `a506a` did
+  in part D), 205 and 206 by 85932, 208 at 90723 (`a111a`), 209 to 213 in `a111d` and on by 127396, and 224 on the
+  way. Then 215, set by `a112b`'s loop, was passed over at 164515. `a099h`'s landing 4008 warps to `a112a` only
+  inside `IF (FLAG[1590] 1 == FLAG[1591] 1 == && FLAG[213] 1 == &&)`; the walker started it twice and it did
+  nothing. 1590 and 1591 are set by `a099h`'s 4506 and 4516, glittering spots on the world map ("do you see
+  something glittering?": the Great Bird's Eyes, an item each), which set no story flag and warp nowhere, so they
+  ranked nothing. `sct.py --story` now adds a gate: an entry that sets a field flag (1024 up) which an `IF` of
+  `FLAG[n] 1 ==` terms joined by `&&` waits for around a warp leads where the warp goes (`099h M04506 w112a`,
+  `M04516` too; eight lines in the whole index; a test, with `||` refused). A hook is the same for a flag no
+  script sets.
+- **Run u4-E2: the gate taken, and one more kind** [V, `build/reach/u4-E2`, stopped by hand at frame 186000]: the
+  same path to 213, the lab's `save` at `a111d`'s save point 4300 at 100826 (flags to 210; kept as
+  `build/savetest/card-partE-mid.raw`, READY). At the world map the walker started 4506 at 129559 and 4516 at
+  135799, each item's message closed by its back-out, then 4008 took it to `a112a`, and 215 was set at 148998.
+  Then 216 was passed over at 184404 with the walker in `a112c`, which sets it: `a112c`'s touch 6002 (its label
+  `FLAG[1870] 0 == FLAG[216] 0 == &&`) sets 1870 and starts event battle 14, and on the return (sys[15] 10000)
+  the loop's block on 1870 calls `me112ce17`, which sets 216. The gate gave 6002 the block's warp to 208a, which
+  ranks nothing in the place that sets the aim. A gate now carries what its block sets as well, its own FLAGSETs
+  and those of the entries it calls (`112c M06002 s216 s228 w208a`; the test has a CALL).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

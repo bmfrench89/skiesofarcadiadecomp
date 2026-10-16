@@ -363,13 +363,103 @@ def hooks(d: bytes) -> dict[int, set[str]]:
     return out
 
 
+def _warps_in(d: bytes, lo: int, hi: int) -> set[str]:
+    """The places the words [lo, hi) warp to: WARP's name, op 238 as 099a."""
+    out = set()
+    for q in range(lo, min(hi, len(d) - 7), 4):
+        if _w(d, q) == 43:
+            m = _WARP_NAME.match(d, q + 4 + _w(d, q + 4))
+            if m:
+                out.add(m.group(1).decode("latin1").lower())
+        elif _w(d, q) == 238 and _w(d, q + 4) >= 0x04000000:
+            out.add("099a")
+    return out
+
+
+def gates(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
+    """The entries that open a block by setting a field flag it waits for, and
+    the story flags and places that block sets and warps to.
+
+    For each IF whose condition is only `FLAG[n] 1 ==` terms joined by `&&`
+    (the words [0, flag, 0x04000000, 1.0, ==, ... &&, ..., END, offset]), each
+    other entry of this script that sets one of its flags at STORY_FLAGS or
+    above (FLAGSET, raw) sets and warps to what the block does: its own
+    FLAGSETs and warps, and those of the entries it CALLs, however deep.
+    me099h's landing 4008 warps to 112a once 1590, 1591 and 213 are set, and
+    its glittering spots 4506 and 4516 set 1590 and 1591 (the Great Bird's
+    Eyes); me112c's touch 6002 sets 1870 and starts a battle, after which
+    the loop's block on 1870 calls the cutscene that sets 216. Part E's
+    walker, knowing nothing of either, passed 215 and 216 over. A hook is the
+    same with a flag no script sets."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    spans = [(off, min(b for b in bounds if b > off), name) for off, name in ents]
+    setters: dict[int, set[str]] = {}
+    for lo, hi, name in spans:
+        for q in range(base + lo, min(base + hi, len(d) - 15), 4):
+            w = struct.unpack(">4I", d[q : q + 16])
+            if w[0] == 17 and w[1] == 0x04000000 and w[3] == END:
+                f = struct.unpack(">f", d[q + 8 : q + 12])[0]
+                if f == int(f) and STORY_FLAGS <= f < 0x1000000:
+                    setters.setdefault(int(f), set()).add(name)
+    starts = {off: name for off, name in reversed(ents)}
+    told = story(d)
+    out: dict[str, tuple[set[int], set[str]]] = {}
+    for o in range(base, len(d) - 8, 4):
+        if _w(d, o) != 0:
+            continue
+        terms, q = [], o + 4
+        while q + 16 <= len(d):
+            t = _w(d, q)
+            if t == END:
+                break
+            if 0x20000000 <= t < 0x40000000 and struct.unpack(">3I", d[q + 4 : q + 16]) == (
+                0x04000000,
+                0x3F800000,
+                4,
+            ):
+                terms.append(t & 0xFFFFFF)
+                q += 16
+            elif t == 8 and terms:
+                q += 4
+            else:
+                terms = []
+                break
+        field = [f for f in terms if f >= STORY_FLAGS and f in setters]
+        if not field or q + 8 > len(d) or _w(d, q) != END:
+            continue
+        lo, hi = q + 8, min(q + 4 + _rel(d, q + 4), len(d) - 15)
+        warps, sets = _warps_in(d, lo, hi), set()
+        for r in range(lo, hi, 4):
+            w = struct.unpack(">4I", d[r : r + 16])
+            if w[0] == 17 and w[1] == 0x04000000 and w[3] == END:
+                v = struct.unpack(">f", d[r + 8 : r + 12])[0]
+                if v == int(v) and 0 <= v < STORY_FLAGS:
+                    sets.add(int(v))
+            elif w[0] == 11 and starts.get(r + 4 + _rel(d, r + 4) - base) in told:
+                s, ws = told[starts[r + 4 + _rel(d, r + 4) - base]]
+                sets |= s
+                warps |= ws
+        here = next((name for lo, hi, name in spans if base + lo <= o < base + hi), None)
+        for f in field if sets or warps else ():
+            for name in setters[f] - {here}:
+                got = out.setdefault(name, (set(), set()))
+                got[0].update(sets)
+                got[1].update(warps)
+    return out
+
+
 def story_lines(name: str, d: bytes, unset: set[int] | None = None) -> list[str]:
     """`story` as text, one entry a line, for the entries that set or warp:
     `004a M03005 w250a`. The lab's walker reads these (reach.md U4). With
     `unset`, the flags no script sets, each hook on one of them is a line too,
-    named for its flag: `099f hook1766 w243a`."""
+    named for its flag: `099f hook1766 w243a`. An entry that opens a block by
+    setting the field flag it waits for (`gates`) sets and warps as it does."""
     lines = []
+    opens = gates(d)
     for entry, (sets, warps) in story(d).items():
+        more = opens.get(entry, (set(), set()))
+        sets, warps = sets | more[0], warps | more[1]
         if sets or warps:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
             lines.append(f"{name} {entry} {' '.join(words)}")

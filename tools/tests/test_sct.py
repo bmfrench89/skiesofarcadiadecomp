@@ -178,6 +178,33 @@ def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     assert sct.hooks(bytes(d)) == {}
 
 
+def test_an_entry_that_sets_a_blocks_field_flag_does_what_the_block_does():
+    """me099h's landing 4008 warps to 112a inside `IF (FLAG[1590] 1 ==
+    FLAG[213] 1 == &&)`, and its glittering spot 4506 sets 1590: so 4506
+    leads to 112a as well, and sets what the block's CALLs set (me112c's
+    touch 6002 sets 1870, and the loop's block on it calls the cutscene that
+    sets 216): a gate. A story flag (213) opens nothing this way, nor does a
+    condition with `||` in it."""
+    ONE = 0x3F800000
+    cond = [0x20000000 | 1590, FLOAT, ONE, EQ, 0x20000000 | 213, FLOAT, ONE, EQ, 8, END]
+    land = [0, *cond, 0, 11, 0, 43, 0, 12]  # IF ... else-> the RET; CALL cut; WARP; RET
+    spot = [17, *f(1590), END, 12]
+    story = [17, *f(213), END, 12]
+    cut = [17, *f(216), END, 12]
+    entries = [("M04008", land), ("M04506", spot), ("M03000", story), ("me112ce17", cut)]
+    d = bytearray(build(entries, b"me112a.sct\0\0"))
+    base = 12 + 4 * 20
+    struct.pack_into(">i", d, base + 4 * 11, 4 * 16 - 4 * 11)  # the else-offset
+    struct.pack_into(">i", d, base + 4 * 13, 4 * 27 - 4 * 13)  # CALL: cut starts at word 27
+    name_at = base + 4 * (len(land) + len(spot) + len(story) + len(cut))
+    struct.pack_into(">I", d, base + 4 * 15, name_at - (base + 4 * 15))
+    assert sct.gates(bytes(d)) == {"M04506": ({216}, {"112a"})}
+    lines = sct.story_lines("099h", bytes(d))
+    assert "099h M04506 s216 w112a" in lines, lines
+    struct.pack_into(">I", d, base + 4 * 9, 9)  # && becomes ||
+    assert sct.gates(bytes(d)) == {}
+
+
 def test_a_script_that_runs_off_its_end_says_so():
     """An expression with no END word reads past the buffer: that has to come
     out as a desynchronised entry, never as invented instructions."""

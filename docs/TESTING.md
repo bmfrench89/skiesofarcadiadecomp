@@ -37,8 +37,8 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 1475 passed, 41 skipped in 977.75s
 ```
 
-1628 tests in 92 files, none of which reads the disc (the run above is 2026-10-09's, at 1516, before
-R5c's five in `test_setup.py`, M6's 32 in `test_mods.py`, `test_progress.py`'s 13 and reach's 62 in
+1629 tests in 92 files, none of which reads the disc (the run above is 2026-10-09's, at 1516, before
+R5c's five in `test_setup.py`, M6's 32 in `test_mods.py`, `test_progress.py`'s 13 and reach's 63 in
 `test_soak.py`, `test_mods.py`, `test_reach.py` and `test_sct.py`). The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
@@ -135,7 +135,7 @@ its own and run it, some of the C as well:
 | `test_clock.py` | 6 | `runtime/clock.c`, built alone and fed synthetic host times (M19): steady steps are guest time, a 10 s gap counts as none and bumps the epoch (10 s with the rule off), a host step backwards moves nothing, a speed change is continuous and bumps the epoch, a pause is excluded, and a peek writes nothing |
 | `test_citest.py` | 7 | the CI scripts' own claims: nothing fell out of coverage, the render driver has not drifted from `selftest.c`, the import graph is stdlib-only, and so is `player_build.py`'s, which a package runs on the embeddable CPython (distribution 3.5) |
 | `test_gxr_atomics.py` | 5 | the render queue's rule 4 (portability 3.4, L2), text only: every use of a shared counter in `gxr.c` is an argument of a `plat_*` helper, its declaration, or the producer's plain read of its own `g_published` on a line marked `own count`; a bare `g_ran[1]` read added to `worker()` (the spec's mutation), a marked worker count, a cast and a condition each fail it, and the code before L2 fails it 38 times |
-| `test_sct.py` | 9 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, a message and a choice with their text (and the text's own entries), a last entry ending off a word, and an entry that runs off its end; and `--story`'s scan: an entry's flags set and warps through what it calls, past a message, op 238 as a warp to the world map, nothing for a call into mid-entry; a hook, a warp inside an `IF` on a flag no script sets, and not one past its block |
+| `test_sct.py` | 10 | `tools/sct.py`, the field-script disassembler, on bytecode built word by word: a flag test, a backward jump, a warp name, a switch, a message and a choice with their text (and the text's own entries), a last entry ending off a word, and an entry that runs off its end; and `--story`'s scan: an entry's flags set and warps through what it calls, past a message, op 238 as a warp to the world map, nothing for a call into mid-entry; a hook, a warp inside an `IF` on a flag no script sets, and not one past its block; a gate, an entry setting the field flag such an `IF` waits for, which sets and leads where the block does (through its calls too), and none under `||` |
 | `test_inventory.py` | 5 | regenerating the inventory leaves both symbol files saying the same thing |
 | `test_dspadpcm.py` | 4 | DSP-ADPCM decoding against hand-computed frames |
 | `test_hle_pc.py` | 4 | every native adapter says which guest function it is, so the profile does not charge it to its caller |
@@ -177,8 +177,8 @@ Reach (docs/specs/reach.md) then added 15 to `test_soak.py` and 8 in a new
 `test_reach.py`, which need nothing, and 14 to `test_mods.py`, which build the lab mod
 with the compiler `SOA_CC` names: 1603 collected in 92 files, 37 more passed in a row
 with MSVC and 23 more passed and 14 more skipped without it [I: from what each needs;
-not measured row by row]. On 2026-10-16 U4's story walker added four to `test_sct.py` and one
-to `test_reach.py`, which need nothing, and twenty to `test_mods.py`: 1628 collected in 92 files,
+not measured row by row]. On 2026-10-16 U4's story walker added five to `test_sct.py` and one
+to `test_reach.py`, which need nothing, and twenty to `test_mods.py`: 1629 collected in 92 files,
 and with MSVC hidden 192 of `test_mods.py`'s 198 skip (both measured). The
 "neither" row took two runs. The first, with another session's 13 uncommitted
 tests in the tree, gave `1065 passed, 483 skipped`. The second, with that file
