@@ -30,7 +30,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
 | 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` and `test_android_build.py` under `noskip` | 43 s | llvm-mingw, the sysroot (`python tools/fetch_android_sysroot.py`), and MSVC for `elfcheck.c`'s half |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (469 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (474 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -373,9 +373,9 @@ python -m pytest tools/tests -q
 1475 passed, 41 skipped in 977.75s
 ```
 
-1622 tests in 92 files, none of which reads the disc (the counts below are 2026-10-09's, at 1516, before
+1627 tests in 92 files, none of which reads the disc (the counts below are 2026-10-09's, at 1516, before
 R5c's five in `test_setup.py`, which run on Windows with llvm-mingw, M6's 32 in `test_mods.py`, `test_progress.py`'s 13
-and reach's 56). The count you see depends
+and reach's 61). The count you see depends
 on what is installed, and the tool tells you: `1456 passed, 42 skipped` without
 capstone (which CI does not install — the 19 cross-validation tests collapse
 into one module-level skip), `1066 passed, 450 skipped` without MSVC, and
@@ -389,7 +389,7 @@ Linux (CI's Linux legs run both).
 
 **Watch the skip count, not just the pass count.** A number that went *up*
 while the pass count went down means a test stopped being able to run rather
-than starting to pass. The 469 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
+than starting to pass. The 474 compiler-gated tests build one `runtime/*.c`, or the GPU spike, and
 run it; on a machine without a compiler the Python is checked and the C is not.
 
 **On failure:** run the one file — `python -m pytest tools/tests/test_x.py -q`

@@ -232,6 +232,11 @@ starts no entry whose cast is not here: a house's residents load only inside it,
 from the street, held her night at the inn 40,000 frames on two of them. A minute's wait on a starting entry logs
 the script threads it waits on.
 
+**Runs u4-D7 to u4-D9** (FINDINGS "Reach U4"): part D from 150 with `--story 150-199`: 150 by `a099h`'s hook, 151
+on arriving in Maramba, 152 by the dancer's night at the inn. The walker learned houses on the way: nothing that
+warps away starts from inside one (flag 1024), a door asks again the entries paused for its residents, and an
+entry gated on the ground the player stands on (B[16]) has it set first, as walking there would.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

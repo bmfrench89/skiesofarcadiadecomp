@@ -8806,6 +8806,36 @@ here).
   worked through its checks. Whether a sailing player can reach that landing before 150 is not known [I: the
   landing is a hit volume on the world map, which the walker starts without sailing]. The next part-D run starts
   its story window at 150, so the first aim is the hook, not a wander.
+- **Runs u4-D7 to u4-D9: into the inn, on the right ground** [V, `build/reach/u4-D7`, `u4-D8`, `u4-D9`; D7 and D8
+  stopped by hand]: with `--story 150-199`, `a099h`'s hook 1768 was set at 8020 in place of the sail to Nasr, its
+  loop warped to `a033a`, which set 150 (0x80310B4C bit 22), and Maramba's loop set 151 on arrival. 152 is the
+  dancer's night, which wants the party inside the inn. Three walker defects in turn, each fixed with a test:
+  - u4-D7: refused for her cast, the dancer was marked for good, and no door in a008a was live. a008b's door 4000
+    sets flag 1024 (inside a house: every door's label wants it clear, every house exit's set, and the exit clears
+    it), and the walker had then warped to a008a by 4100, out on the street, with 1024 still set. Now inside a
+    house nothing that warps away starts, a cast refusal pauses the entry for a minute, and starting a door asks
+    every paused entry of the map again.
+  - u4-D8: the doors were live and started, and did nothing, 180 frames each: each is `IF (B[16] 0 ==)` around its
+    body. B[16] is the ground the player stands on, set by fn_801161B4 from the ground's id at 0x80346E88 (50100
+    gives 0, 50200 1, 50300 2, 50400 3, 50500 4; a008a has grounds 50100 and 50300, and its big doors 4110 and 4111
+    want 2), and the party had come into a008a on 50300. The walker does not move the player, so an entry whose
+    label is followed by an IF on B[16] alone now has B[16] set to that value first, said in the log ("stands on
+    ground B[16] = 0; the player stood on 2: set, as walking there would"). Door scripts place the player
+    themselves.
+  - u4-D9: every door opened, its interior loading (`a008aa` to `a008ad`), the inn's (`a008ae`) at 69409; inside,
+    the dancer at 70727, her night 5,600 frames, 152 at 71428 (frames 73500 and 75000 looked at: Aika's line over
+    Vyse at the inn, the dancer's veil drawn translucent). The walker toured each house's talks and checks before
+    its exit, about 7,000 frames a house, so 152's patience had passed it over at 67808, before the inn came; it
+    was set all the same.
+    Then 153 was passed over at 98418: the next step is a008a's innkeeper (4410: "Oh, yes, Bellena mentioned
+    you"), whose volume is in `a008aa.mld`, the inn behind door 4000; the dancer's hall is house e. The story
+    lines rank 4410, but nothing ranked a door toward him. Now an entry the lines rank toward the aim that has no
+    live volume here (or waits paused for its cast) ranks this map's doors one step behind it, and inside a house
+    where nothing ranks, its exit comes before its talks and checks (a test of each).
+  - u4-D10, with those, had 150 at 8744, 151 at 19097 and 152 at 27477, toured every house by its door and exit,
+    and still passed 153 over at 62648: inside the inn it would not start the innkeeper, whose entry warps to
+    203a, and nothing that warped away started inside a house. Now only the street's are refused there, the
+    volumes present when the walker opened the door; the house's own may warp (a test).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

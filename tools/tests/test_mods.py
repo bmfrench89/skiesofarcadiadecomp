@@ -1271,10 +1271,12 @@ def test_the_walker_starts_no_entry_whose_cast_is_not_here(driver, tmp_path):
     what it CALLs, must be found by op 154's lookup: a008a's dancer (3004)
     calls her night at the inn, which enters 3005, who lives in the inn's own
     MLD, there only inside it. Started from the street, the night waited
-    40,000 frames. With 3005 absent the entry is not started, and is passed
-    over after; with 3005 here, it starts. So does one that sets a house up
-    first (scptHset, op 65): a door, which loads the house's residents itself
-    (a008b's 4000 opens house a and enters 3003, from a008ba.mld)."""
+    40,000 frames. With 3005 absent the entry is not started, nor asked again
+    for a minute; then it is, and starts once 3005 has come (a door can bring
+    him meanwhile). With 3005 here, it starts at once. So does one that sets a
+    house up first (scptHset, op 65): a door, which loads the house's
+    residents itself (a008b's 4000 opens house a and enters 3003, from
+    a008ba.mld)."""
     script_ = (
         # Code at 80400000: "loop" at 0, "M03004" at 0x100, "sub" at 0x200.
         "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 3 "
@@ -1294,18 +1296,184 @@ def test_the_walker_starts_no_entry_whose_cast_is_not_here(driver, tmp_path):
         "set 80400200 41 set 80400204 04000000 set 80400208 0 set 8040020c 1d set 80400210 1a "
         "set 80400214 04000000 set 80400218 453bd000 set 8040021c 1d set 80400220 c "
     )
-    for here, started in (
-        ("here 3004 ", False),
-        ("here 3004 here 3005 ", True),
-        (door + "here 3004 ", True),
+    later = (
+        "here 3005 " + "frame " * 1800 + "safe frame frame frame frame safe"
+    )  # a minute on, 3005 here
+    for here, after, started, refusals in (
+        ("here 3004 ", "", False, 1),  # not asked again within the minute
+        ("here 3004 ", later, True, 1),
+        ("here 3004 here 3005 ", "", True, 0),
+        (door + "here 3004 ", "", True, 0),
     ):
-        script = script_ + here + "safe frame frame frame frame safe frame frame frame frame safe"
+        script = (
+            script_
+            + here
+            + "safe frame frame frame frame safe frame frame frame frame safe "
+            + after
+        )
         out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3")
         assert "loaded 1" in out, err
         assert ("fn_80210550(3004)" in out) == started, out
         refused = "a008a entry 3004 calls on 3005, who is not here (a house's resident, there only inside it)"
-        assert (refused in err) != started, err
-        assert err.count(refused) <= 1, err  # passed over after, not asked again
+        assert err.count(refused) == refusals, err
+
+
+@needs_cc
+def test_a_door_brings_the_residents_an_entry_waited_on(driver, tmp_path):
+    """The dancer (3004) is refused while 3005 is not here; the walker then
+    opens a door (4050, which sets house 4 up: the inn), and so asks her
+    again at once, not a minute on: her night starts."""
+    lab(tmp_path)
+    script = (
+        # "loop" at 0, "M03004" at 0x100 (Enter 3005; RET), "M04050" at 0x200 (Hset 4; RET).
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 3 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303330 set 8041001c 30340000 "
+        "set 80410028 200 set 8041002c 4d303430 set 80410030 35300000 "
+        "set 80400100 1a set 80400104 04000000 set 80400108 453bd000 set 8040010c 1d set 80400110 c "
+        "set 80400200 41 set 80400204 04000000 set 80400208 40800000 set 8040020c 1d set 80400210 c "
+        # a008a running, the main thread in its loop; volumes for 3004 and the door.
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 "
+        "set 8030cea4 80400008 set 80347524 80400800 set 80400808 bbc set 80400810 16 set 80400830 80400900 "
+        "set 80400908 fd2 set 80400910 8 walkfns game "
+        "frame frame frame frame safe "  # 4: 3004 refused
+        "frame frame frame frame safe "  # 8: the door
+        "here 3005 frame frame frame frame safe"  # 12: the dancer again
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [
+        "fn_80210550(4050)",
+        "fn_80210550(3004)",
+    ], out
+    assert err.count("entry 3004 calls on 3005, who is not here") == 1, err
+
+
+@needs_cc
+def test_the_walker_stands_on_the_ground_an_entry_is_gated_on(driver, tmp_path):
+    """An entry whose label is followed by `IF (B[16] N ==)` (a008a's doors,
+    N 0) wants the player on ground N; the walker does not move the player,
+    and came into a008a on ground 2, where every door did nothing. So B[16]
+    is set to N first, the rest of its word kept, and said so; an entry with
+    no such gate leaves it alone."""
+    lab(tmp_path)
+    script_ = (
+        # "loop" at 0, "M04050" at 0x100: EVAL 1; IF (B[16] 0 ==) else ->; RET.
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303430 set 8041001c 35300000 "
+        "set 80400100 9 set 80400104 04000000 set 80400108 3f800000 set 8040010c 1d "
+        "set 80400110 0 set 80400114 10000010 set 80400118 04000000 set 8040011c 0 "
+        "set 80400120 4 set 80400124 1d set 80400128 4 set 8040012c c "
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 "
+        "set 8030cea4 80400008 set 80347524 80400800 set 80400808 fd2 set 80400810 8 "
+        "set 80310a2c 02112233 walkfns game "  # B[16] 2, B[17..19] beside it
+    )
+    for gated, word in (("", "80310A2C=00112233"), ("set 80400114 10000011 ", "80310A2C=02112233")):
+        out, err = play(
+            driver,
+            tmp_path,
+            script_ + gated + "frame frame frame frame safe get 80310a2c",
+            SOA_LAB="walk:0-5000:3",
+        )
+        assert "loaded 1" in out, err
+        assert "fn_80210550(4050)" in out, out
+        assert word in out, out
+        said = "a008a entry 4050 stands on ground B[16] = 0; the player stood on 2: set, as walking there would"
+        assert (said in err) == (not gated), err
+
+
+@needs_cc
+def test_a_story_step_with_no_volume_here_ranks_the_doors(driver, tmp_path):
+    """a008a's innkeeper (4410) warps toward 153 but has no volume on the
+    street: he is in the inn's own MLD, behind a door. So a door (an entry
+    that sets a house up) ranks one step behind him and is started before a
+    check, though the check's id is lower. Inside a house where nothing
+    ranks, its exit comes before its checks."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text("008a M04410 w203a\n203a loop s153\n", encoding="utf-8")
+    script_ = (
+        # "loop" at 0, "M04000" at 0x100 (RET), "M04050" at 0x200 (Hset 4; RET).
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 3 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303430 set 8041001c 30300000 "
+        "set 80410028 200 set 8041002c 4d303430 set 80410030 35300000 "
+        "set 80400100 c set 80400200 41 set 80400204 04000000 set 80400208 40800000 set 8040020c 1d "
+        "set 80400210 c "
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 "
+        "set 8030cea4 80400008 set 80347524 80400800 set 80400808 fa0 set 80400810 8 "
+        "walkfns game "
+    )
+    outside = "set 80400830 80400900 set 80400908 fd2 set 80400910 8 "  # the door, 4050
+    inside = (
+        "set 80310bbc 1 set 80400830 80400900 set 80400908 17a2 set 80400910 8 "  # the exit, 6050
+    )
+    for extra, started in ((outside, "fn_80210550(4050)"), (inside, "fn_80210550(6050)")):
+        out, err = play(
+            driver,
+            tmp_path,
+            script_ + extra + "frame frame frame frame safe",
+            SOA_LAB="story:150-199;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [started], (out, err)
+
+
+@needs_cc
+def test_the_walker_warps_nowhere_from_inside_a_house(driver, tmp_path):
+    """Flag 1024 is set while the party is inside a house (a door sets it, the
+    house's exit clears it). From inside, an entry that warps to another map
+    is not started, however it ranks: a008b's 4100, out on the street, took
+    reach U4's walker to a008a with 1024 still set, and every door there was
+    dead. Outside, it is the one started."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text("008b M04100 w008a\n008a M03004 s152\n", encoding="utf-8")
+    base = (
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 62 set 803475cc 6 set 80311aec 8 "
+        "set 80347524 80400800 set 80400808 1004 set 80400810 8 set 80400830 80400900 "
+        "set 80400908 10d6 set 80400910 8 walkfns game "
+    )
+    for inside, started in (("set 80310bbc 1 ", "fn_80210550(4310)"), ("", "fn_80210550(4100)")):
+        out, err = play(
+            driver,
+            tmp_path,
+            base + inside + "frame frame frame frame safe",
+            SOA_LAB="story:150-199;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [started], (out, err)
+
+
+@needs_cc
+def test_inside_a_house_its_own_entries_may_warp(driver, tmp_path):
+    """The house's own entries are the volumes that came after the walker
+    opened its door, and those may warp from inside: a008a's innkeeper (4410)
+    takes the party to the night at 203a, and reach U4's walker, refusing
+    every warp inside, passed 153 over."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text("008a M04410 w203a\n203a loop s153\n", encoding="utf-8")
+    script = (
+        # "loop" at 0, "M04050" at 0x100 (Hset 4; RET): the inn's door, its volume alone at first.
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303430 set 8041001c 35300000 "
+        "set 80400100 41 set 80400104 04000000 set 80400108 40800000 set 8040010c 1d set 80400110 c "
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 "
+        "set 8030cea4 80400008 set 80347524 80400800 set 80400808 fd2 set 80400810 8 walkfns game "
+        "frame frame frame frame safe "  # 4: the door
+        "set 80310bbc 1 set 80400830 80400900 set 80400908 113a set 80400910 8 "  # inside; the innkeeper's volume
+        "frame frame frame frame safe"  # 8: him
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:150-199;walk:0-5000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [
+        "fn_80210550(4050)",
+        "fn_80210550(4410)",
+    ], (out, err)
 
 
 @needs_cc

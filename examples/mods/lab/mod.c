@@ -44,9 +44,15 @@
  *                  backing out is not started again. Skipping the walk also
  *                  skips walking into a house, whose residents load only
  *                  inside it: an entry whose scptEnter names someone op 154's
- *                  lookup cannot find is not started, unless it sets a house
- *                  up itself (a door). A minute's wait on a starting entry
- *                  logs the script threads it waits on.
+ *                  lookup cannot find is not started for a minute, unless it
+ *                  sets a house up itself (a door), and a door asks it again.
+ *                  Inside a house (flag 1024) nothing that warps away starts,
+ *                  and where nothing ranks its exit comes first. A story step
+ *                  with no volume here (a house's counter) ranks the doors.
+ *                  An entry gated on the ground the player stands on (B[16])
+ *                  has it set first, as walking there would.
+ *                  A minute's wait on a starting entry logs the script
+ *                  threads it waits on.
  *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
  *                  file SOA_LAB_STORY names holds `sct.py --story`'s lines,
  *                  each entry's flags set and maps warped to. The story's next
@@ -153,6 +159,10 @@
 #define FN_ENTRY_LIVE 0x8021067Cu
 #define FN_ENTRY_START 0x80210550u
 #define FLAG_EVENT 1087u
+/* Set while the party is inside a house: a door's entry (a008a's 4000 to
+ * 4090, a008b's 4000) is live only while it is clear and sets it, the
+ * house's exit (6000 to 6090) only while it is set and clears it. */
+#define FLAG_IN_HOUSE 1024u
 #define FN_FIND_OBJECT 0x8015F1A0u /* the object with id r3: its actor, or 0 (op 154's lookup) */
 #define PLAYER 0x80347450u         /* the player's actor (content-systems.md 2, 80101030) */
 #define ACTOR_POS 56u              /* x, y, z floats */
@@ -235,6 +245,8 @@ static uint32_t story_map_word(const char* s); /* likewise, for parse_item's fla
 typedef struct {
     uint32_t map, id, runs, aim, tries, at; /* at: the frame of the last start */
     int trap;                               /* its event needed backing out: never again */
+    uint32_t absent_at;                     /* one more than the frame its cast was last found missing */
+    int door_known, door;                   /* whether its entry sets a house up (scptHset), once read */
 } Seen;
 static Seen g_seen[MAX_SEEN];
 static int g_nseen;
@@ -749,6 +761,14 @@ static int at_choice(void)
            (int16_t)state == WINDOW_CHOICE;
 }
 
+static Seen* seen_find(uint32_t map, uint32_t id)
+{
+    int i;
+    for (i = 0; i < g_nseen; i++)
+        if (g_seen[i].map == map && g_seen[i].id == id) return &g_seen[i];
+    return NULL;
+}
+
 static Seen* seen_of(uint32_t map, uint32_t id)
 {
     int i;
@@ -949,6 +969,20 @@ static uint32_t story_score(uint32_t map, uint32_t id, uint32_t aim)
     return best;
 }
 
+/* Whether an entry's lines warp to a map other than this one. */
+static int story_warps_away(uint32_t map, uint32_t id)
+{
+    uint32_t k;
+    int i;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->map != map || l->id != id) continue;
+        for (k = 0; k < l->nwarps; k++)
+            if (g_story_words[l->at + l->nsets + k] != map) return 1;
+    }
+    return 0;
+}
+
 /* This map's best hook toward `aim`: a line hookN here with flag N clear,
  * warping nearer than this map, tried fewer than STORY_TRIES times at this
  * aim; its rank (1 + where it warps) in *rank, else STORY_FAR and NULL. The
@@ -1112,6 +1146,11 @@ static int script_busy(char* why, size_t cap)
 #define CAST_ENTRIES 16
 #define CAST_IDS 10000u
 #define CAST_WORDS 0x8000u /* an entry longer than this is scanned this far */
+/* An entry refused for its cast is asked again this many frames on: a door
+ * meanwhile can bring the residents in (the inn's, 4050 in a008a, for the
+ * dancer, who sets part D's 152 and whom reach U4's walker first refused for
+ * good). */
+#define CAST_RETRY 1800u
 static uint32_t g_offs[4096], g_noffs, g_offs_code;
 
 /* The entries' starting offsets, sorted, once per script. */
@@ -1150,28 +1189,40 @@ static int is_entry_start(uint32_t o)
     return 0;
 }
 
-static uint32_t cast_absent(uint32_t id)
+/* The map script's code and the offset of the entry M%05u `id` in it. */
+static int entry_offset(uint32_t id, uint32_t* code, uint32_t* off)
 {
-    uint32_t code = 0, index = 0, count = 0, i, k, o, hi, w[4], args[1], act, todo[CAST_ENTRIES], ntodo = 0, done = 0;
-    uint32_t absent = 0;
-    int house = 0;
+    uint32_t index = 0, count = 0, i, k, w;
     char name[17], want[17];
-    float f;
-    if (!g_api->read32(SCRIPT_CODE, &code) || !code || !load_offsets(code)) return 0;
-    g_api->read32(SCRIPT_INDEX, &index);
-    g_api->read32(SCRIPT_COUNT, &count);
+    if (!g_api->read32(SCRIPT_CODE, code) || !*code || !g_api->read32(SCRIPT_INDEX, &index) ||
+        !g_api->read32(SCRIPT_COUNT, &count) || !index || count > 4096)
+        return 0;
     snprintf(want, sizeof want, "M%05u", id);
-    for (i = 0; i < count && !ntodo; i++) {
+    for (i = 0; i < count; i++) {
         for (k = 0; k < 4; k++) {
-            if (!g_api->read32(index + 20u * i + 4u + 4u * k, &w[k])) return 0;
-            name[4 * k] = (char)(w[k] >> 24);
-            name[4 * k + 1] = (char)(w[k] >> 16);
-            name[4 * k + 2] = (char)(w[k] >> 8);
-            name[4 * k + 3] = (char)w[k];
+            if (!g_api->read32(index + 20u * i + 4u + 4u * k, &w)) return 0;
+            name[4 * k] = (char)(w >> 24);
+            name[4 * k + 1] = (char)(w >> 16);
+            name[4 * k + 2] = (char)(w >> 8);
+            name[4 * k + 3] = (char)w;
         }
         name[16] = '\0';
-        if (strcmp(name, want) == 0 && g_api->read32(index + 20u * i, &o)) todo[ntodo++] = o & ~3u;
+        if (strcmp(name, want) == 0 && g_api->read32(index + 20u * i, off)) {
+            *off &= ~3u;
+            return 1;
+        }
     }
+    return 0;
+}
+
+static uint32_t cast_absent(uint32_t id, int* door)
+{
+    uint32_t code = 0, k, o, hi, w[4], args[1], act, todo[CAST_ENTRIES], ntodo = 0, done = 0;
+    uint32_t absent = 0;
+    int house = 0;
+    float f;
+    if (!entry_offset(id, &code, &o) || !load_offsets(code)) return 0;
+    todo[ntodo++] = o;
     while (done < ntodo) {
         o = todo[done++];
         for (hi = entry_end(o); o + 16u <= hi; o += 4) {
@@ -1194,7 +1245,100 @@ static uint32_t cast_absent(uint32_t id)
             }
         }
     }
+    *door = house;
     return house ? 0 : absent;
+}
+
+/* An entry's ground gate: the IF its label is followed by, when that tests
+ * B[16] alone, [0, B[16], 0x04000000, N as a float, ==, 29, the else]. B[16]
+ * is the ground the player stands on (fn_801161B4, from the ground's id at
+ * 0x80346E88: 50100 gives 0, 50200 1, 50300 2, 50400 3, 50500 4), and the
+ * walker does not move the player: reach U4's part-D walker came into a008a
+ * from a008b standing on 50300, and every door there, gated on 0 (a008a's
+ * 4000 to 4090: the inn's is 4050), did nothing. So an entry gated on its
+ * ground has B[16] set to N first, said so: what walking there would do.
+ * Its N in *n, or 0 when there is no such gate. */
+#define B16 0x80310A2Cu /* B[16], the byte variables from 0x80310A1C */
+#define B16_WORD 0x10000010u
+static int ground_gate(uint32_t id, uint8_t* n)
+{
+    uint32_t code = 0, o, w[7], k;
+    float f;
+    if (!entry_offset(id, &code, &o) || !g_api->read32(code + o, &w[0]) || w[0] != 9u) return 0;
+    for (o += 4, k = 0; k < 64; k++, o += 4)  /* the label: op 9 skips to its END */
+        if (!g_api->read32(code + o, &w[0]) || w[0] == 29u) break;
+    if (k == 64) return 0;
+    for (k = 0; k < 7; k++)
+        if (!g_api->read32(code + o + 4u + 4u * k, &w[k])) return 0;
+    if (w[0] != 0u || w[1] != B16_WORD || w[2] != 0x04000000u || w[4] != 4u || w[5] != 29u) return 0;
+    memcpy(&f, &w[3], sizeof f);
+    if (!(f >= 0.0f && f < 8.0f)) return 0;
+    *n = (uint8_t)f;
+    return 1;
+}
+
+/* Whether an entry is a door: its own code sets a house up (scptHset, op 65,
+ * [65, 0x04000000, the house, 29]). Read once per entry. */
+static int entry_is_door(Seen* s, uint32_t id)
+{
+    uint32_t code = 0, o, hi, w[4], k;
+    if (!s) return 0;
+    if (s->door_known) return s->door;
+    s->door_known = 1;
+    if (!entry_offset(id, &code, &o) || !load_offsets(code)) return 0;
+    for (hi = entry_end(o); o + 16u <= hi; o += 4) {
+        for (k = 0; k < 4; k++)
+            if (!g_api->read32(code + o + 4u * k, &w[k])) return 0;
+        if (w[0] == OP_HSET && w[1] == 0x04000000u && w[3] == 29u) return s->door = 1;
+    }
+    return 0;
+}
+
+/* A door's rank toward `aim`: one more than the best rank of an entry of
+ * this map the story lines know that has no live volume here, or waits
+ * paused for its cast; STORY_FAR when there is none. A house's people and
+ * counters are entries of the map whose volumes load with the house:
+ * a008a's innkeeper (4410, the next step after 152) is in the inn's
+ * a008aa.mld, behind door 4000, and reach U4's walker, which knew nothing
+ * of that, toured the other houses and the street until 153 was passed
+ * over. */
+#define DOOR_PRESENT 512
+/* The volumes there were when the walker last opened a door, on that map:
+ * what came after are the house's own. */
+static uint32_t g_house_snap[DOOR_PRESENT], g_house_nsnap, g_house_map;
+static int in_house_snap(uint32_t map, uint32_t id)
+{
+    uint32_t k;
+    if (g_house_map != map) return 1; /* no door opened here: everything counts as the street's */
+    for (k = 0; k < g_house_nsnap; k++)
+        if (g_house_snap[k] == id) return 1;
+    return 0;
+}
+static uint32_t door_rank(uint32_t map, uint32_t aim, uint32_t f)
+{
+    uint32_t present[DOOR_PRESENT], n = 0, v = 0, vol, id, best = STORY_FAR, sc, k;
+    uint16_t state;
+    int guard = 0, i;
+    if (!g_api->read32(LIST_HEAD, &v)) return STORY_FAR;
+    while (v && guard++ < 4096 && n < DOOR_PRESENT) {
+        vol = v;
+        if (!g_api->read32(v + 48, &v)) v = 0;
+        if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read32(vol + 8, &id)) continue;
+        present[n++] = id;
+    }
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        const Seen* s;
+        if (l->map != map || !l->id || l->hook) continue;
+        sc = story_score(map, l->id, aim);
+        if (sc >= best) continue;
+        for (k = 0; k < n && present[k] != l->id; k++) {
+        }
+        s = seen_find(map, l->id);
+        if (k < n && !(s && s->absent_at && f + 1 - s->absent_at < CAST_RETRY)) continue;
+        best = sc;
+    }
+    return best >= STORY_FAR ? STORY_FAR : best + 1;
 }
 
 /* One safe point of the walker: it->started is the last frame the field was
@@ -1247,6 +1391,9 @@ static void walk(Item* it)
     uint32_t f = g_api->frame(), map = g_api->map(), v = 0, vol, id, best_id = 0, best_vol = 0, args[1];
     uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, asked = 0, seen = 0;
     uint32_t aim = 0, score, best_score = 0xFFFFFFFFu, absent;
+    int door = 0, inside, k, pref, best_pref = 2;
+    uint32_t door_score, present[DOOR_PRESENT], npresent = 0;
+    uint8_t want = 0, ground = 0;
     uint16_t state, type = 0;
     int guard = 0, best_exit = 1, exit_;
     Seen* s;
@@ -1369,12 +1516,23 @@ static void walk(Item* it)
         }
         story_note(map, aim);
     }
+    /* Inside a house, nothing of the street's that warps away starts: a
+     * player inside walks out by the house's exit first. Reach U4's part-D
+     * walker entered a008b's house a (4000), then warped to a008a by the
+     * street's 4100, which a player inside could not reach; flag 1024 stayed
+     * set, and every door in a008a, the inn's among them, was dead. The
+     * house's own entries may warp (the inn's innkeeper, 4410, to the night
+     * at 203a): those whose volumes came after the door the walker opened.
+     * Not on the world map. */
+    inside = g_story_on && (map >> 8) != 99 && g_api->story_flag(FLAG_IN_HOUSE);
+    door_score = aim && !inside ? door_rank(map, aim, f) : STORY_FAR;
     while (v && guard++ < 4096) {
         vol = v;
         if (!g_api->read32(v + 48, &v)) v = 0;
         if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read32(vol + 8, &id)) continue;
         exit_ = id >= 6000 && id <= 6999;
         if (!exit_ && (id < 3000 || id > 4999)) continue;
+        if (npresent < DOOR_PRESENT) present[npresent++] = id;
         /* A save point opens the save menu, which is never the story's way on
          * and which nothing here answers: reach U4's fourth and fifth runs
          * stood in it for 30,000 frames and more. The hit-class table at
@@ -1383,19 +1541,29 @@ static void walk(Item* it)
         if (g_api->read16(vol + 18, &type) && (type == HIT_SAVE_POINT || type == HIT_SAVE_POINT_MOT)) continue;
         seen++;
         s = seen_of(map, id);
-        if (!s || s->trap) continue;
+        if (!s || s->trap || (s->absent_at && f + 1 - s->absent_at < CAST_RETRY)) continue;
+        if (inside && story_warps_away(map, id) && in_house_snap(map, id)) continue;
         /* With story: the nearer the story's next flag first, an entry counting
          * toward it for STORY_TRIES starts at most. Then the fewest starts;
          * among equals, a talk or a check before an exit; then the lower id. */
         score = aim && story_fresh(s, aim, f) ? story_score(map, id, aim) : STORY_FAR;
+        if (score == STORY_FAR && door_score < STORY_FAR && !exit_ && story_fresh(s, aim, f) && entry_is_door(s, id))
+            score = door_score;
+        /* Inside a house, where nothing ranks, its exit before the rest: a
+         * house's talks and checks took reach U4's walker 7,000 frames each. */
+        pref = inside && !exit_;
         if (score > best_score ||
-            (score == best_score && (s->runs > best_runs || (s->runs == best_runs && (exit_ > best_exit ||
-                                                                                     (exit_ == best_exit && id >= best_id))))))
+            (score == best_score &&
+             (pref > best_pref ||
+              (pref == best_pref &&
+               (s->runs > best_runs ||
+                (s->runs == best_runs && (exit_ > best_exit || (exit_ == best_exit && id >= best_id))))))))
             continue;
         args[0] = id;
         asked++;
         if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
         best_score = score;
+        best_pref = pref;
         best_runs = s->runs;
         best_id = id;
         best_vol = vol;
@@ -1431,19 +1599,31 @@ static void walk(Item* it)
         return;
     }
     it->why[0] = '\0';
-    absent = cast_absent(best_id);
+    absent = cast_absent(best_id, &door);
     if (absent) {
         s = seen_of(map, best_id);
-        if (s) s->trap = 1;
+        if (s) s->absent_at = f + 1;
         logf_("walk: a%03u%c entry %u calls on %u, who is not here (a house's resident, there only inside it): "
-              "not started",
-              (unsigned)(map >> 8), (char)(map & 0xFF), best_id, absent);
+              "not started, and not asked again until frame %u",
+              (unsigned)(map >> 8), (char)(map & 0xFF), best_id, absent, f + CAST_RETRY);
         return;
+    }
+    if (ground_gate(best_id, &want) && g_api->read8(B16, &ground) && ground != want) {
+        g_api->write8(B16, want);
+        logf_("walk: a%03u%c entry %u stands on ground B[16] = %u; the player stood on %u: set, as walking there would",
+              (unsigned)(map >> 8), (char)(map & 0xFF), best_id, want, ground);
     }
     args[0] = best_id;
     if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
     g_api->write32(PRESS_STARTED, 1);
     g_api->write32(PRESS_VOLUME, best_vol);
+    if (door) { /* a house's residents come in: whoever waited on them is asked again */
+        for (k = 0; k < g_nseen; k++)
+            if (g_seen[k].map == map) g_seen[k].absent_at = 0;
+        memcpy(g_house_snap, present, npresent * sizeof present[0]);
+        g_house_nsnap = npresent;
+        g_house_map = map;
+    }
     s = seen_of(map, best_id);
     if (s) s->runs++;
     story_count(s, aim, f);
