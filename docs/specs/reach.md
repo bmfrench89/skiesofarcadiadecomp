@@ -224,6 +224,14 @@ battle, `hold-hp` on the player's ship; the escape from Valua won at `a501a`; pa
 121 and 124, at `SOA_SPEED=4`. An entry's tries renew 9,000 frames after its last, for a story step that opens
 behind a talk.
 
+**Runs u4-C14 to u4-D5** (FINDINGS "Reach U4"): part C ends at 122 (an aim no visit can meet, 123, is passed over
+after 30,000 frames), and `build/savetest/card-partC-end.raw` starts part D one exit before it. A menu B does not
+leave gets the way out after 5,400 frames, and an entry that needed backing out is not started again; a
+shopkeeper's choice after a back-out is answered from when it comes (down, down, A; then up, A). The walker
+starts no entry whose cast is not here: a house's residents load only inside it, and a008a's dancer, started
+from the street, held her night at the inn 40,000 frames on two of them. A minute's wait on a starting entry logs
+the script threads it waits on.
+
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
 **The runs:** one accelerated battle soak per part card, C to L (S3's recipe with `--battle`, 33,500 frames, every

@@ -92,12 +92,30 @@ static int pad_stub(unsigned port, void* out)
 }
 
 /* The game's side of call_guest: one function at 0x80003100 that adds r3
- * and r4 and, being careless, clobbers r14, f14 and GQR 3. */
-static int g_irq;
+ * and r4 and, being careless, clobbers r14, f14 and GQR 3. After the
+ * "walkfns" command, also the three the lab's walker calls: every entry is
+ * live (fn_8021067C), one starts and says so (fn_80210550), and an object is
+ * found (fn_8015F1A0) when a "here ID" command named it. */
+static int g_irq, g_walk_fns;
+static uint32_t g_here[16];
+static unsigned g_nhere;
 int irq_in_handler(void) { return g_irq; }
-int dispatch_known(uint32_t a) { return a == 0x80003100u; }
+int dispatch_known(uint32_t a)
+{
+    return a == 0x80003100u || (g_walk_fns && (a == 0x8021067Cu || a == 0x80210550u || a == 0x8015F1A0u));
+}
 void dispatch(CpuState* s, uint32_t a)
 {
+    unsigned i;
+    if (a == 0x8021067Cu) { s->gpr[3] = 1; return; }
+    if (a == 0x80210550u) { printf("fn_80210550(%u)\n", s->gpr[3]); s->gpr[3] = 1; return; }
+    if (a == 0x8015F1A0u) {
+        uint32_t id = s->gpr[3];
+        s->gpr[3] = 0;
+        for (i = 0; i < g_nhere; i++)
+            if (g_here[i] == id) s->gpr[3] = 0x81000000u + id;
+        return;
+    }
     if (a != 0x80003100u) { printf("dispatch of %08X\n", a); return; }
     s->gpr[3] += s->gpr[4];
     s->gpr[14] = 0xDEADDEADu;
@@ -115,7 +133,8 @@ void dispatch(CpuState* s, uint32_t a)
  *   pad2 B             pad 2 connected, buttons B    analog2 SX SY CX CY LT RT   its sticks, triggers
  *   proj O P0..P5      a new projection (O 1 orthographic), through the filter
  *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider
- *   game               the game's registers at a safe point: r2, r13 its, r14 a mark */
+ *   game               the game's registers at a safe point: r2, r13 its, r14 a mark
+ *   walkfns            answer the walker's three game functions   here ID   an object id they find */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -151,6 +170,8 @@ int main(int argc, char** argv)
             printf(" %s" "\n", g_proj ? "filtered" : "unfiltered");
         }
         else if (!strcmp(cmd, "irq")) g_irq = 1;
+        else if (!strcmp(cmd, "walkfns")) g_walk_fns = 1;
+        else if (!strcmp(cmd, "here") && scanf("%u", &a) == 1 && g_nhere < 16) g_here[g_nhere++] = a;
         else if (!strcmp(cmd, "host") && scanf("%x", &v) == 1) g_host_now = v;
         else if (!strcmp(cmd, "pad2") && scanf("%x", &v) == 1) { g_pad2_there = 1; g_pad2_buttons = v; }
         else if (!strcmp(cmd, "analog2")) {
@@ -1245,6 +1266,86 @@ def test_the_lab_walker_waits_for_a_quiet_field(driver, tmp_path):
 
 
 @needs_cc
+def test_the_walker_starts_no_entry_whose_cast_is_not_here(driver, tmp_path):
+    """Before an entry starts, the actors its scptEnter names, in it and in
+    what it CALLs, must be found by op 154's lookup: a008a's dancer (3004)
+    calls her night at the inn, which enters 3005, who lives in the inn's own
+    MLD, there only inside it. Started from the street, the night waited
+    40,000 frames. With 3005 absent the entry is not started, and is passed
+    over after; with 3005 here, it starts. So does one that sets a house up
+    first (scptHset, op 65): a door, which loads the house's residents itself
+    (a008b's 4000 opens house a and enters 3003, from a008ba.mld)."""
+    script_ = (
+        # Code at 80400000: "loop" at 0, "M03004" at 0x100, "sub" at 0x200.
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 3 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303330 set 8041001c 30340000 "
+        "set 80410028 200 set 8041002c 73756200 "
+        # M03004: Enter 3004; CALL sub (its offset word at 0x114); RET. sub: Enter 3005; RET.
+        "set 80400100 1a set 80400104 04000000 set 80400108 453bc000 set 8040010c 1d "
+        "set 80400110 b set 80400114 ec set 80400118 c "
+        "set 80400200 1a set 80400204 04000000 set 80400208 453bd000 set 8040020c 1d set 80400210 c "
+        # a008a's field, running, the main thread in its loop; a live talk volume for 3004.
+        "set 80311ac0 8 set 80311ac4 8 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 "
+        "set 8030cea4 80400008 set 80347524 80400800 set 80400808 bbc set 80400810 16 "
+        "walkfns game "
+    )
+    lab(tmp_path)
+    door = (  # sub: Hset 0, then Enter 3005; RET
+        "set 80400200 41 set 80400204 04000000 set 80400208 0 set 8040020c 1d set 80400210 1a "
+        "set 80400214 04000000 set 80400218 453bd000 set 8040021c 1d set 80400220 c "
+    )
+    for here, started in (
+        ("here 3004 ", False),
+        ("here 3004 here 3005 ", True),
+        (door + "here 3004 ", True),
+    ):
+        script = script_ + here + "safe frame frame frame frame safe frame frame frame frame safe"
+        out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3")
+        assert "loaded 1" in out, err
+        assert ("fn_80210550(3004)" in out) == started, out
+        refused = "a008a entry 3004 calls on 3005, who is not here (a house's resident, there only inside it)"
+        assert (refused in err) != started, err
+        assert err.count(refused) <= 1, err  # passed over after, not asked again
+
+
+@needs_cc
+def test_the_walker_names_the_threads_a_stuck_entry_waits_on(driver, tmp_path):
+    """An entry's RET waits while other script threads live (the s16 at
+    0x8030CEAA above 1), and 0x8030E714 stays 1 meanwhile: a minute of it
+    logs, once, the count and each live slot's entry and opcode (slots of
+    52 bytes at *0x8030CEB0, live while the first word is not 0, the PC at
+    +0x1C). a008a's dancer held reach U4's part-D walker 40,000 frames."""
+    lab(tmp_path)
+    script_ = (
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 "
+        "set 80410018 6d653131 set 8041001c 36646330 set 80410020 32000000 "
+    )
+    # Two alive; slot 0 free, slot 1 live at me116dc02's 0x108, an op 30.
+    threads = (
+        "set 8030cea8 2 set 8030ceb0 80420000 set 80420034 1 set 80420050 80400108 set 80400108 1e "
+    )
+    script = (
+        script_
+        + threads
+        + "set 803475cc 6 set 80311aec 8 set 8030cea4 80400008 set 8030e714 1 safe "
+        + "frame " * 1799
+        + "safe "  # frame 1799: not yet a minute
+        + "frame safe "  # 1800
+        + "frame " * 100
+        + "safe"  # still stuck: not said again
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3")
+    assert "loaded 1" in out, err
+    said = [x.split("lab: walk: ", 1)[1] for x in err.splitlines() if "lab: walk: " in x]
+    assert said == [
+        "waiting at frame 0: a script entry is starting (0x8030E714 is 1)",
+        "frame 1800: 2 script thread(s) alive with the main one",
+        "  thread 1 at 00108 (op 30), in me116dc02",
+    ], err
+
+
+@needs_cc
 def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver, tmp_path):
     """fn_80118204's other gates: the player held (0x80347508 is 1) and the
     field's mode 12 (fn_8009763C: 2 at 0x80346C3C, 12 in the low byte at
@@ -1423,6 +1524,61 @@ def test_the_walker_backs_out_of_an_event_that_holds_the_field_a_minute(driver, 
     ], out
     assert "held the field, its window unmoved, since frame 0: pressing B" in err, err
     assert "the field is free again at frame 1800" in err, err
+
+
+@needs_cc
+def test_the_walker_presses_the_way_out_of_a_menu_b_does_not_leave(driver, tmp_path):
+    """An event that has held the field 5,400 frames, B notwithstanding (the
+    Maramba Office's Buy / Sell / Wanted / Exit), gets the way out instead:
+    B, B, up, A, B, B, down x3, A, a press every 70 frames (up wraps to the
+    last item, Exit)."""
+    lab(tmp_path)
+    held = "set 803475cc 6 set 80311aec 8 set 80310bc0 80000000 safe "
+    script = held + "frame " * 5500 + "safe pad 5600 0000 pad 5740 0000 pad 5810 0000 pad 6020 0000"
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-9000:300")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 5600 0200 filtered",  # beat 80: B
+        "pad 5740 0008 filtered",  # beat 82: up
+        "pad 5810 0100 filtered",  # beat 83: A
+        "pad 6020 0004 filtered",  # beat 86: down
+    ], out
+    assert "held the field since frame 0: pressing the way out of a menu" in err, err
+
+
+@needs_cc
+def test_assist_leaves_a_shopkeepers_choice_once_the_walker_has_backed_out(driver, tmp_path):
+    """After the walker has had to back out of an event (a shop's menu), the
+    choice it comes to is a shopkeeper's "what will you do?", whose first
+    option opens the shop again (the Mystery Merchant: buy and sell, talk,
+    leave). Each time one comes, timed from its coming: down, down, A, then
+    the next time up, A. Not on assist's beat: the merchant's talk took 600
+    frames, four beats exactly, so its up fell in the talk every time."""
+    lab(tmp_path)
+    held = "set 803475cc 6 set 80311aec 8 set 80310bc0 80000000 set 80346e4c 80400000 safe "
+    script = (
+        held
+        + "frame " * 1800
+        + "safe "  # 1800: a minute unmoved, B
+        + "set 80346e64 00060000 safe "  # a choice: the window moved, so no more B
+        + "pad 1950 0000 pad 1980 0000 pad 2010 0000 pad 2040 0000 "
+        + "set 80346e64 00040000 safe pad 2100 0000 "  # the talk the choice led to
+        + "set 80346e64 00060000 safe pad 2250 0000 pad 2280 0000 pad 2310 0000"  # the choice again
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-9000:300;assist:0-9000:150")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 1950 0000 filtered",  # the choice comes: nothing yet, though on the beat
+        "pad 1980 0004 filtered",  # down
+        "pad 2010 0004 filtered",  # down
+        "pad 2040 0100 filtered",  # A: the third, leave
+        "pad 2100 0000 filtered",  # a page, not a choice
+        "pad 2250 0000 filtered",  # the choice again, on the beat
+        "pad 2280 0008 filtered",  # up: wraps to the last, should the cursor be first
+        "pad 2310 0100 filtered",  # A
+    ], out
 
 
 @needs_cc

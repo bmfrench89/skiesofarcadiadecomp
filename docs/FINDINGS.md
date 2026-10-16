@@ -8750,6 +8750,62 @@ here).
   flag, so 123 is a later visit's, and the walker crossed the world map's stage h (`a099h`, which has no landing
   at Valua) looking for a way. An aim not reached in 30,000 frames is now passed over for the run, and said so
   (a test).
+- **Run u4-C15: a card at Pirate Isle, and a menu B does not leave** [V, `build/reach/u4-C15`, stopped by hand]: the
+  lab's `save` item saved at `a002e`'s save point 4411 at 147200 (`a/a/a/b/b/b`, played by 147740; the card READY to
+  `cardformat.py verify`, kept as `build/savetest/card-partC-end.raw`: part C done to its last exit, which set 122
+  at 147748 right after, so a part-D run starts one exit from it and 145,000 frames on). Then, aiming at 123, the
+  walker landed in Maramba (`a008b`) and started entry 4501, the Maramba Office, whose menu (frame 360000: "Buy
+  Info. / Sell Info. / Wanted List / Exit", the cursor on the first) B does not leave: each run of B presses moved
+  the window and so began the minute again, for 190,000 frames. Now an event that has held the field 5,400 frames
+  gets the way out of a menu, B, B, up, A, B, B, down x3, A (up wraps to the last item, Exit), and an entry whose
+  event needed backing out is not started again (a test for the presses).
+- **Run u4-D2: the merchant's talk was as long as assist's beat** [V, `build/reach/u4-D2`, stopped by hand]: from
+  the Pirate Isle card, 122 was set at 3335 and the walker reached the Mystery Merchant in Maramba (`a008b`), whose
+  shop it backed out of. His "Buy and sell items / Talk about various things / Leave" then stood on screen from
+  frame 28000 to 199500. `assist` answered a choice after a back-out up, A, down, A on its 150-frame beat, and the
+  pad log shows down at 27300, 27900, 28500 and 29100 and never an up: the A chose Talk, whose page took 600
+  frames, four beats exactly, to bring the choice back, so the up fell in the talk every time (autotext's A at
+  27603 and 27747 turned its pages). Each choice is now answered from when it comes: down, down, A, and the next
+  time up, A (a test).
+- **Runs u4-D3 and u4-D4: a house's residents are there only inside it** [V, `build/reach/u4-D3`, `u4-D4`, the
+  second with RAM at frames 63000 and 72000 in `build/reach/u4-D4-fifo`]: from the Pirate Isle card, u4-D3 left the
+  merchant in 2,000 frames, passed over 123 at 37937 and aimed at 150. In Maramba the walker then started a008a's
+  dancer Bellena (3004) at 55796, whose choice "Please stay at the local inn tonight" took the stay and called
+  `me008ad03`, the night at the inn: it sets 152, loads `a008ad03.mld` (the night's actors, 30000-30050) and
+  enters thirteen of the town's people. From 61502 the picture stood still (a camera at floor level by two pots,
+  dimmed once at 71000) for 40,000 frames, the walker waiting on 0x8030E714 = 1. u4-D4 reproduced it (3004 at
+  55808, still from 61506), and its RAM says why: the main thread was back in its loop, the dancer's entry on its
+  last RET, and RET (fn_801F5BD0) finishes only while the s16 at 0x8030CEAA, the script threads alive, is 1 or
+  less. It was 7: the dancer's, and six tasks for actors 3005 and 3006 (an Enter, a Cl and a Ret each), queued to
+  them by fn_800CD0B8 at 0x80305B08, which only the actor ends, by setting its task's first word to 2. 3005 and 3006
+  are the inn's own people, in `a008ae.mld`, the inn's interior, which loads when the party walks into the house;
+  it was never loaded, in either run. A player meets the dancer inside the inn; the walker starts an entry from
+  wherever it stands. Not a port defect: the queue and the RET behave as the code says. Now the walker scans an
+  entry, and what it CALLs, for the actors its scptEnter names by a constant below 10000, and starts it only when
+  op 154's lookup (fn_8015F1A0) finds each; otherwise it says who is missing and passes the entry over (a test,
+  through the fake guest's new `walkfns`). Run u4-D5 refused the dancer so ("a008a entry 3004 calls on 3005, who is
+  not here"), and also a008b's 4000 and a008a's 4040, 4050 and 4060: every house door, each of which sets its
+  house up (scptHset, op 65) and so loads the residents it then enters. An entry that sets a house up is let be
+  (the same test). And a walker that has waited a minute on 0x8030E714 now logs the live
+  threads (384 slots of 52 bytes at *0x8030CEB0, the PC at +0x1C), each with its entry and opcode (a test).
+- **The disassembler reads messages and choices** (found on the way): op 144 is a self-relative offset, masked to
+  four bytes, to a message's own entry, then one expression; op 155, a choice, is an expression, the same offset,
+  an expression (their handlers, 0x8020A734 and 0x8020A338). The entry is op 9, which skips words to the first
+  END, then the text. The listing had read the offset as an expression and lost its place, and read every
+  message's entry as code; it now prints the text at both ends, and the expression evaluator's one-word values
+  (0x7FFFFFFF and 0x7FFFFFFE, as DEFAULT; 801F616C-801F6190). A file's last entry, which runs into the name pool
+  and need not end on a word, is listed instead of lost. Of the 56,118 entries in the 255 loose field scripts, 4,544
+  had desynchronised; 4,318 still do, on ops whose raw operands the table does not describe (op 23's offset to a
+  model's name, for one). Two tests.
+- **Run u4-D6: landed in Maramba too early to leave** [V, `build/reach/u4-D6`, stopped by hand]: with the door
+  exemption the dancer was refused and the doors were not. But while aiming at the unreachable 123 the walker had
+  wandered, and at 16779 started `a099h`'s 4003, Maramba's landing, with no story rank. Maramba's ways back to the
+  world map are gated by part D's own flags: `a008b`'s 4101 ("Set sail for the Temple of Pyrynn") does nothing
+  until 154, its 6001 until 153 (`sct.py 008b M04101 M06001`), and 150 comes from `a099h`'s hooks 1768 and 1770,
+  warps to `a033a`. So 150 was passed over at 68025 with the party in a town it could not leave, and the walker
+  worked through its checks. Whether a sailing player can reach that landing before 150 is not known [I: the
+  landing is a hit volume on the world map, which the walker starts without sailing]. The next part-D run starts
+  its story window at 150, so the first aim is the hook, not a wander.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

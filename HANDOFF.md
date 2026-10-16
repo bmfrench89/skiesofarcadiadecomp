@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1616 |
+| Python tests | 1622 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -478,9 +478,18 @@ FINDINGS entry "Reach U<n>":
   start Vyse at level 1, so the lab's `finish` holds a long fight's enemies at 1 HP and the game's own victory
   ends it, and `hold-hp` holds the player's ship in a ship battle, each said in the log. Runs go at
   `SOA_SPEED=4`.
+- **Part C done, part D begun (2026-10-16):** `u4-C14` set 122, part C's last; 123 is a later visit's and is
+  passed over after 30,000 frames. `build/savetest/card-partC-end.raw` (saved by the lab's `save` at `a002e`)
+  starts part D one exit before 122. Three walker defects since, each fixed with a test: a menu B does not leave
+  (the Maramba Office) gets the way out; a shopkeeper's choice after a back-out is answered from when it comes
+  (the Mystery Merchant's talk was exactly four of assist's beats long); and an entry whose cast is not here is
+  not started (a008a's dancer, started from the street, waited 40,000 frames on two people who live in the inn's
+  interior MLD, which loads only inside it; RAM captured by `u4-D4`). `sct.py` now lists messages and choices
+  with their text.
 
-**Next:** part C's last steps at Pirate Isle (122 and on, with the renewed tries), then the other part cards the
-same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Next:** part D from `card-partC-end.raw` with `--story 150-199` (`u4-D6`, aiming first at the unreachable 123,
+landed in Maramba before 150 and could not leave; 150 comes from `a099h`'s hooks 1768/1770), then the other part
+cards the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

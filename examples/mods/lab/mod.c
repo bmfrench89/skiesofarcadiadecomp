@@ -38,7 +38,15 @@
  *                  named in the log). An event that holds
  *                  the field a minute with its window unmoved (a shop's menu)
  *                  gets B every 70 frames until the field is free; never a
- *                  ship battle (a 5xx stage), whose menu B would answer.
+ *                  ship battle (a 5xx stage), whose menu B would answer. One
+ *                  that has held it 5,400 frames gets the way out of a menu
+ *                  (B, B, up, A, B, B, down x3, A), and an entry that needed
+ *                  backing out is not started again. Skipping the walk also
+ *                  skips walking into a house, whose residents load only
+ *                  inside it: an entry whose scptEnter names someone op 154's
+ *                  lookup cannot find is not started, unless it sets a house
+ *                  up itself (a door). A minute's wait on a starting entry
+ *                  logs the script threads it waits on.
  *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
  *                  file SOA_LAB_STORY names holds `sct.py --story`'s lines,
  *                  each entry's flags set and maps warped to. The story's next
@@ -65,6 +73,9 @@
  *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
  *                  reads them): what the walker needs where a pad script's A
  *                  every 150 frames would talk to whatever stands nearest.
+ *                  A choice in an event the walker backed out of (a
+ *                  shopkeeper's) gets down, down, A from when it comes, and
+ *                  the next time up, A, instead.
  *   flag:MAP:N     once, at the first safe point where map MAP (004a; 099f is
  *                  the world map at that story stage) runs with no event,
  *                  set flag N, its word read and written back with the bit
@@ -214,6 +225,7 @@ enum {
 #define HIT_SAVE_POINT_MOT 44u /* "wallmot", the other save point */
 
 static int assist_wanted(void); /* below, beside the walker; on_pad calls it first */
+static int at_choice(void);     /* likewise */
 static int story_load(const char* path); /* below, beside the walker; parse_story calls it first */
 static uint32_t story_map_word(const char* s); /* likewise, for parse_item's flag: */
 
@@ -222,9 +234,11 @@ static uint32_t story_map_word(const char* s); /* likewise, for parse_item's fla
 #define MAX_SEEN 1024
 typedef struct {
     uint32_t map, id, runs, aim, tries, at; /* at: the frame of the last start */
+    int trap;                               /* its event needed backing out: never again */
 } Seen;
 static Seen g_seen[MAX_SEEN];
 static int g_nseen;
+static Seen* g_last_start; /* the entry the walker last started, until its event ends */
 
 /* story: where the story goes, from `sct.py --story`'s lines in the file
  * SOA_LAB_STORY names ("004a M03005 w250a": a map, an entry, the flags it
@@ -274,8 +288,17 @@ static uint32_t g_story_aim_now, g_story_aim_from;
 #define SHIP_WAIT_STATE 6u /* the menu waits for A, unless a member's wheel is open */
 
 static int g_sturn_playing; /* an sturn sequence is under way: assist keeps off */
-static int g_walk_backout;  /* the walker found the field held too long: B presses */
+static int g_walk_backout;  /* the walker found the field held too long: 1 B presses, 2 the way out */
 #define WALK_STUCK 1800u    /* frames an event may hold the field before B (a minute) */
+/* An event that has held the field this long, B notwithstanding, is a menu B
+ * does not leave: the Maramba Office's "Buy Info. / Sell Info. / Wanted List /
+ * Exit" held reach U4's part-C walker 190,000 frames. Then the presses go
+ * B, B, up, A (up wraps to the last item, Exit), B, B, down x3, A. */
+#define WALK_EXIT 5400u
+static uint32_t g_event_since; /* one more than the frame flag 1087 was first seen held, 0 when free */
+static int g_backed_out;       /* this event needed the back-out */
+static uint32_t g_entry_busy_from; /* one more than the frame 0x8030E714 was first seen 1, 0 when not */
+static int g_entry_busy_told;      /* its threads logged */
 
 typedef struct Item {
     int kind;
@@ -544,7 +567,10 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     for (i = 0; i < g_nitems; i++)
         if (g_items[i].kind == ITEM_STURN && g_items[i].started) g_sturn_playing = 1;
     if (g_walk_backout && frame % (PRESS_HOLD + PRESS_GAP) < PRESS_HOLD) {
-        pad->buttons = SOA_PAD_B;
+        static const uint16_t way_out[] = {SOA_PAD_B,  SOA_PAD_B,    SOA_PAD_UP,   SOA_PAD_A,    SOA_PAD_B,
+                                           SOA_PAD_B,  SOA_PAD_DOWN, SOA_PAD_DOWN, SOA_PAD_DOWN, SOA_PAD_A};
+        uint32_t beat = frame / (PRESS_HOLD + PRESS_GAP);
+        pad->buttons = g_walk_backout == 2 ? way_out[beat % (sizeof way_out / sizeof way_out[0])] : SOA_PAD_B;
         pad->stick[0] = pad->stick[1] = 128;
         return;
     }
@@ -566,8 +592,33 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
             continue;
         }
         if (it->kind == ITEM_ASSIST) {
-            if (frame >= it->from && frame <= it->to && frame % it->id < 2 && assist_wanted())
+            /* In an event the walker has had to back out of, a choice is a
+             * shopkeeper's "what will you do?" (the Mystery Merchant in a008b:
+             * buy and sell, talk, leave), whose first option opens the shop
+             * again. Each time one comes, from when it came: down, down, A
+             * (the third, leave), and the next time up, A (the last, should
+             * the list wrap). A press on a fixed beat instead fell, every
+             * time, after the talk the A had chosen: 170,000 frames. */
+            static uint32_t choice_from, choice_n;
+            static int was_choice;
+            int choice = g_backed_out && frame >= it->from && frame <= it->to && at_choice();
+            if (choice && !was_choice) {
+                choice_from = frame;
+                choice_n++;
+            }
+            was_choice = choice;
+            if (choice) {
+                uint32_t t = frame - choice_from;
+                if (choice_n & 1)
+                    pad->buttons |= t >= 30 && t < 32   ? SOA_PAD_DOWN
+                                    : t >= 60 && t < 62 ? SOA_PAD_DOWN
+                                    : t >= 90 && t < 92 ? SOA_PAD_A
+                                                        : 0;
+                else
+                    pad->buttons |= t >= 30 && t < 32 ? SOA_PAD_UP : t >= 60 && t < 62 ? SOA_PAD_A : 0;
+            } else if (frame >= it->from && frame <= it->to && frame % it->id < 2 && assist_wanted()) {
                 pad->buttons |= SOA_PAD_A;
+            }
             continue;
         }
         if (it->kind == ITEM_STURN) {
@@ -672,8 +723,7 @@ static int parse_walk(char* s)
  * at a choice box in the field. */
 static int assist_wanted(void)
 {
-    uint32_t task = 0, ship = 0, stage = g_api->map() >> 8;
-    uint16_t state = 0;
+    uint32_t ship = 0, stage = g_api->map() >> 8;
     if (g_api->scene() == SCENE_BATTLE) return 1;
     if (g_api->scene() == 6 && g_api->field_state() == FIELD_RESULTS) return 1;
     /* A ship battle (a 5xx stage) waits for A in its menu's state 6 (the
@@ -687,8 +737,16 @@ static int assist_wanted(void)
     if (g_api->scene() == 6 && stage >= 500 && stage <= 583 && !g_sturn_playing &&
         g_api->read32(SHIP_INPUT, &ship) && (ship >> 24) == SHIP_WAIT_STATE)
         return 1;
-    return g_api->scene() == 6 && g_api->read32(WINDOW_TASK, &task) && task &&
-           g_api->read16(WINDOW_STATE, &state) && (int16_t)state == WINDOW_CHOICE;
+    return at_choice();
+}
+
+/* The field's message window holds a choice (state 6). */
+static int at_choice(void)
+{
+    uint32_t task = 0;
+    uint16_t state = 0;
+    return g_api->scene() == 6 && g_api->read32(WINDOW_TASK, &task) && task && g_api->read16(WINDOW_STATE, &state) &&
+           (int16_t)state == WINDOW_CHOICE;
 }
 
 static Seen* seen_of(uint32_t map, uint32_t id)
@@ -987,6 +1045,38 @@ static int script_entry(uint32_t code, uint32_t off)
     return 1;
 }
 
+/* The script's other threads, for a log line when the main thread's entry
+ * cannot end: its RET (fn_801F5BD0) waits while the s16 at 0x8030CEAA, the
+ * threads alive with it, is above 1. They are 384 slots of 52 bytes at
+ * *0x8030CEB0 (fn_80210F74), a slot live while its first word is not 0, its
+ * next instruction at +0x1C as each opcode's handler reads it. Reach U4's
+ * part-D walker stood 40,000 frames at a008a's dancer's last RET. */
+#define THREAD_COUNT 0x8030CEAAu
+#define THREAD_SLOTS 0x8030CEB0u
+#define THREAD_MAX 384u
+#define THREAD_SIZE 52u
+#define THREAD_PC 0x1Cu
+static void log_threads(uint32_t f)
+{
+    uint32_t code = 0, slots = 0, i, first, pc, op;
+    uint16_t alive = 0;
+    unsigned shown = 0;
+    g_api->read16(THREAD_COUNT, &alive);
+    if (!g_api->read32(SCRIPT_CODE, &code) || !g_api->read32(THREAD_SLOTS, &slots) || !slots) return;
+    logf_("walk: frame %u: %d script thread(s) alive with the main one", f, (int16_t)alive);
+    for (i = 0; i < THREAD_MAX && shown < 16; i++) {
+        if (!g_api->read32(slots + i * THREAD_SIZE, &first) || !first) continue;
+        if (!g_api->read32(slots + i * THREAD_SIZE + THREAD_PC, &pc)) continue;
+        op = 0xFFFFFFFFu;
+        g_api->read32(pc, &op);
+        shown++;
+        if (pc >= code && script_entry(code, pc - code))
+            logf_("walk:   thread %u at %05X (op %u), in %s", i, pc - code, op, g_where.name);
+        else
+            logf_("walk:   thread %u at %08X (op %u), outside the map's script", i, pc, op);
+    }
+}
+
 /* Whether the map script's main thread is busy, with the entry it runs in
  * `why`: anywhere but its "loop" or a RET. a116d's loop clears flag 1087 and
  * then calls its second cutscene, which has stretches with no window and the
@@ -1000,6 +1090,111 @@ static int script_busy(char* why, size_t cap)
     if (!script_entry(code, pc - code) || strcmp(g_where.name, "loop") == 0) return 0;
     snprintf(why, cap, "the map's script runs %s", g_where.name);
     return 1;
+}
+
+/* An entry's cast, checked before the walker starts it: the actors its
+ * scptEnter (op 26) names by a constant, the words [26, 0x04000000, the id as
+ * a float, 29], in its code and in each entry it CALLs ([11, an offset]
+ * landing on an entry's start), however deep: a raw scan, as sct.py's story
+ * scan. Returns the first id below 10000 that op 154's lookup does not find
+ * (an MLD entry with no actor), or 0 when all are here. Ids from 10000 are
+ * event actors, which the entry loads itself (op 23). A player meets a
+ * house's residents inside it, with its interior's MLD loaded, but the walker
+ * starts an entry from anywhere: reach U4's part-D walker started a008a's
+ * dancer, 3004, outside the inn, and her night at the inn (me008ad03) waited
+ * 40,000 frames on 3005 and 3006, who live in the inn's a008ae.mld. An entry
+ * that sets a house up (scptHset, op 65: [65, 0x04000000, the house, 29]) is
+ * a door, which loads the interior before it enters a resident: a008b's
+ * 4000 opens house a and enters 3003, from a008ba.mld; so it is let be. */
+#define OP_ENTER 26u
+#define OP_CALL 11u
+#define OP_HSET 65u
+#define CAST_ENTRIES 16
+#define CAST_IDS 10000u
+#define CAST_WORDS 0x8000u /* an entry longer than this is scanned this far */
+static uint32_t g_offs[4096], g_noffs, g_offs_code;
+
+/* The entries' starting offsets, sorted, once per script. */
+static int load_offsets(uint32_t code)
+{
+    uint32_t index = 0, count = 0, i, j, o;
+    if (g_offs_code == code && g_noffs) return 1;
+    g_noffs = 0;
+    if (!g_api->read32(SCRIPT_INDEX, &index) || !g_api->read32(SCRIPT_COUNT, &count) || !index || count > 4096)
+        return 0;
+    for (i = 0; i < count; i++) {
+        if (!g_api->read32(index + 20u * i, &o)) return 0;
+        o &= ~3u;
+        for (j = g_noffs; j > 0 && g_offs[j - 1] > o; j--) g_offs[j] = g_offs[j - 1];
+        g_offs[j] = o;
+        g_noffs++;
+    }
+    g_offs_code = code;
+    return 1;
+}
+
+/* The entry starting at `lo`'s end: the next start, or the scan's limit. */
+static uint32_t entry_end(uint32_t lo)
+{
+    uint32_t i;
+    for (i = 0; i < g_noffs; i++)
+        if (g_offs[i] > lo) return g_offs[i] - lo < CAST_WORDS * 4u ? g_offs[i] : lo + CAST_WORDS * 4u;
+    return lo + CAST_WORDS * 4u;
+}
+
+static int is_entry_start(uint32_t o)
+{
+    uint32_t i;
+    for (i = 0; i < g_noffs; i++)
+        if (g_offs[i] == o) return 1;
+    return 0;
+}
+
+static uint32_t cast_absent(uint32_t id)
+{
+    uint32_t code = 0, index = 0, count = 0, i, k, o, hi, w[4], args[1], act, todo[CAST_ENTRIES], ntodo = 0, done = 0;
+    uint32_t absent = 0;
+    int house = 0;
+    char name[17], want[17];
+    float f;
+    if (!g_api->read32(SCRIPT_CODE, &code) || !code || !load_offsets(code)) return 0;
+    g_api->read32(SCRIPT_INDEX, &index);
+    g_api->read32(SCRIPT_COUNT, &count);
+    snprintf(want, sizeof want, "M%05u", id);
+    for (i = 0; i < count && !ntodo; i++) {
+        for (k = 0; k < 4; k++) {
+            if (!g_api->read32(index + 20u * i + 4u + 4u * k, &w[k])) return 0;
+            name[4 * k] = (char)(w[k] >> 24);
+            name[4 * k + 1] = (char)(w[k] >> 16);
+            name[4 * k + 2] = (char)(w[k] >> 8);
+            name[4 * k + 3] = (char)w[k];
+        }
+        name[16] = '\0';
+        if (strcmp(name, want) == 0 && g_api->read32(index + 20u * i, &o)) todo[ntodo++] = o & ~3u;
+    }
+    while (done < ntodo) {
+        o = todo[done++];
+        for (hi = entry_end(o); o + 16u <= hi; o += 4) {
+            for (k = 0; k < 4; k++)
+                if (!g_api->read32(code + o + 4u * k, &w[k])) return 0;
+            if (w[0] == OP_HSET && w[1] == 0x04000000u && w[3] == 29u) {
+                house = 1;
+            } else if (w[0] == OP_ENTER && w[1] == 0x04000000u && w[3] == 29u && !absent) {
+                memcpy(&f, &w[2], sizeof f);
+                if (!(f >= 1.0f && f < (float)CAST_IDS)) continue;
+                args[0] = (uint32_t)f;
+                act = 0;
+                if (g_api->call_guest(FN_FIND_OBJECT, args, 1, NULL, 0, &act, NULL) && !act) absent = args[0];
+            } else if (w[0] == OP_CALL) {
+                uint32_t to = o + 4u + w[1], j;
+                if (!is_entry_start(to)) continue;
+                for (j = 0; j < ntodo && todo[j] != to; j++) {
+                }
+                if (j == ntodo && ntodo < CAST_ENTRIES) todo[ntodo++] = to;
+            }
+        }
+    }
+    return house ? 0 : absent;
 }
 
 /* One safe point of the walker: it->started is the last frame the field was
@@ -1051,7 +1246,7 @@ static void walk(Item* it)
 {
     uint32_t f = g_api->frame(), map = g_api->map(), v = 0, vol, id, best_id = 0, best_vol = 0, args[1];
     uint32_t best_runs = 0xFFFFFFFFu, live = 0, started = 0, busy = 0, asked = 0, seen = 0;
-    uint32_t aim = 0, score, best_score = 0xFFFFFFFFu;
+    uint32_t aim = 0, score, best_score = 0xFFFFFFFFu, absent;
     uint16_t state, type = 0;
     int guard = 0, best_exit = 1, exit_;
     Seen* s;
@@ -1084,20 +1279,39 @@ static void walk(Item* it)
         /* A ship battle (a 5xx stage) holds 1087 throughout, its menu is not
          * the message window, and B there answers the crew's wheel: reach
          * U4's part-C run pressed it into a501a's from 111689. Never stuck. */
+        if (!g_event_since) g_event_since = f + 1;
         if (!it->member || window != it->window || ((map >> 8) >= 500 && (map >> 8) <= 583)) {
             if (g_walk_backout && it->member) logf_("walk: the event moved on at frame %u: no more B", f);
             g_walk_backout = 0;
             it->member = f + 1;
             it->window = window;
         }
-        if (f + 1 - it->member >= WALK_STUCK && !g_walk_backout) {
-            g_walk_backout = 1;
-            logf_("walk: an event has held the field, its window unmoved, since frame %u: pressing B every %u frames",
-                  it->member - 1, PRESS_HOLD + PRESS_GAP);
+        if (f + 1 - it->member >= WALK_STUCK) {
+            int level = f + 1 - g_event_since >= WALK_EXIT ? 2 : 1;
+            if (g_walk_backout != level)
+                logf_(level == 2 ? "walk: an event has held the field since frame %u: pressing the way out of a menu "
+                                   "(B, B, up, A, B, B, down x3, A) every %u frames"
+                                 : "walk: an event has held the field, its window unmoved, since frame %u: pressing "
+                                   "B every %u frames",
+                      level == 2 ? g_event_since - 1 : it->member - 1, PRESS_HOLD + PRESS_GAP);
+            g_walk_backout = level;
+            g_backed_out = 1;
         }
         return;
     }
     if (g_walk_backout) logf_("walk: the field is free again at frame %u", f);
+    /* An entry whose event needed backing out is a menu, never the story's
+     * way on: it is not started again (the Maramba Office, twice). */
+    if (g_event_since) {
+        if (g_backed_out && g_last_start) {
+            g_last_start->trap = 1;
+            logf_("walk: a%03u%c entry %u needed backing out: not started again", g_last_start->map >> 8,
+                  (char)(g_last_start->map & 0xFF), g_last_start->id);
+        }
+        g_last_start = NULL;
+        g_backed_out = 0;
+        g_event_since = 0;
+    }
     it->member = 0;
     g_walk_backout = 0;
     {
@@ -1130,8 +1344,14 @@ static void walk(Item* it)
     if (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) {
         walk_wait(it, "a script entry is starting (0x8030E714 is 1)");
         it->started = f;
+        if (!g_entry_busy_from) g_entry_busy_from = f + 1;
+        if (!g_entry_busy_told && f + 1 - g_entry_busy_from >= WALK_STUCK) {
+            g_entry_busy_told = 1;
+            log_threads(f);
+        }
         return;
     }
+    g_entry_busy_from = g_entry_busy_told = 0;
     if (f - it->started < it->id) return;
     if (!g_api->read32(LIST_HEAD, &v)) return;
     if (g_story_on) {
@@ -1163,7 +1383,7 @@ static void walk(Item* it)
         if (g_api->read16(vol + 18, &type) && (type == HIT_SAVE_POINT || type == HIT_SAVE_POINT_MOT)) continue;
         seen++;
         s = seen_of(map, id);
-        if (!s) continue;
+        if (!s || s->trap) continue;
         /* With story: the nearer the story's next flag first, an entry counting
          * toward it for STORY_TRIES starts at most. Then the fewest starts;
          * among equals, a talk or a check before an exit; then the lower id. */
@@ -1195,6 +1415,7 @@ static void walk(Item* it)
             s = seen_of(map, 0x80000000u | h->hook);
             if (s) s->runs++;
             story_count(s, aim, f);
+            g_last_start = NULL; /* a hook starts no entry */
             it->last++;
             it->why[0] = '\0';
             logf_("walk: a%03u%c hook: flag %u set at frame %u, in place of the arrival this map's script waits for "
@@ -1210,6 +1431,15 @@ static void walk(Item* it)
         return;
     }
     it->why[0] = '\0';
+    absent = cast_absent(best_id);
+    if (absent) {
+        s = seen_of(map, best_id);
+        if (s) s->trap = 1;
+        logf_("walk: a%03u%c entry %u calls on %u, who is not here (a house's resident, there only inside it): "
+              "not started",
+              (unsigned)(map >> 8), (char)(map & 0xFF), best_id, absent);
+        return;
+    }
     args[0] = best_id;
     if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
     g_api->write32(PRESS_STARTED, 1);
@@ -1217,6 +1447,7 @@ static void walk(Item* it)
     s = seen_of(map, best_id);
     if (s) s->runs++;
     story_count(s, aim, f);
+    g_last_start = s;
     it->last++;
     if (best_score == STORY_FAR)
         snprintf(why, sizeof why, "%s", g_story_on ? "; the story's rank: none" : "");

@@ -21,9 +21,15 @@ bytes an entry) and operands. Operands are RPN expressions ended by token 29
 followed by a float; 0x08.. is fixed-point, 0x1.. a byte variable B[n], 0x2..
 and 0x3.. flag n, 0x4.. a float variable, 0x5.. a system variable.
 
-Opcodes with raw or variable-length operands the table does not describe (23,
-24, 25, 33, 69, 144 among them) can desynchronise a linear pass; when that
-happens the entry says so rather than printing guesses.
+A message (op 144, 0x8020A734) is a self-relative offset, masked to four
+bytes, to an entry of its own, then one expression; a choice (op 155,
+0x8020A338) is an expression, then the same offset to its options, then an
+expression. The entry is op 9, which skips words to the first END
+(0x801F60C4), then the text, NUL-padded to four bytes. The listing prints the
+text at both ends. Opcodes with raw or
+variable-length operands the table does not describe (23, 24, 25, 33 and 69
+among them) can desynchronise a linear pass; when that happens the entry says
+so rather than printing guesses.
 
 Reads the disc, prints nothing but the script: the loose file when there is
 one, else the script read through the data directory's `disc.iso` (the loose
@@ -70,6 +76,8 @@ NAMED = {
     138: "SAVEPOINT",
     157: "JOIN",
     158: "LEAVE",
+    144: "MESSAGE",
+    155: "CHOICE",
     210: "SHIPBATTLE",
 }
 OPERATORS = (
@@ -77,6 +85,10 @@ OPERATORS = (
     + ["&", "|", "*", "/", "%", "+", "-"]  # 16-22: the handler table repeats seven
 )
 DEFAULT = 0x7F7FFFFF
+# Words scptAnarize takes alone, as DEFAULT (801F616C-801F6190): a message's
+# "no value" among them.
+ALONE = (0x7FFFFFFF, 0x7FFFFFFE)
+MESSAGE, CHOICE = 144, 155
 
 
 def opcode_names(dol_path: Path | None = None) -> dict[int, str]:
@@ -122,6 +134,8 @@ def operand(t: int) -> str:
 
 def expression(d: bytes, o: int) -> tuple[str, int]:
     """One RPN expression from `o`, as text, and the offset after its END."""
+    if _w(d, o) in ALONE or _w(d, o) == DEFAULT:
+        return "DEF", o + 4
     toks = []
     while True:
         t = _w(d, o)
@@ -149,11 +163,34 @@ def entries(d: bytes) -> tuple[int, list[tuple[int, str]]]:
     return 12 + n * 20, ents
 
 
+def _past_end(d: bytes, o: int) -> int:
+    """The offset after the first END word from `o`, word by word, as op 9
+    skips (0x801F60C4)."""
+    while _w(d, o) != END:
+        o += 4
+    return o + 4
+
+
+def _text(d: bytes, o: int) -> tuple[str, int] | None:
+    """A message's text at `o`, shown short, and the offset past its padding;
+    None where `o` holds an opcode or no NUL-ended text."""
+    nul = d.find(b"\0", o, o + 4096)
+    if nul <= o or _w(d, o) < OPCODES:
+        return None
+    text = d[o:nul].decode("latin1").replace("\x7f", " ")
+    text = "".join(c if " " <= c < "\x7f" else "." for c in text)
+    return (text if len(text) <= 60 else text[:57] + "..."), (nul + 4) & ~3
+
+
 def disassemble(d: bytes, base: int, start: int, end: int, names: dict[int, str]) -> list[str]:
     """Lines for the code in [start, end), offsets relative to `base`."""
     out, o = [], start
     while o < end:
-        at, op = o - base, _w(d, o)
+        at = o - base
+        if end - o < 4:  # the last entry runs into the name pool, which need not end on a word
+            out.append(f"{at:05x}  ... {end - o} byte(s)")
+            break
+        op = _w(d, o)
         o += 4
         if op >= OPCODES:
             out.append(f"{at:05x}  ??? {op:08x}")
@@ -164,6 +201,19 @@ def disassemble(d: bytes, base: int, start: int, end: int, names: dict[int, str]
             name = d[sa : d.index(b"\0", sa)].decode("latin1")
             args.append(f'"{name}"')
             o += 4
+        elif op in (MESSAGE, CHOICE):  # (a choice's expression,) the text's entry, an expression
+            if op == CHOICE:
+                e, o = expression(d, o)
+                args.append(f"({e})")
+            at_text = o + (_rel(d, o) & ~3)
+            o += 4
+            e, o = expression(d, o)
+            shown = _text(d, _past_end(d, at_text)) if _w(d, at_text) == 9 else None
+            args.append(f"@{at_text - base:05x}" + (f' "{shown[0]}"' if shown else "") + f" ({e})")
+        elif op == 9 and (shown := _text(d, _past_end(d, o))):
+            # A message's own entry: op 9 skips its words, and the text follows.
+            args.append(f'"{shown[0]}"')
+            o = shown[1]
         elif op in (10, 11):  # GOTO, CALL
             args.append(f"-> {o - base + _rel(d, o):05x}")
             o += 4
@@ -224,7 +274,7 @@ def story(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
     to, its own and those of every entry it CALLs, however deep.
 
     A raw scan, not the disassembly, so an opcode the disassembler cannot size
-    (144, a message, desynchronises most of a town's entries) hides nothing:
+    (op 23's raw offset to a model's name, for one) hides nothing:
     FLAGSET n is the words [17, 0x04000000, n as a float, 29]; a WARP is [43,
     a self-relative offset to "meNNNx.sct"]; a CALL is [11, an offset] landing
     exactly on another entry's start. Op 238 (fn_802074B0) is the way back to

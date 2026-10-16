@@ -85,6 +85,42 @@ def test_an_entry_is_disassembled_only_up_to_the_next():
     assert list(lines_of(d, ["b"])) == ["b"]
 
 
+def words_of(text: bytes) -> list[int]:
+    """Text as the script holds it: NUL-ended, padded to whole words."""
+    text += b"\0" * (4 - len(text) % 4)
+    return list(struct.unpack(f">{len(text) // 4}I", text))
+
+
+def test_a_message_and_a_choice_print_their_text():
+    """A message (144) is an offset to an entry of its own, then one
+    expression, here 0x7FFFFFFF, which the game's evaluator takes alone; a
+    choice (155) is an expression, the offset, an expression. The entry is
+    op 9 skipping to its END, then the text: listed as text, not decoded as
+    code. Before, the offset read as an expression and the listing lost its
+    place (me008a's dancer, M03004)."""
+    talk = [144, 40 - 4, 0x7FFFFFFF, 155, *f(2), END, 84 - 28, sct.DEFAULT, 12]
+    said = [9, *f(1), END, *words_of(b"\\h(\x81sBellena\x81t)Stay\x7fhere.")]
+    options = [9, *f(1), END, *words_of(b"[Yes]\\n[No]")]
+    got = lines_of(build([("talk", talk), ("M04060008", said), ("M04060009", options)]))
+    assert got == {
+        "talk": [
+            '00000  [144]MESSAGE @00028 "\\h(.sBellena.t)Stay here." (DEF)',
+            '0000c  [155]CHOICE (2) @00054 "[Yes]\\n[No]" (DEF)',
+            "00024  [12]RET",
+        ],
+        "M04060008": ['00028  [9]EVAL "\\h(.sBellena.t)Stay here."'],
+        "M04060009": ['00054  [9]EVAL "[Yes]\\n[No]"'],
+    }, got
+
+
+def test_the_last_entry_may_end_off_a_word():
+    """The last entry runs into the name pool, which need not end on a word:
+    its stray bytes are said, and the entry is listed, not lost."""
+    assert lines_of(build([("a", [12])], b"me1")) == {
+        "a": ["00000  [12]RET", "00004  ... 3 byte(s)"]
+    }
+
+
 def test_the_story_scan_sees_through_calls_and_what_desynchronises_the_listing():
     """`story`: an entry's flags set and maps warped to include those of every
     entry it calls, however deep, and a message (op 144, which the listing
