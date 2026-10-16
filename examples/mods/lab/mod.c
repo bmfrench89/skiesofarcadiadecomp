@@ -33,8 +33,9 @@
  *                  what the walker skips is the walk. Each start is logged.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
- *                  in a ship battle while no crew member chooses (a 5xx
- *                  stage, the ship input's state not 9: sturn plays those),
+ *                  in a ship battle where its menu waits for A (a 5xx stage,
+ *                  the ship input word at state 6, step 0; sturn plays the
+ *                  crew's wheels),
  *                  or while the field's message window holds a choice (state
  *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
  *                  reads them): what the walker needs where a pad script's A
@@ -51,6 +52,11 @@
  *                  acts, what lands and when it ends. A run with this tests the
  *                  port's battle to its end, not a player's chance of winning,
  *                  and says so; it logs how many top-ups each battle took.
+ *   save:F-G:SEQ   once, on a quiet field in frames F to G with a live save
+ *                  point (hit type 44 or 45) in the map, start its entry as
+ *                  the A press would, then 120 frames later press SEQ into
+ *                  the save menu (buttons as turn's, 10 frames each, 60
+ *                  between): a card a later run can Continue from.
  *   turn:F-G:M:SEQ at party member M's first command input of each battle in
  *                  frames F to G (scene 7, the phase word 0x8034733C at 1 and
  *                  the member word 0x80347330 at M, as mods/coop reads them),
@@ -63,7 +69,12 @@
  *                  0x80309174 + 32 * m: 3 Attack, 4 Guard, 5 Item).
  *   sturn:F-G:M:SEQ the same for a ship battle's crew member M, each time
  *                  that member's wheel comes ready (the word at 0x80306738:
- *                  state byte 9, step byte 2, member byte M), every turn.
+ *                  state byte 9, step byte 2, member byte M), every turn; a
+ *                  wheel still ready afterwards gets the presses again, three
+ *                  times at most. In either, SEQ may hold alternatives split
+ *                  by '|', used in turn by successive inputs (Focus twice,
+ *                  then the special: b/right/a/a|b/right/a/a|b/right/right#4/a/a),
+ *                  and a press "name#N" is held N frames (left#4: one slot).
  *
  * Addresses: r13 is 0x8034E720 (runtime/selftest.c), so the list head
  * r13-29180 is 0x80347524 (fn_8022300C, 80223024), linked at +48 (802230DC),
@@ -106,12 +117,25 @@
 #define PHASE_ORDER 2u
 #define PRESS_HOLD 10u
 #define PRESS_GAP 60u
-#define MAX_PRESSES 16
+#define MAX_PRESSES 32
+#define MAX_ALTS 4
+#define STURN_RETRIES 3u /* plays of a ship member's input that changed nothing, before giving up */
 
 #define MAX_ITEMS 64
 #define MAX_STEPS 8
 
-enum { ITEM_ENTRY, ITEM_PEEK, ITEM_HOLD_HP, ITEM_TURN, ITEM_DUMP, ITEM_STURN, ITEM_WALK, ITEM_ASSIST };
+enum {
+    ITEM_ENTRY,
+    ITEM_PEEK,
+    ITEM_HOLD_HP,
+    ITEM_TURN,
+    ITEM_DUMP,
+    ITEM_STURN,
+    ITEM_WALK,
+    ITEM_ASSIST,
+    ITEM_SAVE
+};
+
 
 /* The field's message window, as mods/autotext reads it: its task (0 when
  * there is none) and its state, 6 being a choice. */
@@ -138,6 +162,9 @@ static int g_nseen;
 #define SHIP_INPUT 0x80306738u
 #define SHIP_READY_STATE 9u
 #define SHIP_READY_STEP 2u
+#define SHIP_WAIT_STATE 6u /* the menu waits for A, unless a member's wheel is open */
+
+static int g_sturn_playing; /* an sturn sequence is under way: assist keeps off */
 
 typedef struct Item {
     int kind;
@@ -154,7 +181,13 @@ typedef struct Item {
     /* turn: the presses, the member, and where it is: started (frame of the
      * first press, 0 idle), done for this battle */
     uint16_t presses[MAX_PRESSES];
+    uint8_t holds[MAX_PRESSES]; /* frames each press is held: 10, or N from "name#N" */
     int npresses;
+    /* "SEQ|SEQ|...": alternatives, used in turn by a turn or sturn item's
+     * successive inputs (a retry keeps the one it has) */
+    uint8_t alt_from[MAX_ALTS], alt_len[MAX_ALTS];
+    int nalt, alt;
+    uint32_t turns;
     uint32_t member, started;
     int done;
 } Item;
@@ -295,34 +328,72 @@ static uint16_t button(const char* name)
     return 0;
 }
 
-/* "turn:F-G:M:SEQ", or "sturn:F-G:M:SEQ" for a ship battle's crew */
+/* "turn:F-G:M:SEQ", "sturn:F-G:M:SEQ" for a ship battle's crew, or
+ * "save:F-G:SEQ" (no member) */
 static int parse_turn(char* s)
 {
     Item* it;
     char *frames, *member, *seq, *tok, *end, *save;
-    int ship = strncmp(s, "sturn:", 6) == 0;
-    if ((!ship && strncmp(s, "turn:", 5) != 0) || g_nitems == MAX_ITEMS) return 0;
+    int ship = strncmp(s, "sturn:", 6) == 0, saving = strncmp(s, "save:", 5) == 0;
+    if ((!ship && !saving && strncmp(s, "turn:", 5) != 0) || g_nitems == MAX_ITEMS) return 0;
     it = &g_items[g_nitems];
     memset(it, 0, sizeof *it);
     snprintf(it->text, sizeof it->text, "%s", s);
-    it->kind = ship ? ITEM_STURN : ITEM_TURN;
+    it->kind = ship ? ITEM_STURN : saving ? ITEM_SAVE : ITEM_TURN;
     frames = s + (ship ? 6 : 5);
-    member = strchr(frames, ':');
-    if (!member) return 0;
-    *member++ = '\0';
-    seq = strchr(member, ':');
-    if (!seq) return 0;
-    *seq++ = '\0';
-    if (!parse_frames(frames, it) || !parse_u32(member, &end, &it->member) || *end || it->member > 3) return 0;
-    for (tok = seq; tok && *tok; tok = save) {
-        save = strchr(tok, '/');
-        if (save) *save++ = '\0';
-        if (it->npresses == MAX_PRESSES || !(it->presses[it->npresses] = button(tok))) return 0;
-        it->npresses++;
+    if (saving) {
+        seq = strchr(frames, ':');
+        if (!seq) return 0;
+        *seq++ = '\0';
+        if (!parse_frames(frames, it)) return 0;
+    } else {
+        member = strchr(frames, ':');
+        if (!member) return 0;
+        *member++ = '\0';
+        seq = strchr(member, ':');
+        if (!seq) return 0;
+        *seq++ = '\0';
+        if (!parse_frames(frames, it) || !parse_u32(member, &end, &it->member) || *end || it->member > 3) return 0;
+    }
+    {
+        char *alt, *next_alt;
+        for (alt = seq; alt; alt = next_alt) {
+            next_alt = strchr(alt, '|');
+            if (next_alt) *next_alt++ = '\0';
+            if (it->nalt == MAX_ALTS || (saving && it->nalt == 1)) return 0;
+            it->alt_from[it->nalt] = (uint8_t)it->npresses;
+            for (tok = alt; tok && *tok; tok = save) {
+                save = strchr(tok, '/');
+                if (save) *save++ = '\0';
+                {
+                    /* "left#4": held 4 frames, under the game's 6-frame repeat,
+                     * so a wheel moves one slot where a plain press moves two */
+                    char* hash = strchr(tok, '#');
+                    uint32_t hold = PRESS_HOLD;
+                    if (hash) {
+                        *hash++ = '\0';
+                        if (!parse_u32(hash, &end, &hold) || *end || hold < 1 || hold > PRESS_HOLD + PRESS_GAP - 1)
+                            return 0;
+                    }
+                    if (it->npresses == MAX_PRESSES || !(it->presses[it->npresses] = button(tok))) return 0;
+                    it->holds[it->npresses] = (uint8_t)hold;
+                }
+                it->npresses++;
+            }
+            it->alt_len[it->nalt] = (uint8_t)(it->npresses - it->alt_from[it->nalt]);
+            if (!it->alt_len[it->nalt]) return 0;
+            it->nalt++;
+        }
     }
     if (!it->npresses) return 0;
     g_nitems++;
     return 1;
+}
+
+/* A new input (not a retry) takes the next alternative. */
+static void next_alt(Item* it)
+{
+    if (it->last == 0) it->alt = (int)(it->turns++ % (uint32_t)it->nalt);
 }
 
 static void log_commands(uint32_t frame)
@@ -352,9 +423,26 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     if (g_api->read32(SHIP_INPUT, &ship) && (ship >> 24) == SHIP_READY_STATE &&
         ((ship >> 16) & 0xFFu) == SHIP_READY_STEP)
         crew = (ship >> 8) & 0xFFu;
+    g_sturn_playing = 0;
+    for (i = 0; i < g_nitems; i++)
+        if (g_items[i].kind == ITEM_STURN && g_items[i].started) g_sturn_playing = 1;
     for (i = 0; i < g_nitems; i++) {
         Item* it = &g_items[i];
         uint32_t step, into;
+        if (it->kind == ITEM_SAVE) {
+            /* state 1: the save point's entry has started; play from it->started */
+            if (it->state != 1 || frame < it->started) continue;
+            into = frame - it->started;
+            step = into / (PRESS_HOLD + PRESS_GAP);
+            if (step >= (uint32_t)it->npresses) {
+                it->state = 2;
+                logf_("save: %s played by frame %u", strrchr(it->text, ':') + 1, frame);
+                continue;
+            }
+            pad->buttons = into % (PRESS_HOLD + PRESS_GAP) < it->holds[step] ? it->presses[step] : 0;
+            pad->stick[0] = pad->stick[1] = 128;
+            continue;
+        }
         if (it->kind == ITEM_ASSIST) {
             if (frame >= it->from && frame <= it->to && frame % it->id < 2 && assist_wanted())
                 pad->buttons |= SOA_PAD_A;
@@ -366,12 +454,14 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
             if (!it->started) {
                 if (crew != it->member) {
                     it->done = 0;
+                    it->last = 0;
                     continue;
                 }
                 if (it->done || frame < it->from || frame > it->to) continue;
                 it->started = frame;
-                logf_("sturn: crew %u's input at frame %u: pressing %s", it->member, frame,
-                      strrchr(it->text, ':') + 1);
+                next_alt(it);
+                logf_("sturn: crew %u's input at frame %u: pressing %s (alternative %d of %d)", it->member, frame,
+                      strrchr(it->text, ':') + 1, it->alt + 1, it->nalt);
             }
         } else if (it->kind != ITEM_TURN) {
             continue;
@@ -382,23 +472,40 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
         } else if (!it->started) {
             if (it->done || frame < it->from || frame > it->to || member != it->member) continue;
             it->started = frame;
+            next_alt(it);
             logf_("turn: member %u's input at frame %u: pressing %s", it->member, frame, strrchr(it->text, ':') + 1);
         }
         /* A lead-in of nothing pressed first: the wheel turns into view as
          * the input opens, and a press then is dropped. */
         into = frame - it->started;
         step = into < PRESS_GAP ? 0 : (into - PRESS_GAP) / (PRESS_HOLD + PRESS_GAP);
-        if (step >= (uint32_t)it->npresses) {
+        if (step >= (uint32_t)it->alt_len[it->alt]) {
             it->started = 0;
-            /* A ship member's wheel that is no longer ready may come ready
-             * again next turn; one still ready would only replay the same. */
-            it->done = it->kind == ITEM_TURN || crew == it->member;
+            if (it->kind == ITEM_TURN) {
+                it->done = 1;
+            } else if (crew == it->member && it->last < STURN_RETRIES) {
+                /* Still ready: a press did not land (an A between turns can
+                 * open the cannon list first: reach U3's sink run stood there
+                 * 16,000 frames). Played again, a few times at most. */
+                it->last++;
+                it->done = 0;
+                logf_("sturn: crew %u's wheel is still ready at frame %u: again (%u of %u)", it->member, frame,
+                      it->last, STURN_RETRIES);
+            } else if (crew == it->member) {
+                it->done = 1; /* given up: the person's now */
+            } else {
+                /* Not ready any more: it may come ready again next turn, with
+                 * the next alternative. */
+                it->done = 0;
+                it->last = 0;
+            }
             continue;
         }
+        step += it->alt_from[it->alt];
         if (into < PRESS_GAP)
             pad->buttons = 0;
         else
-            pad->buttons = (into - PRESS_GAP) % (PRESS_HOLD + PRESS_GAP) < PRESS_HOLD ? it->presses[step] : 0;
+            pad->buttons = (into - PRESS_GAP) % (PRESS_HOLD + PRESS_GAP) < it->holds[step] ? it->presses[step] : 0;
         pad->stick[0] = pad->stick[1] = 128;
     }
 }
@@ -434,12 +541,16 @@ static int assist_wanted(void)
     uint16_t state = 0;
     if (g_api->scene() == SCENE_BATTLE) return 1;
     if (g_api->scene() == 6 && g_api->field_state() == FIELD_RESULTS) return 1;
-    /* A ship battle (a 5xx stage) needs A through its opening and between
-     * turns (reach U3's runs), but never while a crew member chooses: that
-     * menu (state 9 at 0x80306738) is sturn's. Reach U4's seventh run stood
-     * at the Fortress Gate for 70,000 frames without it. */
-    if (g_api->scene() == 6 && stage >= 500 && stage <= 583 && g_api->read32(SHIP_INPUT, &ship) &&
-        (ship >> 24) != SHIP_READY_STATE)
+    /* A ship battle (a 5xx stage) waits for A in its menu's state 6 (the
+     * word 0x80306738 = 06 .. .. ..): at the opening and between one crew
+     * member and the next, whatever step the last member left (reach U3's
+     * sink runs stood at 060F0103 and at 06020203). State 6 is also a member's
+     * wheel after B, inside an sturn sequence, where an A would choose for it
+     * (the second sink run, where Aika stood for 16,000 frames): so never
+     * while one plays. Reach U4's seventh run stood at the Fortress Gate for
+     * 70,000 frames with no A at all. */
+    if (g_api->scene() == 6 && stage >= 500 && stage <= 583 && !g_sturn_playing &&
+        g_api->read32(SHIP_INPUT, &ship) && (ship >> 24) == SHIP_WAIT_STATE)
         return 1;
     return g_api->scene() == 6 && g_api->read32(WINDOW_TASK, &task) && task &&
            g_api->read16(WINDOW_STATE, &state) && (int16_t)state == WINDOW_CHOICE;
@@ -465,6 +576,40 @@ static void walk_wait(Item* it, const char* why)
     if (strcmp(it->why, why) != 0) {
         snprintf(it->why, sizeof it->why, "%s", why);
         logf_("walk: waiting at frame %u: %s", g_api->frame(), why);
+    }
+}
+
+/* One safe point of save: on a quiet field with a live save point (hit type
+ * 44 or 45) in this map, start its entry as the A press would, once; the pad
+ * filter then plays the item's presses into the save menu, from SAVE_SETTLE
+ * frames later. */
+#define SAVE_SETTLE 120u
+static void save_point(Item* it)
+{
+    uint32_t f = g_api->frame(), v = 0, vol, id, busy = 0, live = 0, started = 0, args[1];
+    uint16_t state, type;
+    int guard = 0;
+    if (it->state != 0) return;
+    if (g_api->scene() != 6 || g_api->field_state() != 8 || g_api->story_flag(FLAG_EVENT) ||
+        (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) || !g_api->read32(LIST_HEAD, &v))
+        return;
+    while (v && guard++ < 4096) {
+        vol = v;
+        if (!g_api->read32(v + 48, &v)) v = 0;
+        if (!g_api->read16(vol + 20, &state) || (int16_t)state < 0 || !g_api->read16(vol + 18, &type) ||
+            (type != HIT_SAVE_POINT && type != HIT_SAVE_POINT_MOT) || !g_api->read32(vol + 8, &id))
+            continue;
+        args[0] = id;
+        if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
+        if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return;
+        g_api->write32(PRESS_STARTED, 1);
+        g_api->write32(PRESS_VOLUME, vol);
+        it->state = 1;
+        it->started = f + SAVE_SETTLE;
+        logf_("save: a%03u%c's save point %u started at frame %u; pressing %s from frame %u",
+              (unsigned)(g_api->map() >> 8), (char)(g_api->map() & 0xFF), id, f, strrchr(it->text, ':') + 1,
+              it->started);
+        return;
     }
 }
 
@@ -552,6 +697,7 @@ static int parse_hold(char* s)
     g_nitems++;
     return 1;
 }
+
 
 /* One safe point of hold-hp: tops up the standing party; it->last counts this
  * battle's top-ups, logged when the battle ends. */
@@ -691,6 +837,8 @@ static void on_safe_point(void* user)
             if (f <= it->to) hold_hp(it);
         } else if (it->kind == ITEM_DUMP) {
             if (it->state == 0) dump(it);
+        } else if (it->kind == ITEM_SAVE) {
+            if (f <= it->to) save_point(it);
         } else if (it->kind == ITEM_WALK) {
             if (f <= it->to) walk(it);
         } else if (it->kind == ITEM_PEEK && f <= it->to) {
@@ -803,7 +951,9 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     }
     if (g_nitems) api->on_safe_point(on_safe_point, NULL);
     for (i = 0; i < g_nitems; i++) {
-        if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN && g_items[i].kind != ITEM_ASSIST) continue;
+        if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN && g_items[i].kind != ITEM_ASSIST &&
+            g_items[i].kind != ITEM_SAVE)
+            continue;
         if (api->size < SOA_MOD_HAS(pad_filter) || !api->pad_filter(on_pad, NULL)) {
             api->log("lab: a turn item needs the pad filter, which this port does not offer");
             return 1;

@@ -397,7 +397,10 @@ def read_seen(text: str) -> Seen:
                 s.dpad_presses += 1
             p = RE_PEEK_WORD.match(line)
             if p:
-                s.words.setdefault(int(p.group(1), 16), []).append((frame, int(p.group(2), 16)))
+                addr, value = int(p.group(1), 16), int(p.group(2), 16)
+                s.words.setdefault(addr, []).append((frame, value))
+                if addr == SHIP_RESULTS_FLAG and value == 1:
+                    s.ship_events.append(("results", "", frame))
             continue
         if line.startswith("[trace] "):
             s.traced = True
@@ -425,9 +428,13 @@ def read_seen(text: str) -> Seen:
         if RE_MEM.match(line):
             s.mem_lines.append(line)
         elif m := RE_LAB_PEEK.match(line):
-            s.words.setdefault(int(m.group(2), 16), []).append(
-                (int(m.group(1)), int(m.group(3), 16))
-            )
+            addr, value = int(m.group(2), 16), int(m.group(3), 16)
+            s.words.setdefault(addr, []).append((int(m.group(1)), value))
+            # In log order with the map loads: a lab line's frame is exact, the
+            # trace's only a lower bound (reach U3's sixth sink run read as
+            # "left" when the results flag's frame passed the next load's stamp).
+            if addr == SHIP_RESULTS_FLAG and value == 1:
+                s.ship_events.append(("results", "", int(m.group(1))))
         elif m := RE_PIPELINE.match(line):
             s.pipelines.append((m.group(1) == "on the draw path", float(m.group(2)), len(s.maps)))
         elif line.startswith("[gxr] "):
@@ -540,11 +547,11 @@ def ship_battles(s: Seen) -> list[dict]:
     if cur is not None:
         out.append(cur)
     # The trace never shows HRS_BEND (reach U3's runs), so a peek of the
-    # results flag decides when there is one: fn_8012A26C sets 0x80347280 to 1
-    # when the next load is the results screen. 0x80347278 then says how the
-    # fight ended: 2 when the party ran (reach U3, frame 8100's wheel on Run),
-    # 1 or 3 when a ship sank (battle-system.md 7, the applier).
-    results = s.words.get(SHIP_RESULTS_FLAG, [])
+    # results flag (read_seen puts it among the ship events in log order)
+    # decides when there is one: fn_8012A26C sets 0x80347280 to 1 when the
+    # next load is the results screen. 0x80347278 then says how the fight
+    # ended: 2 when the party ran (reach U3, frame 8100's wheel on Run), 1 or
+    # 3 when a ship sank (battle-system.md 7, the applier).
     outcomes = s.words.get(SHIP_OUTCOME, [])
     for b in out:
         start, stop = b["frame"] or 0, b["end_frame"]
@@ -552,17 +559,6 @@ def ship_battles(s: Seen) -> list[dict]:
             (f, v) for f, v in outcomes if (f or 0) >= start and (stop is None or (f or 0) <= stop)
         ]
         b["outcome_word"] = inside[-1][1] if inside else None
-        if b["end"] in (None, "left"):
-            hit = next(
-                (
-                    f
-                    for f, v in results
-                    if v == 1 and (f or 0) >= start and (stop is None or (f or 0) <= stop)
-                ),
-                None,
-            )
-            if hit is not None:
-                b["end"], b["end_frame"] = "results", hit
         if b["end"] == "results" and b["outcome_word"] == SHIP_RAN:
             b["end"] = "ran"
     return out

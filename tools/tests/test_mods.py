@@ -1182,8 +1182,11 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
         "set 80346e4c 0 set 803475cc 7 pad 250 0000 "  # a battle
         "set 803475cc 6 set 80311aec 4 pad 300 0000 "  # its results screen
         "set 80311aec 8 pad 350 0000 "  # the field running again
-        "set 80311ac0 207 setb 80311ac8 61 set 80306738 06000003 pad 400 0000 "  # a519a, a ship battle
-        "set 80306738 09020003 pad 450 0000"  # a crew member chooses: sturn's, not assist's
+        "set 80311ac0 207 setb 80311ac8 61 set 80306738 06000003 pad 400 0000 "  # a519a: waits for A
+        "set 80306738 09020003 pad 450 0000 "  # a crew member chooses: sturn's, not assist's
+        "set 80306738 060f0103 pad 500 0000 "  # between members: waits for A
+        "set 80306738 080f0103 pad 550 0000 "  # the next wheel opening: no A, it could reach it
+        "set 80306738 06020203 pad 600 0000"  # between members, another step left over: A
     )
     out, err = play(driver, tmp_path, script, SOA_LAB="assist:0-1000:50")
     assert "loaded 1" in out, err
@@ -1199,6 +1202,81 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
         "pad 350 0000 filtered",
         "pad 400 0100 filtered",
         "pad 450 0000 filtered",
+        "pad 500 0100 filtered",
+        "pad 550 0000 filtered",
+        "pad 600 0100 filtered",
+    ], out
+
+
+@needs_cc
+def test_a_ship_members_input_that_changed_nothing_is_played_again_three_times(driver, tmp_path):
+    """A wheel still ready when its presses are done had one of them not land:
+    played again, three times at most, then left to the person."""
+    lab(tmp_path)
+    pads = " ".join(f"pad {f} 0000" for f in range(100, 1200, 10))
+    out, err = play(driver, tmp_path, "set 80306738 09020000 " + pads, SOA_LAB="sturn:0-5000:0:a")
+    assert "loaded 1" in out, err
+    assert err.count("lab: sturn: crew 0's input") == 4, err
+    assert err.count("is still ready") == 3 and "again (3 of 3)" in err, err
+
+
+@needs_cc
+def test_assist_keeps_off_a_ship_members_wheel_while_its_turn_plays(driver, tmp_path):
+    """State 6 is also a member's wheel after its B. While that member's
+    sturn presses play, assist's A would choose for it: so none, even on the
+    beat; once the presses are done, state 6 is a wait again and gets its A."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 207 setb 80311ac8 61 "
+        "set 80306738 09020003 pad 100 0000 "  # crew 0 ready: its presses start
+        "set 80306738 06020003 pad 180 0000 pad 240 0000 "  # after its B, on assist's beat: no A
+        "pad 300 0000 pad 360 0000"  # its presses done (b/right: two slots), a wait: A on the beat
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="sturn:0-1000:0:b/right;assist:0-1000:60")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 100 0000 filtered",
+        "pad 180 0000 filtered",
+        "pad 240 0000 filtered",
+        "pad 300 0000 filtered",
+        "pad 360 0100 filtered",
+    ], out
+
+
+@needs_cc
+def test_a_ship_members_inputs_take_the_alternatives_in_turn(driver, tmp_path):
+    """sturn:...:a|b presses A at the member's first input, B at the next,
+    then A again; each new input takes the next alternative."""
+    lab(tmp_path)
+    turn = "set 80306738 09020000 pad {0} 0000 pad {1} 0000 set 80306738 06000000 pad {2} 0000 "
+    script = turn.format(100, 160, 300) + turn.format(400, 460, 600) + turn.format(700, 760, 900)
+    out, err = play(driver, tmp_path, script, SOA_LAB="sturn:0-5000:0:a|b")
+    assert "loaded 1" in out, err
+    pressed = [x for x in out.splitlines() if x.startswith(("pad 160 ", "pad 460 ", "pad 760 "))]
+    assert pressed == ["pad 160 0100 filtered", "pad 460 0200 filtered", "pad 760 0100 filtered"], (
+        out
+    )
+    assert "(alternative 2 of 2)" in err, err
+
+
+@needs_cc
+def test_a_lab_press_can_be_held_shorter_than_the_games_repeat(driver, tmp_path):
+    """`left#4` is held four frames, under the six after which the game
+    repeats a held direction, so a wheel moves one slot, not two."""
+    lab(tmp_path)
+    script = "set 80306738 09020000 pad 100 0000 " + " ".join(
+        f"pad {f} 0000" for f in (160, 163, 164, 169)
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="sturn:0-1000:0:left#4")
+    assert "loaded 1" in out, err
+    pads = [x for x in out.splitlines() if x.startswith("pad ")]
+    assert pads == [
+        "pad 100 0000 filtered",
+        "pad 160 0001 filtered",
+        "pad 163 0001 filtered",
+        "pad 164 0000 filtered",
+        "pad 169 0000 filtered",
     ], out
 
 
@@ -1228,6 +1306,13 @@ def test_a_lab_item_it_cannot_read_refuses_the_mod(driver, tmp_path):
     turns = ("turn:0-9:4:a", "turn:0-9:0:", "turn:0-9:0:a/jump", "turn:0-9:0")
     dumps = ("dump:0:0x80000000:6", "dump:0-5:0x80000000:8", "dump:0:0x80000000:9000")
     walks = ("walk:0-9", "walk:0-9:0", "walk:9-0:300", "walk:0-9:x", "assist:0-9:3")
+    walks += (
+        "save:0-9",
+        "save:0-9:",
+        "save:0-9:a/jump",
+        "turn:0-9:0:a#0",
+        "turn:0-9:0:a#x",
+    )
     for bad in (*bad_items, "hold-hp:5-2", "hold-hp:x", *turns, *dumps, *walks):
         out, err = play(driver, tmp_path, "safe", SOA_LAB=bad)
         assert "loaded 0" in out and f"SOA_LAB item not understood: {bad}" in err, (bad, err)

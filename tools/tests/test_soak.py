@@ -599,6 +599,9 @@ def ship(*events: str) -> list[str]:
             "ran",
             soak.DID_NOT_TEST,
         ),
+        # A lab peek's frame is exact and the trace's a lower bound: the flag
+        # at 8617 comes before the load in the log, whose stamp says 8323.
+        (ship(si(8323), lab_peek(8617, 0x80347280, 1), field_map("a126a")), "results", "pass"),
     ],
     ids=[
         "won",
@@ -608,11 +611,13 @@ def ship(*events: str) -> list[str]:
         "warped-away",
         "results-flag",
         "ran-away",
+        "results-flag-after-the-loads-stamp",
     ],
 )
 def test_a_ship_battle_is_fought_to_its_end_only_by_results_or_a_loss(play, end, verdict):
-    """The sky550 run of 2026-09-23 reached round 3 and met its frame limit:
-    that is "did not test", as is a stage left by a warp to the next one."""
+    """The sky550 run of 2026-09-23 met its frame limit at its first turn (its
+    "round 3 of 41" was the SP gauge): that is "did not test", as is a stage
+    left by a warp to the next one."""
     res = soak.judge(soak_log(play), "x.log", expect_ship_end=True)
     assert res["ship_battles"][0]["stage"] == "a550a"
     assert res["ship_battles"][0]["end"] == end

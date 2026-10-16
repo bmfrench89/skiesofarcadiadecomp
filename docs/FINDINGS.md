@@ -8565,6 +8565,32 @@ here).
   for the remaining 70,000 frames, since the walker's run drove no ship battle. The lab's `assist` now presses A on
   a 5xx stage while no crew member chooses (the ship input's state not 9), and the next run carries U3's `sturn`
   items (Vyse a cannon, the others Focus).
+- **Run 8** [V, `build/reach/u4-G8`]: with U3's `sturn` items the escape battle ran turn after turn and was lost
+  eight times over 70,000 frames: the Delphinus's HP byte from 100 to 0 each time, the Fortress Gate's from 100 to
+  98 at best, the outcome word 3 (our ship sunk), and each loss the stage again (the script's `_LOSE` retries by
+  opcode 210). Every base invariant held. `me519a.sct` says why [V `sct.py 519a`]: its loop checks only
+  `B[261] <= 0`; the enemy's `B[262] <= 0` is checked only in `_SP_ATTACK`, after the special attack (`B[266]`),
+  so the gate falls only to the Moon Stone Cannon (Enrique names it at frame 121000), on a chance (C!) turn.
+- **Run 9** carried a lab item meant to hold the enemy ship's HP at 1 through `*(*0x8034727C + 36) + 24`. A dump
+  in a sky battle confirmed that layout (each ship record: its name, maximum HP at +20 and HP at +24; the Delphinus
+  36000, the Black Pirates 9000) but showed the battle keeps the HP it fights with elsewhere: with the record held
+  at 1, `B[262]` still fell 100, 75, 51, 27, 3, 0. The item is removed.
+- **The ship battle's menu, mapped** [V, `build/reach/u3-wheel5`, `u3-sink*`]: the wheel's positions are 0 Run, 1
+  Item, 2 Guard, 3 Attack, 4 Magic, 5 Focus, 6 S-Cannon (frames 3900, 3950, 4450, and earlier 4375 and 4650); a press
+  held four frames moves it one slot (the lab's new `left#4`), a plain one two. The menu word `0x80306738` waits for
+  A in state 6, at the opening and between members, whatever step the last left (`060F0103`, `06020203`); the same
+  state is a member's wheel after B, where an A chooses for it. The lab's `assist` presses only in that wait, and
+  never while a crew member's `sturn` presses play; with that, a sky battle was won with every crew turn played
+  (the outcome word 1, the results flag, `a126a` again). A member's wheel still ready after its presses gets them
+  again, three times at most, and a member's inputs can rotate alternatives (`a|b`), which the gate needs: Focus,
+  Focus, then the S-Cannon.
+- **soak.py read one win as "left":** a lab peek's frame is exact and a trace line's only a lower bound, so the
+  results flag at 8617 looked later than the next load stamped 8323. The flag now joins the ship events in log
+  order (a test, red without it).
+- **The save menu, driven** [V, `build/reach/u4-saveprobe`]: the lab's `save:F-G:SEQ` starts a save point's entry
+  and presses `a/a/a/b/b/b`: Slot A, file #01, Yes to overwrite, then out. "Saving completed" at frame 3725, the card
+  163,840 bytes written and `cardformat.py verify`: READY. A card saved partway lets the next run Continue from
+  there; the next run saves at the save point before the gate.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
