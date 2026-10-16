@@ -8591,6 +8591,19 @@ here).
   and presses `a/a/a/b/b/b`: Slot A, file #01, Yes to overwrite, then out. "Saving completed" at frame 3725, the card
   163,840 bytes written and `cardformat.py verify`: READY. A card saved partway lets the next run Continue from
   there; the next run saves at the save point before the gate.
+- **Run 10: the gate broken, part G's escape played to its end** [V, `build/reach/u4-G10`, 195,000 frames]:
+  - the lab's `save` item saved at `a116h`'s save point at about frame 88000, on the way to the gate (the run's
+    card, 81,920 bytes written: a card a later run can Continue from, past the prison);
+  - at the Fortress Gate Vyse's inputs rotated Focus, Focus, S-Cannon, the others Focus: the third turn's Moon Stone
+    Cannon won it on the first attempt, the outcome word 1 at 128876 (frame 128600: the Delphinus through the
+    gate);
+  - the story went on: `a116f`, `a243a`, `a116d`, then the Delphinus's own decks and bridge, `a035g`, `a035h` and
+    `a035i` (frames 133000, Aika and Fina on the bridge; 137200, Gilder; 157800, the deck), flags 313 to 315 set
+    (`0x80310B60` = `0FFFB00F`);
+  - from about 137000 to the end, 60,000 frames, the walker went round the ship's talks, checks and ladders with
+    nothing new: the story goes on by sailing, across the world map, which an entry walker cannot do. That is the
+    edge of part G's played story here: from `a116a`'s cell to the Delphinus under way, every map, event, battle
+    and the escape's ship battle, in one run, with every base invariant held.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
