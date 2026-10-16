@@ -453,13 +453,19 @@ FINDINGS entry "Reach U<n>":
   It found **the one port defect so far: BP_MASK was not applied** (fixed in b80f412: after every game over the
   masked GEN_MODE write changed bits the console keeps; no frame seen drawn differently). Part L was cut off by the
   host's restart and is to be run again, with `hold-hp` so a soak is not lost to its first game over.
-- **U4, part G played** (FINDINGS "Reach U4"): the walker, with `assist` and `autotext`, carried part G from
-  `a116a` through eight maps and flags 303 to 312 to the Delphinus's hangar. A 195,000-frame run from the same card
-  was going when this was written, to see past the hangar into part H.
+- **U4, part G played to its end** (FINDINGS "Reach U4"): from `a116a`'s cell through the prison, Vigoro, the
+  Fortress Gate's ship battle (won with the Moon Stone Cannon) to the Delphinus under way, flags 303 to 315, in one
+  195,000-frame run with every base invariant held. Where the story continues by sailing the world map, the entry
+  walker stops: that needs a world-map driver, not built.
+- **The lab mod drives** the walk (`walk`), A where it belongs (`assist`), battles (`hold-hp`, `turn`), ship battles
+  (`sturn`, with alternatives and presses held a frame count: the ship wheel is mapped), saves (`save`), and reads
+  (`peek`, `dump`, `objects`); each item's comment in `examples/mods/lab/mod.c` says what it is for and which run
+  showed it was needed.
 
-**Next:** that run's result; U5's part L and a `hold-hp` round; then the walker on other parts (C to D is the
-shortest by flags). `tools/reach.py run` is how every run here is made (its `--help`, and each FINDINGS entry's
-recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the review page.
+**Next:** the walker on each part card in turn (part C was running when this was written), each to its own
+world-map edge; U5's part L and a `hold-hp` round; and, to join the parts, a world-map driver or the game's warp at
+each edge. `tools/reach.py run` is how every run here is made (its `--help`, and each FINDINGS entry's recipe).
+Step 3, the owner's sitting, also holds R5c's 150% capture and the review page.
 
 **The state at the stop (2026-10-14, after R5c, built in a cloud session):** a session in Anthropic's cloud,
 with the repository and no game data, built R5c (FINDINGS "R5c"), and pushed it to the branch
