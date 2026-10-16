@@ -492,8 +492,12 @@ FINDINGS entry "Reach U<n>":
   and two ship battles (Belleza's ended by `finish`, which now holds an enemy ship at 1 HP too); its card,
   saved at the temple, is `build/savetest/card-partD-end.raw`.
 
-**Next:** part E from `card-partD-end.raw` with `--story 200-249`, then the later parts the same way; U5's
-parts E, F, I and L with `hold-hp`. The mod framework's
+**Part E done (`u4-E3`, 2026-10-16):** every flag of 200-249 a script sets, through the gates the story index
+now knows (the Great Bird's Eyes, a touch's battle). Cards: `card-partE-mid.raw` (`a111d`) and
+`card-partE-late.raw` (`a112c`, before part E's last two ship battles).
+
+**Next:** part F from `card-partE-late.raw` with `--story 200-299` (part E's last steps, then F), then the
+later parts the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

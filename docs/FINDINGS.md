@@ -8874,6 +8874,16 @@ here).
   the loop's block on 1870 calls `me112ce17`, which sets 216. The gate gave 6002 the block's warp to 208a, which
   ranks nothing in the place that sets the aim. A gate now carries what its block sets as well, its own FLAGSETs
   and those of the entries it calls (`112c M06002 s216 s228 w208a`; the test has a CALL).
+- **Run u4-E3: part E played to its end** [V, `build/reach/u4-E3`, stopped by hand at frame 288500]: from the
+  mid-part-E card, 210 to 213 by 25545, 215 at 48197, 216 by the touch's battle at 70532, 217 to 219 and 226
+  to 228 by 85569 (the lab's `save` at `a112c`'s save point 4000 at 84299; kept as
+  `build/savetest/card-partE-late.raw`, READY), then two ship battles: `a514a` 91260 to 130189, and the green
+  Gigas at `a515a` 132638 to 216859 (frame 180000 looked at: the Gigas and the ship, drawn right). Each was held
+  at 1 HP 12,000 frames in and ended tens of thousands of frames later all the same: these fights end on their
+  own course, not on the enemy's HP [I]. 220, 222, 223 and 225 followed, and at 286832 "no flag in 200-249 is
+  left for a line to set": every flag of part E a script sets. The last 60,000 frames went on 214 and 221,
+  which only the developers' part-select room sets; the lab now counts no flag settable that only `355a`
+  sets (its story test changed to say so).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

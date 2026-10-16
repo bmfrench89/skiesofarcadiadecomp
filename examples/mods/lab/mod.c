@@ -283,6 +283,7 @@ static int g_story_nmaps;
 static uint32_t g_story_aim, g_story_aim_map; /* what the last log named */
 #define STORY_FLAG_LIMIT 1024u                /* sct.py's STORY_FLAGS */
 static uint8_t g_story_settable[STORY_FLAG_LIMIT];
+#define PART_SELECT (355u << 8 | 'a') /* the developers' part-select room */
 /* An aim not reached in this many frames is passed over, for the rest of the
  * run: a flag set only in a branch the run did not take, or on a later visit
  * (part C's 123: a005a's talk 3005 sets it only once flag 409 is set, a part I
@@ -854,8 +855,11 @@ static int story_line(char* p)
         uint32_t v = 0;
         char* end;
         if (g_story_nwords == STORY_WORDS) return 0;
+        /* A flag only the developers' part-select room (355a) sets is set by
+         * no place the story goes, and was aimed at for nothing: reach U4's
+         * part-E walker spent 30,000 frames on each of 214 and 221. */
         if (tok[0] == 's' && !l->nwarps && parse_u32(tok + 1, &end, &v) && !*end && v < STORY_FLAG_LIMIT)
-            l->nsets++, g_story_settable[v] = 1;
+            l->nsets++, g_story_settable[v] |= l->map != PART_SELECT;
         else if (tok[0] == 'w' && (v = story_map_word(tok + 1)) != 0)
             l->nwarps++;
         else
@@ -1028,7 +1032,7 @@ static void story_note(uint32_t map, uint32_t aim)
         snprintf(one, sizeof one, "%03u%c", g_story[i].map >> 8, (char)(g_story[i].map & 0xFF));
         /* 355a is the developers' part-select room, which sets every part's
          * flags and which no warp reaches: not a place the story goes */
-        if (story_sets(&g_story[i], aim) && !strstr(where, one) && g_story[i].map != (355u << 8 | 'a')) {
+        if (story_sets(&g_story[i], aim) && !strstr(where, one) && g_story[i].map != PART_SELECT) {
             size_t len = strlen(where);
             snprintf(where + len, sizeof where - len, "%s%s", n++ ? " " : "", one);
         }

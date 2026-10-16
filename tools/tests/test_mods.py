@@ -1840,7 +1840,8 @@ def test_the_lab_story_aims_at_the_next_flag_and_measures_the_way_there(driver, 
     is one place), then the cutscene map whose loop sets 100. With 100 and
     102 set (a story sets flags out of order), the aim is 101, one warp
     further off. With 100 to 102 set, 103 is left, which only the part-select
-    room sets and no warp reaches: aimed at, and said so. Then nothing."""
+    room sets: no aim, for no place the story goes sets it (reach U4's part-E
+    walker spent 30,000 frames on each such flag)."""
     lab(tmp_path)
     (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
     script = (
@@ -1864,8 +1865,6 @@ def test_the_lab_story_aims_at_the_next_flag_and_measures_the_way_there(driver, 
     assert aims == [
         "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
         "aiming at flag 101 (set in 116d); a004a is 4 warp(s) away",
-        "aiming at flag 103 (set in only the part-select room); "
-        "no warp the lines know leads there from a004a",
         "no flag in 100-149 is left for a line to set",
     ], err
 
