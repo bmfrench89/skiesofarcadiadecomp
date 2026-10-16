@@ -131,7 +131,9 @@ named after a one-line change to blending.
 Two silent classes. Renderer: indirect and Z textures, fog range, zfreeze,
 TMEM preload, non-RGB8 EFB, BP_MASK, unsupported texture formats, cache
 evictions, wide lines and points and `GX_BL_DSTALPHA` at RGB8 are all
-unimplemented and drew something plausible instead. CPU: `mem_ptr` masks
+unimplemented and drew something plausible instead. (BP_MASK has been applied
+since reach U5, and `GX_BL_DSTALPHA` at RGB8 read as 1.0 since reach U4 met it
+in a107a: FINDINGS "Reach U5".) CPU: `mem_ptr` masks
 0x01FFFFFF into an image that was 0x01800000 long, so an EA in
 `0x81800000-0x81FFFFFF` read or wrote up to 8 MB of host heap past the buffer
 while every device model bounds-checks.

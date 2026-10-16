@@ -280,6 +280,54 @@ def test_the_simd_bilinear_gives_the_scalar_answer(tmp_path):
     assert m and int(m[1]) == 3000 * 200 and m[2] == "0", out
 
 
+DSTALPHA_DRIVER = r"""
+#define _CRT_SECURE_NO_WARNINGS
+#include "gxr.c"
+
+uint32_t mmio_read32(CpuState* s, uint32_t ea) { (void)s; (void)ea; return 0; }
+void hle_report(void) {}
+
+/* PE_CMODE0 00563D, as a107a's railcar cutscene programs it (reach U4): blend
+ * on, source factor 6 (the destination's alpha), destination factor 1 (one),
+ * over a pixel whose kept alpha is 0, at each EFB pixel format given. */
+static void one(uint32_t pe_control, uint32_t cmode)
+{
+    static uint32_t bp[0x100];
+    PixelCfg px;
+    const uint8_t src[4] = {50, 60, 70, 255}, dst[4] = {100, 100, 100, 0};
+    memset(&px, 0, sizeof px);
+    bp[0x41] = cmode;
+    bp[0x43] = pe_control;
+    pixel_prepare(bp, &px);
+    memcpy(g_efb[0][0], dst, 4);
+    blend_pixel(&px, 0, 0, src);
+    printf("[dstalpha] format %u cmode %06X: %d,%d,%d\n", pe_control & 7, cmode, g_efb[0][0][0], g_efb[0][0][1],
+           g_efb[0][0][2]);
+}
+
+int main(void)
+{
+    one(0x40, 0x00563D); /* RGB8: the alpha reads 1.0, so src + dst */
+    one(0x41, 0x00563D); /* RGBA6: the kept alpha, 0, so dst alone */
+    one(0x40, 0x0007FD); /* RGB8, the inverse as the destination factor: dst * 0 */
+    return 0;
+}
+"""
+
+
+@needs_msvc
+def test_destination_alpha_reads_one_at_rgb8(tmp_path):
+    """The console's EFB at pixel format RGB8 has no alpha plane, and a blend
+    factor of the destination's alpha reads 1.0 there (its inverse 0); at
+    RGBA6 the alpha the EFB kept is used. FINDINGS "Reach U4": the railcar in
+    a107a draws its lamps' glow as src * dst alpha + dst."""
+    out = build(tmp_path, "dstalpha", DSTALPHA_DRIVER, ["gx.c", "gxr_tev.c", "png.c"])
+    assert "[dstalpha] format 0 cmode 00563D: 150,160,170" in out, out
+    assert "[dstalpha] format 1 cmode 00563D: 100,100,100" in out, out
+    # 0x0007FD: sfac 7 (1 - dst alpha) and dfac 7: at RGB8 both 0, so black.
+    assert "[dstalpha] format 0 cmode 0007FD: 0,0,0" in out, out
+
+
 @needs_msvc
 def test_the_blend_cases_give_the_general_answer(tmp_path):
     out = build(tmp_path, "blend", BLEND_DRIVER, ["gx.c", "gxr_tev.c", "png.c"])

@@ -450,8 +450,10 @@ FINDINGS entry "Reach U<n>":
 - **U3 done:** a ship battle won, once its command input was found (`0x80306738`); A presses alone stall at 3 SP,
   which FINDINGS had read as "round 3 of 41" (corrected).
 - **U5, nine of ten parts run** (FINDINGS "Reach U5"): every base invariant held; the effect ledger at 44 of 576.
-  It found **the one port defect so far: BP_MASK was not applied** (fixed in b80f412: after every game over the
-  masked GEN_MODE write changed bits the console keeps; no frame seen drawn differently). Part L was cut off by the
+  It found **a port defect: BP_MASK was not applied** (fixed in b80f412: after every game over the
+  masked GEN_MODE write changed bits the console keeps; no frame seen drawn differently). U4's part-C runs found
+  **a second, a visible one: a destination-alpha blend at RGB8 drew too dim** (the console reads that alpha as 1.0;
+  `a107a`'s railcar headlamps were faint wisps instead of bright shafts, 27% of the frame; fixed 2026-10-16). Part L was cut off by the
   host's restart and is to be run again, with `hold-hp` so a soak is not lost to its first game over.
 - **U4, part G played to its end** (FINDINGS "Reach U4"): from `a116a`'s cell through the prison, Vigoro, the
   Fortress Gate's ship battle (won with the Moon Stone Cannon) to the Delphinus under way, flags 303 to 315, in one

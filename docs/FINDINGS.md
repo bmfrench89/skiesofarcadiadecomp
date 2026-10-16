@@ -8532,6 +8532,27 @@ here).
     `000013`, and the parser's line to its values; with the mask taken out again that test fails. The contract:
     `compile_runtime.py` (39/39, and under clang-cl), `--link`, the self test (0 failures), the replay (23/23
     unmoved), `title --check` (4 of 4).
+- **A second port defect, fixed: a destination-alpha blend at RGB8 drew too dim** [V, 2026-10-16,
+  `build/reach/u4-dstalpha`]. Reach U4's part-C runs fired a tripwire none had: `PE_CMODE0 00563D` (blend on,
+  source factor 6, `GX_BL_DSTALPHA`; destination factor 1) at EFB pixel format RGB8, in `a107a`'s railcar cutscene
+  as flag 114 is set. RGB8 has no alpha plane and the console reads the destination alpha as 1.0 there, so the
+  draw is the source added to the frame; the port weighted it by the alpha byte it keeps per EFB pixel. Earlier
+  part-C runs drew only every 500th frame and never drew one of these, so none had said so.
+  - **The frame** [V]: the run again with `SOA_FIFO_DUMP` of four frames into its own folder; 72700 holds the
+    blend (the railcar's headlamp beams). Rendered as the port drew it and with the fix: 27% of the frame moves,
+    brighter in green and blue (`imgdiff`: bias +9, +28, +30, MAE 22). The beams the port drew as faint wisps are
+    bright cyan shafts across the left of the frame. 72300, 72500 and 72900, which hold no such blend, render the
+    same hash with and without the fix.
+  - **The fix:** `pixel_prepare` (`runtime/gxr.c`), where both backends take their blend factors, reads
+    `GX_BL_DSTALPHA` as ONE and `GX_BL_INVDSTALPHA` as ZERO when PE_CONTROL's pixel format is RGB8; at RGBA6 the
+    kept alpha stands. The tripwire is gone (it can no longer describe a wrong picture). The Vulkan backend's
+    render of 72700 now matches the CPU's (`imgdiff` pass, 0.07% far, against a fail of 27% before).
+  - **The checks:** `test_gxr_fastpath.py`'s new case puts 00563D through the real `pixel_prepare` and
+    `blend_pixel` over a pixel whose kept alpha is 0: the source added at RGB8, the destination alone at RGBA6, and
+    the inverse factor zero; with the fix taken out it fails. `test_gxr_tripwires.py` holds the stream's
+    destination-alpha draw silent. The contract: `compile_runtime.py` (MSVC and clang-cl, exit 0), `--link`, the
+    self test (0 failures), the replay (23/23 unmoved at 1, 2, 3 and 8 threads; the corpus has no such blend),
+    `gpuspike.py selftest` (every check passes).
 
 **Reach U4: the story played by the entry walker, from part G's landing to the Delphinus.** 2026-10-15,
 `build/reach/u4-G*` (game data, kept here).
@@ -8720,7 +8741,8 @@ here).
   walker had spent its two tries on 6100 (164922, 165012) before it started 3024 (168200), and never went back. An
   entry's tries at an aim now begin again 9,000 frames after its last (a test). `soak.py check
   --expect-ship-end`: pass over 300,000 frames, and a renderer question no run had raised: a destination-alpha
-  blend at RGB8 (`PE_CMODE0 00563D`, frame 72136, after `a107a` loaded), looked at next.
+  blend at RGB8 (`PE_CMODE0 00563D`, frame 72136, after `a107a` loaded): a port defect, fixed (FINDINGS "Reach
+  U5", the second).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

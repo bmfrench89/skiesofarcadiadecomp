@@ -273,8 +273,8 @@ int gxr_enabled(void)
  * evidence that nothing was *asked for* in those windows, not that nothing
  * was in force. SOA_SNAP narrows the draw tripwires and not the BP ones for
  * the same reason the other way round: gxr_draw_inner returns before
- * draw_tripwire on a frame it is skipping, so a line, a point or a
- * destination-alpha blend on such a frame says nothing -- correctly, since
+ * draw_tripwire on a frame it is skipping, so a wide line or point on such a
+ * frame says nothing -- correctly, since
  * nothing was drawn and there is no picture to be wrong. What the game asked
  * for is still caught on every frame that is written.
  */
@@ -339,7 +339,7 @@ static void bp_tripwire(const uint32_t* bp, uint32_t reg, uint32_t v)
  * once per draw, from the setup that reads the same registers. */
 static void draw_tripwire(const uint32_t* bp, unsigned prim)
 {
-    uint32_t lp = bp[0x22], cmode = bp[0x41];
+    uint32_t lp = bp[0x22];
     /* GXSetLineWidth and GXSetPointSize count in sixths of a pixel, so 6 is
      * the one pixel raster_line and raster_point actually draw. The threshold
      * is two pixels, not "anything but exactly one": the game programs
@@ -352,15 +352,9 @@ static void draw_tripwire(const uint32_t* bp, unsigned prim)
     if (prim == 0xB8 && ((lp >> 8) & 0xFF) >= 12)
         WARN_ONCE("[gxr] LINEPTWIDTH (BP 22 %06X) asks for points %.2f pixels across; points are drawn as single pixels\n",
                   lp, (double)((lp >> 8) & 0xFF) / 6.0);
-    /* GX_BL_DSTALPHA and its inverse read the EFB alpha plane, which RGB8
-     * does not have: the console reads 1.0 there. We keep an alpha byte per
-     * EFB pixel and blend against that, which is a different picture. */
-    if ((cmode & 1) && (bp[0x43] & 7) == 0) {
-        unsigned sfac = (cmode >> 8) & 7, dfac = (cmode >> 5) & 7;
-        if (sfac >= 6 || dfac >= 6)
-            WARN_ONCE("[gxr] PE_CMODE0 %06X blends with a destination-alpha factor (src %u, dst %u) at EFB format RGB8, where the console has no alpha plane and reads 1.0; we blend against the alpha we kept\n",
-                      cmode, sfac, dfac);
-    }
+    /* GX_BL_DSTALPHA and its inverse at EFB format RGB8 had a tripwire here
+     * until reach U4 met one (a107a, PE_CMODE0 00563D): pixel_prepare now
+     * reads the destination alpha as the console does there, 1.0. */
 }
 
 /* The EFB persists across frames on the console; a replay starts from the
@@ -823,6 +817,15 @@ static void pixel_prepare(const uint32_t* bp, PixelCfg* px)
     px->blend_en = cmode & 1; px->logic_en = (cmode >> 1) & 1;
     px->col_upd = (cmode >> 3) & 1; px->alpha_upd = (cmode >> 4) & 1;
     px->dfac = (cmode >> 5) & 7; px->sfac = (cmode >> 8) & 7;
+    /* At EFB pixel format RGB8 (PE_CONTROL bits 0-2 at 0) there is no alpha
+     * plane, and the console reads the destination alpha as 1.0: so
+     * GX_BL_DSTALPHA (6) is ONE and GX_BL_INVDSTALPHA (7) ZERO, whatever alpha
+     * byte we kept. Both backends take their factors from here. Reach U4 met it
+     * in a107a's railcar cutscene, PE_CMODE0 00563D: src * dst alpha + dst. */
+    if ((bp[0x43] & 7) == 0) {
+        if (px->sfac >= 6) px->sfac = px->sfac == 6 ? 1 : 0;
+        if (px->dfac >= 6) px->dfac = px->dfac == 6 ? 1 : 0;
+    }
     px->subtract = (cmode >> 11) & 1; px->lop = (cmode >> 12) & 15;
     px->const_alpha = (cmode1 & 0x100) ? (int)(cmode1 & 0xFF) : -1;
     px->z_en = zmode & 1; px->z_func = (zmode >> 1) & 7; px->z_upd = (zmode >> 4) & 1;

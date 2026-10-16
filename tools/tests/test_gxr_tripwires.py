@@ -137,7 +137,8 @@ int main(void)
         bp_w(&s, 0x22, 0x000606u);
 
         /* GX_BL_DSTALPHA at EFB format RGB8: blend on, source factor 4,
-         * destination factor 6 (the EFB's alpha, which RGB8 does not have). */
+         * destination factor 6 (the EFB's alpha, which RGB8 does not have):
+         * modelled now (read as 1.0, reach U4), so it says nothing. */
         bp_w(&s, 0x41, 0x0004C1u);
         draw(&s, 0x80, 4);
         bp_w(&s, 0x41, 0x18);
@@ -231,7 +232,6 @@ CONDITIONS = [
     ("Z textures", "ZTEX2 (BP F5 000004) turns Z textures on"),
     ("wide lines", "asks for lines 4.00 pixels wide"),
     ("wide points", "asks for points 4.00 pixels across"),
-    ("destination alpha", "blends with a destination-alpha factor"),
     ("copy Y-scale", "EFB copy Y-scale (BP 4E 000200) is 2.000"),
 ]
 
@@ -256,7 +256,8 @@ def test_what_the_game_really_programs_stays_silent(output):
     assert "EFB copy filter" not in output, output
     assert "BP 4E 000100" not in output, output
     assert "[gxr] BP_MASK" not in output, output  # applied now, so nothing to warn of
-    # Every [gxr] line that is not one of the eleven conditions, the report, or
+    assert "destination-alpha" not in output, output  # read as 1.0 at RGB8 now (reach U4)
+    # Every [gxr] line that is not one of the ten conditions, the report, or
     # the driver's own. A new tripwire firing on this stream shows up here.
     strays = [
         ln
