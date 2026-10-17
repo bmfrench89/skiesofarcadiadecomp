@@ -522,13 +522,22 @@ stood still once (Muraji, u4-H6) did not recur (FINDINGS).
 the dungeon `a123`'s door puzzle stood in for by `flag:123d:1912` and arrival-only flags now in the index
 (`123d via123b s403`). Card `card-partI-004a.raw` (after 412).
 
-**Part J under way (`u4-J1` to `u4-J3`, 2026-10-17):** 450, 452 to 455, 457 to 459, 462 and 470 to 473. The
+**Part J's story done (`u4-J1` to `u4-J4`, 2026-10-17):** every flag of 450-499 a script sets. The
 index now marks an arrival sent straight back, a hook's own conditions (and keeps a hook's warp off its loop's
 line), and an entry only the game starts (g), which the lab begins by name where it sets the aim (`a127b`'s Fship
-and Delocco, a sky map). Cards: `card-partJ-126a.raw`, `card-partJ-109g.raw`, `card-partJ-020a.raw`.
+and Delocco, a sky map). Cards: `card-partJ-126a.raw`, `card-partJ-109g.raw`, `card-partJ-020a.raw`,
+`card-partJ-017h.raw` (after part J, 500 to 504 set).
 
-**Next:** part J on from `card-partJ-020a.raw` with `--story 450-499`, toward 463 to 468 (`a127b`) and then 469
-(`a205a` by stage l's hook), then K and L the same way. Part H's tail (381 on)
+**Part K's story done (`u4-K1`, 2026-10-17):** 500 to 525 but 508, 513 and 514, which no script sets. Card
+`card-partK-028a.raw` (before 515).
+
+**Part L, and the game to its ending credits (`u4-L1`, 2026-10-17):** 550 to 559 and 561 to 571, the last ship
+battle and battles, `a298a`'s closing cutscene and the staff credits at frame 275247, the title after. U4's story
+is played, every part from C to L, to the end (part I from its part card, J to L each from where the one before
+ended), part H's tail (381 on) aside. Card `card-partL-130a.raw`.
+
+**Next:** part H's tail, from `card-partH.raw`, by a run that leaves `a019d` for the world map only after the
+betrayal (380); U5 (effect packages part by part, reach.md); PLAN-NEXT §0's step 3, the owner's sitting. Part H's tail (381 on)
 needs a run from `card-partH.raw` that leaves `a019d` for the world map only after the betrayal (380): every later
 card carries 365, set by that trip made early, which shuts the betrayal out (FINDINGS "u4-H15 and u4-H16"). U5's
 parts E, F, I and L with `hold-hp`. The mod framework's

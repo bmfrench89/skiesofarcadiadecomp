@@ -9177,6 +9177,32 @@ here).
   does, the lab starts it by its name in the map script's own entry table (fn_80210450 takes the string), said
   so, twice at most per aim (a test each, failing without it). Cards: `card-partJ-109g.raw` (u4-J2, 30170) and
   `card-partJ-020a.raw` (u4-J3, 45355).
+- **Run u4-J4: part J's story to its end** [V, `build/reach/u4-J4`, stopped by hand at frame 149500]: from
+  `card-partJ-020a.raw`, the walker reached `a127b` and started `Fship` by name at 8931 ("in place of what starts
+  it in the game"); 463 at 8933, a ship battle won by `finish` and 467 at 24779, a second, whose enemy no cannon
+  reached, sunk by `finish` at 50603, and 468 at 50879. Stage l's hook 1782, its block's 468 now set, was set at
+  52906 and the game warped to `a205a`, the arrival from the world map setting 460 at 52960; 469 at 72394 on the
+  way into `a034a`, 461 at 74335 and 474 at 92050. The story went on into part K: 500 to 504 by 149309, and from
+  there "no flag in 450-499 is left for a line to set". `save` saved at `a004a` (80388) and `a017h` (146327,
+  `build/savetest/card-partJ-017h.raw`).
+- **Run u4-K1: part K's story to its end** [V, `build/reach/u4-K1`, stopped by hand at frame 105500]: from
+  `card-partJ-017h.raw` with `--story 500-549`, 500 to 507 and 509 to 511 by 30534 (`0x80310B78` = EFF00000), 512 and
+  then 515 to 525 by 101666 through `a028`, `a126d` (a land battle held by `finish`), `a126e` and `a131f`, and "no
+  flag in 500-549 is left for a line to set" (no script sets 508, 513 or 514). `save` saved at `a028a` (47117,
+  `build/savetest/card-partK-028a.raw`, before 515). Nothing new in the lab was needed.
+- **Run u4-L1: part L, and the game to its ending** [V, `build/reach/u4-L1`, stopped by hand at frame 451000;
+  frames 275000 and 280000 looked at]: from `card-partK-028a.raw` with `--story 515-649`, part K's 515 to 525 again
+  by 55439, then stage o's hook 1603 at 58876 into `a249a`, 550 at 58934 and 551 at 62399; 552 to 559 and 561 to
+  571 by 271431 through `a017e`, `a130` (`save` at `a130a`, 165136, `build/savetest/card-partL-130a.raw`) and `a131`,
+  a ship battle and land battles held and ended by `finish`, `a131i`, `a250a`, the last ship battle (`a547a`, 227119
+  to 246625) and a last battle ended by 261896. Then `a298a`'s part-L cutscene 21 (frame 275000: the ship under the
+  moon), scene 9 at 275247 loading `/ending/staff.mld`, the staff credits (frame 280000: "Original Development
+  Staff, Director Atsusi Seimiya"), and the title from 285744. Every part, C to L, has now been played on the port
+  by the game's own scripts, each from its part card or the last part's latest card (part I from its part card,
+  parts J to L each from where the one before ended), to the ending credits, with the stand-ins the lab logs (hooks for the ship's arrivals,
+  far landings, gold, one puzzle's flag, entries the game starts by name, and `finish` for long fights and a ship
+  no cannon reaches), and part H's tail (381 on) left: its cards carry 365 set early. No port defect showed in
+  parts I to L; the battle that stood still once in part H (u4-H6) did not recur.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

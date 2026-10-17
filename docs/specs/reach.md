@@ -248,8 +248,12 @@ sail, a touch entry under the player stepped off, and ship battles ended by the 
 SP will not pay) and `finish` holding a long one's enemy at 1 HP. Only the Fortress Gate needs the S-Cannon, on a
 chance turn; no lab item places it by the chance mark. Part H's first flag waits on a world-map object's flag no
 script sets: a hook now carries the flags its block sets. Runs u4-H1 to u4-H4 took part H to 379, a ship no cannon
-reaches sunk by `finish` in place of the torpedoes a player would carry. Not yet known to the index: which
-arrival (`sys[15]`) a loop's branch wants.
+reaches sunk by `finish` in place of the torpedoes a player would carry.
+
+**Runs u4-H5 to u4-L1** (FINDINGS "Reach U4"): part H to 364, and parts I to L to the game's ending credits
+(u4-L1, frame 275247), the index learning arrivals (`via`, and the ways in sent straight back), a hook's own
+conditions, the world map's letter by `B[6]`, travel menus and entries only the game starts. Part H's tail (381
+on) is left: every card past its start carries 365, set by a trip the walker made early.
 
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
