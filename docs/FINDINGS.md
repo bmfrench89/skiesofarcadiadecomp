@@ -9203,6 +9203,24 @@ here).
   far landings, gold, one puzzle's flag, entries the game starts by name, and `finish` for long fights and a ship
   no cannon reaches), and part H's tail (381 on) left: its cards carry 365 set early. No port defect showed in
   parts I to L; the battle that stood still once in part H (u4-H6) did not recur.
+- **Run u4-H17: part H again, the betrayal in its place** [V, `build/reach/u4-H17`, stopped by hand at frame
+  243500; `sct.py 019d`, `099i`]: `a019d`'s 4005 is live while 365 is clear, and the world map's loop, for the party
+  come from `a019d` (193), plays `me099ah16` (365) with no condition and warps to `a020a`; so the first trip out by
+  4005 sets 365, and the betrayal (`uragiri`, 380, `IF (FLAG[364] 1 == FLAG[365] 0 == &&)`) can only come before it
+  [I: the game keeps 4005 out of a player's reach until then]. A way into a map whose arrival sets a flag of the
+  window above the aim, still clear, is now no way toward the aim (`019d via099i s365` while aiming at 358), and is
+  one again once that flag is set or aimed at (a test, failing without it). From `card-partH.raw` u4-H17 then set
+  352 to 362 and 364 to 380 by 205915 (`0x80310B68` = 1FFFF7FF; no script sets 363), the betrayal among them,
+  through Mt. Kazai, two ship battles and the Spellship sunk; `save` at `a019a` (205258,
+  `build/savetest/card-partH-019a-380.raw`). Aiming at 381, it reached `a122b`, whose 3000 (the Ragged Old Man)
+  plays the scene that sets 381 only in the else of `IF (FLAG[1051] 0 ==)`: field flag 1051, which no script
+  sets (stage f's hook 1051 waits on it too) [I: a discovery the ship makes]. The requirements read only
+  `IF (FLAG[g] 1 ==)` blocks and missed it; 381 was passed over at 241885.
+- **Run u4-H18: part H's tail** [V, `build/reach/u4-H18`, stopped by hand at frame 16000]: from
+  `card-partH-019a-380.raw` with `--story 379-399` and the lab's `flag:122b:1051` (logged "in place of what the game
+  sets it for"), 379 at 3445, then `a122b` by stage i, 1051 at 9926, the Ragged Old Man's scene and 381 at 11079,
+  and "no flag in 379-399 is left for a line to set". With it every part, C to L, has its story played on the port
+  by the game's own scripts and the lab's logged stand-ins.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

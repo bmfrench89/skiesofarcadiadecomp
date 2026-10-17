@@ -1059,7 +1059,7 @@ static int story_load(const char* path)
 
 static void story_dists(uint32_t aim);
 static int story_hook_ready(const StoryLine* l);
-static int story_bounces(uint32_t map, uint32_t to);
+static int story_way_shut(uint32_t map, uint32_t to, uint32_t aim);
 static uint32_t story_dist(uint32_t map);
 
 /* The flag the story wants next, its distances measured: in the window, the
@@ -1175,7 +1175,7 @@ static void story_dists(uint32_t aim)
             if (l->hook && !story_hook_ready(l)) continue;
             for (k = 0; k < l->nwarps; k++) {
                 int to = story_node(g_story_words[l->at + l->nsets + k], 0);
-                if (story_bounces(l->map, g_story_words[l->at + l->nsets + k])) continue;
+                if (story_way_shut(l->map, g_story_words[l->at + l->nsets + k], aim)) continue;
                 if (to >= 0 && g_story_dist[to] != STORY_FAR && g_story_dist[to] + 1u < g_story_dist[from]) {
                     g_story_dist[from] = (uint16_t)(g_story_dist[to] + 1u);
                     changed = 1;
@@ -1198,6 +1198,29 @@ static int story_bounces(uint32_t map, uint32_t to)
         if (v->map != map || v->via != to) continue;
         for (k = 0; k < v->nwarps; k++)
             if (g_story_words[v->at + v->nsets + k] == map) return 1;
+    }
+    return 0;
+}
+
+/* Whether the way from `map` into `to` is no way toward `aim`: it comes
+ * straight back, or the arrival plays a later scene of the story, setting a
+ * flag of the window above the aim still clear (`019d via099i s365`).
+ * a019d's 4005 is live while 365 is clear and its arrival on the world map
+ * plays 365's scene; reach U4's part-H walker, aiming at 358, took it early,
+ * and the betrayal (380), which waits on 365 clear, could not come after
+ * [I: the game keeps that exit out of a player's reach until then]. */
+static int story_way_shut(uint32_t map, uint32_t to, uint32_t aim)
+{
+    uint32_t k, f;
+    int i;
+    if (story_bounces(map, to)) return 1;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* v = &g_story[i];
+        if (v->map != map || v->via != to) continue;
+        for (k = 0; k < v->nsets; k++) {
+            f = g_story_words[v->at + k];
+            if (f > aim && f <= g_story_hi && !g_api->story_flag(f)) return 1;
+        }
     }
     return 0;
 }
@@ -1229,7 +1252,7 @@ static uint32_t story_score(uint32_t map, uint32_t id, uint32_t aim)
                 if (g_story_words[l->at + l->nsets + k] == v->via) return 0;
         }
         for (k = 0; k < l->nwarps; k++) {
-            if (story_bounces(map, g_story_words[l->at + l->nsets + k])) continue;
+            if (story_way_shut(map, g_story_words[l->at + l->nsets + k], aim)) continue;
             d = story_dist(g_story_words[l->at + l->nsets + k]);
             if (d < here && d + 1 < best) best = d + 1;
         }

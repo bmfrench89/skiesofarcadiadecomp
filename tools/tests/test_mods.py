@@ -2366,6 +2366,42 @@ def test_an_entry_the_game_starts_is_started_by_name_where_it_sets_the_aim(drive
 
 
 @needs_cc
+def test_a_way_whose_arrival_plays_a_later_scene_is_not_taken_early(driver, tmp_path):
+    """`019d via099i s365`: a019d's 4005 to the world map plays 365's scene on
+    arrival, and part H's walker, aiming at 358, took it early, which shut
+    the betrayal (380) out. A way into a map whose arrival sets a flag of the
+    window above the aim, still clear, is no way toward it: the walker goes
+    round by a019a (4004) instead; with 365 already set, 4005 is a way again."""
+    lab(tmp_path)
+    lines = (
+        "019d M04005 w099i|019d via099i s365|019d M04004 w019a|"
+        "019a M04002 w019b|019b M04000 w121a|099i M04017 w121a|121a M04000 s358|"
+    )
+    (tmp_path / "story.txt").write_text(lines.replace("|", "\n"), encoding="utf-8")
+    vols = (
+        "set 80347524 80400800 set 80400808 fa4 set 80400810 8 set 80400830 80400900 "  # 4004
+        "set 80400908 fa5 set 80400910 8 walkfns game "  # 4005
+    )
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 13 setb 80311ac8 64 "
+    for flags, started in (
+        ("", "fn_80210550(4004)"),
+        ("set 80310b68 2000 ", "fn_80210550(4005)"),
+    ):  # 365: bit 13
+        out, err = play(
+            driver,
+            tmp_path,
+            vols + here + flags + "frame frame frame frame safe",
+            SOA_LAB="story:350-399;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [started], (
+            flags,
+            out,
+        )
+
+
+@needs_cc
 def test_a_travel_menus_warps_are_no_way_the_walker_can_take(driver, tmp_path):
     """A line other than a loop that warps to six places or more is a travel
     menu (a034a's rorensu, 25), whose place the walker cannot choose: its

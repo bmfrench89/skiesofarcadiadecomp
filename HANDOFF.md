@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1660 |
+| Python tests | 1661 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -534,10 +534,13 @@ and Delocco, a sky map). Cards: `card-partJ-126a.raw`, `card-partJ-109g.raw`, `c
 **Part L, and the game to its ending credits (`u4-L1`, 2026-10-17):** 550 to 559 and 561 to 571, the last ship
 battle and battles, `a298a`'s closing cutscene and the staff credits at frame 275247, the title after. U4's story
 is played, every part from C to L, to the end (part I from its part card, J to L each from where the one before
-ended), part H's tail (381 on) aside. Card `card-partL-130a.raw`.
+ended). Card `card-partL-130a.raw`.
 
-**Next:** part H's tail, from `card-partH.raw`, by a run that leaves `a019d` for the world map only after the
-betrayal (380); U5 (effect packages part by part, reach.md); PLAN-NEXT §0's step 3, the owner's sitting. Part H's tail (381 on)
+**Part H's tail done (`u4-H17`, `u4-H18`):** the walker no longer takes a way whose arrival plays a later scene
+before its time, so part H ran again from its card with the betrayal (380) in its place, and 381 followed once
+`flag:122b:1051` stood in for a flag only the game sets. Card `card-partH-019a-380.raw`.
+
+**Next:** U5 (effect packages part by part, reach.md); PLAN-NEXT §0's step 3, the owner's sitting. Part H's tail (381 on)
 needs a run from `card-partH.raw` that leaves `a019d` for the world map only after the betrayal (380): every later
 card carries 365, set by that trip made early, which shuts the betrayal out (FINDINGS "u4-H15 and u4-H16"). U5's
 parts E, F, I and L with `hold-hp`. The mod framework's

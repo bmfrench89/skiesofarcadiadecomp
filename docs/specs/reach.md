@@ -252,8 +252,8 @@ reaches sunk by `finish` in place of the torpedoes a player would carry.
 
 **Runs u4-H5 to u4-L1** (FINDINGS "Reach U4"): part H to 364, and parts I to L to the game's ending credits
 (u4-L1, frame 275247), the index learning arrivals (`via`, and the ways in sent straight back), a hook's own
-conditions, the world map's letter by `B[6]`, travel menus and entries only the game starts. Part H's tail (381
-on) is left: every card past its start carries 365, set by a trip the walker made early.
+conditions, the world map's letter by `B[6]`, travel menus and entries only the game starts; and part H's tail
+(u4-H17, u4-H18), once the walker left a way whose arrival plays a later scene until its time.
 
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
