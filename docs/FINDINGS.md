@@ -8963,6 +8963,36 @@ here).
   would take on the order of 200,000 frames a try. The lab's new `gold:MAP:N` raises the gold to N once, on MAP
   with the field free, logged before and after: a stand-in of the hooks' kind for what a player would have
   gathered by then (a test).
+- **Run u4-G12: the shipwrights paid, and a touch under the player** [V, `build/reach/u4-G12`, stopped by hand at
+  frame 123500]: from the sailing card, `gold` raised 44,143 to 100,000 on `a017a` at 8277, and 318 to 320 followed
+  (10188, 13971, 19383). `a099i`'s 4015, toward 321, was started with no volume near at 22587, and the cutscene in
+  `a242a` set 329 at 22693 and warped to `a018b`. From 24578 the walker said "the map's script runs M06020" until
+  the run was stopped: a touch entry, `IF (FLAG[323] 0 == FLAG[322] 1 == &&)` and then a warp to `a242a`, false with
+  322 unset. Run u4-G13, with a touch entry no longer counted as the script busy, waited from 24563 on the lock
+  (0x8030E714 1, no script thread alive). Probe u4-G14 [V, `build/reach/u4-G14`, 26,500 frames, peeks from 24300]:
+  the arrival put Vyse at x -453, z -48, with 6020's object at x -438, z -42; from 24557 to 26000 the lock stayed 1
+  and the main thread's PC stayed on 80E8408C, which is the script's code (80E825C0, the PC at the map load) plus
+  0x1ACC, M06020's first word. `fn_80210550` takes the lock and points the PC at an entry's first word; RET
+  (fn_801F5BD0) frees the lock once no other thread runs, and leaves the PC on itself. An entry that never leaves
+  its first word at a safe point, with the lock held, is one started again before each [I: the touch, started each
+  frame Vyse stands in its volume; its own dispatch was not read]. A player walks off; the walker never moves the
+  player, and every start it makes is refused while the lock is held (80210574). Now, once a touch entry has held
+  the lock for 60 frames, the pad filter holds the stick a quarter turn every 90 frames until the lock is free,
+  logged both ways (a test, failing with the stick or the touch check taken out).
+- **Run u4-G15: off the touch, and 321 to 325** [V, `build/reach/u4-G15`, stopped by hand at frame 165000]: "M06020 has started over since frame
+  24572 with the player in its volume: stepping off at frame 24632", and "off M06020 at frame 24652": twenty frames
+  of stick. Then 321 at 28769 (`a018a`'s 3006), 322 at 35090 (`a018b`'s 3020, warping to `a242a`, whose cutscene
+  sets it), 323 at 39748 (the walker started 6020 itself at 39672, its condition true now, and it warped to
+  `a242a`) and 324 at 43392 in `a034a`. A ship battle on stage `a520a` followed from 44710, the Delphinus against a
+  brown ship, with the ship's HP held and Vyse's `sturn` rotating Focus, Focus, S-Cannon: won by 67409 (30 HP
+  top-ups), 325 at 68047 in `a242a`, and then `a521a` from 69267 against Gregorio's gunboat. There Vyse's third
+  alternative chose the S-Cannon at 88802 and it was refused: from about 90000 to 165000 the picture stood on his
+  wheel at S-Cannon with the grid empty, the chance mark on another column (frames 90000, 163000 and 163500 alike),
+  and `assist`'s A every 150 frames chose it again. The cannon fires only on a chance (C!) turn (run 8's entry
+  above); at the Fortress Gate the rotation's third turn was one. `sturn`'s retry looks for the wheel ready
+  (state 9) and the refused choice leaves it in the wait for A (state 6), so nothing played another alternative.
+  `a521a`, unlike the gate, checks `B[262] <= 0` in its own loop (`_WAIT_LOOP`, 0027C), so the crew's cannons win
+  it; past the gate the part-G runs give Vyse Focus alone. An S-Cannon placed by the chance mark is not built.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

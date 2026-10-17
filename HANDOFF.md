@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1638 |
+| Python tests | 1639 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -501,8 +501,14 @@ and a chain of requirements the story index now carries (`reqN` lines; the walke
 on, field flags too). The story went on into part G; its card, at the prison's save point, is
 `card-partF-end.raw`.
 
-**Next:** part G from `card-partF-end.raw` with `--story 300-349`, then H to L the same way; U5's parts E, F,
-I and L with `hold-hp`. The mod framework's
+**Part G to 325 (`u4-G15`, 2026-10-17):** the Fortress Gate by the Moon Stone Cannon, Gilder's choice
+answered start by start, the deserted island landed on in place of the sail (`card-partG-sail.raw`, saved at
+`a103a`'s save point), the shipwrights paid by the lab's `gold`, Crescent Isle (`a018a`, `a018b`, `a242a`; the walker now
+steps off a touch entry that keeps starting under the player), and a ship battle won. Gregorio's gunboat stood
+75,000 frames on a refused S-Cannon (it fires only on a chance turn): past the gate, runs give Vyse Focus alone.
+
+**Next:** part G on from `card-partG-sail.raw` with `--story 300-349` (the recipe in FINDINGS "Reach U4"'s
+part-G entries), then H to L the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

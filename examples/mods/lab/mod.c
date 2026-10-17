@@ -34,8 +34,8 @@
  *                  Busy also means what stops the player's own A press
  *                  (fn_80118204: flag 1087, 0x80347508 at 1, the field's mode
  *                  12), a message window on screen, and the map script's main
- *                  thread anywhere but its loop (a cutscene the loop called,
- *                  named in the log). An event that holds
+ *                  thread anywhere but its loop or a touch entry (a cutscene
+ *                  the loop called, named in the log). An event that holds
  *                  the field a minute with its window unmoved (a shop's menu)
  *                  gets B every 70 frames until the field is free; never a
  *                  ship battle (a 5xx stage), whose menu B would answer. One
@@ -52,7 +52,10 @@
  *                  An entry gated on the ground the player stands on (B[16])
  *                  has it set first, as walking there would.
  *                  A minute's wait on a starting entry logs the script
- *                  threads it waits on.
+ *                  threads it waits on. A touch entry (M06nnn) that keeps
+ *                  starting under the player for a second has the stick held
+ *                  a quarter turn on every 90 frames until it stops, as a
+ *                  player walks off it.
  *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
  *                  file SOA_LAB_STORY names holds `sct.py --story`'s lines,
  *                  each entry's flags set and maps warped to. The story's next
@@ -201,6 +204,9 @@
 #define PHASE_ORDER 2u
 #define PRESS_HOLD 10u
 #define WANDER_LEG 90u /* frames the wander item holds the stick one way */
+#define TOUCH_PATIENCE 60u /* frames a touch entry may start over before the walker steps off it */
+/* The stick, a quarter turn at a time: up, right, down, left. */
+static const uint8_t g_leg_x[4] = {128, 255, 128, 0}, g_leg_y[4] = {255, 128, 0, 128};
 #define GOLD 0x8030BB40u /* the party's gold, the scripts' sys[0] (story-flags.md) */
 #define GOLD_CAP 99999999u
 #define CHOICE_BEAT 30u /* frames between assist's presses in a choice */
@@ -343,6 +349,9 @@ static int g_walk_backout;  /* the walker found the field held too long: 1 B pre
 static uint32_t g_event_since; /* one more than the frame flag 1087 was first seen held, 0 when free */
 static int g_backed_out;       /* this event needed the back-out */
 static uint32_t g_entry_busy_from; /* one more than the frame 0x8030E714 was first seen 1, 0 when not */
+static uint32_t g_touch_from;      /* one more than the frame a touch entry was first seen starting, 0 when not */
+static uint32_t g_step_off;        /* one more than the frame the walker began stepping off it, 0 when not */
+static char g_touch_name[17];
 static int g_entry_busy_told;      /* its threads logged */
 
 typedef struct Item {
@@ -626,6 +635,12 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
         pad->stick[0] = pad->stick[1] = 128;
         return;
     }
+    if (g_step_off && !pad->buttons && g_api->scene() == 6 && g_api->field_state() == 8 &&
+        !g_api->story_flag(FLAG_EVENT)) {
+        uint32_t leg = (frame - (g_step_off - 1)) / WANDER_LEG % 4;
+        pad->stick[0] = g_leg_x[leg];
+        pad->stick[1] = g_leg_y[leg];
+    }
     for (i = 0; i < g_nitems; i++) {
         Item* it = &g_items[i];
         uint32_t step, into;
@@ -644,7 +659,6 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
             continue;
         }
         if (it->kind == ITEM_WANDER) {
-            static const uint8_t sx[4] = {128, 255, 128, 0}, sy[4] = {255, 128, 0, 128};
             uint32_t held = 0, task = 0, leg;
             uint16_t wstate = 0;
             if (frame < it->from || frame > it->to || g_api->map() != it->base || g_api->scene() != 6 ||
@@ -655,8 +669,8 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
                 (int16_t)wstate >= WINDOW_OPENING && (int16_t)wstate <= WINDOW_LAST_OPEN)
                 continue;
             leg = (frame / WANDER_LEG) % 4;
-            pad->stick[0] = sx[leg];
-            pad->stick[1] = sy[leg];
+            pad->stick[0] = g_leg_x[leg];
+            pad->stick[1] = g_leg_y[leg];
             if (!it->state) {
                 it->state = 1;
                 logf_("wander: on a%03u%c from frame %u, a quarter turn every %u frames, for the field's own encounters",
@@ -1261,15 +1275,33 @@ static void log_threads(uint32_t f)
  * `why`: anywhere but its "loop" or a RET. a116d's loop clears flag 1087 and
  * then calls its second cutscene, which has stretches with no window and the
  * player not held; reach U4's part-C walker started an exit in one, twice,
- * and cut off the warp the loop makes when the cutscene returns. */
+ * and cut off the warp the loop makes when the cutscene returns. A touch
+ * entry (M06nnn) is not busy: it starts again every frame the player stands
+ * in its volume, and one whose condition is false returns at once and
+ * starts again, so the walker found a018b's 6020 running for 99,000 frames;
+ * a touch that plays an event sets flag 1087, which is waited on anyway. */
+static int is_touch(const char* name)
+{
+    return strncmp(name, "M06", 3) == 0 && strlen(name) == 6;
+}
+
 static int script_busy(char* why, size_t cap)
 {
     uint32_t code = 0, pc = 0, op = 0;
     if (!g_api->read32(SCRIPT_CODE, &code) || !g_api->read32(SCRIPT_PC, &pc) || !code || pc < code) return 0;
     if (g_api->read32(pc, &op) && op == OP_RET) return 0;
     if (!script_entry(code, pc - code) || strcmp(g_where.name, "loop") == 0) return 0;
+    if (is_touch(g_where.name)) return 0;
     snprintf(why, cap, "the map's script runs %s", g_where.name);
     return 1;
+}
+
+/* Whether the map script's main thread is in a touch entry, named in g_where. */
+static int touch_running(void)
+{
+    uint32_t code = 0, pc = 0;
+    return g_api->read32(SCRIPT_CODE, &code) && g_api->read32(SCRIPT_PC, &pc) && code && pc >= code &&
+           script_entry(code, pc - code) && is_touch(g_where.name);
 }
 
 /* An entry's cast, checked before the walker starts it: the actors its
@@ -1673,6 +1705,24 @@ static void walk(Item* it)
         }
     }
     if (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) {
+        /* A touch entry is started again each frame the player stands in its
+         * volume, and the lock is held each time: a018b's 6020, which does
+         * nothing until flag 322, lies under the arrival from a242a, and
+         * reach U4's part-G walker, which never moves the player, waited 99,000
+         * frames on it (the main thread on its first word, 0x8030E714 1).
+         * Past TOUCH_PATIENCE frames the pad filter holds the stick a quarter
+         * turn every WANDER_LEG frames, until the lock is free, as a player
+         * walks on. */
+        if (!touch_running()) {
+            g_touch_from = 0;
+        } else if (!g_touch_from) {
+            g_touch_from = f + 1;
+            snprintf(g_touch_name, sizeof g_touch_name, "%s", g_where.name);
+        } else if (!g_step_off && f + 1 - g_touch_from >= TOUCH_PATIENCE) {
+            g_step_off = f + 1;
+            logf_("walk: %s has started over since frame %u with the player in its volume: stepping off at frame %u",
+                  g_touch_name, g_touch_from - 1, f);
+        }
         walk_wait(it, "a script entry is starting (0x8030E714 is 1)");
         it->started = f;
         if (!g_entry_busy_from) g_entry_busy_from = f + 1;
@@ -1683,6 +1733,8 @@ static void walk(Item* it)
         return;
     }
     g_entry_busy_from = g_entry_busy_told = 0;
+    if (g_step_off) logf_("walk: off %s at frame %u", g_touch_name, f);
+    g_touch_from = g_step_off = 0;
     if (f - it->started < it->id) return;
     if (!g_api->read32(LIST_HEAD, &v)) return;
     if (g_story_on) {

@@ -1541,6 +1541,48 @@ def test_the_walker_names_the_threads_a_stuck_entry_waits_on(driver, tmp_path):
 
 
 @needs_cc
+def test_the_walker_steps_off_a_touch_that_keeps_starting_under_the_player(driver, tmp_path):
+    """A touch entry (M06nnn) starts again each frame the player stands in its
+    volume, holding the lock (0x8030E714) each time: a018b's 6020 lies under
+    the arrival from a242a, and part G's walker, which never moves the player,
+    waited 99,000 frames on it. Once the main thread has been in one for 60
+    frames with the lock held, the pad filter holds the stick a quarter turn
+    every 90 frames, said so, until the lock is free; the person's own press
+    is left alone, and so is any other entry holding the lock."""
+    lab(tmp_path)
+    # The script: code at 80400000; "loop" at 0 and "M06020" at 0x100.
+    frames70, frames59 = "frame " * 70, "frame " * 59
+    script = (
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303630 set 8041001c 32300000 "
+        "set 803475cc 6 set 80311aec 8 set 8030e714 1 "
+        f"set 8030cea4 80400008 safe {frames70}safe padall 70 0 "  # the loop holds it: not a touch
+        f"set 8030cea4 80400100 safe {frames59}safe padall 129 0 "  # 6020 for 59 frames: not yet
+        "frame safe padall 130 0 padall 220 0 padall 230 100 "  # 60: up, then right; the person's A alone
+        "set 8030e714 0 set 8030cea4 80400008 frame safe padall 131 0"  # the lock free
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-1000:3")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("padall")] == [
+        "padall 70 00 00 11 22 33 44 55 66",
+        "padall 129 00 00 11 22 33 44 55 66",
+        "padall 130 00 00 80 FF 33 44 55 66",
+        "padall 220 00 00 FF 80 33 44 55 66",
+        "padall 230 00 01 11 22 33 44 55 66",
+        "padall 131 00 00 11 22 33 44 55 66",
+    ], out
+    said = [
+        x.split("lab: walk: ", 1)[1]
+        for x in err.splitlines()
+        if "lab: walk: " in x and "waiting" not in x
+    ]
+    assert said == [
+        "M06020 has started over since frame 70 with the player in its volume: stepping off at frame 130",
+        "off M06020 at frame 131",
+    ], err
+
+
+@needs_cc
 def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver, tmp_path):
     """fn_80118204's other gates: the player held (0x80347508 is 1) and the
     field's mode 12 (fn_8009763C: 2 at 0x80346C3C, 12 in the low byte at
@@ -1549,8 +1591,10 @@ def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver,
     which; and the map script's main thread anywhere but its loop, which is
     a cutscene the loop called (a116d's clears 1087 first). With none -- the
     window's task there from the map load, waiting for a message in state 1;
-    the thread in its loop, or at a RET it is about to leave -- it looks for
-    an entry."""
+    the thread in its loop, or at a RET it is about to leave, or in a touch
+    entry (M06nnn), which starts again every frame the player stands on it
+    (a018b's 6020 held part G's walker 99,000 frames) -- it looks for an
+    entry."""
     lab(tmp_path)
     # The script: code at 80400000; two entries, "loop" at 0 and "me116dc02"
     # at 0x100, indexed at 80410000 (offset, then the name's 16 bytes).
@@ -1566,7 +1610,9 @@ def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver,
         "set 80346e64 00010000 set 8030cea4 80400104 safe "  # in the cutscene
         "set 80400104 c frame frame frame frame safe "  # at its RET: back to the loop next tick
         "set 80400104 0 safe "  # in the cutscene again
-        "set 8030cea4 80400008 frame frame frame frame safe"  # the loop
+        "set 8030cea4 80400008 frame frame frame frame safe "  # the loop
+        "set 80410018 4d303630 set 8041001c 32300000 set 80410020 0 "  # the entry at 0x100 is M06020
+        "set 8030cea4 80400104 frame frame frame frame safe"  # a touch: not busy
     )
     out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-100:3")
     assert "loaded 1" in out, err
