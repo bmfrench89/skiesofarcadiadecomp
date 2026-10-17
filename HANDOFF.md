@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1646 |
+| Python tests | 1650 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -510,15 +510,16 @@ at 1 HP through the record the fight keeps it in. Cards: `card-partG-sail.raw` (
 `card-partG-crescent.raw` (`a018b`) and `card-partG-013d.raw` (`a013d`, after 327). What is left in 330-349
 is side errands; 328 belongs to the prison, long behind.
 
-**Part H to 379 (`u4-H4`, 2026-10-17):** 352 by a hook that now carries the flags its block sets (1781, the
-ship's arrival), the Tenkou Spellship sunk by `finish` (the part card's Delphinus has only cannons, which cannot
-reach it), then 353 to 357, 365 to 377 and 379 through Yafutoma's maps and two more ship battles. Card
-`card-partH-020a.raw` (`a020a`, with 352 to 357 and 365). 358 (Mt. Kazai) needs the Ship Parts Merchant's second option, which
-the walker now tries; 359 needs the arrival at `a232a` from `a019d`; the merchant's talk once kept four threads
-alive after a back-out (FINDINGS).
+**Part H to 379 and 352 to 364 (`u4-H4` to `u4-H14`, 2026-10-17):** 352 by a hook that carries the flags its block
+sets, the Tenkou Spellship sunk by `finish` (the part card's Delphinus has only cannons), Yafutoma, the Ship Parts
+Merchant (whose tasks the lab now does when he never takes them up, and whose repeated choice now moves on), Mt.
+Kazai (358) and 359 to 364. 380 (the betrayal) waits on 365 clear, which the walker's early trip set. Then the
+world map's letter: map 99 loads at B[6]'s, and the index and the lab now say so (`w099@`, `w099i`). Cards:
+`card-partH-020a.raw`, `card-partH-019d.raw` (to 377), `card-partH-121a.raw` (Mt. Kazai, with 358). A battle that
+stood still once (Muraji, u4-H6) did not recur (FINDINGS).
 
-**Next:** part H again from `card-partH-020a.raw` with `--story 350-399` (`save` now saves again every
-60,000 frames); then I to L the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Next:** part H on from `card-partH-121a.raw` with `--story 350-399`, toward 381 (`a122b`) by stage i; then I to
+L the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

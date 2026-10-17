@@ -1618,6 +1618,40 @@ def test_inside_a_house_its_own_entries_may_warp(driver, tmp_path):
 
 
 @needs_cc
+def test_the_walker_does_an_actors_tasks_it_never_took_up(driver, tmp_path):
+    """A minute on a starting entry, each live slot waiting on a task queued
+    to an actor (the record at +0x0C, the actor's id at +0x24) whose first word
+    is still 0 is marked done (2), said so: a019a's Ship Parts Merchant, talked
+    to from the pier outside his shop, never took his four up. A task the
+    actor has taken up (1), and a slot with no actor, are left alone."""
+    lab(tmp_path)
+    slots = (
+        "set 8030cea8 4 set 8030ceb0 80420000 "
+        "set 80420034 1 set 80420040 80430000 set 80420058 bba "  # slot 1: 3002's, queued
+        "set 80420068 1 set 80420074 804300a0 set 8042008c bba set 804300a0 1 "  # slot 2: taken up
+        "set 8042009c 1 set 804200a8 80430140 "  # slot 3: no actor
+    )
+    script = (
+        slots
+        + "set 803475cc 6 set 80311aec 8 set 8030e714 1 safe "
+        + "frame " * 1799
+        + "safe get 80430000 "  # 1799: not yet
+        + "frame safe get 80430000 get 804300a0 get 80430140"  # 1800: done in its place
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("80430")] == [
+        "80430000=00000000",
+        "80430000=00000002",
+        "804300A0=00000001",
+        "80430140=00000000",
+    ], out
+    assert (
+        "frame 1800: 1 task(s) queued to actor 3002 never taken up: marked done in its place" in err
+    ), err
+
+
+@needs_cc
 def test_the_walker_names_the_threads_a_stuck_entry_waits_on(driver, tmp_path):
     """An entry's RET waits while other script threads live (the s16 at
     0x8030CEAA above 1), and 0x8030E714 stays 1 meanwhile: a minute of it
@@ -1774,6 +1808,45 @@ def test_assist_takes_the_next_option_when_the_walker_starts_an_entry_again(driv
         "pad 200 0000 filtered",
         "pad 230 0004 filtered",
         "pad 260 0100 filtered",
+    ], out
+
+
+@needs_cc
+def test_assist_takes_the_next_option_when_a_choice_comes_again_in_one_start(driver, tmp_path):
+    """A choice asked again with no start of the walker's between gets the
+    option after the last, the third after the second: a019a's Ship Parts
+    Merchant asks again after "Talk about various things", and answered so
+    every time his talk went on for good (u4-H12)."""
+    lab(tmp_path)
+    window = "set 80346e4c 80400000 set 80346e64 00060000 "
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 13 setb 80311ac8 61 set 8030cea4 80400008 "
+        "set 80347524 80400800 set 80400808 fa2 set 80400810 16 walkfns game "
+        "frame frame frame frame safe "  # the merchant's talk
+        + window
+        + "pad 50 0000 pad 80 0000 set 80346e4c 0 pad 90 0000 "  # A: the first
+        + window
+        + "pad 200 0000 pad 230 0000 pad 260 0000 set 80346e4c 0 pad 270 0000 "  # down, A
+        + window
+        + "pad 300 0000 pad 330 0000 pad 360 0000 pad 390 0000"  # down, down, A
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3;assist:0-5000:150")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == ["fn_80210550(4002)"], (
+        out
+    )
+    assert [x for x in out.splitlines() if x.startswith("pad ")] == [
+        "pad 50 0000 filtered",
+        "pad 80 0100 filtered",
+        "pad 90 0000 filtered",
+        "pad 200 0000 filtered",
+        "pad 230 0004 filtered",
+        "pad 260 0100 filtered",
+        "pad 270 0000 filtered",
+        "pad 300 0000 filtered",
+        "pad 330 0004 filtered",
+        "pad 360 0004 filtered",
+        "pad 390 0100 filtered",
     ], out
 
 
@@ -2061,7 +2134,7 @@ def test_the_walker_never_backs_out_of_an_event_whose_dialogue_moves_on(driver, 
 STORY = """# sct.py --story, cut down to part C's opening (reach U4)
 004a M03005 w250a
 004a M04010 s58
-250a loop s599 w099a w004a
+250a loop s599 w099@ w004a
 099f loop s59 w243a
 243a loop s100 s102 w116d
 116d M04001 s101
@@ -2083,7 +2156,7 @@ def test_the_lab_story_aims_at_the_next_flag_and_measures_the_way_there(driver, 
     lab(tmp_path)
     (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
     script = (
-        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 setb 80310a22 5 "  # B[6] 5: stage f
         "frame frame frame frame safe "  # frame 4: the first pick in a004a
         "set 80310b48 50 frame frame frame safe "  # flags 100 and 102
         "set 80310b48 70 frame frame frame safe "  # 100 to 102
@@ -2177,6 +2250,33 @@ def test_the_walker_stands_in_for_the_arrival_a_story_flag_waits_on(driver, tmp_
         "a099i hook: flag 1781 set at frame 4, in place of the arrival this map's script waits for "
         "(the story's rank toward flag 352: 0)" in err
     ), err
+
+
+@needs_cc
+def test_a_warp_to_the_world_map_goes_to_the_letter_b6_holds(driver, tmp_path):
+    """`019a M04001 w099@`: the world map loads at the letter B[6] gives, and
+    each letter is its own place. With B[6] at 8 (stage i, whose 4022 lands
+    on a122a) the exit ranks toward 381, in a122b; at 0 (stage a, no such
+    landing) it does not: part H's walker left Yafutoma with B[6] at 0 and
+    sailed stage a for 200,000 frames."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(
+        "019a M04001 w099@\n099i M04022 w122a\n122a M04000 w122b\n122b M03000 s381\n",
+        encoding="utf-8",
+    )
+    vol = "set 80347524 80400800 set 80400808 fa1 set 80400810 8 walkfns game "
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 13 setb 80311ac8 61 "
+    for b6, rank in ((8, "the story's rank toward flag 381: 3"), (0, "the story's rank: none")):
+        out, err = play(
+            driver,
+            tmp_path,
+            vol + here + f"setb 80310a22 {b6:x} frame frame frame frame safe",
+            SOA_LAB="story:380-399;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        started = [x for x in err.splitlines() if "entry 4001 started" in x]
+        assert len(started) == 1 and rank in started[0], (b6, err)
 
 
 @needs_cc
@@ -2333,7 +2433,7 @@ def test_the_lab_story_starts_an_aims_patience_over_when_the_story_moves(driver,
     lab(tmp_path)
     (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
     script = (
-        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 setb 80310a22 5 "  # B[6] 5: stage f
         "frame frame frame frame safe "  # frame 4: aim 100
         + "frame " * 20000
         + "set 80310b48 20 safe "  # 20004: 101 set
@@ -2373,7 +2473,7 @@ def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tm
     lab(tmp_path)
     (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
     script = (
-        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 setb 80310a22 5 "  # B[6] 5: stage f
         "frame frame frame frame safe "  # frame 4: aim 100
         + ("frame " * 30000 + "safe ")
         * 4  # frames 30004, 60004, 90004 and 120004

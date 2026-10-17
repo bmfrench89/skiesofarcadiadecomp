@@ -125,9 +125,9 @@ def test_the_story_scan_sees_through_calls_and_what_desynchronises_the_listing()
     """`story`: an entry's flags set and maps warped to include those of every
     entry it calls, however deep, and a message (op 144, which the listing
     cannot size) hides nothing after it. Op 238, the way back to the world
-    map, is a warp to 099a. A flag set from an expression, a flag at 1024 or
-    above (the field's own: 1087 the event lock), and a CALL that lands
-    mid-entry are not counted."""
+    map, is a warp to it at the letter B[6] holds then (099@). A flag set
+    from an expression, a flag at 1024 or above (the field's own: 1087 the
+    event lock), and a CALL that lands mid-entry are not counted."""
     talk = [144, 0xC824, 0x7FFFFFFF, 11, 0]  # a message, then a CALL patched below
     talk += [17, *f(1087), END, 17, 0x20000000 | 5, END, 12]
     sub = [17, *f(100), END, 11, 0, 12]  # 100, and a CALL to deeper
@@ -140,17 +140,33 @@ def test_the_story_scan_sees_through_calls_and_what_desynchronises_the_listing()
     name_at = base + 4 * (len(talk) + len(sub) + len(deeper))
     struct.pack_into(">I", d, base + deeper_at + 4, name_at - (base + deeper_at + 4))
     got = sct.story(bytes(d))
-    assert got["deeper"] == (set(), {"116d", "099a"}), got
-    assert got["sub"] == ({100}, {"116d", "099a"}), got
-    assert got["M03005"] == ({100}, {"116d", "099a"}), got
+    assert got["deeper"] == (set(), {"116d", "099@"}), got
+    assert got["sub"] == ({100}, {"116d", "099@"}), got
+    assert got["M03005"] == ({100}, {"116d", "099@"}), got
     assert sct.story_lines("004a", bytes(d)) == [
-        "004a M03005 s100 w099a w116d",
-        "004a sub s100 w099a w116d",
-        "004a deeper w099a w116d",
+        "004a M03005 s100 w099@ w116d",
+        "004a sub s100 w099@ w116d",
+        "004a deeper w099@ w116d",
     ]
     # A CALL into the middle of an entry is not a call the scan follows.
     struct.pack_into(">i", d, base + 16, sub_at + 4 - 16)
     assert sct.story(bytes(d))["M03005"] == (set(), set()), sct.story(bytes(d))
+
+
+def test_a_warp_to_the_world_map_goes_where_b6_says():
+    """Map 99 loads at the letter B[6] gives, whatever a warp names: a019d's
+    4005 sets B[6] to 8 and then takes op 238, so it leads to 099i; a019a's
+    4001 takes op 238 as B[6] stands (099@), and so does a WARP naming 099a."""
+    b6 = [5, 0x10000006, *f(8), 10, END]  # SETB (B[6] 8 =)
+    there = b6 + [238, 0x40000040, END, 12]
+    asis = [238, 0x40000040, END, 43, 0, 12]  # op 238, then a WARP patched below
+    d = bytearray(build([("M04005", there), ("M04001", asis)], b"me099a.sct\0\0"))
+    base = 12 + 2 * 20
+    warp_at = base + 4 * len(there) + 12
+    struct.pack_into(">I", d, warp_at + 4, base + 4 * (len(there) + len(asis)) - (warp_at + 4))
+    got = sct.story(bytes(d))
+    assert got["M04005"] == (set(), {"099i"}), got
+    assert got["M04001"] == (set(), {"099@"}), got
 
 
 def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():

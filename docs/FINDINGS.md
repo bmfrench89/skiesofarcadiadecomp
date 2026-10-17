@@ -9066,9 +9066,9 @@ here).
   alive (its scptEnter, scptLetsTalk and camera steps, the talk itself on its last FLAGCLR) and the walker waited
   on the start lock until the run was stopped: [I] the back-out's presses outlasting the talk; not yet looked at.
 - **359 waits on an arrival** [V, `sct.py 232a`]: `a232a`'s loop sets 359 only under `SWITCH (sys[15])`'s 193,
-  and `sys[15]` is the map the party came from (FINDINGS 1382), map times ten plus the letter [I: every value seen
-  fits, 190 `a019a`, 193 `a019d`, 2470 `a247a`, `a013d`'s 131 and 134 `a013b` and `a013e`; the code that writes it
-  not read]: 359 needs the walk from `a019d` (its 4004, or its
+  and `sys[15]` is the map the party came from, map times ten plus the letter (content-systems.md, which
+  lists the arrivals a new map handles: old x 10 + letter, 10000, 20000; 190 `a019a`, 193 `a019d`, 2470 `a247a`,
+  `a013d`'s 131 and 134 `a013b` and `a013e`): 359 needs the walk from `a019d` (its 4004, or its
   loop's warp). Passed over at 160085 with the walker on other maps; its second go comes when nothing else is
   reachable. The index does not say which arrival a loop's branch wants.
 - **Runs u4-H5 and u4-H6: patience that the story's moves start over** [V, `build/reach/u4-H5`, `u4-H6`]: from
@@ -9086,6 +9086,38 @@ here).
   not recur. Run u4-H4 had fought Muraji (from 92711) to its end as well. Not chased further here: a stall that
   depends on timing needs the state at the stall, and later runs peek the battle's phase word (`0x8034733C`) so
   that a recurrence says which phase it stopped in.
+- **The Ship Parts Merchant who never turned round** [V, `build/reach/u4-H9` to `u4-H13`]: u4-H9 saved at
+  `a019d`'s save point (4300) at 102843 (`build/savetest/card-partH-019d.raw`, flags to 377), and at `a019a` the
+  merchant's talk again kept the start lock after the walker backed out of his shop. From that card the probes
+  reach him in 7,000 frames. u4-H10 and u4-H11 read the script's thread slots (52 bytes at `*0x8030CEB0`) and
+  what they wait on: slot 0 the map's loop on its RET, slots 1 to 4 each waiting on a task queued to actor 3002
+  (the id at +0x24, the record at +0x0C, 0xA0 apart from 80EBEFE0), the ops that queued them scptEnter (26),
+  scptDefMO (28), scptLetsTalk (27) and scptRet (41), and every record's first word 0: queued, never taken up
+  (part D's dancer had shown an actor marks one done with 2). The merchant is loaded (op 154 finds him, so the
+  cast check let the talk start) but does not run: the walker talks to him through the shop's counter (4002)
+  with Vyse on the pier outside (frame 9500) [I: the game runs only the actors near the player; not read in
+  the code]. A minute into such a wait, each task still queued to an actor is now marked done in its place,
+  said so (a test, failing without it); u4-H12's talk then ended two frames after. Its second start answered
+  "Talk about various things", which asks again, and was answered so every time: a choice asked again within
+  one start now takes the option after (a test, failing without it). u4-H13 then left the merchant (the tasks
+  marked done twice), set 379 at 19490 and 378 at 25350, and walked into Mt. Kazai, `a121a` to `a121d`, where it
+  started 358's 4000 at 29697, as the probe ran out. On this card 377 is set, so the merchant offers his shop,
+  talk and leave, not "Proceed to Mt. Kazai"; the walk there went by the world map's 4017.
+- **Run u4-H14: Mt. Kazai, 358 to 364, and the world map's letter** [V, `build/reach/u4-H14`, stopped by hand at
+  frame 303500]: from the `a019d` card the walker went by the world map's 4017 into Mt. Kazai and set 358 at 31143;
+  `save` saved at `a121a`'s save point (4100) at 32636 (`build/savetest/card-partH-121a.raw`). Then 359 at 37422 (the
+  arrival at `a232a` from `a019d`), 360 to 362 by 48166, 364 at 52197. 380 (`a019d`'s `uragiri`) was passed over
+  at 85977: it plays only `IF (FLAG[364] 1 == FLAG[365] 0 == &&)`, and 365 had been set since u4-H4, by the world
+  map's loop on the arrival from `a019d` (its `SWITCH (sys[15])`'s 193 case calls `me099ah16`), which the walker
+  made early. Nothing the index knows needs 380. Aiming at 381 (`a122b`), the walker then sailed the world map's
+  stage a from about 88000 to the stop, never reaching `a122`. `me232ah15`, the cutscene that sets 364, also sets
+  B[6] to 0, and map 99 loads at the letter B[6] gives (content-systems.md: map 99), whatever a warp names; the
+  walker left Yafutoma by `a019a`'s 4001 (op 238 with B[6] as it stood) and came out on stage a, which has no
+  landing for `a122`, where stage i has 4022. `a019d`'s 4005 and `a020a`'s 4020 set B[6] to 8 first, and lead to
+  stage i. The index called every way to the world map `099a`, and the lab made every world map one place. Now
+  a warp to map 99 is `099` and the letter its entry set B[6] to (`019d M04005 w099i`), else `099@`, which the lab
+  resolves to the letter B[6] holds when it measures; each world map letter is its own place (a test each,
+  failing with the letter taken from the name, or ignoring B[6]). 113 lines of the index say `w099@`.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

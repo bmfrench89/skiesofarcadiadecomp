@@ -271,6 +271,35 @@ STORY_FLAGS = 1024  # 1024 up are the field's own: 1087 the event lock, 1856 up 
 # which every town's loop sets).
 MAP_TEMPORARIES = range(1856, 2048)
 _WARP_NAME = re.compile(rb"me(\d{3}[a-z])\.sct\0", re.IGNORECASE)
+# The world map at the letter B[6] gives when it loads: map 99 takes its
+# letter from B[6] whatever a warp names (content-systems.md, map 99).
+WORLD = "099@"
+
+
+def _world(name: str, letter: str | None = None) -> str:
+    """A warp's place: the world map at `letter` where the entry set B[6]
+    before the warp, else at whatever B[6] holds then (WORLD)."""
+    if name.startswith("099"):
+        return "099" + letter if letter else WORLD
+    return name
+
+
+def _b6(d: bytes, o: int) -> str | None:
+    """At `o`, SETB (B[6] k =), the words [5, B[6], 0x04000000, k as a float,
+    =, END]: the world map's letter it gives; else None. a019d's 4005 sets it
+    to 8 (099i) before its op 238, where a019a's 4001 leaves it as it is."""
+    if (
+        o + 24 <= len(d)
+        and _w(d, o) == 5
+        and _w(d, o + 4) == 0x10000006
+        and _w(d, o + 8) == 0x04000000
+        and _w(d, o + 16) == 10
+        and _w(d, o + 20) == END
+    ):
+        v = struct.unpack(">f", d[o + 12 : o + 16])[0]
+        if v == int(v) and 0 <= v < 26:
+            return chr(ord("a") + int(v))
+    return None
 
 
 def story(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
@@ -282,10 +311,12 @@ def story(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
     FLAGSET n is the words [17, 0x04000000, n as a float, 29]; a WARP is [43,
     a self-relative offset to "meNNNx.sct"]; a CALL is [11, an offset] landing
     exactly on another entry's start. Op 238 (fn_802074B0) is the way back to
-    the world map at a position: its fn_800C8E44 warps to "me099a.sct", whose
-    letter the game then picks from the story (FINDINGS: map 99), so it counts
-    as a warp to 099a. What the scan cannot see is a flag set from an
-    expression, and a walk off an island's edge onto the world map."""
+    the world map at a position: its fn_800C8E44 warps to "me099a.sct", and
+    the world map, however named, loads at the letter B[6] gives: a warp to
+    map 99 is to "099" and the letter of a SETB (B[6] k =) earlier in the same
+    entry, else to WORLD, the letter B[6] holds then. What the scan cannot
+    see is a flag set from an expression, and a walk off an island's edge
+    onto the world map."""
     base, ents = entries(d)
     bounds = sorted({off for off, _ in ents} | {len(d) - base})
     starts: dict[int, str] = {}
@@ -296,18 +327,21 @@ def story(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
         end = base + min(b for b in bounds if b > off)
         sets, warps, calls = own.setdefault(name, (set(), set(), set()))
         o = base + off
+        letter = None
         while o + 8 <= end:
             w = _w(d, o)
             if w == 17 and o + 16 <= len(d) and _w(d, o + 4) == 0x04000000 and _w(d, o + 12) == END:
                 v = struct.unpack(">f", d[o + 8 : o + 12])[0]
                 if v == int(v) and 0 <= v < STORY_FLAGS:
                     sets.add(int(v))
+            elif w == 5:
+                letter = _b6(d, o) or letter
             elif w == 43:
                 m = _WARP_NAME.match(d, o + 4 + _w(d, o + 4))
                 if m:
-                    warps.add(m.group(1).decode("latin1").lower())
+                    warps.add(_world(m.group(1).decode("latin1").lower(), letter))
             elif w == 238 and _w(d, o + 4) >= 0x04000000:  # an operand follows, not data
-                warps.add("099a")
+                warps.add(_world("099a", letter))
             elif w == 11:
                 target = starts.get(o + 4 + _rel(d, o + 4) - base)
                 if target and target != name:
@@ -369,9 +403,9 @@ def hooks(d: bytes) -> dict[int, tuple[set[int], set[str]]]:
             if _w(d, q) == 43:
                 m = _WARP_NAME.match(d, q + 4 + _w(d, q + 4))
                 if m:
-                    warps.add(m.group(1).decode("latin1").lower())
+                    warps.add(_world(m.group(1).decode("latin1").lower()))
             elif _w(d, q) == 238 and _w(d, q + 4) >= 0x04000000:
-                warps.add("099a")
+                warps.add(WORLD)
             elif (
                 _w(d, q) == 17
                 and q + 16 <= len(d)
@@ -395,15 +429,16 @@ def hooks(d: bytes) -> dict[int, tuple[set[int], set[str]]]:
 
 
 def _warps_in(d: bytes, lo: int, hi: int) -> set[str]:
-    """The places the words [lo, hi) warp to: WARP's name, op 238 as 099a."""
+    """The places the words [lo, hi) warp to: WARP's name, map 99 and op 238
+    as WORLD."""
     out = set()
     for q in range(lo, min(hi, len(d) - 7), 4):
         if _w(d, q) == 43:
             m = _WARP_NAME.match(d, q + 4 + _w(d, q + 4))
             if m:
-                out.add(m.group(1).decode("latin1").lower())
+                out.add(_world(m.group(1).decode("latin1").lower()))
         elif _w(d, q) == 238 and _w(d, q + 4) >= 0x04000000:
-            out.add("099a")
+            out.add(WORLD)
     return out
 
 

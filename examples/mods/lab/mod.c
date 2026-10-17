@@ -52,7 +52,9 @@
  *                  An entry gated on the ground the player stands on (B[16])
  *                  has it set first, as walking there would.
  *                  A minute's wait on a starting entry logs the script
- *                  threads it waits on. A touch entry (M06nnn) that keeps
+ *                  threads it waits on, and marks done the tasks queued to an
+ *                  actor that never took them up (one the game is not
+ *                  running: a shopkeeper talked to from outside his shop). A touch entry (M06nnn) that keeps
  *                  starting under the player for a second (the script on its
  *                  first word at each safe point) has the stick held
  *                  a quarter turn on every 90 frames until it stops, as a
@@ -226,6 +228,7 @@ static const uint8_t g_leg_x[4] = {128, 255, 128, 0}, g_leg_y[4] = {255, 128, 0,
 #define GOLD_CAP 99999999u
 #define CHOICE_BEAT 30u /* frames between assist's presses in a choice */
 #define CHOICE_TURNS 2u /* options assist takes in turn, start by start of an entry */
+#define CHOICE_OPTIONS 3u /* and ask by ask within one start: the most a choice here has */
 #define PRESS_GAP 60u
 #define MAX_PRESSES 32
 #define MAX_ALTS 4
@@ -707,14 +710,25 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
              * time, the second the next, and so on in turn. a035g's Gilder
              * asks "What do you say?", "not quite finished" first and "I've
              * pretty much seen everything" second; answering the first every
-             * time, reach U4's part-G walker passed 316 over. */
-            static uint32_t choice_from, choice_n, choice_k;
+             * time, reach U4's part-G walker passed 316 over. And a choice
+             * asked again within one start gets the option after: a019a's
+             * Ship Parts Merchant asks once more after "Talk about various
+             * things", and answering it so every time, reach U4's part-H
+             * walker heard his talk for good (u4-H12). */
+            static uint32_t choice_from, choice_n, choice_k, asks, ask_runs;
+            static const Seen* ask_start;
             static int was_choice;
             int choice = frame >= it->from && frame <= it->to && at_choice();
             if (choice && !was_choice) {
                 choice_from = frame;
                 if (g_backed_out) choice_n++;
+                if (g_last_start != ask_start || (g_last_start && g_last_start->runs != ask_runs)) {
+                    ask_start = g_last_start;
+                    ask_runs = g_last_start ? g_last_start->runs : 0;
+                    asks = 0;
+                }
                 choice_k = g_last_start && g_last_start->runs > 1 ? (g_last_start->runs - 1) % CHOICE_TURNS : 0;
+                choice_k = (choice_k + asks++) % CHOICE_OPTIONS;
             }
             was_choice = choice;
             if (choice && !g_backed_out) {
@@ -907,18 +921,31 @@ static void story_count(Seen* s, uint32_t aim, uint32_t f)
 /* "004a" as a map word; 0 if it is not one */
 static uint32_t story_map_word(const char* s)
 {
+    if (strcmp(s, "099@") == 0) return 99u << 8 | '@';
     if (strlen(s) != 4 || s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' ||
         s[3] < 'a' || s[3] > 'z')
         return 0;
     return (uint32_t)((s[0] - '0') * 100 + (s[1] - '0') * 10 + (s[2] - '0')) << 8 | (uint32_t)s[3];
 }
 
-/* The distances' place for a map, every world map (099x) being one; -1 for
- * a map no line names, unless `add` (the file's reading) makes it a place. */
+/* The distances' place for a map; -1 for a map no line names, unless `add`
+ * (the file's reading) makes it a place. Map 99, the world map, loads at the
+ * letter B[6] gives whatever a warp names (content-systems.md), and each
+ * letter is its own: stage a has no landing for a122, where stage i has
+ * 4022. A warp the lines call 099@ goes to the letter B[6] holds now; one
+ * whose entry set B[6] first names its letter (a019d's 4005, 099i). Reach
+ * U4's part-H walker, with every world map one place, left Yafutoma by
+ * a019a's 4001 with B[6] at 0 (me232ah15 sets it so) and sailed stage a,
+ * where a122 is not, for 200,000 frames. */
+#define B6 0x80310A22u /* B[6], a byte: the world map's letter less 'a' */
 static int story_node(uint32_t map, int add)
 {
     int i;
-    if (map >> 8 == 99) map = 99u << 8 | 'a';
+    uint8_t b = 0;
+    if ((map & 0xFFu) == '@') {
+        if (add || !g_api->read8(B6, &b) || b >= 26) return -1;
+        map = 99u << 8 | (uint32_t)('a' + b);
+    }
     for (i = 0; i < g_story_nmaps; i++)
         if (g_story_maps[i] == map) return i;
     if (!add || g_story_nmaps == STORY_MAPS) return -1;
@@ -1280,6 +1307,8 @@ static int script_entry(uint32_t code, uint32_t off)
 #define THREAD_MAX 384u
 #define THREAD_SIZE 52u
 #define THREAD_PC 0x1Cu
+#define THREAD_TASK 0x0Cu  /* an actor's task a slot waits on: its record */
+#define THREAD_ACTOR 0x24u /* and the actor's id */
 static void log_threads(uint32_t f)
 {
     uint32_t code = 0, slots = 0, i, first, pc, op;
@@ -1299,6 +1328,32 @@ static void log_threads(uint32_t f)
         else
             logf_("walk:   thread %u at %08X (op %u), outside the map's script", i, pc, op);
     }
+}
+
+/* The script waits on the tasks its scptEnter, scptDefMO, scptLetsTalk and
+ * scptRet queue to an actor, each a record whose first word the actor sets
+ * (0 queued, 2 done), and an actor the game is not running never takes one
+ * up: a019a's Ship Parts Merchant (3002), talked to through the shop's
+ * counter (4002) with Vyse on the pier outside, left all four at 0, and the
+ * talk's RET held the start lock for good (reach U4's probes u4-H10 and
+ * u4-H11). A minute on, each task still queued to an actor is marked done in
+ * its place, said so; one an actor has taken up is left to it. */
+static void take_up_tasks(uint32_t f)
+{
+    uint32_t slots = 0, i, s, first, task, actor, state, n = 0, who = 0;
+    if (!g_api->read32(THREAD_SLOTS, &slots) || !slots) return;
+    for (i = 1; i < THREAD_MAX; i++) {
+        s = slots + i * THREAD_SIZE;
+        if (!g_api->read32(s, &first) || !first || !g_api->read32(s + THREAD_TASK, &task) || !task ||
+            !g_api->read32(s + THREAD_ACTOR, &actor) || !actor || actor >= 10000 || !g_api->read32(task, &state) ||
+            state != 0)
+            continue;
+        g_api->write32(task, 2);
+        n++;
+        who = actor;
+    }
+    if (n)
+        logf_("walk: frame %u: %u task(s) queued to actor %u never taken up: marked done in its place", f, n, who);
 }
 
 /* Whether the map script's main thread is busy, with the entry it runs in
@@ -1773,6 +1828,7 @@ static void walk(Item* it)
         if (!g_entry_busy_told && f + 1 - g_entry_busy_from >= WALK_STUCK) {
             g_entry_busy_told = 1;
             log_threads(f);
+            take_up_tasks(f);
         }
         return;
     }
