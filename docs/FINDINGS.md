@@ -9132,6 +9132,30 @@ here).
   37000 [I: 4005 opens after the betrayal, 380, which waits on 365 clear]. Every card since `card-partH-020a.raw`
   carries 365 set early, so part H's tail (381 on) waits for a run from `card-partH.raw` that leaves `a019d` for the
   world map only after the betrayal.
+- **Part I's start, and a door too early** [V, `build/reach/u4-I1`, stopped by hand at frame 154000]: from
+  `card-partI.raw` with `--story 400-449`, 400 and 401 by the game's scripts, `save` at `a017b`'s save point (4250)
+  at 33534 (`build/savetest/card-partI-017b.raw`), and into the dungeon `a123`, aiming at 403. `a123b`'s loop sets
+  403 only under `SWITCH (sys[15])`'s 1233, the arrival from `a123d`, with 401 set and 403 clear; the walker came
+  in from the world map (990), took `a123b`'s door (4000) at 35647, and arrived in `a123c` with 403 clear. That
+  loop clears flag 1087 only on its 403 branch, so the field stayed held, the picture black from 35827 to the stop
+  (frame 150000), B and the way out of a menu changing nothing. [I: a player cannot reach that door before 403;
+  the walker starts entries without walking to them.] The story index now says where an arrival-only flag is
+  set: a flag the loop sets only in one arrival's case (and nowhere else in it, nor in another case) leaves the
+  loop's and the map's cutscenes' lines and goes on a line of the map the party comes from, naming where it goes
+  (`123d via123b s403`); 81 such lines, `019d via232a s359 s361` and `019d via099i s365` among them. In the lab a
+  way into the named map from there ranks first (a test each, failing without it).
+- **A door puzzle, and a stand-in for it** [V, `build/reach/u4-I2`, `u4-I3`; `sct.py 123d`]: u4-I2 aimed at 403
+  "set in 123d" and got there, and `a123d`'s 4201, its way into `a123b`, opens the door only `IF (FLAG[1912] 1 ==)`;
+  otherwise it takes the party on through the chamber and plays the doors' check (`tobira`, `tobihazure`, the
+  wrong door, `tobiseikai`, the right one), and its `mondai` counts the answers (1910, 1911, 1912). The walker
+  started 4201 four times among the chamber's other entries, never set 1912, and a wrong door (6003) left an
+  event it could not back out of. u4-I3 set 1912 with the lab's `flag:123d:1912`, logged in place of the puzzle's
+  answers (the hooks' kind of stand-in): 403 at 5583, 404 to 408 by 19142 through `a123b` and `a123c`, and 414 at
+  28425 (413 came set on the part card). Then 409 at 31520, 411 at 45887 (by `a125a` and `a125b`), 412 at 63380, a
+  ship battle and a land battle ended by `finish`, and from 71292 "no flag in 400-449 is left for a line to set":
+  part I's story to its end in the index's terms (no script sets 402 or 410).
+  `save` saved at `a017e` (30000) and `a004a` (94342, `build/savetest/card-partI-004a.raw`, after 412); the run was
+  stopped by hand at 252500, in a menu at `a010a`.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

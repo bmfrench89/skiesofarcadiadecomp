@@ -2253,6 +2253,35 @@ def test_the_walker_stands_in_for_the_arrival_a_story_flag_waits_on(driver, tmp_
 
 
 @needs_cc
+def test_a_way_into_a_map_whose_loop_sets_the_aim_on_that_arrival_ranks_first(driver, tmp_path):
+    """`123d via123b s403`: a123b's loop sets 403 only on the arrival from
+    a123d, so a123d is where 403 is set, and its way into a123b (4201) ranks
+    first, before a lower id that leads elsewhere (4200). Part I's walker
+    stood in a123b, whose loop never sets 403 for an arrival from the world
+    map, and took its door instead."""
+    lab(tmp_path)
+    lines = "123d M04201 w123b|123d M04200 w123a|123d via123b s403|123a M04000 w123b|"
+    (tmp_path / "story.txt").write_text(lines.replace("|", "\n"), encoding="utf-8")
+    vols = (
+        "set 80347524 80400800 set 80400808 1068 set 80400810 8 set 80400830 80400900 "  # 4200
+        "set 80400908 1069 set 80400910 8 walkfns game "  # 4201
+    )
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 7b setb 80311ac8 64 frame frame frame frame safe"
+    out, err = play(
+        driver,
+        tmp_path,
+        vols + here,
+        SOA_LAB="story:400-449;walk:0-5000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == ["fn_80210550(4201)"], (
+        out
+    )
+    assert "the story's rank toward flag 403: 0" in err, err
+
+
+@needs_cc
 def test_a_travel_menus_warps_are_no_way_the_walker_can_take(driver, tmp_path):
     """A line other than a loop that warps to six places or more is a travel
     menu (a034a's rorensu, 25), whose place the walker cannot choose: its

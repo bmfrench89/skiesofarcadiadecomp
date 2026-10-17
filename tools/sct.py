@@ -610,6 +610,79 @@ def _sets_of(d: bytes, flags: set[int]) -> dict[str, set[int]]:
     return out
 
 
+SYS15 = 0x5000000F  # sys[15], the map the party came from: map x 10 + its letter
+
+
+def _sets_in(d: bytes, ranges, starts: dict[int, str], base: int, called) -> set[int]:
+    """The story flags the words in `ranges` set: their FLAGSETs, and those of
+    the entries they CALL (`called`, story's)."""
+    out: set[int] = set()
+    for lo, hi in ranges:
+        for q in range(lo, min(hi, len(d) - 15), 4):
+            w = _w(d, q)
+            if w == 17 and _w(d, q + 4) == 0x04000000 and _w(d, q + 12) == END:
+                v = struct.unpack(">f", d[q + 8 : q + 12])[0]
+                if v == int(v) and 0 <= v < STORY_FLAGS:
+                    out.add(int(v))
+            elif w == 11:
+                target = starts.get(q + 4 + _rel(d, q + 4) - base)
+                if target:
+                    out |= called[target][0]
+    return out
+
+
+def arrivals(d: bytes) -> tuple[dict[str, set[int]], set[int]]:
+    """The story flags the map's loop sets only on an arrival from one place:
+    its SWITCH (sys[15]) picks a case by the map the party came from, map times
+    ten plus its letter (content-systems.md: 1233 is a123d), and a123b's loop
+    plays the cutscene that sets 403 only on the arrival from a123d. Returns
+    {the map came from: those flags} and the set of them, flags the loop sets
+    in no other case and nowhere outside the switch. A case for a return from
+    battle (10000), a load (20000) or none (the default) is no one arrival."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    starts: dict[int, str] = {}
+    for off, entry in ents:
+        starts.setdefault(off, entry)
+    loop = next((off for off, entry in ents if entry == "loop"), None)
+    if loop is None:
+        return {}, set()
+    lo, hi = base + loop, base + min(b for b in bounds if b > loop)
+    called = story(d)
+    per: dict[str, set[int]] = {}
+    blocks = []
+    o = lo
+    while o + 16 <= hi:
+        n = _w(d, o + 12)
+        if _w(d, o) == 3 and _w(d, o + 4) == SYS15 and _w(d, o + 8) == END and 0 < n < 64:
+            cases = [
+                (_w(d, o + 16 + 8 * i), o + 20 + 8 * i + _rel(d, o + 20 + 8 * i)) for i in range(n)
+            ]
+            targets = sorted({t for _, t in cases})
+            for v, t in cases:
+                if v >= 10000 or not lo <= t < hi:
+                    continue
+                end = min([x for x in targets if x > t] or [hi])
+                blocks.append((t, end))
+                src = f"{v // 10:03d}{chr(ord('a') + v % 10)}"
+                per.setdefault(src, set()).update(_sets_in(d, [(t, end)], starts, base, called))
+            o += 16 + 8 * n
+            continue
+        o += 4
+    outside, pos = [], lo
+    for t, end in sorted(blocks):
+        if t > pos:
+            outside.append((pos, t))
+        pos = max(pos, end)
+    if pos < hi:
+        outside.append((pos, hi))
+    elsewhere = _sets_in(d, outside, starts, base, called)
+    for src in per:
+        elsewhere |= set().union(*(f for s, f in per.items() if s != src)) & per[src]
+    only = set().union(*per.values()) - elsewhere if per else set()
+    return {src: f & only for src, f in per.items() if f & only}, only
+
+
 def story_lines(
     name: str,
     d: bytes,
@@ -624,13 +697,19 @@ def story_lines(
     And for each flag every place here sets only once others are set, a line
     naming them (`requirements`): `013b req271 r272`. With `needed`, the
     field flags requirements name, an entry that sets one sets it on its line
-    too: `115a M04000 s1610`."""
+    too: `115a M04000 s1610`. A flag the loop sets only on an arrival from
+    one map (`arrivals`) is that map's, on a line naming where the arrival is
+    to: `123d via123b s403`; the loop and the cutscenes here, which the walker
+    cannot start, do not say they set it."""
     lines = []
     opens = gates(d)
     field = _sets_of(d, set(needed)) if needed else {}
+    via, only = arrivals(d)
     for entry, (sets, warps) in story(d).items():
         more = opens.get(entry, (set(), set()))
         sets, warps = sets | more[0] | field.get(entry, set()), warps | more[1]
+        if not re.fullmatch(r"M\d{5}", entry):
+            sets = sets - only
         if sets or warps:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
             lines.append(f"{name} {entry} {' '.join(words)}")
@@ -640,6 +719,8 @@ def story_lines(
             lines.append(f"{name} hook{flag} {' '.join(words)}")
     for flag, need in sorted(requirements(d).items()):
         lines.append(f"{name} req{flag} {' '.join(f'r{g}' for g in sorted(need))}")
+    for src, flags in sorted(via.items()):
+        lines.append(f"{src} via{name} {' '.join(f's{f}' for f in sorted(flags))}")
     return lines
 
 

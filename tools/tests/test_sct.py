@@ -169,6 +169,37 @@ def test_a_warp_to_the_world_map_goes_where_b6_says():
     assert got["M04001"] == (set(), {"099@"}), got
 
 
+def test_a_flag_the_loop_sets_on_one_arrival_belongs_to_the_map_came_from():
+    """a123b's loop plays the cutscene that sets 403 under SWITCH (sys[15])'s
+    1233, the arrival from a123d: the loop's and the cutscene's lines no longer
+    say they set it, and a line says a123d's way in does (`123d via123b s403`).
+    A flag the loop also sets outside the switch (402) stays the loop's, and
+    the default case is no one arrival."""
+    SYS15 = 0x5000000F
+    head = [3, SYS15, END, 3, 1233, 0, 990, 0, 0xFFFFFFFF, 0]  # rels patched below
+    a1233 = [11, 0, 10, 0]  # CALL the cutscene, GOTO
+    a990 = [17, *f(402), END, 10, 0]  # 402 here
+    other = [17, *f(401), END, 17, *f(402), END, 12]  # default and after: 401, 402
+    loop = head + a1233 + a990 + other
+    cut = [17, *f(403), END, 12]
+    d = bytearray(build([("loop", loop), ("me123bi04", cut)]))
+    base = 12 + 2 * 20
+    at = {
+        "a1233": 4 * len(head),
+        "a990": 4 * (len(head) + len(a1233)),
+        "other": 4 * (len(head) + len(a1233) + len(a990)),
+    }
+    for i, key in enumerate(("a1233", "a990", "other")):
+        rel_at = 4 * (5 + 2 * i)
+        struct.pack_into(">i", d, base + rel_at, at[key] - rel_at)
+    struct.pack_into(">i", d, base + at["a1233"] + 4, 4 * len(loop) - (at["a1233"] + 4))  # the CALL
+    via, only = sct.arrivals(bytes(d))
+    assert via == {"123d": {403}} and only == {403}, (via, only)
+    lines = sct.story_lines("123b", bytes(d))
+    assert "123d via123b s403" in lines, lines
+    assert "123b loop s401 s402" in lines and not any("me123bi04" in x for x in lines), lines
+
+
 def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     """`IF (FLAG[1766] 1 ==)` around a warp, as me099f's loop has it: a hook,
     listed only when no script sets the flag. A block on a story flag (below

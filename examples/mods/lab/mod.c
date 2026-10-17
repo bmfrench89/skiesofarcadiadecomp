@@ -78,7 +78,10 @@
  *                  ship reaching a spot): a hook setting the aim ranks first,
  *                  one warping nearer by its distance, and a requirement on N
  *                  holds it back no longer; ranked before every live entry,
- *                  the walker sets N in its place, twice at most per aim.
+ *                  the walker sets N in its place, twice at most per aim. A
+ *                  line "MAP viaTO sF.." says MAP's ways into TO set F, on
+ *                  that arrival (TO's loop picks by where the party came
+ *                  from): they rank first.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
  *                  in a ship battle where its menu waits for A (a 5xx stage,
@@ -320,6 +323,7 @@ static Seen* g_last_start; /* the entry the walker last started, until its event
 typedef struct {
     uint32_t map, id; /* id: n for an entry named M%05d (the walker's), else 0 */
     uint32_t hook;    /* n for a line named hookN: its warps wait for flag n, which no script sets */
+    uint32_t via;     /* a line viaMAP: this map's ways into MAP set its flags, on that arrival */
     uint32_t req;     /* n for a line named reqN: every place this map sets n waits for its flags */
     uint32_t at;      /* its sets, then its warps, then its requirements, in g_story_words */
     uint16_t nsets, nwarps, nreqs;
@@ -982,6 +986,7 @@ static int story_line(char* p)
         l->hook = (uint32_t)strtoul(name + 4, NULL, 10);
         if (!l->hook || l->hook >= FLAG_COUNT) return 0;
     }
+    if (strncmp(name, "via", 3) == 0 && !(l->via = story_map_word(name + 3))) return 0;
     if (strncmp(name, "req", 3) == 0 && name[3] && strspn(name + 3, "0123456789") == strlen(name + 3)) {
         l->req = (uint32_t)strtoul(name + 3, NULL, 10);
         if (!l->req || l->req >= FLAG_COUNT) return 0;
@@ -1175,11 +1180,20 @@ static uint32_t story_dist(uint32_t map)
 static uint32_t story_score(uint32_t map, uint32_t id, uint32_t aim)
 {
     uint32_t best = STORY_FAR, here = story_dist(map), k, d;
-    int i;
+    int i, j;
     for (i = 0; i < g_nstory; i++) {
         const StoryLine* l = &g_story[i];
         if (l->map != map || l->id != id) continue;
         if (story_sets(l, aim)) return 0;
+        /* A way into a map whose loop sets the aim on the arrival from here
+         * (`123d via123b s403`: a123b's loop plays 403's cutscene only for
+         * the party come from a123d) sets it as well as any. */
+        for (j = 0; j < g_nstory; j++) {
+            const StoryLine* v = &g_story[j];
+            if (v->map != map || !v->via || !story_sets(v, aim)) continue;
+            for (k = 0; k < l->nwarps; k++)
+                if (g_story_words[l->at + l->nsets + k] == v->via) return 0;
+        }
         for (k = 0; k < l->nwarps; k++) {
             d = story_dist(g_story_words[l->at + l->nsets + k]);
             if (d < here && d + 1 < best) best = d + 1;

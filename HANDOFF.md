@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1651 |
+| Python tests | 1653 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -518,7 +518,12 @@ world map's letter: map 99 loads at B[6]'s, and the index and the lab now say so
 `card-partH-020a.raw`, `card-partH-019d.raw` (to 377), `card-partH-121a.raw` (Mt. Kazai, with 358). A battle that
 stood still once (Muraji, u4-H6) did not recur (FINDINGS).
 
-**Next:** part I from `card-partI.raw` with `--story 400-449`, then J to L the same way. Part H's tail (381 on)
+**Part I's story done (`u4-I3`, 2026-10-17):** 400 to 414 (no script sets 402 or 410), with
+the dungeon `a123`'s door puzzle stood in for by `flag:123d:1912` and arrival-only flags now in the index
+(`123d via123b s403`). Card `card-partI-004a.raw` (after 412).
+
+**Next:** part J from `card-partI-004a.raw` with `--story 450-499` (where part I's story left the party), then K
+and L the same way. Part H's tail (381 on)
 needs a run from `card-partH.raw` that leaves `a019d` for the world map only after the betrayal (380): every later
 card carries 365, set by that trip made early, which shuts the betrayal out (FINDINGS "u4-H15 and u4-H16"). U5's
 parts E, F, I and L with `hold-hp`. The mod framework's
