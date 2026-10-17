@@ -9071,6 +9071,21 @@ here).
   not read]: 359 needs the walk from `a019d` (its 4004, or its
   loop's warp). Passed over at 160085 with the walker on other maps; its second go comes when nothing else is
   reachable. The index does not say which arrival a loop's branch wants.
+- **Runs u4-H5 and u4-H6: patience that the story's moves start over** [V, `build/reach/u4-H5`, `u4-H6`]: from
+  `card-partH-020a.raw`, u4-H5 passed 358 over at 34592 while Yafutoma's scenes set 366 to 372 around the
+  walker, which had no chance to set out for Mt. Kazai. An aim's 30,000 frames now start over whenever another
+  flag of the window is set, said so (a test, failing without it); u4-H6 kept 358 as its aim through them.
+- **A question, not a finding: a battle that stood still** [V, `build/reach/u4-H6`, `u4-H8`]: in u4-H6 the event
+  battle against Muraji and three guards on the Delphinus (from `a035a`'s `me035ah24`, frame 36311) logged its
+  first round's commands at 37651, all Attack, and from about 38000 the picture did not change again: frames
+  38000 to 151000 differ from the last by a mean of 1.4 grey levels of 255 at most (blinking numbers), Vyse mid-swing
+  with 521 and 823 shown over two enemies, while frames went on being presented (so no watchdog). The last load
+  before it, `/BEFF/F292503C.MLK`, had loaded 23 times earlier in the run and completed each time. Run u4-H8, the
+  same recipe from the same card, fought the same battle through to its end at 50497: the two runs' starts
+  already differ by a frame at 3553 and by eight at 11450, so the runs are not frame-exact, and the stall did
+  not recur. Run u4-H4 had fought Muraji (from 92711) to its end as well. Not chased further here: a stall that
+  depends on timing needs the state at the stall, and later runs peek the battle's phase word (`0x8034733C`) so
+  that a recurrence says which phase it stopped in.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

@@ -2326,6 +2326,43 @@ def test_the_lab_story_aims_at_the_field_flag_a_flag_waits_on(driver, tmp_path):
 
 
 @needs_cc
+def test_the_lab_story_starts_an_aims_patience_over_when_the_story_moves(driver, tmp_path):
+    """Another flag of the window set while the walker aims at one starts the
+    aim's 30,000 frames over, said so: part H's walker passed 358 over while
+    Yafutoma's scenes set 366 to 372 around it."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "frame frame frame frame safe "  # frame 4: aim 100
+        + "frame " * 20000
+        + "set 80310b48 20 safe "  # 20004: 101 set
+        + "frame " * 20000
+        + "safe "  # 40004: 20,000 frames since: kept
+        + "frame " * 10000
+        + "safe"  # 50004: 30,000: passed over
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:100-101;walk:0-200000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    lines = [
+        x.split("lab: story: ", 1)[1]
+        for x in err.splitlines()
+        if "lab: story: " in x and "line(s)" not in x
+    ]
+    assert lines[:3] == [
+        "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
+        "a flag of 100-101 set by frame 20004: flag 100's patience starts over",
+        "flag 100 aimed at since frame 20004 and not set: passed over from frame 50004",
+    ], err
+
+
+@needs_cc
 def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tmp_path):
     """A flag set only in a branch the run did not take, or on a later visit
     (part C's 123), would hold the walker for good: aimed at for 30,000

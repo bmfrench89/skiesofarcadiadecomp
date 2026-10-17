@@ -67,7 +67,8 @@
  *                  an entry that sets it, then one that warps nearer, each for
  *                  two starts while that flag is the aim, and two more 9,000
  *                  frames after the last (a talk may open it); an aim not
- *                  reached in 30,000 frames is passed over. Where the
+ *                  reached in 30,000 frames with no other flag of the window
+ *                  set is passed over. Where the
  *                  map itself sets it (its loop, on conditions), the walker
  *                  stays and talks. The aim and the distance are logged. A
  *                  line "MAP hookN sF.. wX..." is what MAP's script does once
@@ -342,6 +343,7 @@ static uint8_t g_story_settable[FLAG_COUNT]; /* field flags too, where a require
 enum { PASSED_NOT, PASSED_ONCE, PASSED_AGAIN_AIMED, PASSED_FOR_GOOD };
 static uint8_t g_story_passed[FLAG_COUNT];
 static uint32_t g_story_aim_now, g_story_aim_from;
+static uint32_t g_story_window_set; /* flags of LO..HI set at the walker's last look */
 
 /* A ship battle's command input (reach U3, found by RAM captures at two
  * crew members' inputs and confirmed by peeks through a fight): the word at
@@ -1780,10 +1782,20 @@ static void walk(Item* it)
     if (f - it->started < it->id) return;
     if (!g_api->read32(LIST_HEAD, &v)) return;
     if (g_story_on) {
+        uint32_t k, nset = 0;
+        for (k = g_story_lo; k <= g_story_hi; k++) nset += g_api->story_flag(k) ? 1u : 0u;
         aim = story_aim(map);
         if (aim != g_story_aim_now) {
             g_story_aim_now = aim;
             g_story_aim_from = f;
+        } else if (aim && nset != g_story_window_set) {
+            /* The story moved on, by another flag of the window: the aim's
+             * patience starts over. Part H's walker, aiming at 358 (Mt.
+             * Kazai) while Yafutoma's scenes set 366 to 372 around it,
+             * passed it over before it could set out (u4-H5, at 34592). */
+            g_story_aim_from = f;
+            logf_("story: a flag of %u-%u set by frame %u: flag %u's patience starts over", g_story_lo, g_story_hi, f,
+                  aim);
         } else if (aim && f - g_story_aim_from >= STORY_AIM_PATIENCE) {
             logf_("story: flag %u aimed at since frame %u and not set: passed over from frame %u", aim,
                   g_story_aim_from, f);
@@ -1792,6 +1804,7 @@ static void walk(Item* it)
             g_story_aim_now = aim;
             g_story_aim_from = f;
         }
+        g_story_window_set = nset;
         story_note(map, aim);
     }
     /* Inside a house, nothing of the street's that warps away starts: a
