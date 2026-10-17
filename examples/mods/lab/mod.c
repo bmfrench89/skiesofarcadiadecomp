@@ -200,6 +200,7 @@
 #define ENTRY_BUSY 0x8030E714u
 #define FN_ENTRY_LIVE 0x8021067Cu
 #define FN_ENTRY_START 0x80210550u
+#define FN_ENTRY_START_NAME 0x80210450u /* the same, by the entry's name string */
 #define FLAG_EVENT 1087u
 /* Set while the party is inside a house: a door's entry (a008a's 4000 to
  * 4090, a008b's 4000) is live only while it is clear and sets it, the
@@ -232,6 +233,7 @@ static const uint8_t g_leg_x[4] = {128, 255, 128, 0}, g_leg_y[4] = {255, 128, 0,
 #define CHOICE_BEAT 30u /* frames between assist's presses in a choice */
 #define CHOICE_TURNS 2u /* options assist takes in turn, start by start of an entry */
 #define MENU_WARPS 6u /* a line warping to this many places is a travel menu */
+#define HOOK_CLEAR 0x80000000u /* on a hook line's condition word: the flag must be clear (x) */
 #define CHOICE_OPTIONS 3u /* and ask by ask within one start: the most a choice here has */
 #define PRESS_GAP 60u
 #define MAX_PRESSES 32
@@ -324,6 +326,8 @@ typedef struct {
     uint32_t map, id; /* id: n for an entry named M%05d (the walker's), else 0 */
     uint32_t hook;    /* n for a line named hookN: its warps wait for flag n, which no script sets */
     uint32_t via;     /* a line viaMAP: this map's ways into MAP set its flags, on that arrival */
+    int game;         /* a line ending in g: an entry the game starts by name, which no script calls */
+    char name[17];    /* the line's entry */
     uint32_t req;     /* n for a line named reqN: every place this map sets n waits for its flags */
     uint32_t at;      /* its sets, then its warps, then its requirements, in g_story_words */
     uint16_t nsets, nwarps, nreqs;
@@ -980,6 +984,7 @@ static int story_line(char* p)
     memset(l, 0, sizeof *l);
     name = next_word(&p);
     if (!name || !(l->map = story_map_word(tok)) || story_node(l->map, 1) < 0) return 0;
+    snprintf(l->name, sizeof l->name, "%s", name);
     if (name[0] == 'M' && strlen(name) == 6 && strspn(name + 1, "0123456789") == 5)
         l->id = (uint32_t)strtoul(name + 1, NULL, 10);
     if (strncmp(name, "hook", 4) == 0 && name[4] && strspn(name + 4, "0123456789") == strlen(name + 4)) {
@@ -995,6 +1000,10 @@ static int story_line(char* p)
     while ((tok = next_word(&p)) != NULL) {
         uint32_t v = 0;
         char* end;
+        if (strcmp(tok, "g") == 0 && !l->req) {
+            l->game = 1;
+            continue;
+        }
         if (g_story_nwords == STORY_WORDS) return 0;
         /* A flag only the developers' part-select room (355a) sets is set by
          * no place the story goes, and was aimed at for nothing: reach U4's
@@ -1003,6 +1012,9 @@ static int story_line(char* p)
             l->nsets++, g_story_settable[v] |= l->map != PART_SELECT;
         else if (tok[0] == 'w' && !l->req && (v = story_map_word(tok + 1)) != 0)
             l->nwarps++;
+        else if ((tok[0] == 'r' || tok[0] == 'x') && l->hook && parse_u32(tok + 1, &end, &v) && !*end &&
+                 v < FLAG_COUNT)
+            l->nreqs++, v |= tok[0] == 'x' ? HOOK_CLEAR : 0;
         else if (tok[0] == 'r' && l->req && parse_u32(tok + 1, &end, &v) && !*end && v < FLAG_COUNT)
             l->nreqs++;
         else
@@ -1046,6 +1058,8 @@ static int story_load(const char* path)
 }
 
 static void story_dists(uint32_t aim);
+static int story_hook_ready(const StoryLine* l);
+static int story_bounces(uint32_t map, uint32_t to);
 static uint32_t story_dist(uint32_t map);
 
 /* The flag the story wants next, its distances measured: in the window, the
@@ -1151,14 +1165,17 @@ static void story_dists(uint32_t aim)
     uint32_t k;
     for (i = 0; i < g_story_nmaps; i++) g_story_dist[i] = STORY_FAR;
     for (i = 0; i < g_nstory; i++)
-        if (story_sets(&g_story[i], aim)) g_story_dist[story_node(g_story[i].map, 0)] = 0;
+        if (story_sets(&g_story[i], aim) && (!g_story[i].hook || story_hook_ready(&g_story[i])))
+            g_story_dist[story_node(g_story[i].map, 0)] = 0;
     while (changed) {
         changed = 0;
         for (i = 0; i < g_nstory; i++) {
             const StoryLine* l = &g_story[i];
             int from = story_node(l->map, 0);
+            if (l->hook && !story_hook_ready(l)) continue;
             for (k = 0; k < l->nwarps; k++) {
                 int to = story_node(g_story_words[l->at + l->nsets + k], 0);
+                if (story_bounces(l->map, g_story_words[l->at + l->nsets + k])) continue;
                 if (to >= 0 && g_story_dist[to] != STORY_FAR && g_story_dist[to] + 1u < g_story_dist[from]) {
                     g_story_dist[from] = (uint16_t)(g_story_dist[to] + 1u);
                     changed = 1;
@@ -1166,6 +1183,23 @@ static void story_dists(uint32_t aim)
             }
         }
     }
+}
+
+/* Whether the way from `map` into `to` comes straight back: a line
+ * "map viaTO w<map>" (a126c's loop sends the party come from a126b back to
+ * a126b; reach U4's part-J walker took a126b's 4212 into a126c four times,
+ * aiming at 454, which only the way in from a126d lets it set). */
+static int story_bounces(uint32_t map, uint32_t to)
+{
+    uint32_t k;
+    int i;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* v = &g_story[i];
+        if (v->map != map || v->via != to) continue;
+        for (k = 0; k < v->nwarps; k++)
+            if (g_story_words[v->at + v->nsets + k] == map) return 1;
+    }
+    return 0;
 }
 
 static uint32_t story_dist(uint32_t map)
@@ -1195,6 +1229,7 @@ static uint32_t story_score(uint32_t map, uint32_t id, uint32_t aim)
                 if (g_story_words[l->at + l->nsets + k] == v->via) return 0;
         }
         for (k = 0; k < l->nwarps; k++) {
+            if (story_bounces(map, g_story_words[l->at + l->nsets + k])) continue;
             d = story_dist(g_story_words[l->at + l->nsets + k]);
             if (d < here && d + 1 < best) best = d + 1;
         }
@@ -1216,6 +1251,20 @@ static int story_warps_away(uint32_t map, uint32_t id)
     return 0;
 }
 
+/* Whether a hook's block will warp once its flag is set: the flags it
+ * then tests (r set, x clear, on its line) as they stand. me099l's warp to
+ * 205a waits on 468 set and 460 clear past 1782; part J's walker set 1782
+ * with 468 clear, and every map was two warps from 205a by it (u4-J2). */
+static int story_hook_ready(const StoryLine* l)
+{
+    uint32_t k, w;
+    for (k = 0; k < l->nreqs; k++) {
+        w = g_story_words[l->at + l->nsets + l->nwarps + k];
+        if ((g_api->story_flag(w & ~HOOK_CLEAR) != 0) != !(w & HOOK_CLEAR)) return 0;
+    }
+    return 1;
+}
+
 /* This map's best hook toward `aim`: a line hookN here with flag N clear,
  * setting the aim (rank 0) or warping nearer than this map (1 + where it
  * warps), tried fewer than STORY_TRIES times at this aim; its rank in *rank,
@@ -1230,7 +1279,7 @@ static const StoryLine* story_hook(uint32_t map, uint32_t aim, uint32_t* rank)
     *rank = STORY_FAR;
     for (i = 0; i < g_nstory; i++) {
         const StoryLine* l = &g_story[i];
-        if (l->map != map || !l->hook || g_api->story_flag(l->hook)) continue;
+        if (l->map != map || !l->hook || g_api->story_flag(l->hook) || !story_hook_ready(l)) continue;
         s = seen_of(map, 0x80000000u | l->hook);
         if (!story_fresh(s, aim, g_api->frame())) continue;
         for (k = 0; k < l->nsets; k++)
@@ -1668,6 +1717,53 @@ static int sail(Item* it, uint32_t map, uint32_t aim, uint32_t f, uint32_t best)
     return 1;
 }
 
+/* An entry the game starts itself, by name, which no script calls (a line
+ * ending in g): a127b's Fship (463) and Delocco (467), which start as the
+ * Delphinus flies there, and the walker cannot fly; reach U4's part-J walker
+ * stood in a127b with no way to them. Where one sets the aim and nothing
+ * live here does, it is started by its name in the map script's own entry
+ * table (fn_80210450 takes the string), said so: a stand-in for the flight,
+ * twice at most per aim as a hook is. */
+static int game_start(Item* it, uint32_t map, uint32_t aim, uint32_t f, uint32_t best)
+{
+    uint32_t index = 0, count = 0, i, k, w = 0, at, started = 0, args[1];
+    char name[17];
+    Seen* s;
+    int j;
+    if (best == 0 || !g_api->read32(SCRIPT_INDEX, &index) || !g_api->read32(SCRIPT_COUNT, &count) || !index ||
+        count > 4096)
+        return 0;
+    for (j = 0; j < g_nstory; j++) {
+        const StoryLine* l = &g_story[j];
+        if (l->map != map || !l->game || !story_sets(l, aim)) continue;
+        s = seen_of(map, 0x40000000u | (uint32_t)j);
+        if (!s || !story_fresh(s, aim, f)) continue;
+        for (i = 0; i < count; i++) {
+            at = index + 20u * i + 4u;
+            for (k = 0; k < 4 && g_api->read32(at + 4u * k, &w); k++) {
+                name[4 * k] = (char)(w >> 24);
+                name[4 * k + 1] = (char)(w >> 16);
+                name[4 * k + 2] = (char)(w >> 8);
+                name[4 * k + 3] = (char)w;
+            }
+            name[16] = '\0';
+            if (k < 4 || strcmp(name, l->name) != 0) continue;
+            args[0] = at;
+            if (!g_api->call_guest(FN_ENTRY_START_NAME, args, 1, NULL, 0, &started, NULL)) return 0;
+            s->runs++;
+            story_count(s, aim, f);
+            g_last_start = NULL;
+            it->last++;
+            it->why[0] = '\0';
+            logf_("walk: a%03u%c's %s started by name at frame %u, in place of what starts it in the game (the "
+                  "story's aim: flag %u)",
+                  (unsigned)(map >> 8), (char)(map & 0xFF), l->name, f, aim);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* One safe point of the walker: it->started is the last frame the field was
  * busy (or an entry was started), it->last the number of entries started. */
 /* Logs why the walker waits, once each time the reason changes. */
@@ -1960,6 +2056,7 @@ static void walk(Item* it)
                   (unsigned)(map >> 8), (char)(map & 0xFF), h->hook, f, aim, hook_rank);
             return;
         }
+        if (game_start(it, map, aim, f, best_score)) return;
         if ((map >> 8) == 99 && sail(it, map, aim, f, best_score)) return;
     }
     if (!best_vol) {

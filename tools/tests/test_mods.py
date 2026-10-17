@@ -102,13 +102,15 @@ static unsigned g_nhere;
 int irq_in_handler(void) { return g_irq; }
 int dispatch_known(uint32_t a)
 {
-    return a == 0x80003100u || (g_walk_fns && (a == 0x8021067Cu || a == 0x80210550u || a == 0x8015F1A0u));
+    return a == 0x80003100u ||
+           (g_walk_fns && (a == 0x8021067Cu || a == 0x80210550u || a == 0x80210450u || a == 0x8015F1A0u));
 }
 void dispatch(CpuState* s, uint32_t a)
 {
     unsigned i;
     if (a == 0x8021067Cu) { s->gpr[3] = 1; return; }
     if (a == 0x80210550u) { printf("fn_80210550(%u)\n", s->gpr[3]); s->gpr[3] = 1; return; }
+    if (a == 0x80210450u) { printf("fn_80210450(%08X)\n", s->gpr[3]); s->gpr[3] = 1; return; }
     if (a == 0x8015F1A0u) {
         uint32_t id = s->gpr[3];
         s->gpr[3] = 0;
@@ -2279,6 +2281,88 @@ def test_a_way_into_a_map_whose_loop_sets_the_aim_on_that_arrival_ranks_first(dr
         out
     )
     assert "the story's rank toward flag 403: 0" in err, err
+
+
+@needs_cc
+def test_a_way_in_that_the_loop_sends_straight_back_leads_nowhere(driver, tmp_path):
+    """`126b via126c w126b`: a126c's loop sends the party come from a126b
+    straight back, so a126b's way into a126c (4212) leads nowhere toward 454,
+    set in a126c, and the way round by a126d (4008) ranks instead: part J's
+    walker took 4212 four times."""
+    lab(tmp_path)
+    lines = (
+        "126b M04212 w126c|126b M04008 w126d|126d M04001 w126c|126c M04001 s454|126b via126c w126b|"
+    )
+    (tmp_path / "story.txt").write_text(lines.replace("|", "\n"), encoding="utf-8")
+    vols = (
+        "set 80347524 80400800 set 80400808 1074 set 80400810 8 set 80400830 80400900 "  # 4212
+        "set 80400908 fa8 set 80400910 8 walkfns game "  # 4008
+    )
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 7e setb 80311ac8 62 frame frame frame frame safe"
+    out, err = play(
+        driver,
+        tmp_path,
+        vols + here,
+        SOA_LAB="story:450-499;walk:0-5000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == ["fn_80210550(4008)"], (
+        out
+    )
+    assert "the story's rank toward flag 454: 2" in err, err
+
+
+@needs_cc
+def test_a_hook_waits_for_the_flags_its_block_then_tests(driver, tmp_path):
+    """`099l hook1782 w205a r468 x460`: the warp waits on 468 set and 460
+    clear past 1782, so with 468 clear the hook is neither used nor a way to
+    205a; with it set, it is. Part J's walker set 1782 with 468 clear."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(
+        "099l hook1782 w205a r468 x460\n205a M04000 w034a\n205a via034a s469\n", encoding="utf-8"
+    )
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 63 setb 80311ac8 6c "
+    for flags, used in (
+        ("", False),
+        ("set 80310b74 100000 ", True),
+    ):  # 468: word 0x80310B74, bit 20
+        out, err = play(
+            driver,
+            tmp_path,
+            here + flags + "frame frame frame frame safe",
+            SOA_LAB="story:450-499;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert ("hook: flag 1782 set" in err) == used, (flags, err)
+
+
+@needs_cc
+def test_an_entry_the_game_starts_is_started_by_name_where_it_sets_the_aim(driver, tmp_path):
+    """`127b Fship s463 g`: the game starts Fship as the Delphinus flies
+    there, and the walker cannot fly. With nothing live here setting the aim,
+    Fship is started by its name in the map script's entry table (the string's
+    address, to fn_80210450), said so; a line without g is not."""
+    lab(tmp_path)
+    # The script's entry table at 80410000: "loop" at 0, "Fship" second.
+    table = (
+        "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
+        "set 80410004 6c6f6f70 set 80410014 100 set 80410018 46736869 set 8041001c 70000000 "
+    )
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 7f setb 80311ac8 62 set 8030cea4 80400008 walkfns game "
+    for line, started in (("127b Fship s463 g", True), ("127b Fship s463", False)):
+        (tmp_path / "story.txt").write_text(line + "\n", encoding="utf-8")
+        out, err = play(
+            driver,
+            tmp_path,
+            table + here + "frame frame frame frame safe",
+            SOA_LAB="story:450-499;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert ("fn_80210450(80410018)" in out) == started, (line, out)
+        assert ("a127b's Fship started by name at frame 4" in err) == started, (line, err)
 
 
 @needs_cc

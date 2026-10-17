@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1653 |
+| Python tests | 1660 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -522,8 +522,13 @@ stood still once (Muraji, u4-H6) did not recur (FINDINGS).
 the dungeon `a123`'s door puzzle stood in for by `flag:123d:1912` and arrival-only flags now in the index
 (`123d via123b s403`). Card `card-partI-004a.raw` (after 412).
 
-**Next:** part J from `card-partI-004a.raw` with `--story 450-499` (where part I's story left the party), then K
-and L the same way. Part H's tail (381 on)
+**Part J under way (`u4-J1` to `u4-J3`, 2026-10-17):** 450, 452 to 455, 457 to 459, 462 and 470 to 473. The
+index now marks an arrival sent straight back, a hook's own conditions (and keeps a hook's warp off its loop's
+line), and an entry only the game starts (g), which the lab begins by name where it sets the aim (`a127b`'s Fship
+and Delocco, a sky map). Cards: `card-partJ-126a.raw`, `card-partJ-109g.raw`, `card-partJ-020a.raw`.
+
+**Next:** part J on from `card-partJ-020a.raw` with `--story 450-499`, toward 463 to 468 (`a127b`) and then 469
+(`a205a` by stage l's hook), then K and L the same way. Part H's tail (381 on)
 needs a run from `card-partH.raw` that leaves `a019d` for the world map only after the betrayal (380): every later
 card carries 365, set by that trip made early, which shuts the betrayal out (FINDINGS "u4-H15 and u4-H16"). U5's
 parts E, F, I and L with `hold-hp`. The mod framework's

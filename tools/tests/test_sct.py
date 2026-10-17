@@ -200,6 +200,99 @@ def test_a_flag_the_loop_sets_on_one_arrival_belongs_to_the_map_came_from():
     assert "123b loop s401 s402" in lines and not any("me123bi04" in x for x in lines), lines
 
 
+def test_an_arrival_the_loop_sends_straight_back_says_so():
+    """a126c's loop, for the party come from a126b (1261), calls a scene that
+    warps back to a126b: `126b via126c w126b`. The arrival from a126d (1263)
+    is let stay, and says nothing."""
+    SYS15 = 0x5000000F
+    head = [3, SYS15, END, 2, 1261, 0, 1263, 0]  # rels patched below
+    from_b = [11, 0, 10, 0]  # CALL the scene, GOTO
+    from_d = [17, *f(1893), END, 12]
+    loop = head + from_b + from_d
+    scene = [43, 0, 12]  # a WARP patched below
+    d = bytearray(build([("loop", loop), ("from_b", scene)], b"me126b.sct\0\0"))
+    base = 12 + 2 * 20
+    at_b, at_d = 4 * len(head), 4 * (len(head) + len(from_b))
+    struct.pack_into(">i", d, base + 20, at_b - 20)
+    struct.pack_into(">i", d, base + 28, at_d - 28)
+    struct.pack_into(">i", d, base + at_b + 4, 4 * len(loop) - (at_b + 4))  # the CALL
+    warp_at = base + 4 * len(loop)
+    struct.pack_into(">I", d, warp_at + 4, base + 4 * (len(loop) + len(scene)) - (warp_at + 4))
+    assert sct.bounces(bytes(d)) == {"126b"}
+    assert "126b via126c w126b" in sct.story_lines("126c", bytes(d))
+
+
+def test_a_hook_says_what_its_block_then_tests():
+    """me099l's loop, once 1782 is set (no script sets it: the ship's
+    arrival), warps to 205a only if 468 is set and 460 clear: the hook's line
+    says so (`r468 x460`), so the walker leaves the hook until then."""
+    ONE = 0x3F800000
+    loop = [0, 0x20000000 | 1782, FLOAT, ONE, EQ, END, 0]  # the outer block, patched
+    loop += [
+        0,
+        0x20000000 | 468,
+        FLOAT,
+        ONE,
+        EQ,
+        0x20000000 | 460,
+        FLOAT,
+        0,
+        EQ,
+        8,
+        END,
+        0,
+    ]  # the inner IF
+    loop += [43, 0, 12]  # the WARP, patched
+    d = bytearray(build([("loop", loop)], b"me205a.sct\0\0"))
+    base = 12 + 20
+    struct.pack_into(">i", d, base + 24, 4 * len(loop) - 24)
+    struct.pack_into(">i", d, base + 4 * 18, 4 * (len(loop) - 1) - 4 * 18)
+    warp_at = base + 4 * (len(loop) - 3)
+    struct.pack_into(">I", d, warp_at + 4, base + 4 * len(loop) - (warp_at + 4))
+    assert sct.hook_conditions(bytes(d)) == {1782: [(468, 1), (460, 0)]}
+    assert "099l hook1782 w205a r468 x460" in sct.story_lines("099l", bytes(d), unset={1782})
+
+
+def test_an_entry_no_call_reaches_is_the_games_to_start():
+    """a127b's Fship sets 463 and no CALL reaches it: the game starts it, as
+    the Delphinus flies there, and its line ends in g. A cutscene the loop
+    calls, and a developer's test entry, do not."""
+    loop = [11, 0, 12]  # CALL the cutscene, patched below
+    cut = [17, *f(462), END, 12]
+    fship = [17, *f(463), END, 12]
+    test = [17, *f(464), END, 12]
+    d = bytearray(build([("loop", loop), ("me127bj14", cut), ("Fship", fship), ("test171", test)]))
+    base = 12 + 4 * 20
+    struct.pack_into(">i", d, base + 4, 4 * len(loop) - 4)
+    assert sct.game_started(bytes(d)) == {"Fship"}
+    lines = sct.story_lines("127b", bytes(d))
+    assert (
+        "127b Fship s463 g" in lines
+        and "127b me127bj14 s462" in lines
+        and "127b test171 s464" in lines
+    ), lines
+
+
+def test_a_loops_line_leaves_a_hooks_warp_to_the_hook():
+    """me099l's loop warps to 205a only past hook 1782 (and once 468 is set):
+    that warp is the hook's line's, not the loop's, which keeps the warps it
+    makes outside any hook's block."""
+    ONE = 0x3F800000
+    loop = [0, 0x20000000 | 1782, FLOAT, ONE, EQ, END, 0]  # the hook's block, patched
+    loop += [43, 0, 10, 0]  # the WARP to 205a inside it, patched
+    loop += [43, 0, 12]  # a WARP to 250a after it, patched
+    names = b"me205a.sct\0\0me250a.sct\0\0"
+    d = bytearray(build([("loop", loop)], names))
+    base = 12 + 20
+    struct.pack_into(">i", d, base + 24, 4 * 11 - 24)  # the block ends at word 11
+    end = base + 4 * len(loop)
+    struct.pack_into(">I", d, base + 32, end - (base + 32))  # word 8: me205a
+    struct.pack_into(">I", d, base + 48, end + 12 - (base + 48))  # word 12: me250a
+    lines = sct.story_lines("099l", bytes(d), unset={1782})
+    assert "099l loop w250a" in lines and "099l hook1782 w205a" in lines, lines
+    assert sct.story_lines("099l", bytes(d), unset=set())[0] == "099l loop w205a w250a"
+
+
 def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     """`IF (FLAG[1766] 1 ==)` around a warp, as me099f's loop has it: a hook,
     listed only when no script sets the flag. A block on a story flag (below

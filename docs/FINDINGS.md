@@ -9156,6 +9156,27 @@ here).
   part I's story to its end in the index's terms (no script sets 402 or 410).
   `save` saved at `a017e` (30000) and `a004a` (94342, `build/savetest/card-partI-004a.raw`, after 412); the run was
   stopped by hand at 252500, in a menu at `a010a`.
+- **Part J's start: an arrival sent straight back, a hook too early, a flight** [V, `build/reach/u4-J1` to `u4-J3`]:
+  from part I's last card (`card-partI-004a.raw`) with `--story 450-499`, u4-J1 set 450, 452, 453, 470, 472 and 473
+  by 16800, then passed 454 over: `a126c`'s 4001 sets it, and the walker went in from `a126b` (4212) four times,
+  where `a126c`'s loop, for the party come from `a126b` (1261), plays two Valuan soldiers' talk and warps back to
+  `a126b`; only the way in from `a126d` stays. An arrival the loop sends straight back now says so on its `via`
+  line (`126b via126c w126b`; 10 such), and the lab counts that way in as leading nowhere (a test each). `save`
+  saved at `a126a` (67872, `build/savetest/card-partJ-126a.raw`) and u4-J2 from it set 454, 455, 457 to 459 and
+  471. Then 469: `a205a`'s way into `a034a` sets it, and the world map's stage l reaches `a205a` only past its hook
+  1782 and only if 468 is set and 460 clear, `IF (FLAG[468] 1 == FLAG[460] 0 == &&)` at the head of the block;
+  468 is set in `a127b`. The walker set 1782 at 27387 with 468 clear, no warp came, and the loop's own line,
+  saying `w205a`, left every map two warps from `a205a`: the walker toured twenty of them until 469 was passed
+  over at 71847. A hook's line now carries the flags its block then tests (`099l hook1782 w205a r468 x460`), the
+  lab leaves such a hook, as a way and as a setter, until they hold, and a loop's line leaves a warp it makes only
+  inside such a hook's block to the hook (a test each). And `a127b`, where 463 (`Fship`), 467 (`Delocco`) and 468
+  (`Victory`) are set, is a sky map, the player a ship (type 13), its only exit back: `Fship` and `Delocco` no
+  call reaches [I: the game starts them as the Delphinus flies there]. An entry no CALL in its script reaches,
+  other than the loop, init, a volume's or a developer's test or debug entry, now ends its line in g (93 lines;
+  19 set story flags, `019d uragiri s380` among them), and where such a line sets the aim and nothing live here
+  does, the lab starts it by its name in the map script's own entry table (fn_80210450 takes the string), said
+  so, twice at most per aim (a test each, failing without it). Cards: `card-partJ-109g.raw` (u4-J2, 30170) and
+  `card-partJ-020a.raw` (u4-J3, 45355).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

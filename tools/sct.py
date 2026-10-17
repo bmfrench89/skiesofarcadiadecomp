@@ -683,6 +683,109 @@ def arrivals(d: bytes) -> tuple[dict[str, set[int]], set[int]]:
     return {src: f & only for src, f in per.items() if f & only}, only
 
 
+def game_started(d: bytes) -> set[str]:
+    """The entries the game starts itself, by name: none of the script's
+    CALLs lands on them, and they are not the loop, init, an M%05d volume's
+    or a developer's test or debug entry. a127b's Fship (463) and Delocco
+    (467) start as the Delphinus flies there."""
+    base, ents = entries(d)
+    starts = {off: name for off, name in ents}
+    called = set()
+    for o in range(base, len(d) - 7, 4):
+        if _w(d, o) == 11:
+            target = starts.get(o + 4 + _rel(d, o + 4) - base)
+            if target:
+                called.add(target)
+    return {
+        name
+        for _, name in ents
+        if name not in called
+        and name not in ("loop", "init")
+        and not re.fullmatch(r"M\d{5}", name)
+        and not re.match(r"(test|debug)", name, re.IGNORECASE)
+    }
+
+
+def _hook_blocks(d: bytes, flags: set[int]) -> list[tuple[int, int]]:
+    """The word ranges of the blocks `IF (FLAG[T] 1 ==)` with T in `flags`."""
+    out = []
+    for o in range(0, len(d) - 27, 4):
+        w = struct.unpack(">7I", d[o : o + 28])
+        if (
+            w[0] == 0
+            and 0x20000000 <= w[1] < 0x40000000
+            and w[2:6] == (0x04000000, 0x3F800000, 4, END)
+            and w[1] & 0xFFFFFF in flags
+        ):
+            out.append((o + 28, o + 24 + _rel(d, o + 24)))
+    return out
+
+
+def hook_conditions(d: bytes) -> dict[int, list[tuple[int, int]]]:
+    """For each hook's flag, the flags its block then tests before anything
+    else, `IF (FLAG[n] v == ...)`, as (n, v): me099l's loop warps to 205a once
+    1782 is set only if 468 is set and 460 clear, and part J's walker set 1782
+    with 468 still clear, for no warp."""
+    out: dict[int, list[tuple[int, int]]] = {}
+    for o in range(0, len(d) - 27, 4):
+        w = struct.unpack(">7I", d[o : o + 28])
+        if (
+            w[0] != 0
+            or not 0x20000000 <= w[1] < 0x40000000
+            or w[2:6] != (0x04000000, 0x3F800000, 4, END)
+        ):
+            continue
+        flag = w[1] & 0xFFFFFF
+        inner = _flag_if(d, o + 28) if flag >= STORY_FLAGS else None
+        if inner:
+            out.setdefault(flag, []).extend(inner[0])
+    return out
+
+
+def bounces(d: bytes) -> set[str]:
+    """The maps an arrival from which the loop sends straight back: a126c's
+    loop, for the party come from a126b (1261), plays a scene and warps to
+    a126b; only the way in from a126d leaves the party in a126c, where 454 is
+    set. Each a case of the loop's SWITCH (sys[15]) whose words, or the
+    entries they CALL, warp to the map the case is for."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    starts: dict[int, str] = {}
+    for off, entry in ents:
+        starts.setdefault(off, entry)
+    loop = next((off for off, entry in ents if entry == "loop"), None)
+    if loop is None:
+        return set()
+    lo, hi = base + loop, base + min(b for b in bounds if b > loop)
+    called = story(d)
+    out: set[str] = set()
+    o = lo
+    while o + 16 <= hi:
+        n = _w(d, o + 12)
+        if _w(d, o) == 3 and _w(d, o + 4) == SYS15 and _w(d, o + 8) == END and 0 < n < 64:
+            cases = [
+                (_w(d, o + 16 + 8 * i), o + 20 + 8 * i + _rel(d, o + 20 + 8 * i)) for i in range(n)
+            ]
+            targets = sorted({t for _, t in cases})
+            for v, t in cases:
+                if v >= 10000 or not lo <= t < hi:
+                    continue
+                end = min([x for x in targets if x > t] or [hi])
+                src = f"{v // 10:03d}{chr(ord('a') + v % 10)}"
+                warps = _warps_in(d, t, end)
+                for q in range(t, min(end, len(d) - 7), 4):
+                    if _w(d, q) == 11:
+                        target = starts.get(q + 4 + _rel(d, q + 4) - base)
+                        if target:
+                            warps |= called[target][1]
+                if src in warps:
+                    out.add(src)
+            o += 16 + 8 * n
+            continue
+        o += 4
+    return out
+
+
 def story_lines(
     name: str,
     d: bytes,
@@ -692,7 +795,10 @@ def story_lines(
     """`story` as text, one entry a line, for the entries that set or warp:
     `004a M03005 w250a`. The lab's walker reads these (reach.md U4). With
     `unset`, the flags no script sets, each hook on one of them is a line too,
-    named for its flag: `099f hook1766 w243a`, `099i hook1781 s352`. An entry that opens a block by
+    named for its flag: `099f hook1766 w243a`, `099i hook1781 s352`, with the
+    flags its block then tests, set (r) or clear (x): `099l hook1782 w205a
+    r468 x460`. An entry the game starts by name (`game_started`) ends in g:
+    `127b Fship s463 g`. An entry that opens a block by
     setting the field flag it waits for (`gates`) sets and warps as it does.
     And for each flag every place here sets only once others are set, a line
     naming them (`requirements`): `013b req271 r272`. With `needed`, the
@@ -700,27 +806,56 @@ def story_lines(
     too: `115a M04000 s1610`. A flag the loop sets only on an arrival from
     one map (`arrivals`) is that map's, on a line naming where the arrival is
     to: `123d via123b s403`; the loop and the cutscenes here, which the walker
-    cannot start, do not say they set it."""
+    cannot start, do not say they set it. An arrival the loop sends straight
+    back (`bounces`) says so on that line: `126b via126c w126b`."""
     lines = []
     opens = gates(d)
     field = _sets_of(d, set(needed)) if needed else {}
     via, only = arrivals(d)
+    game = game_started(d)
+    hooked = hooks(d)
+    held = {f for f in hooked if unset is not None and f in unset}
     for entry, (sets, warps) in story(d).items():
         more = opens.get(entry, (set(), set()))
         sets, warps = sets | more[0] | field.get(entry, set()), warps | more[1]
+        if entry == "loop" and held:
+            # A warp the loop makes only inside a hook's block is the hook's,
+            # on the hook's line with what the block then tests: me099l's
+            # loop warps to 205a past 1782 only once 468 is set, and its line
+            # saying w205a made every map two warps from 205a for part J's
+            # walker before 468.
+            base, ents = entries(d)
+            bounds = sorted({off for off, _ in ents} | {len(d) - base})
+            off = next(o for o, e in ents if e == "loop")
+            lo, hi = base + off, base + min(b for b in bounds if b > off)
+            blocks = sorted(_hook_blocks(d, held))
+            outside, pos = [], lo
+            for b_lo, b_hi in blocks:
+                if b_lo > pos and b_lo < hi:
+                    outside.append((pos, b_lo))
+                pos = max(pos, b_hi)
+            if pos < hi:
+                outside.append((pos, hi))
+            own = set().union(*(_warps_in(d, a, b) for a, b in outside)) if outside else set()
+            warps = warps - (set().union(*(hooked[f][1] for f in held)) - own)
         if not re.fullmatch(r"M\d{5}", entry):
             sets = sets - only
         if sets or warps:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
+            words += ["g"] if entry in game else []
             lines.append(f"{name} {entry} {' '.join(words)}")
+    conds = hook_conditions(d)
     for flag, (sets, warps) in sorted(hooks(d).items()) if unset is not None else ():
         if flag in unset:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
+            words += [f"{'r' if v else 'x'}{n}" for n, v in conds.get(flag, [])]
             lines.append(f"{name} hook{flag} {' '.join(words)}")
     for flag, need in sorted(requirements(d).items()):
         lines.append(f"{name} req{flag} {' '.join(f'r{g}' for g in sorted(need))}")
-    for src, flags in sorted(via.items()):
-        lines.append(f"{src} via{name} {' '.join(f's{f}' for f in sorted(flags))}")
+    back = bounces(d)
+    for src in sorted(set(via) | back):
+        words = [f"s{f}" for f in sorted(via.get(src, ()))] + ([f"w{src}"] if src in back else [])
+        lines.append(f"{src} via{name} {' '.join(words)}")
     return lines
 
 
