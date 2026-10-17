@@ -178,6 +178,49 @@ def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     assert sct.hooks(bytes(d)) == {}
 
 
+def test_a_flag_set_only_once_another_is_says_which():
+    """a013b's 6113 calls the cutscene that sets 271 inside `IF (FLAG[272] 1
+    == FLAG[271] 0 == &&)`, and 6111 sets 272 inside `IF (FLAG[290] 1 ==
+    FLAG[272] 0 == &&)`: 271 waits for 272 (through the call), 272 for 290.
+    A flag also set somewhere unguarded waits for nothing."""
+    ONE, ZERO = 0x3F800000, 0
+    gate271 = [0x20000000 | 272, FLOAT, ONE, EQ, 0x20000000 | 271, FLOAT, ZERO, EQ, 8, END]
+    talk = [0, *gate271, 0, 11, 0, 12]  # IF ... else-> the RET; CALL cut; RET
+    cut = [17, *f(271), END, 12]
+    gate272 = [0x20000000 | 290, FLOAT, ONE, EQ, 0x20000000 | 272, FLOAT, ZERO, EQ, 8, END]
+    exit_ = [0, *gate272, 0, 17, *f(272), END, 12]  # IF ... else-> the RET; FLAGSET 272; RET
+    loose = [17, *f(290), END, 12]
+    entries = [("M06113", talk), ("me013bf24", cut), ("M06111", exit_), ("M06120", loose)]
+    d = bytearray(build(entries, b""))
+    base = 12 + 4 * 20
+    struct.pack_into(">i", d, base + 4 * 11, 4 * 14 - 4 * 11)  # talk's else-offset
+    struct.pack_into(">i", d, base + 4 * 13, 4 * 15 - 4 * 13)  # CALL: cut starts at word 15
+    struct.pack_into(
+        ">i", d, base + 4 * (20 + 11), 4 * (20 + 16) - 4 * (20 + 11)
+    )  # exit's else-offset
+    assert sct.requirements(bytes(d)) == {271: {272}, 272: {290}}
+    lines = sct.story_lines("013b", bytes(d))
+    assert "013b req271 r272" in lines and "013b req272 r290" in lines, lines
+    struct.pack_into(">f", d, base + 4 * 39, 272.0)  # M06120 now sets 272 unguarded
+    assert sct.requirements(bytes(d)) == {271: {272}}
+
+
+def test_an_entry_setting_a_field_flag_a_requirement_names_says_so():
+    """a013a's 274 waits on field flag 1610 (`013a req274 r1610`), which only
+    a115a's 4000 sets: given the field flags requirements name, that entry's
+    line says it sets 1610, through a call too; otherwise field flags stay
+    off the lines."""
+    door = [11, 0, 12]  # CALL set; RET
+    sets = [17, *f(1610), END, 12]
+    d = bytearray(build([("M04000", door), ("set1610", sets)], b""))
+    struct.pack_into(">i", d, 12 + 2 * 20 + 4, 4 * 3 - 4)  # the CALL lands on set1610
+    assert sct.story_lines("115a", bytes(d)) == []
+    assert sct.story_lines("115a", bytes(d), needed={1610}) == [
+        "115a M04000 s1610",
+        "115a set1610 s1610",
+    ]
+
+
 def test_an_entry_that_sets_a_blocks_field_flag_does_what_the_block_does():
     """me099h's landing 4008 warps to 112a inside `IF (FLAG[1590] 1 ==
     FLAG[213] 1 == &&)`, and its glittering spot 4506 sets 1590: so 4506

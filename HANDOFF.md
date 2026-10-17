@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1629 |
+| Python tests | 1634 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -496,8 +496,13 @@ FINDINGS entry "Reach U<n>":
 now knows (the Great Bird's Eyes, a touch's battle). Cards: `card-partE-mid.raw` (`a111d`) and
 `card-partE-late.raw` (`a112c`, before part E's last two ship battles).
 
-**Next:** part F from `card-partE-late.raw` with `--story 200-299` (part E's last steps, then F), then the
-later parts the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Part F through (`u4-F5`, 2026-10-17):** the deserted island by the lab's `wander` (its encounters' meat),
+and a chain of requirements the story index now carries (`reqN` lines; the walker aims at what a flag waits
+on, field flags too). The story went on into part G; its card, at the prison's save point, is
+`card-partF-end.raw`.
+
+**Next:** part G from `card-partF-end.raw` with `--story 300-349`, then H to L the same way; U5's parts E, F,
+I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

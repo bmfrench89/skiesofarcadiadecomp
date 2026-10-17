@@ -1130,6 +1130,33 @@ def test_the_lab_holds_the_players_ship_in_a_ship_battle(driver, tmp_path):
 
 
 @needs_cc
+def test_the_lab_wanders_its_map_for_the_fields_own_encounters(driver, tmp_path):
+    """wander:F-G:MAP holds the stick one way, then a quarter turn on, every
+    90 frames, while MAP's field is free: a017a, the deserted island, goes on
+    only once Vyse has gathered the meat its battles drop, and the walker
+    never moves the player. Not during an event, nor on another map, nor
+    over the person's own press."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 11 setb 80311ac8 61 "
+        "padall 100 0 padall 200 0 "  # legs 1 and 2
+        "set 80310bc0 80000000 padall 300 0 set 80310bc0 0 "  # an event: left alone
+        "padall 400 100 "  # the person's A: left alone
+        "setb 80311ac8 62 padall 500 0"  # a017b: left alone
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="wander:0-1000:017a")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("padall")] == [
+        "padall 100 00 00 FF 80 33 44 55 66",
+        "padall 200 00 00 80 00 33 44 55 66",
+        "padall 300 00 00 11 22 33 44 55 66",
+        "padall 400 00 01 11 22 33 44 55 66",
+        "padall 500 00 00 11 22 33 44 55 66",
+    ], out
+    assert "wander: on a017a from frame 100, a quarter turn every 90 frames" in err, err
+
+
+@needs_cc
 def test_the_lab_finishes_a_ship_battle_that_has_gone_on_too_long(driver, tmp_path):
     """In a ship battle (a 5xx stage, scene 6) the enemy is the ship object at
     *(S + 36), S = *0x8034727C, HP at +24: after FRAMES it is held at 1, so
@@ -1933,24 +1960,85 @@ def test_the_lab_sets_a_flag_once_on_its_map_and_keeps_the_rest_of_the_word(driv
 
 
 @needs_cc
-def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tmp_path):
-    """A flag set only in a branch the run did not take, or on a later visit
-    (part C's 123), would hold the walker for good: aimed at for 30,000
-    frames and still clear, it is passed over, said so, and the next is the
-    aim."""
+def test_the_lab_story_aims_past_a_flag_still_waiting_on_another(driver, tmp_path):
+    """`013b req271 r272`: every place a013b sets 271 waits for 272, so with
+    272 clear the aim is 272, and only once it is set, 271; the walker had
+    spent 30,000 frames on 271 first."""
     lab(tmp_path)
-    (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
+    (tmp_path / "story.txt").write_text(
+        "013b M06113 s271\n013b M06111 s272\n013b req271 r272\n", encoding="utf-8"
+    )
     script = (
-        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
-        "frame frame frame frame safe "  # frame 4: aim 100
-        + "frame " * 30000
-        + "safe"  # frame 30004: 100 not set in 30,000 frames
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 d setb 80311ac8 62 "
+        "frame frame frame frame safe "  # 4: 272 first
+        "set 80310b5c 10000 frame frame frame safe"  # 272 set: now 271
     )
     out, err = play(
         driver,
         tmp_path,
         script,
-        SOA_LAB="story:100-149;walk:0-40000:3",
+        SOA_LAB="story:271-272;walk:0-1000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    aims = [x.split("lab: story: ", 1)[1] for x in err.splitlines() if "lab: story: aiming" in x]
+    assert aims == [
+        "aiming at flag 272 (set in 013b); a013b is 0 warp(s) away",
+        "aiming at flag 271 (set in 013b); a013b is 0 warp(s) away",
+    ], err
+
+
+@needs_cc
+def test_the_lab_story_aims_at_the_field_flag_a_flag_waits_on(driver, tmp_path):
+    """`013a req274 r1610`: a013a's loop plays the cutscene that sets 274
+    only once field flag 1610 is set, and only a115a's 4000 sets it. So the
+    aim is 1610, in 115a, one warp off; once it is set, 274."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(
+        "013a loop s274\n013a req274 r1610\n013a M06000 w115a\n115a M04000 s1610 w013a\n",
+        encoding="utf-8",
+    )
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 d setb 80311ac8 61 "
+        "frame frame frame frame safe "  # 4: 1610 first
+        "set 80310c04 400 frame frame frame safe"  # 1610 set: now 274
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:274-274;walk:0-1000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    aims = [x.split("lab: story: ", 1)[1] for x in err.splitlines() if "lab: story: aiming" in x]
+    assert aims == [
+        "aiming at flag 1610 (set in 115a); a013a is 1 warp(s) away",
+        "aiming at flag 274 (set in 013a); a013a is 0 warp(s) away",
+    ], err
+
+
+@needs_cc
+def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tmp_path):
+    """A flag set only in a branch the run did not take, or on a later visit
+    (part C's 123), would hold the walker for good: aimed at for 30,000
+    frames and still clear, it is passed over, said so, and the next is the
+    aim. Once nothing else the lines reach is left, each passed-over flag has
+    a second go (a013b's 6113 sets 271 only once 272 is set), and is passed
+    over for good only after that."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(STORY, encoding="utf-8")
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 4 setb 80311ac8 61 "
+        "frame frame frame frame safe "  # frame 4: aim 100
+        + ("frame " * 30000 + "safe ")
+        * 4  # frames 30004, 60004, 90004 and 120004
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:100-101;walk:0-200000:3",
         SOA_LAB_STORY=str(tmp_path / "story.txt"),
     )
     assert "loaded 1" in out, err
@@ -1963,6 +2051,14 @@ def test_the_lab_story_passes_over_an_aim_not_reached_in_30000_frames(driver, tm
         "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
         "flag 100 aimed at since frame 4 and not set: passed over from frame 30004",
         "aiming at flag 101 (set in 116d); a004a is 4 warp(s) away",
+        "flag 101 aimed at since frame 30004 and not set: passed over from frame 60004",
+        "flag 100, passed over before, has a second go: nothing else the lines reach is left",
+        "aiming at flag 100 (set in 243a); a004a is 3 warp(s) away",
+        "flag 100 aimed at since frame 60004 and not set: passed over from frame 90004",
+        "flag 101, passed over before, has a second go: nothing else the lines reach is left",
+        "aiming at flag 101 (set in 116d); a004a is 4 warp(s) away",
+        "flag 101 aimed at since frame 90004 and not set: passed over from frame 120004",
+        "no flag in 100-101 is left for a line to set",
     ], err
 
 

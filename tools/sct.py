@@ -376,6 +376,88 @@ def _warps_in(d: bytes, lo: int, hi: int) -> set[str]:
     return out
 
 
+def _flag_if(d: bytes, o: int) -> tuple[list[tuple[int, int]], int, int] | None:
+    """At `o`, an IF whose condition is only `FLAG[n] v ==` terms, v 0 or 1,
+    joined by `&&` (the words [0, flag, 0x04000000, v, ==, ... &&, ..., END,
+    offset]): its terms (n, v) and its block [lo, hi); else None."""
+    if _w(d, o) != 0:
+        return None
+    terms, q = [], o + 4
+    while q + 16 <= len(d):
+        t = _w(d, q)
+        if t == END:
+            break
+        v = struct.unpack(">3I", d[q + 4 : q + 16])
+        if (
+            0x20000000 <= t < 0x40000000
+            and v[0] == 0x04000000
+            and v[1] in (0, 0x3F800000)
+            and v[2] == 4
+        ):
+            terms.append((t & 0xFFFFFF, 1 if v[1] else 0))
+            q += 16
+        elif t == 8 and terms:
+            q += 4
+        else:
+            return None
+    if not terms or q + 8 > len(d) or _w(d, q) != END:
+        return None
+    return terms, q + 8, q + 4 + _rel(d, q + 4)
+
+
+def requirements(d: bytes) -> dict[int, set[int]]:
+    """For each story flag this script sets, the flags every place it sets it
+    waits for, story or field: the `FLAG[g] 1 ==` terms of the IFs around the FLAGSET
+    (`_flag_if`'s), and those around each CALL into the entry it is in, the
+    callers' own taken too, however deep; an entry nothing calls waits for
+    nothing. Only a flag every place waits on has them. a013b's 6113 calls
+    the cutscene that sets 271 inside `IF (FLAG[272] 1 == FLAG[271] 0 ==
+    &&)`, and its 6111 sets 272 only once 290 is set: part F's walker, which
+    aims at the lowest flag still clear, spent 30,000 frames on each. a013a's
+    loop plays the cutscene that sets 274 only once field flag 1610 is set,
+    which a115a's 4000 sets."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    spans = [(base + off, base + min(b for b in bounds if b > off), name) for off, name in ents]
+    starts = {base + off: name for off, name in reversed(ents)}
+    blocks = []
+    for o in range(base, len(d) - 8, 4):
+        b = _flag_if(d, o)
+        if b:
+            need = {n for n, v in b[0] if v == 1}
+            if need:
+                blocks.append((b[1], b[2], need))
+
+    def around(p: int) -> set[int]:
+        return set().union(*(need for lo, hi, need in blocks if lo <= p < hi))
+
+    sites: list[tuple[int, str, set[int]]] = []
+    callers: dict[str, list[tuple[str, set[int]]]] = {}
+    for lo, hi, name in spans:
+        for q in range(lo, min(hi, len(d) - 15), 4):
+            w = struct.unpack(">4I", d[q : q + 16])
+            if w[0] == 17 and w[1] == 0x04000000 and w[3] == END:
+                v = struct.unpack(">f", d[q + 8 : q + 12])[0]
+                if v == int(v) and 0 <= v < STORY_FLAGS:
+                    sites.append((int(v), name, around(q)))
+            elif w[0] == 11 and starts.get(q + 4 + _rel(d, q + 4)) not in (None, name):
+                callers.setdefault(starts[q + 4 + _rel(d, q + 4)], []).append((name, around(q)))
+
+    def entry_need(name: str, seen: frozenset[str]) -> set[int]:
+        if name not in callers or name in seen:
+            return set()
+        each = [need | entry_need(c, seen | {name}) for c, need in callers[name]]
+        return set.intersection(*each)
+
+    out: dict[int, set[int]] = {}
+    for flag in {f for f, _, _ in sites}:
+        each = [need | entry_need(name, frozenset()) for f, name, need in sites if f == flag]
+        need = set.intersection(*each) - {flag}
+        if need:
+            out[flag] = need
+    return out
+
+
 def gates(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
     """The entries that open a block by setting a field flag it waits for, and
     the story flags and places that block sets and warps to.
@@ -406,29 +488,11 @@ def gates(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
     told = story(d)
     out: dict[str, tuple[set[int], set[str]]] = {}
     for o in range(base, len(d) - 8, 4):
-        if _w(d, o) != 0:
+        b = _flag_if(d, o)
+        field = [f for f, v in b[0] if v == 1 and f >= STORY_FLAGS and f in setters] if b else []
+        if not field:
             continue
-        terms, q = [], o + 4
-        while q + 16 <= len(d):
-            t = _w(d, q)
-            if t == END:
-                break
-            if 0x20000000 <= t < 0x40000000 and struct.unpack(">3I", d[q + 4 : q + 16]) == (
-                0x04000000,
-                0x3F800000,
-                4,
-            ):
-                terms.append(t & 0xFFFFFF)
-                q += 16
-            elif t == 8 and terms:
-                q += 4
-            else:
-                terms = []
-                break
-        field = [f for f in terms if f >= STORY_FLAGS and f in setters]
-        if not field or q + 8 > len(d) or _w(d, q) != END:
-            continue
-        lo, hi = q + 8, min(q + 4 + _rel(d, q + 4), len(d) - 15)
+        lo, hi = b[1], min(b[2], len(d) - 15)
         warps, sets = _warps_in(d, lo, hi), set()
         for r in range(lo, hi, 4):
             w = struct.unpack(">4I", d[r : r + 16])
@@ -449,23 +513,66 @@ def gates(d: bytes) -> dict[str, tuple[set[int], set[str]]]:
     return out
 
 
-def story_lines(name: str, d: bytes, unset: set[int] | None = None) -> list[str]:
+def _sets_of(d: bytes, flags: set[int]) -> dict[str, set[int]]:
+    """The entries that set any of `flags` (FLAGSET, raw), each with those it
+    sets, its own and through the entries it CALLs, however deep."""
+    base, ents = entries(d)
+    bounds = sorted({off for off, _ in ents} | {len(d) - base})
+    starts = {base + off: name for off, name in reversed(ents)}
+    own: dict[str, tuple[set[int], set[str]]] = {}
+    for off, name in ents:
+        sets, calls = own.setdefault(name, (set(), set()))
+        hi = base + min(b for b in bounds if b > off)
+        for q in range(base + off, min(hi, len(d) - 15), 4):
+            w = struct.unpack(">4I", d[q : q + 16])
+            if w[0] == 17 and w[1] == 0x04000000 and w[3] == END:
+                v = struct.unpack(">f", d[q + 8 : q + 12])[0]
+                if v == int(v) and int(v) in flags:
+                    sets.add(int(v))
+            elif w[0] == 11 and starts.get(q + 4 + _rel(d, q + 4)) not in (None, name):
+                calls.add(starts[q + 4 + _rel(d, q + 4)])
+    out = {}
+    for name in own:
+        sets, seen, todo = set(), {name}, [name]
+        while todo:
+            s, c = own[todo.pop()]
+            sets |= s
+            todo += [n for n in c - seen]
+            seen |= c
+        if sets:
+            out[name] = sets
+    return out
+
+
+def story_lines(
+    name: str,
+    d: bytes,
+    unset: set[int] | None = None,
+    needed: set[int] | frozenset[int] = frozenset(),
+) -> list[str]:
     """`story` as text, one entry a line, for the entries that set or warp:
     `004a M03005 w250a`. The lab's walker reads these (reach.md U4). With
     `unset`, the flags no script sets, each hook on one of them is a line too,
     named for its flag: `099f hook1766 w243a`. An entry that opens a block by
-    setting the field flag it waits for (`gates`) sets and warps as it does."""
+    setting the field flag it waits for (`gates`) sets and warps as it does.
+    And for each flag every place here sets only once others are set, a line
+    naming them (`requirements`): `013b req271 r272`. With `needed`, the
+    field flags requirements name, an entry that sets one sets it on its line
+    too: `115a M04000 s1610`."""
     lines = []
     opens = gates(d)
+    field = _sets_of(d, set(needed)) if needed else {}
     for entry, (sets, warps) in story(d).items():
         more = opens.get(entry, (set(), set()))
-        sets, warps = sets | more[0], warps | more[1]
+        sets, warps = sets | more[0] | field.get(entry, set()), warps | more[1]
         if sets or warps:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
             lines.append(f"{name} {entry} {' '.join(words)}")
     for flag, warps in sorted(hooks(d).items()) if unset is not None else ():
         if flag in unset:
             lines.append(f"{name} hook{flag} {' '.join(f'w{m}' for m in sorted(warps))}")
+    for flag, need in sorted(requirements(d).items()):
+        lines.append(f"{name} req{flag} {' '.join(f'r{g}' for g in sorted(need))}")
     return lines
 
 
@@ -480,7 +587,10 @@ def story_index(data: Path) -> list[str]:
         )
     anywhere = set().union(*(flags_set(d) for _, d in scripts))
     unset = set(range(STORY_FLAGS, 27328)) - anywhere
-    return [line for name, d in scripts for line in story_lines(name, d, unset)]
+    needed = {
+        g for _, d in scripts for need in requirements(d).values() for g in need if g >= STORY_FLAGS
+    }
+    return [line for name, d in scripts for line in story_lines(name, d, unset, needed)]
 
 
 def load(script: str, data: Path) -> bytes:

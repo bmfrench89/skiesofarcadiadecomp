@@ -90,6 +90,15 @@
  *                  first cutscene when flag 1766 is set (me099f, 01E20), which
  *                  a fldHakken object in a099f.mld carries: the ship sailing
  *                  there. Logged with the word before and after.
+ *   wander:F-G:MAP in frames F to G, on map MAP while its field is free (no
+ *                  event, no window, the player not held), the stick held one
+ *                  way and then the next, a quarter turn every 90 frames: the
+ *                  walk a player makes, and the field's own encounters with
+ *                  it. a017a, the deserted island, goes on (flag 267) only
+ *                  once Vyse has more than 14 of item 358, the meat its
+ *                  battles drop, counted on each return from one (op 183,
+ *                  0x8030E474); the walker never moves the player, so reach
+ *                  U4's part-F walker met none.
  *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
  *                  (a multiple of 4, at most 8192) from the address the chain
  *                  C ends on (C's steps as peek's; *0x8034727C is the ship
@@ -182,6 +191,7 @@
 #define PHASE_INPUT 1u
 #define PHASE_ORDER 2u
 #define PRESS_HOLD 10u
+#define WANDER_LEG 90u /* frames the wander item holds the stick one way */
 #define PRESS_GAP 60u
 #define MAX_PRESSES 32
 #define MAX_ALTS 4
@@ -201,7 +211,8 @@ enum {
     ITEM_ASSIST,
     ITEM_SAVE,
     ITEM_FLAG,
-    ITEM_FINISH
+    ITEM_FINISH,
+    ITEM_WANDER
 };
 
 #define STORY_FLAG_WORDS 0x80310B3Cu /* flag n: bit n & 31 of the word +4 * (n >> 5) (story-flags.md 1) */
@@ -270,8 +281,9 @@ static Seen* g_last_start; /* the entry the walker last started, until its event
 typedef struct {
     uint32_t map, id; /* id: n for an entry named M%05d (the walker's), else 0 */
     uint32_t hook;    /* n for a line named hookN: its warps wait for flag n, which no script sets */
-    uint32_t at;      /* its sets, then its warps, in g_story_words */
-    uint16_t nsets, nwarps;
+    uint32_t req;     /* n for a line named reqN: every place this map sets n waits for its flags */
+    uint32_t at;      /* its sets, then its warps, then its requirements, in g_story_words */
+    uint16_t nsets, nwarps, nreqs;
 } StoryLine;
 static StoryLine g_story[STORY_LINES];
 static uint32_t g_story_words[STORY_WORDS];
@@ -282,14 +294,19 @@ static uint16_t g_story_dist[STORY_MAPS];
 static int g_story_nmaps;
 static uint32_t g_story_aim, g_story_aim_map; /* what the last log named */
 #define STORY_FLAG_LIMIT 1024u                /* sct.py's STORY_FLAGS */
-static uint8_t g_story_settable[STORY_FLAG_LIMIT];
+static uint8_t g_story_settable[FLAG_COUNT]; /* field flags too, where a requirement names one */
 #define PART_SELECT (355u << 8 | 'a') /* the developers' part-select room */
-/* An aim not reached in this many frames is passed over, for the rest of the
- * run: a flag set only in a branch the run did not take, or on a later visit
- * (part C's 123: a005a's talk 3005 sets it only once flag 409 is set, a part I
- * flag), would otherwise hold the walker for good. */
+/* An aim not reached in this many frames is passed over: a flag set only in
+ * a branch the run did not take, or on a later visit (part C's 123: a005a's
+ * talk 3005 sets it only once flag 409 is set, a part I flag), would
+ * otherwise hold the walker for good. Once nothing else the lines reach is
+ * left, each passed-over flag has a second go, and only then is passed over
+ * for the run: a story's flags are not set in order, and one can open only
+ * after a later one (a013b's 6113 sets 271 only once 272 is set; reach U4's
+ * part-F walker passed 271 over, then set 272). */
 #define STORY_AIM_PATIENCE 30000u
-static uint8_t g_story_passed[STORY_FLAG_LIMIT];
+enum { PASSED_NOT, PASSED_ONCE, PASSED_AGAIN_AIMED, PASSED_FOR_GOOD };
+static uint8_t g_story_passed[FLAG_COUNT];
 static uint32_t g_story_aim_now, g_story_aim_from;
 
 /* A ship battle's command input (reach U3, found by RAM captures at two
@@ -444,6 +461,9 @@ static int parse_item(char* s)
         it->kind = ITEM_ENTRY;
         if (!parse_frames(a, it) || it->to != it->from) return 0;
         if (!parse_u32(b, &end, &it->id) || *end) return 0;
+    } else if (strcmp(s, "wander") == 0) {
+        it->kind = ITEM_WANDER;
+        if (!parse_frames(a, it) || !(it->base = story_map_word(b))) return 0;
     } else if (strcmp(s, "flag") == 0) {
         char* end;
         it->kind = ITEM_FLAG;
@@ -603,6 +623,27 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
             }
             pad->buttons = into % (PRESS_HOLD + PRESS_GAP) < it->holds[step] ? it->presses[step] : 0;
             pad->stick[0] = pad->stick[1] = 128;
+            continue;
+        }
+        if (it->kind == ITEM_WANDER) {
+            static const uint8_t sx[4] = {128, 255, 128, 0}, sy[4] = {255, 128, 0, 128};
+            uint32_t held = 0, task = 0, leg;
+            uint16_t wstate = 0;
+            if (frame < it->from || frame > it->to || g_api->map() != it->base || g_api->scene() != 6 ||
+                g_api->field_state() != 8 || g_api->story_flag(FLAG_EVENT) || pad->buttons)
+                continue;
+            if (g_api->read32(PLAYER_HELD, &held) && held == 1) continue;
+            if (g_api->read32(WINDOW_TASK, &task) && task && g_api->read16(WINDOW_STATE, &wstate) &&
+                (int16_t)wstate >= WINDOW_OPENING && (int16_t)wstate <= WINDOW_LAST_OPEN)
+                continue;
+            leg = (frame / WANDER_LEG) % 4;
+            pad->stick[0] = sx[leg];
+            pad->stick[1] = sy[leg];
+            if (!it->state) {
+                it->state = 1;
+                logf_("wander: on a%03u%c from frame %u, a quarter turn every %u frames, for the field's own encounters",
+                      it->base >> 8, (char)(it->base & 0xFF), frame, WANDER_LEG);
+            }
             continue;
         }
         if (it->kind == ITEM_ASSIST) {
@@ -850,6 +891,10 @@ static int story_line(char* p)
         l->hook = (uint32_t)strtoul(name + 4, NULL, 10);
         if (!l->hook || l->hook >= FLAG_COUNT) return 0;
     }
+    if (strncmp(name, "req", 3) == 0 && name[3] && strspn(name + 3, "0123456789") == strlen(name + 3)) {
+        l->req = (uint32_t)strtoul(name + 3, NULL, 10);
+        if (!l->req || l->req >= FLAG_COUNT) return 0;
+    }
     l->at = g_story_nwords;
     while ((tok = next_word(&p)) != NULL) {
         uint32_t v = 0;
@@ -858,10 +903,12 @@ static int story_line(char* p)
         /* A flag only the developers' part-select room (355a) sets is set by
          * no place the story goes, and was aimed at for nothing: reach U4's
          * part-E walker spent 30,000 frames on each of 214 and 221. */
-        if (tok[0] == 's' && !l->nwarps && parse_u32(tok + 1, &end, &v) && !*end && v < STORY_FLAG_LIMIT)
+        if (tok[0] == 's' && !l->req && !l->nwarps && parse_u32(tok + 1, &end, &v) && !*end && v < FLAG_COUNT)
             l->nsets++, g_story_settable[v] |= l->map != PART_SELECT;
-        else if (tok[0] == 'w' && (v = story_map_word(tok + 1)) != 0)
+        else if (tok[0] == 'w' && !l->req && (v = story_map_word(tok + 1)) != 0)
             l->nwarps++;
+        else if (tok[0] == 'r' && l->req && parse_u32(tok + 1, &end, &v) && !*end && v < FLAG_COUNT)
+            l->nreqs++;
         else
             return 0;
         g_story_words[g_story_nwords++] = v;
@@ -903,14 +950,79 @@ static uint32_t story_dist(uint32_t map);
  * `map`; else the lowest clear one a line sets (unreachable, logged so); 0
  * when there is none. Not the lowest above the highest set: part C sets 124
  * in a209a (me209ac25) before 113, 115 and 117, which come after it. */
+/* Whether flag f waits on others everywhere it is set: each map whose lines
+ * set it (the part-select room aside) has a reqF line with a flag still
+ * clear (sct.py's requirements). a013b's 6113 sets 271 only once 272 is
+ * set, and its 6111 sets 272 only once 290 is; the walker, aiming at the
+ * lowest flag still clear, spent 30,000 frames on each before. */
+static int story_sets(const StoryLine* l, uint32_t flag); /* below */
+static int story_blocked(uint32_t f)
+{
+    int i, j, sets = 0, held;
+    uint32_t k;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->map == PART_SELECT || !story_sets(l, f)) continue;
+        sets = 1;
+        held = 0;
+        for (j = 0; j < g_nstory && !held; j++) {
+            const StoryLine* r = &g_story[j];
+            if (r->req != f || r->map != l->map) continue;
+            for (k = 0; k < r->nreqs && !held; k++)
+                if (!g_api->story_flag(g_story_words[r->at + r->nsets + r->nwarps + k])) held = 1;
+        }
+        if (!held) return 0;
+    }
+    return sets;
+}
+
+/* What to aim at for flag f: f, when nothing it waits on is clear and the
+ * lines reach a place that sets it; else the first clear flag it waits on
+ * that the same holds for, however deep (a field flag, or a story flag in the
+ * window: 409, part I's, stays a wait). a013a's 274 waits on field flag
+ * 1610, which only a115a's 4000 sets; 272 waits on 290, which waits on 289. */
+#define AIM_DEPTH 4
+static uint32_t aim_for(uint32_t f, uint32_t map, int depth)
+{
+    uint32_t k, r, got;
+    int i;
+    if (depth > AIM_DEPTH || !g_story_settable[f] || g_api->story_flag(f) ||
+        (g_story_passed[f] != PASSED_NOT && g_story_passed[f] != PASSED_AGAIN_AIMED))
+        return 0;
+    if (!story_blocked(f)) {
+        story_dists(f);
+        return story_dist(map) != STORY_FAR ? f : 0;
+    }
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->req != f) continue;
+        for (k = 0; k < l->nreqs; k++) {
+            r = g_story_words[l->at + l->nsets + l->nwarps + k];
+            if (r < STORY_FLAG_LIMIT && (r < g_story_lo || r > g_story_hi)) continue;
+            if ((got = aim_for(r, map, depth + 1)) != 0) return got;
+        }
+    }
+    return 0;
+}
+
 static uint32_t story_aim(uint32_t map)
 {
-    uint32_t f, first = 0;
+    uint32_t f, first = 0, got;
     for (f = g_story_lo; f <= g_story_hi; f++) {
-        if (!g_story_settable[f] || g_story_passed[f] || g_api->story_flag(f)) continue;
-        if (!first) first = f;
+        if (!g_story_settable[f] || g_api->story_flag(f) ||
+            (g_story_passed[f] != PASSED_NOT && g_story_passed[f] != PASSED_AGAIN_AIMED))
+            continue;
+        if (!first && !story_blocked(f)) first = f;
+        if ((got = aim_for(f, map, 0)) != 0) return got;
+    }
+    for (f = g_story_lo; f <= g_story_hi; f++) {
+        if (!g_story_settable[f] || g_api->story_flag(f) || g_story_passed[f] != PASSED_ONCE || story_blocked(f))
+            continue;
         story_dists(f);
-        if (story_dist(map) != STORY_FAR) return f;
+        if (story_dist(map) == STORY_FAR) continue;
+        g_story_passed[f] = PASSED_AGAIN_AIMED;
+        logf_("story: flag %u, passed over before, has a second go: nothing else the lines reach is left", f);
+        return f;
     }
     if (first) story_dists(first);
     return first;
@@ -1514,7 +1626,7 @@ static void walk(Item* it)
         } else if (aim && f - g_story_aim_from >= STORY_AIM_PATIENCE) {
             logf_("story: flag %u aimed at since frame %u and not set: passed over from frame %u", aim,
                   g_story_aim_from, f);
-            g_story_passed[aim] = 1;
+            g_story_passed[aim] = g_story_passed[aim] == PASSED_AGAIN_AIMED ? PASSED_FOR_GOOD : PASSED_ONCE;
             aim = story_aim(map);
             g_story_aim_now = aim;
             g_story_aim_from = f;
@@ -2040,7 +2152,7 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     if (g_nitems) api->on_safe_point(on_safe_point, NULL);
     for (i = 0; i < g_nitems; i++) {
         if (g_items[i].kind != ITEM_TURN && g_items[i].kind != ITEM_STURN && g_items[i].kind != ITEM_ASSIST &&
-            g_items[i].kind != ITEM_SAVE && g_items[i].kind != ITEM_WALK)
+            g_items[i].kind != ITEM_SAVE && g_items[i].kind != ITEM_WALK && g_items[i].kind != ITEM_WANDER)
             continue;
         if (api->size < SOA_MOD_HAS(pad_filter) || !api->pad_filter(on_pad, NULL)) {
             api->log("lab: a turn item needs the pad filter, which this port does not offer");

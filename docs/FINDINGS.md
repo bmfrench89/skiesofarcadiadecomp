@@ -8884,6 +8884,45 @@ here).
   left for a line to set": every flag of part E a script sets. The last 60,000 frames went on 214 and 221,
   which only the developers' part-select room sets; the lab now counts no flag settable that only `355a`
   sets (its story test changed to say so).
+- **Runs u4-F1 and u4-F2: the deserted island, and a flag that opens after a later one** [V,
+  `build/reach/u4-F1`, `u4-F2`, stopped by hand]: from the late part-E card with `--story 200-299`, part E's
+  last steps went 140,000 frames sooner than in u4-E3 (no part-select flags), the `save` at `a111d` at 141681
+  with part E done; then part F: 250 at 144334, 251 to 266 and 285, 286 by 250024. 267 was passed over at
+  282057 on `a017a`, the deserted island: after each battle (sys[15] 10000) its loop counts item 358, the meat
+  its monsters drop (op 183 into sys[36], 0x8030E474: "This meat looks pretty tasty"), and at more than 14 sets
+  1858, which plays the cutscene that sets 267. Battles come from walking, and the walker never moves the
+  player. The lab's new `wander:F-G:MAP` holds the stick a quarter turn on every 90 frames while that map's
+  field is free (a test). u4-F2, from the island's save point (`card-partF-island.raw`), met eight battles,
+  had 16 pieces of meat by 34974, and 267 to 270 followed by 59484. Then 271, in `a013b`, was passed over at
+  90690: its setter 6113 is `IF (FLAG[272] 1 == FLAG[271] 0 == &&)`, and 272 comes after it (6111, 6112). The
+  walker aims at the lowest flag still clear, and a story's flags are not set in order. Now a passed-over flag
+  has a second go once nothing else the lines reach is left, and is passed over for good only after that
+  (the patience test extended to both).
+- **Run u4-F3: a chain of requirements, and the index learns them** [V, `build/reach/u4-F3`, stopped by hand at
+  frame 87000]: from F2's `a013a` card, 271 and then 272 were passed over (33617, 63701): 6111 and 6112 set 272
+  inside `IF (FLAG[290] 1 == FLAG[272] 0 == &&)`, and 290 waits on 289, 289 on 270. A second go at the end would
+  have tried them lowest first and in the wrong order again. `sct.py --story` now adds requirement lines: for
+  each story flag, the story flags every place in that script sets it waits for, from the `&&`-only IFs around
+  each FLAGSET and around each CALL into its entry, callers' own too (`013b req271 r272`, `req272 r290`,
+  `req290 r289`, `req289 r270`; 120 lines in the index, among them 151 on 150, 154 on 153, 159 on 158 and 124 on
+  114, all in the order the runs set them). The walker skips an aim whose every setting map still waits on a
+  clear flag. Gates read the same IFs, now with `== 0` terms too, which adds four lines (`002e M03024 s122
+  w099a`: part C's talk that opens 122). A test on each side, each failing with its change taken out.
+- **Run u4-F4: a requirement on a field flag** [V, `build/reach/u4-F4`, stopped by hand at frame 35000]: 271 to 273
+  were skipped as waiting, and 274 was passed over at 33739: `a013a`'s loop plays its cutscene inside `IF
+  (FLAG[1610] 1 == FLAG[274] 0 == &&)`, and field flag 1610 is set only by `a115a`'s 4000, another script.
+  Requirements now name field flags as well (`013a req274 r1610`), and the entries anywhere that set a field flag
+  a requirement names carry it on their lines (`115a M04000 s1610 w013a`; 149 requirement lines, 19 field flags
+  among them, among them 2548 for part C's 122). An aim that waits on a clear flag is reached through it: the
+  walker aims at the flag waited on, a field flag or a story flag in the window, however deep, and so walks to
+  `a115a` for 1610 before 274 (a test on each side).
+- **Run u4-F5: part F's story through to part G** [V, `build/reach/u4-F5`, stopped by hand at frame 111000]:
+  from F2's `a013a` card, the walker aimed at 1610 in `a115a`, and 271 to 274 were set by 32056 in the order
+  their requirements made; 289 to 291 and 275 by 36708; then the story went on into part G's prison (`a116a`,
+  the lab's `save` at its save point 4100 at 84211, kept as `build/savetest/card-partF-end.raw`) and set 300 to
+  307. Part F's 276 to 279 and 288 were left clear (the world map's 099c loop, the loops of `a013b` and `a013d`,
+  `a115c`'s 4000): steps off the way the story went [I: side events, or a later visit's]. 279 had been passed
+  over at 108662.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
