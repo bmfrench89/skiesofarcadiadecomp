@@ -53,7 +53,8 @@
  *                  has it set first, as walking there would.
  *                  A minute's wait on a starting entry logs the script
  *                  threads it waits on. A touch entry (M06nnn) that keeps
- *                  starting under the player for a second has the stick held
+ *                  starting under the player for a second (the script on its
+ *                  first word at each safe point) has the stick held
  *                  a quarter turn on every 90 frames until it stops, as a
  *                  player walks off it.
  *   story:LO-HI    the walker's sense of where the story goes (reach U4): the
@@ -132,9 +133,12 @@
  *                  it; logged, with the put-backs counted at the end. For a
  *                  party below the story's level: the part-select cards start
  *                  Vyse at level 1, and two Royal Guards outlasted 70,000
- *                  frames, and healed back up from 1 HP once. Not a ship
- *                  battle: the enemy ship's HP there is not where the fight
- *                  keeps it (reach U4's run 9).
+ *                  frames, and healed back up from 1 HP once. In a ship
+ *                  battle (a 5xx stage) the enemy ship is held at 1 HP the
+ *                  same way: its record, the one the driver takes B[262]
+ *                  from, and its object. Part G's gunboat (a521a) fell from
+ *                  80 pixels of HP bar to 39 in 100,000 frames to the part
+ *                  card's Prototype Cannons (reach U4's u4-G19).
  *   save:F-G:SEQ   once, on a quiet field in frames F to G with a live save
  *                  point (hit type 44 or 45) in the map, start its entry as
  *                  the A press would, then 120 frames later press SEQ into
@@ -154,10 +158,13 @@
  *                  that member's wheel comes ready (the word at 0x80306738:
  *                  state byte 9, step byte 2, member byte M), every turn; a
  *                  wheel still ready afterwards gets the presses again, three
- *                  times at most. In either, SEQ may hold alternatives split
- *                  by '|', used in turn by successive inputs (Focus twice,
- *                  then the special: b/right/a/a|b/right/a/a|b/right/right#4/a/a),
- *                  and a press "name#N" is held N frames (left#4: one slot).
+ *                  times at most, the next alternative each time (a cannon the
+ *                  SP will not pay for, then Focus). In either, SEQ may hold
+ *                  alternatives split by '|', used in turn by successive
+ *                  inputs (Focus twice, then the special:
+ *                  b/right/a/a|b/right/a/a|b/right/right#4/a/a; a cannon or
+ *                  Focus: b/a/a/a|b/right/a/a), and a press "name#N" is held
+ *                  N frames (left#4: one slot).
  *
  * Addresses: r13 is 0x8034E720 (runtime/selftest.c), so the list head
  * r13-29180 is 0x80347524 (fn_8022300C, 80223024), linked at +48 (802230DC),
@@ -757,9 +764,13 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
             } else if (crew == it->member && it->last < STURN_RETRIES) {
                 /* Still ready: a press did not land (an A between turns can
                  * open the cannon list first: reach U3's sink run stood there
-                 * 16,000 frames). Played again, a few times at most. */
+                 * 16,000 frames). Played again, a few times at most, with the
+                 * next alternative where there is one: a cannon costs SP the
+                 * crew may not have this turn (Fina's greyed list, 5 of 52, in
+                 * reach U4's part-G probe u4-G18), and Focus is what gains it. */
                 it->last++;
                 it->done = 0;
+                if (it->nalt > 1) it->alt = (it->alt + 1) % it->nalt;
                 logf_("sturn: crew %u's wheel is still ready at frame %u: again (%u of %u)", it->member, frame,
                       it->last, STURN_RETRIES);
             } else if (crew == it->member) {
@@ -1296,12 +1307,16 @@ static int script_busy(char* why, size_t cap)
     return 1;
 }
 
-/* Whether the map script's main thread is in a touch entry, named in g_where. */
+/* Whether the map script's main thread stands on a touch entry's first
+ * word, named in g_where: where each start of it puts the PC. A touch that
+ * runs moves on from there; a013d's 6005 walks the player a step and warps,
+ * more than a second, and reach U4's u4-G20 stepped off it twice when this
+ * asked only for the entry. */
 static int touch_running(void)
 {
     uint32_t code = 0, pc = 0;
     return g_api->read32(SCRIPT_CODE, &code) && g_api->read32(SCRIPT_PC, &pc) && code && pc >= code &&
-           script_entry(code, pc - code) && is_touch(g_where.name);
+           script_entry(code, pc - code) && is_touch(g_where.name) && pc - code == g_where.lo;
 }
 
 /* An entry's cast, checked before the walker starts it: the actors its
@@ -1909,13 +1924,60 @@ static int parse_hold(char* s)
 #define SHIP_RECORDS 0x80308EF8u
 #define SHIP_RECORD_COUNT 0x8034729Cu
 #define SHIP_PLAYER_ID 0x803472B0u
+#define SHIP_ENEMY_ID 0x803472ACu
 #define SHIP_STATE 0x8034727Cu
-/* Not a ship battle: holding the enemy ship's object at *(S + 36) + 24 at 1
- * moved no fight (reach U4's run 9, and again in parts D and E), the battle
- * keeping the HP it fights with elsewhere. */
+
+/* The battle's record of the ship with this id, as the driver fn_80129DD0
+ * finds it (below), or 0. */
+static uint32_t ship_record(uint32_t id)
+{
+    uint32_t count = 0, i, rec, p, q;
+    uint16_t rec_id;
+    if (!g_api->read32(SHIP_RECORD_COUNT, &count) || count > 8) return 0;
+    for (i = 0; i < count; i++) {
+        rec = SHIP_RECORDS + 20u * i;
+        if (g_api->read32(rec, &p) && p && g_api->read32(p + 36, &q) && q && g_api->read16(q + 378, &rec_id) &&
+            rec_id == id)
+            return rec;
+    }
+    return 0;
+}
+
+static uint32_t hold_at_one(uint32_t at)
+{
+    uint32_t hp = 0;
+    if (!g_api->read32(at, &hp) || (int32_t)hp <= 1) return 0;
+    g_api->write32(at, 1);
+    return 1;
+}
+
+/* A ship battle's enemy at 1 HP: its record's +8, from which the driver takes
+ * B[262], the HP % the stage's _WIN tests (1 while above 0), and its object's
+ * +24, *(*0x8034727C + 36). Holding the object alone moved no fight (reach
+ * U4's run 9): the record is the one hold-hp's player side has kept up. */
+static void finish_ship(Item* it, uint32_t f)
+{
+    uint32_t id = 0, rec = 0, s = 0, ship = 0, n = 0;
+    if (!it->started) it->started = f + 1;
+    if (f + 1 - it->started < it->id) return;
+    if (g_api->read32(SHIP_ENEMY_ID, &id) && (rec = ship_record(id)) != 0) n += hold_at_one(rec + 8);
+    if (g_api->read32(SHIP_STATE, &s) && s && g_api->read32(s + 36, &ship) && ship) n += hold_at_one(ship + 24);
+    if (!it->state)
+        logf_("finish: the ship battle from frame %u has gone %u frames: the enemy ship held at 1 HP from now (%s), "
+              "so the crew's next hit ends it",
+              it->started - 1, it->id, rec ? "its record and object" : "its object; no record has its id");
+    else
+        it->last += n;
+    it->state = 1;
+}
+
 static void finish_battle(Item* it)
 {
-    uint32_t f = g_api->frame(), slot, actor, status, hp, n = 0;
+    uint32_t f = g_api->frame(), slot, actor, status, hp, n = 0, stage = g_api->map() >> 8;
+    if (g_api->scene() == 6 && stage >= 500 && stage <= 583) {
+        finish_ship(it, f);
+        return;
+    }
     if (g_api->scene() != SCENE_BATTLE) {
         if (it->state) logf_("finish: the battle ended by frame %u; %u enemy HP put back to 1", f, it->last);
         it->started = 0;
@@ -1960,15 +2022,8 @@ static uint32_t top_up(uint32_t hp_at, uint32_t max_at)
 
 static uint32_t hold_ship(void)
 {
-    uint32_t n = 0, count = 0, id = 0, i, rec, p, q, s = 0, ship = 0;
-    uint16_t rec_id;
-    if (g_api->read32(SHIP_RECORD_COUNT, &count) && count <= 8 && g_api->read32(SHIP_PLAYER_ID, &id))
-        for (i = 0; i < count; i++) {
-            rec = SHIP_RECORDS + 20u * i;
-            if (g_api->read32(rec, &p) && p && g_api->read32(p + 36, &q) && q && g_api->read16(q + 378, &rec_id) &&
-                rec_id == id)
-                n += top_up(rec + 8, rec + 12);
-        }
+    uint32_t n = 0, id = 0, rec, s = 0, ship = 0;
+    if (g_api->read32(SHIP_PLAYER_ID, &id) && (rec = ship_record(id)) != 0) n += top_up(rec + 8, rec + 12);
     if (g_api->read32(SHIP_STATE, &s) && s && g_api->read32(s + 32, &ship) && ship) n += top_up(ship + 24, ship + 20);
     return n;
 }

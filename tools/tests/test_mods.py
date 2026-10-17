@@ -1200,6 +1200,50 @@ def test_the_lab_finishes_a_battle_that_has_gone_on_too_long_once(driver, tmp_pa
 
 
 @needs_cc
+def test_the_lab_finishes_a_ship_battle_that_has_gone_on_too_long(driver, tmp_path):
+    """finish on a 5xx stage: once the ship battle has gone FRAMES frames, the
+    enemy ship's record (the one of *0x8034729C at 0x80308EF8 whose
+    *(*(rec)+36)+378 halfword is the id at 0x803472AC, B[262]'s source) and
+    its object (*0x8034727C+36, +24) go to 1 HP and are held there, a repair
+    put back; the player's record is left alone, and so is an enemy already
+    at 0. Part G's gunboat lost half its HP bar in 100,000 frames (u4-G19)."""
+    lab(tmp_path)
+    ships = (
+        "set 8034729c 2 set 803472b0 7 set 803472ac 9 "
+        "set 80308ef8 80400000 set 80400024 80400100 set 80400278 7 "  # record 0: ours, id 7
+        "set 80308f00 64 set 80308f04 7b2 "
+        "set 80308f0c 80400400 set 80400424 80400500 set 80400678 9 "  # record 1: the enemy, id 9
+        "set 80308f14 1388 set 80308f18 1388 "  # 5000 of 5000
+        "set 8034727c 80400200 set 80400224 80400300 set 80400318 1388 "  # the enemy's object: 5000
+    )
+    script = (
+        ships + "set 803475cc 6 set 80311aec 8 set 80311ac0 209 setb 80311ac8 61 safe "  # a521a
+        "frame safe get 80308f14 "  # 1 frame in: not yet
+        "frame safe get 80308f14 get 80400318 get 80308f00 "  # 2: held
+        "set 80308f14 c8 frame safe get 80308f14 "  # repaired: put back
+        "set 80308f14 0 frame safe get 80308f14 "  # sunk: left alone
+        "set 80311ac0 4 frame safe"  # the stage left
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="finish:0-100:2")
+    assert "loaded 1" in out, err
+    reads = [x for x in out.splitlines() if x.startswith(("80308F", "80400318"))]
+    assert reads == [
+        "80308F14=00001388",
+        "80308F14=00000001",
+        "80400318=00000001",
+        "80308F00=00000064",
+        "80308F14=00000001",
+        "80308F14=00000000",
+    ], out
+    lines = [x.split("lab: ", 1)[1] for x in err.splitlines() if "lab: finish:" in x]
+    assert lines == [
+        "finish: the ship battle from frame 0 has gone 2 frames: the enemy ship held at 1 HP from now "
+        "(its record and object), so the crew's next hit ends it",
+        "finish: the battle ended by frame 5; 1 enemy HP put back to 1",
+    ], err
+
+
+@needs_cc
 def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver, tmp_path):
     """turn:F-G:M:SEQ waits for member M's input (scene 7, phase 1, the member
     word M), holds 60 frames of nothing while the wheel turns in, then each
@@ -1548,15 +1592,18 @@ def test_the_walker_steps_off_a_touch_that_keeps_starting_under_the_player(drive
     waited 99,000 frames on it. Once the main thread has been in one for 60
     frames with the lock held, the pad filter holds the stick a quarter turn
     every 90 frames, said so, until the lock is free; the person's own press
-    is left alone, and so is any other entry holding the lock."""
+    is left alone, and so is any other entry holding the lock, and a touch
+    that runs on past its first word (a013d's 6005 walks the player a step
+    and warps)."""
     lab(tmp_path)
     # The script: code at 80400000; "loop" at 0 and "M06020" at 0x100.
-    frames70, frames59 = "frame " * 70, "frame " * 59
+    frames35, frames59 = "frame " * 35, "frame " * 59
     script = (
         "set 8030cea0 80400000 set 8030d6c0 80410000 set 8030d6c4 2 "
         "set 80410004 6c6f6f70 set 80410014 100 set 80410018 4d303630 set 8041001c 32300000 "
         "set 803475cc 6 set 80311aec 8 set 8030e714 1 "
-        f"set 8030cea4 80400008 safe {frames70}safe padall 70 0 "  # the loop holds it: not a touch
+        f"set 8030cea4 80400008 safe {frames35}safe padall 35 0 "  # the loop holds it: not a touch
+        f"set 8030cea4 80400108 safe {frames35}safe padall 70 0 "  # 6020 past its first word: running
         f"set 8030cea4 80400100 safe {frames59}safe padall 129 0 "  # 6020 for 59 frames: not yet
         "frame safe padall 130 0 padall 220 0 padall 230 100 "  # 60: up, then right; the person's A alone
         "set 8030e714 0 set 8030cea4 80400008 frame safe padall 131 0"  # the lock free
@@ -1564,6 +1611,7 @@ def test_the_walker_steps_off_a_touch_that_keeps_starting_under_the_player(drive
     out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-1000:3")
     assert "loaded 1" in out, err
     assert [x for x in out.splitlines() if x.startswith("padall")] == [
+        "padall 35 00 00 11 22 33 44 55 66",
         "padall 70 00 00 11 22 33 44 55 66",
         "padall 129 00 00 11 22 33 44 55 66",
         "padall 130 00 00 80 FF 33 44 55 66",
@@ -1703,13 +1751,23 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
 @needs_cc
 def test_a_ship_members_input_that_changed_nothing_is_played_again_three_times(driver, tmp_path):
     """A wheel still ready when its presses are done had one of them not land:
-    played again, three times at most, then left to the person."""
+    played again, three times at most, then left to the person; with the next
+    alternative each time where there are several, as a cannon the turn's SP
+    will not pay for gives way to Focus (Fina's greyed list in u4-G18)."""
     lab(tmp_path)
     pads = " ".join(f"pad {f} 0000" for f in range(100, 1200, 10))
     out, err = play(driver, tmp_path, "set 80306738 09020000 " + pads, SOA_LAB="sturn:0-5000:0:a")
     assert "loaded 1" in out, err
     assert err.count("lab: sturn: crew 0's input") == 4, err
     assert err.count("is still ready") == 3 and "again (3 of 3)" in err, err
+    out, err = play(driver, tmp_path, "set 80306738 09020000 " + pads, SOA_LAB="sturn:0-5000:0:a|b")
+    alts = [x.rsplit("(", 1)[1] for x in err.splitlines() if "lab: sturn: crew 0's input" in x]
+    assert alts == [
+        "alternative 1 of 2)",
+        "alternative 2 of 2)",
+        "alternative 1 of 2)",
+        "alternative 2 of 2)",
+    ], err
 
 
 @needs_cc

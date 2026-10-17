@@ -8993,6 +8993,46 @@ here).
   (state 9) and the refused choice leaves it in the wait for A (state 6), so nothing played another alternative.
   `a521a`, unlike the gate, checks `B[262] <= 0` in its own loop (`_WAIT_LOOP`, 0027C), so the crew's cannons win
   it; past the gate the part-G runs give Vyse Focus alone. An S-Cannon placed by the chance mark is not built.
+- **Runs u4-G16 to u4-G18: a card at Crescent Isle, and a crew that only focused** [V, `build/reach/u4-G16`,
+  `u4-G17`, `u4-G18`]: u4-G16, with Vyse on Focus alone from the sailing card, saved at `a018b`'s save point (4100)
+  at 24646 (`build/savetest/card-partG-crescent.raw`: flags to 320, and 329) and then stood 66,000 frames in
+  `a520a`'s battle with the Gregorio Cruiser. Frame 110500 shows why: Vyse, Aika and Fina each placing Focus.
+  `b/right/a/a` is Focus for every member (B leaves the wheel at Attack, and a plain press moves it two slots), so
+  no one fired; u4-G15 had won it with Vyse's S-Cannon. Probe u4-G17 gave the crew `b/a/a`: Aika's cannon went
+  into the grid with the list still open (frame 24250), so choosing a cannon places it and a third A confirms.
+  Probe u4-G18, `b/a/a/a`: Aika fired; Fina's list was greyed at 5 SP of 52 (each Prototype Cannon costs 6), and
+  her three retries pressed the same again and left her wheel standing. A retry now plays the next alternative
+  where there is one (a test, failing without it), and the crew get `b/a/a/a|b/right/a/a`: a cannon, or Focus
+  when the turn's SP will not pay for one.
+- **Which ship battles need the S-Cannon** [V, `sct.py` over the 67 ship-battle stages, `a500a` to `a583a`]: only
+  `a519a`, the Fortress Gate, checks the enemy's HP in `_SP_ATTACK` alone. Every other stage with the check
+  (`B[262] 0 <=`) makes it in its `_WAIT_LOOP` too, so cannon fire wins it, and four end on their own terms:
+  `a506a` on a timer (`sys[52] 1994 >=`), `a523a` and `a577a` at a threshold (`B[262] B[140] <=`), `a540a` at 40.
+- **Run u4-G19: the gunboat, slowly** [V, `build/reach/u4-G19`, stopped by hand at frame 236000]: from the Crescent
+  Isle card with the crew on a cannon or Focus, the cruiser fell at 83630 (60,000 frames of battle, 82 HP top-ups)
+  and 325 followed at 84246; Gregorio's gunboat (`a521a`) then ran from 85466. Its HP bar, measured in the frames
+  that show it, went from 80 pixels to 39 between 86000 and 198500, a few pixels a round: the part card's
+  Delphinus fights with its four Prototype Cannons, where a player would have bought better. The stage asks its
+  own choice every second turn ("Close in and look for an opening" or "Play it safe", `_EV_TURN2`); no down was
+  pressed in the battle, so wherever it came the first was taken [I: the window itself not seen in a frame].
+- **The ship battle's `finish`** [V, `build/reach/u4-G20`]: the enemy's HP that the fight keeps is its record's,
+  among the 20-byte ship records at 0x80308EF8 (+8 HP, +12 maximum), the one whose `*(*(rec)+36)+378` halfword is
+  the id at 0x803472AC, from which the driver takes `B[262]` (battle-system.md 7); run 9 had held the ship object's
+  +24 alone. `finish` now holds both at 1 HP in a ship battle that has gone FRAMES frames (a test, failing with
+  the record left alone or found by the player's id). In u4-G20 the cruiser was held from 35179 and sunk by 43128
+  (325 at 43746); the gunboat from 56967 and sunk by 60378 (record 1's HP to 0 at 60196; 326 at 60993).
+- **Run u4-G20: part G's story to its end** [V, `build/reach/u4-G20`, stopped by hand at frame 148500]: a third
+  ship battle (`a522a`, an enemy of 50,000 HP) held from 73622 and won by 87021, and 327 at 87696. The lab's
+  `save` saved at `a013d`'s save point (4411) at 91297 (`build/savetest/card-partG-013d.raw`). 328 was passed over
+  at 121366: `a116b`'s 6001, which sets it, runs while 328 is clear in the prison corridor where part G began,
+  long behind. The aim then fell on 338, `a008a`'s 3015, the Kabal Skewer Lady's errand (inventory items 294 and
+  295, her daughter in Esparanza): flags 330 to 349 that scripts set are such side steps. Part H's first, 352
+  (`a099i`'s loop, `me099ah03`), waits on field flag 1781, which no script sets: like 1766, a world-map object
+  the ship sails to [I: not found in an MLD]. The index lists a warp that waits so as a hook, not a flag set.
+  On the way the walker stepped off `a013d`'s 6005 twice (104261, 114353), a touch with no condition that walks
+  the player a step and warps to `a013e`: running, not starting over, since it takes more than a second. The
+  step-off now asks for the main thread on the touch's first word, where each start puts it and a running touch
+  leaves (the same test, failing without the check).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

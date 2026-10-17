@@ -241,11 +241,13 @@ entry gated on the ground the player stands on (B[16]) has it set first, as walk
 exit comes first inside it, and its own entries may warp. Part D played to its end, flags 150 to 162, and its card saved at the Temple of Pyrynn
 (`build/savetest/card-partD-end.raw`).
 
-**Runs u4-E1 to u4-G15** (FINDINGS "Reach U4"): parts E and F through, by gates and requirements the story index
+**Runs u4-E1 to u4-G20** (FINDINGS "Reach U4"): parts E and F through, by gates and requirements the story index
 learned (`reqN` lines), the lab's `wander` for the deserted island's meat, and `gold` for the shipwrights' price;
-part G to 325, with a choice answered start by start, a far landing started in place of the sail, and a touch entry
-under the player stepped off. A refused S-Cannon (off a chance turn) still holds a ship battle: no lab item places
-it by the chance mark.
+part G's story to its end (327, 329), with a choice answered start by start, a far landing started in place of the
+sail, a touch entry under the player stepped off, and ship battles ended by the crew's cannons (or Focus, when the
+SP will not pay) and `finish` holding a long one's enemy at 1 HP. Only the Fortress Gate needs the S-Cannon, on a
+chance turn; no lab item places it by the chance mark. Part H's first flag waits on a world-map object's flag no
+script sets, which the index's hooks (warps only) do not cover yet.
 
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
