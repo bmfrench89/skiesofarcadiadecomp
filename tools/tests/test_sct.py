@@ -168,7 +168,7 @@ def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     name_at = base + 4 * len(loop)
     for word in (8, 19):
         struct.pack_into(">I", d, base + 4 * word, name_at - (base + 4 * word))
-    assert sct.hooks(bytes(d)) == {1766: {"243a"}}
+    assert sct.hooks(bytes(d)) == {1766: (set(), {"243a"})}
     assert sct.story_lines("099f", bytes(d), unset={1766}) == [
         "099f loop w243a",
         "099f hook1766 w243a",
@@ -176,6 +176,23 @@ def test_a_hook_is_a_warp_inside_an_if_on_a_flag_the_field_sets():
     assert sct.story_lines("099f", bytes(d), unset=set()) == ["099f loop w243a"]
     struct.pack_into(">i", d, base + 24, 4 * 7 - 24)  # a block that ends before the warp
     assert sct.hooks(bytes(d)) == {}
+
+
+def test_a_hook_also_sets_what_its_block_and_the_entries_it_calls_set():
+    """me099i's loop, once flag 1781 is set (no script sets it: the ship's
+    arrival), calls me099ah03, which sets 352, part H's first: the hook sets
+    352 (and a FLAGSET in the block itself counts too), and its line says so."""
+    ONE = 0x3F800000
+    loop = [0, 0x20000000 | 1781, FLOAT, ONE, EQ, END, 0]  # the else-offset patched below
+    loop += [17, *f(353), END, 11, 0, 10, 0]  # a FLAGSET, a CALL patched below, a GOTO
+    loop += [12]
+    cut = [17, *f(352), END, 12]
+    d = bytearray(build([("loop", loop), ("me099ah03", cut)]))
+    base = 12 + 2 * 20
+    struct.pack_into(">i", d, base + 24, 4 * 14 - 24)  # the block ends at word 14
+    struct.pack_into(">i", d, base + 4 * 12, 4 * len(loop) - 4 * 12)  # the CALL lands on me099ah03
+    assert sct.hooks(bytes(d)) == {1781: ({352, 353}, set())}
+    assert "099i hook1781 s352 s353" in sct.story_lines("099i", bytes(d), unset={1781})
 
 
 def test_a_flag_set_only_once_another_is_says_which():

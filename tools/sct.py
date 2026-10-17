@@ -337,15 +337,22 @@ def flags_set(d: bytes) -> set[int]:
     return out
 
 
-def hooks(d: bytes) -> dict[int, set[str]]:
-    """The warps inside each `IF (FLAG[T] 1 ==)` block with T at STORY_FLAGS or
-    above: a warp that waits for a flag the field sets. On the world map these
-    are where the ship's arrival takes the story on: me099f's loop warps to
-    243a, part C's first cutscene, once flag 1766 is set, which no script sets
-    and a fldHakken object in a099f.mld carries (the ship sailing to it). The
-    block is the words [0, flag T, 0x04000000, 1.0, ==, END, offset], and runs
-    from after its offset to where the offset points."""
-    out: dict[int, set[str]] = {}
+def hooks(d: bytes) -> dict[int, tuple[set[int], set[str]]]:
+    """The story flags set and the warps inside each `IF (FLAG[T] 1 ==)` block
+    with T at STORY_FLAGS or above, the block's own and those of the entries it
+    CALLs (`story`): what waits for a flag the field sets. On the world map
+    these are where the ship's arrival takes the story on: me099f's loop warps
+    to 243a, part C's first cutscene, once flag 1766 is set, which no script
+    sets and a fldHakken object in a099f.mld carries (the ship sailing to it);
+    me099i's calls me099ah03, which sets 352, part H's first, once 1781 is.
+    The block is the words [0, flag T, 0x04000000, 1.0, ==, END, offset], and
+    runs from after its offset to where the offset points."""
+    base, ents = entries(d) if len(d) >= 12 else (0, [])
+    starts: dict[int, str] = {}
+    for off, name in ents:
+        starts.setdefault(off, name)
+    called: dict[str, tuple[set[int], set[str]]] | None = None
+    out: dict[int, tuple[set[int], set[str]]] = {}
     for o in range(0, len(d) - 27, 4):
         w = struct.unpack(">7I", d[o : o + 28])
         if (
@@ -357,13 +364,33 @@ def hooks(d: bytes) -> dict[int, set[str]]:
         flag, end = w[1] & 0xFFFFFF, o + 24 + _rel(d, o + 24)
         if flag < STORY_FLAGS:
             continue
+        sets, warps = set(), set()
         for q in range(o + 28, min(end, len(d) - 7), 4):
             if _w(d, q) == 43:
                 m = _WARP_NAME.match(d, q + 4 + _w(d, q + 4))
                 if m:
-                    out.setdefault(flag, set()).add(m.group(1).decode("latin1").lower())
+                    warps.add(m.group(1).decode("latin1").lower())
             elif _w(d, q) == 238 and _w(d, q + 4) >= 0x04000000:
-                out.setdefault(flag, set()).add("099a")
+                warps.add("099a")
+            elif (
+                _w(d, q) == 17
+                and q + 16 <= len(d)
+                and _w(d, q + 4) == 0x04000000
+                and _w(d, q + 12) == END
+            ):
+                v = struct.unpack(">f", d[q + 8 : q + 12])[0]
+                if v == int(v) and 0 <= v < STORY_FLAGS:
+                    sets.add(int(v))
+            elif _w(d, q) == 11:
+                target = starts.get(q + 4 + _rel(d, q + 4) - base)
+                if target:
+                    called = called if called is not None else story(d)
+                    sets |= called[target][0]
+                    warps |= called[target][1]
+        if sets or warps:
+            got = out.setdefault(flag, (set(), set()))
+            got[0].update(sets)
+            got[1].update(warps)
     return out
 
 
@@ -557,7 +584,7 @@ def story_lines(
     """`story` as text, one entry a line, for the entries that set or warp:
     `004a M03005 w250a`. The lab's walker reads these (reach.md U4). With
     `unset`, the flags no script sets, each hook on one of them is a line too,
-    named for its flag: `099f hook1766 w243a`. An entry that opens a block by
+    named for its flag: `099f hook1766 w243a`, `099i hook1781 s352`. An entry that opens a block by
     setting the field flag it waits for (`gates`) sets and warps as it does.
     And for each flag every place here sets only once others are set, a line
     naming them (`requirements`): `013b req271 r272`. With `needed`, the
@@ -572,9 +599,10 @@ def story_lines(
         if sets or warps:
             words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
             lines.append(f"{name} {entry} {' '.join(words)}")
-    for flag, warps in sorted(hooks(d).items()) if unset is not None else ():
+    for flag, (sets, warps) in sorted(hooks(d).items()) if unset is not None else ():
         if flag in unset:
-            lines.append(f"{name} hook{flag} {' '.join(f'w{m}' for m in sorted(warps))}")
+            words = [f"s{f}" for f in sorted(sets)] + [f"w{m}" for m in sorted(warps)]
+            lines.append(f"{name} hook{flag} {' '.join(words)}")
     for flag, need in sorted(requirements(d).items()):
         lines.append(f"{name} req{flag} {' '.join(f'r{g}' for g in sorted(need))}")
     return lines

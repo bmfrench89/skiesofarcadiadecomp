@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1640 |
+| Python tests | 1645 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -510,9 +510,15 @@ at 1 HP through the record the fight keeps it in. Cards: `card-partG-sail.raw` (
 `card-partG-crescent.raw` (`a018b`) and `card-partG-013d.raw` (`a013d`, after 327). What is left in 330-349
 is side errands; 328 belongs to the prison, long behind.
 
-**Next:** part H from `card-partH.raw` with `--story 350-399`. Its first flag, 352, waits on field flag 1781,
-which no script sets (a world-map object the ship sails to, as 1766 is): the index's hooks know only warps
-that wait so, and will need flag sets too. Then I to L the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
+**Part H to 379 (`u4-H4`, 2026-10-17):** 352 by a hook that now carries the flags its block sets (1781, the
+ship's arrival), the Tenkou Spellship sunk by `finish` (the part card's Delphinus has only cannons, which cannot
+reach it), then 353 to 357, 365 to 377 and 379 through Yafutoma's maps and two more ship battles. Card
+`card-partH-020a.raw` (`a020a`, with 352 to 357 and 365). 358 (Mt. Kazai) needs the Ship Parts Merchant's second option, which
+the walker now tries; 359 needs the arrival at `a232a` from `a019d`; the merchant's talk once kept four threads
+alive after a back-out (FINDINGS).
+
+**Next:** part H again from `card-partH-020a.raw` with `--story 350-399` (`save` now saves again every
+60,000 frames); then I to L the same way; U5's parts E, F, I and L with `hold-hp`. The mod framework's
 next slices (M16, M17, T10, PLAN-NEXT §0) have not moved since M6 on 2026-10-14: the owner was asked whether a
 cloud session or a background agent here takes them. `tools/reach.py run` is how every run here is made (its
 `--help`, and each FINDINGS entry's recipe). Step 3, the owner's sitting, also holds R5c's 150% capture and the

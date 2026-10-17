@@ -9033,6 +9033,44 @@ here).
   the player a step and warps to `a013e`: running, not starting over, since it takes more than a second. The
   step-off now asks for the main thread on the touch's first word, where each start puts it and a running touch
   leaves (the same test, failing without the check).
+- **Part H's start, a hook that sets a flag** [V, the scripts; `build/reach/u4-H1`]: `a099i`'s loop calls
+  `me099ah03`, which sets 352, part H's first, inside `IF (FLAG[1781] 1 ==)`, and no script sets 1781: the ship's
+  arrival, as 1766 is part C's. The index listed such a block as a hook only when it warps; a hook now carries the
+  story flags its block sets too, its own and through the entries it calls (`099i hook1781 s352`, and two more:
+  `035g hook1055 s316`, Gilder's noise, and `017f hook1051 s31`; 1576 lines). In the lab a hook that sets the aim
+  ranks first, and a requirement on the hook's own flag (`req352 r1781`) holds it back no longer (a test each,
+  failing with the change taken out). u4-H1, from `card-partH.raw` with `--story 350-399`, crossed Crescent Isle to
+  the world map, set 1781 at 4452, and 352 followed at 4494.
+- **A ship the cannons cannot reach** [V, `build/reach/u4-H1` to `u4-H3`]: the ship battle that followed
+  (`a525a`, the Tenkou Spellship) was held at 1 HP from 18311 and still stood at 40000. Probe u4-H2 read the
+  enemy's record (25,000 HP) at 1 from 12309 to 20000: nothing landed. The stage's own lines say why: Fina, "It
+  appears that Yafutoman ships can climb to great altitudes. Our cannons can't reach them", and Aika, "I'll bet
+  that our torpedos can!". Probe u4-H3's up press took the weapon list from its first row to its third, wrapping
+  at four: the part card's Delphinus carries four Prototype Cannons and nothing else. `finish` now sinks an enemy
+  ship that has stood at 1 HP for FRAMES frames more with no hit sinking it, record and object to 0, logged "in
+  place of a weapon that reaches it", and the stage's own `_WIN` plays (a test, failing without it).
+- **Run u4-H4: part H to 379** [V, `build/reach/u4-H4`, stopped by hand at frame 187000]: the Spellship sunk at
+  30310 and the battle won by 30514; 353 at 30630, 354 to 357 by 52653, 365 to 377 by 153443 (another ship battle
+  held at 1 HP from 123240 and won by 125109; land battles held and won), 379 at 173332. The lab's `save` saved at
+  `a020a`'s save point (4010) at 59576 (`build/savetest/card-partH-020a.raw`), and only then: it saves once, so
+  the run's progress after was not kept. `save` now saves again at the first save point 60,000 frames after its
+  last (a test, failing without it).
+- **358 and the Ship Parts Merchant** [V, `build/reach/u4-H4`, `sct.py 019a`]: 358 is set in Mt. Kazai
+  (`a121d`), and was passed over at 91741 with the walker elsewhere. The way there is `a019a`'s Ship Parts
+  Merchant (4001, 4002, 3002): "What will you do?", [Buy and sell ship parts] first, then [Proceed to Mt. Kazai],
+  which gives the Underwater Suit and leaves for the mountain (op 238). The walker reached him only at 173188,
+  aiming at 361: `assist` took the first option, the shop, the walker backed out of its menu, and marked both
+  entries "not started again", a rule from part D's Maramba Office, where a menu was never the story's way on. An
+  entry backed out of is now started again until its starts have taken each of `assist`'s two options in turn (a
+  test, failing without it). And after the second back-out, from 181588, the merchant's talk kept four threads
+  alive (its scptEnter, scptLetsTalk and camera steps, the talk itself on its last FLAGCLR) and the walker waited
+  on the start lock until the run was stopped: [I] the back-out's presses outlasting the talk; not yet looked at.
+- **359 waits on an arrival** [V, `sct.py 232a`]: `a232a`'s loop sets 359 only under `SWITCH (sys[15])`'s 193,
+  and `sys[15]` is the map the party came from (FINDINGS 1382), map times ten plus the letter [I: every value seen
+  fits, 190 `a019a`, 193 `a019d`, 2470 `a247a`, `a013d`'s 131 and 134 `a013b` and `a013e`; the code that writes it
+  not read]: 359 needs the walk from `a019d` (its 4004, or its
+  loop's warp). Passed over at 160085 with the walker on other maps; its second go comes when nothing else is
+  reachable. The index does not say which arrival a loop's branch wants.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

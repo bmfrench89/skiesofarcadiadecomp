@@ -1244,6 +1244,45 @@ def test_the_lab_finishes_a_ship_battle_that_has_gone_on_too_long(driver, tmp_pa
 
 
 @needs_cc
+def test_the_lab_sinks_a_ship_battles_enemy_no_hit_reaches(driver, tmp_path):
+    """An enemy ship held at 1 HP for FRAMES frames more with no hit sinking it
+    goes to 0, record and object, said once: a525a's Tenkou Spellship flies
+    above where the part card's Prototype Cannons reach. One the crew has
+    sunk meanwhile is not sunk again."""
+    lab(tmp_path)
+    ships = (
+        "set 8034729c 2 set 803472b0 7 set 803472ac 9 "
+        "set 80308ef8 80400000 set 80400024 80400100 set 80400278 7 "
+        "set 80308f00 64 set 80308f04 7b2 "
+        "set 80308f0c 80400400 set 80400424 80400500 set 80400678 9 "
+        "set 80308f14 61a8 set 80308f18 61a8 "  # 25000 of 25000
+        "set 8034727c 80400200 set 80400224 80400300 set 80400318 61a8 "
+    )
+    script = (
+        ships + "set 803475cc 6 set 80311aec 8 set 80311ac0 20d setb 80311ac8 61 safe "  # a525a
+        "frame frame safe get 80308f14 "  # 2: held at 1
+        "frame safe get 80308f14 "  # 3: still held
+        "frame safe get 80308f14 get 80400318 "  # 4: 2 frames at 1, no hit: sunk
+        "set 80308f14 1 frame safe get 80308f14"  # sunk once only
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="finish:0-100:2")
+    assert "loaded 1" in out, err
+    reads = [x for x in out.splitlines() if x.startswith(("80308F", "80400318"))]
+    assert reads == [
+        "80308F14=00000001",
+        "80308F14=00000001",
+        "80308F14=00000000",
+        "80400318=00000000",
+        "80308F14=00000001",
+    ], out
+    sunk = [x.split("lab: ", 1)[1] for x in err.splitlines() if "with no hit sinking it" in x]
+    assert sunk == [
+        "finish: the enemy ship has stood at 1 HP for 2 frames with no hit sinking it: sunk at frame 4, in place "
+        "of a weapon that reaches it (the part card's Delphinus carries Prototype Cannons only)"
+    ], err
+
+
+@needs_cc
 def test_the_lab_plays_a_members_turn_once_a_battle_and_logs_the_commands(driver, tmp_path):
     """turn:F-G:M:SEQ waits for member M's input (scene 7, phase 1, the member
     word M), holds 60 frames of nothing while the wheel turns in, then each
@@ -1303,6 +1342,37 @@ def test_the_lab_plays_a_ship_crew_members_turn_each_time_its_wheel_is_ready(dri
         "pad 465 0100 filtered",
     ], out
     assert err.count("lab: sturn: crew 0's input") == 2, err
+
+
+@needs_cc
+def test_the_lab_saves_at_a_save_point_and_again_a_while_later(driver, tmp_path):
+    """save:F-G:SEQ on a quiet field starts a live save point's entry (hit
+    type 45, the class word's low half at +18) as the A press would, plays SEQ
+    from 120 frames later, and starts one again 60,000 frames after: a long
+    run's card holds its latest (u4-H4's one save was 100,000 frames old when
+    the run stopped). Not again sooner."""
+    lab(tmp_path)
+    vol = "set 80347524 80400800 set 80400808 1004 set 80400810 7800002d walkfns game "
+    quiet = "set 803475cc 6 set 80311aec 8 set 80311ac0 14 setb 80311ac8 61 "
+    script = (
+        vol + quiet + "safe frame safe "  # frame 0: started; 1: not again
+        "padall 120 0 padall 200 0 "  # the press from 120; played by 200
+        + "frame " * 60000
+        + "safe "  # 60001: too soon
+        + "frame " * 119
+        + "safe"  # 60120: 60,000 frames after the presses began
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="save:0-100000:a")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [
+        "fn_80210550(4100)"
+    ] * 2, out
+    starts = [x.split("lab: ", 1)[1] for x in err.splitlines() if "save point" in x]
+    assert starts == [
+        "save: a020a's save point 4100 started at frame 0; pressing a from frame 120",
+        "save: a020a's save point 4100 started at frame 60120; pressing a from frame 60240",
+    ], err
+    assert "save: a played by frame 200" in err, err
 
 
 @needs_cc
@@ -1858,6 +1928,36 @@ def test_the_walker_backs_out_of_an_event_that_holds_the_field_a_minute(driver, 
 
 
 @needs_cc
+def test_an_entry_backed_out_of_is_started_again_for_its_next_option(driver, tmp_path):
+    """An entry whose event needed backing out is started again until its
+    starts have taken each of assist's two options, then left alone: a019a's
+    Ship Parts Merchant's first is the shop, its second "Proceed to Mt.
+    Kazai", the story's way on (358, which part H's walker passed over)."""
+    lab(tmp_path)
+    vol = "set 80347524 80400800 set 80400808 fa2 set 80400810 8 walkfns game "
+    quiet, held = "set 80310bc0 0 ", "set 80310bc0 80000000 "
+    one = held + "safe " + "frame " * 1810 + "safe " + quiet + "safe " + "frame " * 4 + "safe "
+    script = (
+        vol
+        + "set 80311ac0 13 setb 80311ac8 61 set 803475cc 6 set 80311aec 8 frame frame frame frame safe "
+        + one
+        + one
+        + "frame " * 4
+        + "safe"
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-20000:3")
+    assert "loaded 1" in out, err
+    said = [x.split("lab: walk: ", 1)[1] for x in err.splitlines() if "needed backing out" in x]
+    assert said == [
+        "a019a entry 4002 needed backing out: started again for its next option",
+        "a019a entry 4002 needed backing out: not started again",
+    ], err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [
+        "fn_80210550(4002)"
+    ] * 2, out
+
+
+@needs_cc
 def test_the_walker_presses_the_way_out_of_a_menu_b_does_not_leave(driver, tmp_path):
     """An event that has held the field 5,400 frames, B notwithstanding (the
     Maramba Office's Buy / Sell / Wanted / Exit), gets the way out instead:
@@ -2046,6 +2146,36 @@ def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_then_later(d
     assert hooks[0] == (
         "a099f hook: flag 1766 set at frame 4, in place of the arrival this map's script waits for "
         "(the story's rank toward flag 100: 1)"
+    ), err
+
+
+@needs_cc
+def test_the_walker_stands_in_for_the_arrival_a_story_flag_waits_on(driver, tmp_path):
+    """`099i hook1781 s352`: a099i's loop calls the cutscene that sets 352,
+    part H's first, once flag 1781 is set, and no script sets it; 352 waits
+    on it (`req352 r1781`). The requirement holds the walker back no longer,
+    and the hook, setting the aim, ranks first: 1781 is set, said so."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text(
+        "099i loop s352\n099i me099ah03 s352\n099i hook1781 s352\n099i req352 r1781\n",
+        encoding="utf-8",
+    )
+    script = (
+        "set 80310c18 1 set 803475cc 6 set 80311aec 8 set 80311ac0 63 setb 80311ac8 69 "
+        "frame frame frame frame safe get 80310c18"  # frame 4: the hook
+    )
+    out, err = play(
+        driver,
+        tmp_path,
+        script,
+        SOA_LAB="story:350-399;walk:0-20000:3",
+        SOA_LAB_STORY=str(tmp_path / "story.txt"),
+    )
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("80310C18")] == ["80310C18=00200001"], out
+    assert (
+        "a099i hook: flag 1781 set at frame 4, in place of the arrival this map's script waits for "
+        "(the story's rank toward flag 352: 0)" in err
     ), err
 
 

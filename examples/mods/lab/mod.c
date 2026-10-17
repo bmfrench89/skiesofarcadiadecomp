@@ -70,10 +70,12 @@
  *                  reached in 30,000 frames is passed over. Where the
  *                  map itself sets it (its loop, on conditions), the walker
  *                  stays and talks. The aim and the distance are logged. A
- *                  line "MAP hookN wX..." is a warp in MAP's script that waits
- *                  for flag N, which no script sets (the world map's: the ship
- *                  reaching a spot); ranked before every live entry, the
- *                  walker sets N in its place, twice at most per aim.
+ *                  line "MAP hookN sF.. wX..." is what MAP's script does once
+ *                  flag N is set, which no script sets (the world map's: the
+ *                  ship reaching a spot): a hook setting the aim ranks first,
+ *                  one warping nearer by its distance, and a requirement on N
+ *                  holds it back no longer; ranked before every live entry,
+ *                  the walker sets N in its place, twice at most per aim.
  *   assist:F-G:EVERY  A, for two frames every EVERY frames, only in a battle,
  *                  at its results screen (the field's state 4, 0x80311AEC),
  *                  in a ship battle where its menu waits for A (a 5xx stage,
@@ -138,12 +140,17 @@
  *                  same way: its record, the one the driver takes B[262]
  *                  from, and its object. Part G's gunboat (a521a) fell from
  *                  80 pixels of HP bar to 39 in 100,000 frames to the part
- *                  card's Prototype Cannons (reach U4's u4-G19).
- *   save:F-G:SEQ   once, on a quiet field in frames F to G with a live save
- *                  point (hit type 44 or 45) in the map, start its entry as
- *                  the A press would, then 120 frames later press SEQ into
- *                  the save menu (buttons as turn's, 10 frames each, 60
- *                  between): a card a later run can Continue from.
+ *                  card's Prototype Cannons (reach U4's u4-G19). One that has
+ *                  stood at 1 for FRAMES frames more, no hit landing, is sunk,
+ *                  logged: a525a's Spellship flies where cannons cannot reach.
+ *   save:F-G:SEQ   on a quiet field in frames F to G with a live save point
+ *                  (hit type 44 or 45) in the map, start its entry as the A
+ *                  press would, then 120 frames later press SEQ into the save
+ *                  menu (buttons as turn's, 10 frames each, 60 between): a
+ *                  card a later run can Continue from. Again at the first such
+ *                  point 60,000 frames after, so a long run's card holds its
+ *                  latest: u4-H4's one save, at 59576, was 100,000 frames old
+ *                  by the time the run had a reason to stop.
  *   turn:F-G:M:SEQ at party member M's first command input of each battle in
  *                  frames F to G (scene 7, the phase word 0x8034733C at 1 and
  *                  the member word 0x80347330 at M, as mods/coop reads them),
@@ -1022,8 +1029,12 @@ static int story_blocked(uint32_t f)
         for (j = 0; j < g_nstory && !held; j++) {
             const StoryLine* r = &g_story[j];
             if (r->req != f || r->map != l->map) continue;
-            for (k = 0; k < r->nreqs && !held; k++)
-                if (!g_api->story_flag(g_story_words[r->at + r->nsets + r->nwarps + k])) held = 1;
+            /* A hook's own flag is one the walker sets: a099i's 352 waits
+             * on 1781, which the ship's arrival sets and no script does. */
+            for (k = 0; k < r->nreqs && !held; k++) {
+                uint32_t g = g_story_words[r->at + r->nsets + r->nwarps + k];
+                if (g != l->hook && !g_api->story_flag(g)) held = 1;
+            }
         }
         if (!held) return 0;
     }
@@ -1155,9 +1166,10 @@ static int story_warps_away(uint32_t map, uint32_t id)
 }
 
 /* This map's best hook toward `aim`: a line hookN here with flag N clear,
- * warping nearer than this map, tried fewer than STORY_TRIES times at this
- * aim; its rank (1 + where it warps) in *rank, else STORY_FAR and NULL. The
- * walker's tries of a hook are kept as entry 0x80000000 | N. */
+ * setting the aim (rank 0) or warping nearer than this map (1 + where it
+ * warps), tried fewer than STORY_TRIES times at this aim; its rank in *rank,
+ * else STORY_FAR and NULL. The walker's tries of a hook are kept as entry
+ * 0x80000000 | N. */
 static const StoryLine* story_hook(uint32_t map, uint32_t aim, uint32_t* rank)
 {
     uint32_t here = story_dist(map), k, d;
@@ -1170,6 +1182,11 @@ static const StoryLine* story_hook(uint32_t map, uint32_t aim, uint32_t* rank)
         if (l->map != map || !l->hook || g_api->story_flag(l->hook)) continue;
         s = seen_of(map, 0x80000000u | l->hook);
         if (!story_fresh(s, aim, g_api->frame())) continue;
+        for (k = 0; k < l->nsets; k++)
+            if (g_story_words[l->at + k] == aim) {
+                *rank = 0;
+                return l;
+            }
         for (k = 0; k < l->nwarps; k++) {
             d = story_dist(g_story_words[l->at + l->nsets + k]);
             if (d < here && d + 1 < *rank) {
@@ -1584,15 +1601,17 @@ static void walk_wait(Item* it, const char* why)
 }
 
 /* One safe point of save: on a quiet field with a live save point (hit type
- * 44 or 45) in this map, start its entry as the A press would, once; the pad
- * filter then plays the item's presses into the save menu, from SAVE_SETTLE
- * frames later. */
+ * 44 or 45) in this map, start its entry as the A press would, and again
+ * SAVE_AGAIN frames after the last; the pad filter then plays the item's
+ * presses into the save menu, from SAVE_SETTLE frames later. */
 #define SAVE_SETTLE 120u
+#define SAVE_AGAIN 60000u
 static void save_point(Item* it)
 {
     uint32_t f = g_api->frame(), v = 0, vol, id, busy = 0, live = 0, started = 0, args[1];
     uint16_t state, type;
     int guard = 0;
+    if (it->state == 2 && f >= it->started + SAVE_AGAIN) it->state = 0;
     if (it->state != 0) return;
     if (g_api->scene() != 6 || g_api->field_state() != 8 || g_api->story_flag(FLAG_EVENT) ||
         (g_api->read32(ENTRY_BUSY, &busy) && busy == 1) || !g_api->read32(LIST_HEAD, &v))
@@ -1678,10 +1697,18 @@ static void walk(Item* it)
         return;
     }
     if (g_walk_backout) logf_("walk: the field is free again at frame %u", f);
-    /* An entry whose event needed backing out is a menu, never the story's
-     * way on: it is not started again (the Maramba Office, twice). */
+    /* An entry whose event needed backing out is a menu: once its starts
+     * have taken each of assist's options in turn, it is not started again
+     * (the Maramba Office, twice). Before then its next start takes the next
+     * option, which may be the story's way on: a019a's Ship Parts Merchant
+     * asks "Buy and sell ship parts" or "Proceed to Mt. Kazai", and reach
+     * U4's part-H walker, which took the shop once and never came back,
+     * passed 358, in Mt. Kazai, over. */
     if (g_event_since) {
-        if (g_backed_out && g_last_start) {
+        if (g_backed_out && g_last_start && g_last_start->runs < CHOICE_TURNS) {
+            logf_("walk: a%03u%c entry %u needed backing out: started again for its next option",
+                  g_last_start->map >> 8, (char)(g_last_start->map & 0xFF), g_last_start->id);
+        } else if (g_backed_out && g_last_start) {
             g_last_start->trap = 1;
             logf_("walk: a%03u%c entry %u needed backing out: not started again", g_last_start->map >> 8,
                   (char)(g_last_start->map & 0xFF), g_last_start->id);
@@ -1955,13 +1982,29 @@ static uint32_t hold_at_one(uint32_t at)
  * B[262], the HP % the stage's _WIN tests (1 while above 0), and its object's
  * +24, *(*0x8034727C + 36). Holding the object alone moved no fight (reach
  * U4's run 9): the record is the one hold-hp's player side has kept up. */
+/* And one held at 1 HP for FRAMES frames more, no hit sinking it, is sunk:
+ * the part cards' Delphinus carries four Prototype Cannons, and a525a's
+ * Tenkou Spellship flies above where cannons reach ("I'll bet that our
+ * torpedos can!"), so reach U4's part-H walker held it at 1 for 22,000
+ * frames to no end. The stage's own _WIN plays from B[262] at 0. */
 static void finish_ship(Item* it, uint32_t f)
 {
-    uint32_t id = 0, rec = 0, s = 0, ship = 0, n = 0;
+    uint32_t id = 0, rec = 0, s = 0, ship = 0, n = 0, hp = 0;
     if (!it->started) it->started = f + 1;
-    if (f + 1 - it->started < it->id) return;
-    if (g_api->read32(SHIP_ENEMY_ID, &id) && (rec = ship_record(id)) != 0) n += hold_at_one(rec + 8);
-    if (g_api->read32(SHIP_STATE, &s) && s && g_api->read32(s + 36, &ship) && ship) n += hold_at_one(ship + 24);
+    if (f + 1 - it->started < it->id || it->state == 2) return;
+    if (g_api->read32(SHIP_ENEMY_ID, &id)) rec = ship_record(id);
+    if (!g_api->read32(SHIP_STATE, &s) || !s || !g_api->read32(s + 36, &ship)) ship = 0;
+    if (f + 1 - it->started >= 2 * it->id && rec && g_api->read32(rec + 8, &hp) && hp == 1) {
+        g_api->write32(rec + 8, 0);
+        if (ship) g_api->write32(ship + 24, 0);
+        logf_("finish: the enemy ship has stood at 1 HP for %u frames with no hit sinking it: sunk at frame %u, in "
+              "place of a weapon that reaches it (the part card's Delphinus carries Prototype Cannons only)",
+              it->id, f);
+        it->state = 2;
+        return;
+    }
+    if (rec) n += hold_at_one(rec + 8);
+    if (ship) n += hold_at_one(ship + 24);
     if (!it->state)
         logf_("finish: the ship battle from frame %u has gone %u frames: the enemy ship held at 1 HP from now (%s), "
               "so the crew's next hit ends it",

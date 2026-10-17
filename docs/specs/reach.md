@@ -247,7 +247,9 @@ part G's story to its end (327, 329), with a choice answered start by start, a f
 sail, a touch entry under the player stepped off, and ship battles ended by the crew's cannons (or Focus, when the
 SP will not pay) and `finish` holding a long one's enemy at 1 HP. Only the Fortress Gate needs the S-Cannon, on a
 chance turn; no lab item places it by the chance mark. Part H's first flag waits on a world-map object's flag no
-script sets, which the index's hooks (warps only) do not cover yet.
+script sets: a hook now carries the flags its block sets. Runs u4-H1 to u4-H4 took part H to 379, a ship no cannon
+reaches sunk by `finish` in place of the torpedoes a player would carry. Not yet known to the index: which
+arrival (`sys[15]`) a loop's branch wants.
 
 ## 6. U5: effect packages, and the renderer's unfired tripwires
 
