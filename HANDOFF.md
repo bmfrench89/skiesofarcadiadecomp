@@ -540,7 +540,11 @@ ended). Card `card-partL-130a.raw`.
 before its time, so part H ran again from its card with the betrayal (380) in its place, and 381 followed once
 `flag:122b:1051` stood in for a flag only the game sets. Card `card-partH-019a-380.raw`.
 
-**Next:** U5 (effect packages part by part, reach.md); PLAN-NEXT §0's step 3, the owner's sitting. Part H's tail (381 on)
+**U5's second round (2026-10-17):** parts D, E, F, G, I and L with `hold-hp` pass `soak.py check`; H, J and K met
+no battle on their maps, but the story runs fought there, and with their logs the effect-package ledger holds 119
+of 576 (FINDINGS "Reach U5"). The one renderer question is LINEPTWIDTH (lines asked 2.17 px wide, drawn 1).
+
+**Next:** PLAN-NEXT §0's step 3, the owner's sitting; then the owner's choice among mods, 60 fps and widescreen. Part H's tail (381 on)
 needs a run from `card-partH.raw` that leaves `a019d` for the world map only after the betrayal (380): every later
 card carries 365, set by that trip made early, which shuts the betrayal out (FINDINGS "u4-H15 and u4-H16"). U5's
 parts E, F, I and L with `hold-hp`. The mod framework's

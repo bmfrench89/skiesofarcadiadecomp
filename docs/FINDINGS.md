@@ -9221,6 +9221,24 @@ here).
   sets it for"), 379 at 3445, then `a122b` by stage i, 1051 at 9926, the Ragged Old Man's scene and 381 at 11079,
   and "no flag in 379-399 is left for a line to set". With it every part, C to L, has its story played on the port
   by the game's own scripts and the lab's logged stand-ins.
+- **Reach U5, second round: parts E, F, I and L** [V, `build/reach/u5b-partE`, `F`, `I`, `L`, 2026-10-17, `soak.py
+  check --beff-ledger`: pass, all four]: the first round's recipe with the lab's `hold-hp` (seeds 42, 43, 46 and 49;
+  warps to `a111b`, `a115b`, `a123b` and `a131e`; 33,500 frames, every frame drawn). E fought three battles, I four,
+  L two, every base invariant held, and the ledger went from 58 to 68 of 576 names: `F050005A`, `F292115A`,
+  `F0500029` (E), `F050004A`, `D2402900`, `F290384A`, `D2400300` (I), `F290046E`, `F050004F`, `F290614F` (L). F
+  fought one battle and lost it at 4510 with no top-up made: the party went from whole to fallen between two safe
+  points [I: blows that kill outright, part F's enemies against the part card's level-1 party]. The one renderer
+  question, as before: LINEPTWIDTH (2.17 px) in battles on `a123b` and `a131e`.
+- **U5's second round, parts D, G, H, J and K, and the story runs' effect packages** [V, `build/reach/u5b-partD`
+  to `K`; `soak.py check --beff-ledger`]: with `hold-hp` and other warps (D `a109d`, G `a116c`, H `a020b`, J `a126b`,
+  K `a103b`), D fought two battles and G three, both pass, and the ledger went to 76 (`F0500019`, `F050001E`,
+  `D2402300`; `F0500067`, `F290974B`, `F0500063`, `F2900563`, `D2403100`). H, J and K met no battle ("did not test
+  what it says"): J's random walk went between `a126a` and `a126b` twenty times, H and K stood where the accelerator
+  brought none. The story runs did fight there: `soak.py check` over u4-G20, u4-H17, u4-I3, u4-J4, u4-K1 and
+  u4-L1 adds their names, 43 more (u4-L1 alone 23), and the ledger holds 119 of 576. Those checks say FAIL on two
+  lines only, "no [gx] line" and "a [gxr] line with no bad-vertex-ref count": the runs were stopped by hand and
+  never wrote the end-of-run report; every other check a log can answer passed (no MMIO outside the model, no
+  stop line, no `[mem]` line, the card READY). LINEPTWIDTH (2.17 px) is the one renderer question, as before.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
