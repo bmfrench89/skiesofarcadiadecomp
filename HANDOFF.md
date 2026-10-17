@@ -489,7 +489,7 @@ FINDINGS entry "Reach U<n>":
   night once the walker learned houses: nothing warped to from inside one (flag 1024), doors asked again, and
   the ground an entry is gated on (B[16], which a008a's doors test) stood on first. **Part D done
   (`u4-D12`):** flags 150 to 162 by the game's own scripts, through the inn's two nights, the Temple of Pyrynn
-  and two ship battles (Belleza's ended by `finish`, which now holds an enemy ship at 1 HP too); its card,
+  and two ship battles, Belleza's among them, which end in their own course; its card,
   saved at the temple, is `build/savetest/card-partD-end.raw`.
 
 **Part E done (`u4-E3`, 2026-10-16):** every flag of 200-249 a script sets, through the gates the story index

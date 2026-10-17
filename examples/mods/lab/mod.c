@@ -121,8 +121,9 @@
  *                  it; logged, with the put-backs counted at the end. For a
  *                  party below the story's level: the part-select cards start
  *                  Vyse at level 1, and two Royal Guards outlasted 70,000
- *                  frames, and healed back up from 1 HP once. In a ship
- *                  battle (a 5xx stage), the enemy ship's HP the same way.
+ *                  frames, and healed back up from 1 HP once. Not a ship
+ *                  battle: the enemy ship's HP there is not where the fight
+ *                  keeps it (reach U4's run 9).
  *   save:F-G:SEQ   once, on a quiet field in frames F to G with a live save
  *                  point (hit type 44 or 45) in the map, start its entry as
  *                  the A press would, then 120 frames later press SEQ into
@@ -1790,18 +1791,13 @@ static int parse_hold(char* s)
 #define SHIP_RECORD_COUNT 0x8034729Cu
 #define SHIP_PLAYER_ID 0x803472B0u
 #define SHIP_STATE 0x8034727Cu
-/* In a ship battle (a 5xx stage) the enemy is the ship object at
- * *(S + 36), S = *0x8034727C, its HP at +24: what the turn's applier
- * damages and tests for the sink (battle-system.md 7). Reach U4's part-D run
- * fought Belleza's flagship at a507a 90,000 frames with the part card's
- * level-1 crew. */
-#define SHIP_ENEMY 36u
-#define SHIP_HP 24u
+/* Not a ship battle: holding the enemy ship's object at *(S + 36) + 24 at 1
+ * moved no fight (reach U4's run 9, and again in parts D and E), the battle
+ * keeping the HP it fights with elsewhere. */
 static void finish_battle(Item* it)
 {
-    uint32_t f = g_api->frame(), slot, actor, status, hp, n = 0, stage = g_api->map() >> 8, s = 0, ship = 0;
-    int ship_battle = g_api->scene() == 6 && stage >= 500 && stage <= 583;
-    if (g_api->scene() != SCENE_BATTLE && !ship_battle) {
+    uint32_t f = g_api->frame(), slot, actor, status, hp, n = 0;
+    if (g_api->scene() != SCENE_BATTLE) {
         if (it->state) logf_("finish: the battle ended by frame %u; %u enemy HP put back to 1", f, it->last);
         it->started = 0;
         it->state = 0;
@@ -1810,20 +1806,12 @@ static void finish_battle(Item* it)
     }
     if (!it->started) it->started = f + 1;
     if (f + 1 - it->started < it->id) return;
-    if (ship_battle) {
-        if (g_api->read32(SHIP_STATE, &s) && s && g_api->read32(s + SHIP_ENEMY, &ship) && ship &&
-            g_api->read32(ship + SHIP_HP, &hp) && (int32_t)hp > 1) {
-            g_api->write32(ship + SHIP_HP, 1);
-            n++;
-        }
-    } else {
-        for (slot = 4; slot < ENEMY_SLOTS; slot++) {
-            if (!g_api->read32(ACTORS + 4 * slot, &actor) || !actor) continue;
-            if (!g_api->read32(actor + ACTOR_STATUS, &status) || (status & STATUS_OUT)) continue;
-            if (!g_api->read32(actor + ACTOR_HP, &hp) || (int32_t)hp <= 1) continue;
-            g_api->write32(actor + ACTOR_HP, 1);
-            n++;
-        }
+    for (slot = 4; slot < ENEMY_SLOTS; slot++) {
+        if (!g_api->read32(ACTORS + 4 * slot, &actor) || !actor) continue;
+        if (!g_api->read32(actor + ACTOR_STATUS, &status) || (status & STATUS_OUT)) continue;
+        if (!g_api->read32(actor + ACTOR_HP, &hp) || (int32_t)hp <= 1) continue;
+        g_api->write32(actor + ACTOR_HP, 1);
+        n++;
     }
     if (!it->state)
         logf_("finish: the battle from frame %u has gone %u frames: %u enemy(s) held at 1 HP from now, so the "

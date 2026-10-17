@@ -8841,11 +8841,13 @@ here).
   Pyrynn (`a109a`, `a109g`, `a109e`) 155 to 158 by 64465; 159 at 68213; the ship battle at `a506a` won by 93367
   with the Little Jack held, then 160 at 93486; then Belleza's flagship at `a507a`, in the desert canyon (frame
   184500 looked at), from 95375, still afloat 90,000 frames on against the part card's level-1 crew. The lab's
-  `finish` now does in a ship battle what it does in a battle: past its frames the enemy ship's HP, +24 of the
-  object at *(*0x8034727C + 36), which the turn's applier damages and tests for the sink, is held at 1 (a test).
-  Run u4-D12, with it, followed u4-D11 frame for frame to the ship battles: at `a506a` the hold began at 82578
-  and the battle ended at 93367 all the same, its frame in u4-D11 too (that fight's end is not its enemy's HP
-  [I]); Belleza's, held from 107526, ended at 123823, and 161 was set at 124582.
+  `finish` was given a ship branch, holding +24 of the object at *(*0x8034727C + 36) at 1. **Corrected
+  2026-10-17:** that is run 9's item above, already found not to move a fight (the battle keeps the HP it
+  fights with elsewhere), and re-added here without reading run 9. Run u4-D12 followed u4-D11 frame for frame to
+  the ship battles: at `a506a` the hold began at 82578 and the battle ended at 93367 all the same, its frame in
+  u4-D11 too; Belleza's, held from 107526, ended at 123823 where u4-D11's was still going at 185000, which is a
+  different course of turns, not shown to be the hold's doing; and in part E (`a514a`, the Gigas) the hold moved
+  nothing again. The branch and its test are removed. 161 was set at 124582.
 - **Run u4-D12: part D played to its end** [V, `build/reach/u4-D12`, stopped by hand at frame 175000]: 162 at
   126441, and then "no flag in 150-199 is left for a line to set": part D's flags 150 to 162, every one set by
   the game's own scripts, the walker standing in only for the sail to Nasr (the hook), for walking (entries
@@ -8878,8 +8880,8 @@ here).
   mid-part-E card, 210 to 213 by 25545, 215 at 48197, 216 by the touch's battle at 70532, 217 to 219 and 226
   to 228 by 85569 (the lab's `save` at `a112c`'s save point 4000 at 84299; kept as
   `build/savetest/card-partE-late.raw`, READY), then two ship battles: `a514a` 91260 to 130189, and the green
-  Gigas at `a515a` 132638 to 216859 (frame 180000 looked at: the Gigas and the ship, drawn right). Each was held
-  at 1 HP 12,000 frames in and ended tens of thousands of frames later all the same: these fights end on their
+  Gigas at `a515a` 132638 to 216859 (frame 180000 looked at: the Gigas and the ship, drawn right). Each had its
+  enemy object held at 1 HP 12,000 frames in (the branch since removed) and ended tens of thousands of frames later all the same: these fights end on their
   own course, not on the enemy's HP [I]. 220, 222, 223 and 225 followed, and at 286832 "no flag in 200-249 is
   left for a line to set": every flag of part E a script sets. The last 60,000 frames went on 214 and 221,
   which only the developers' part-select room sets; the lab now counts no flag settable that only `355a`
@@ -8923,6 +8925,11 @@ here).
   307. Part F's 276 to 279 and 288 were left clear (the world map's 099c loop, the loops of `a013b` and `a013d`,
   `a115c`'s 4000): steps off the way the story went [I: side events, or a later visit's]. 279 had been passed
   over at 108662.
+- **Run u4-G1: a map's own temporaries are no requirement** [V, `build/reach/u4-G1`, stopped by hand at frame
+  61500]: from the part-F card, 307 to 309 by 52527 (308 through a requirement on field flag 1793), then the
+  walker aimed at 1858, "set in 002a 002b 002c": flags 1856 to 2047 are one map's temporaries, cleared on a load
+  (story-flags.md), and every town's loop sets its own 1858. Requirements now leave them out (136 lines in the
+  index, none on one; a test).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

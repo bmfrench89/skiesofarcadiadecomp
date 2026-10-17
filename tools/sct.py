@@ -266,6 +266,10 @@ def script(d: bytes, want: list[str] | None = None, names: dict[int, str] | None
 
 
 STORY_FLAGS = 1024  # 1024 up are the field's own: 1087 the event lock, 1856 up one map's
+# Flags 1856-2047 are one map's temporaries, cleared on a load (story-flags.md): a requirement on
+# one is that map's own business, not a step to take elsewhere (part G's walker aimed at 1858,
+# which every town's loop sets).
+MAP_TEMPORARIES = range(1856, 2048)
 _WARP_NAME = re.compile(rb"me(\d{3}[a-z])\.sct\0", re.IGNORECASE)
 
 
@@ -424,7 +428,7 @@ def requirements(d: bytes) -> dict[int, set[int]]:
     for o in range(base, len(d) - 8, 4):
         b = _flag_if(d, o)
         if b:
-            need = {n for n, v in b[0] if v == 1}
+            need = {n for n, v in b[0] if v == 1 and n not in MAP_TEMPORARIES}
             if need:
                 blocks.append((b[1], b[2], need))
 

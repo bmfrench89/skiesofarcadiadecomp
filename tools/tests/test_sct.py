@@ -205,6 +205,19 @@ def test_a_flag_set_only_once_another_is_says_which():
     assert sct.requirements(bytes(d)) == {271: {272}}
 
 
+def test_a_maps_own_temporary_flag_is_no_requirement():
+    """Flags 1856 to 2047 are one map's temporaries, cleared on a load: a flag
+    set inside `IF (FLAG[1858] 1 ==)` waits on nothing another map could
+    give (every town's loop sets its own 1858), while one inside
+    `IF (FLAG[1610] 1 ==)` waits on 1610."""
+    ONE = 0x3F800000
+    block = [0, 0x20000000 | 1858, FLOAT, ONE, EQ, END, 4 * 11 - 4 * 6, 17, *f(300), END, 12]
+    d = bytearray(build([("loop", block)], b""))
+    assert sct.requirements(bytes(d)) == {}
+    struct.pack_into(">I", d, 12 + 20 + 4, 0x20000000 | 1610)
+    assert sct.requirements(bytes(d)) == {300: {1610}}
+
+
 def test_an_entry_setting_a_field_flag_a_requirement_names_says_so():
     """a013a's 274 waits on field flag 1610 (`013a req274 r1610`), which only
     a115a's 4000 sets: given the field flags requirements name, that entry's

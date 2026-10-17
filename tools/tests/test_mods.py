@@ -1157,31 +1157,6 @@ def test_the_lab_wanders_its_map_for_the_fields_own_encounters(driver, tmp_path)
 
 
 @needs_cc
-def test_the_lab_finishes_a_ship_battle_that_has_gone_on_too_long(driver, tmp_path):
-    """In a ship battle (a 5xx stage, scene 6) the enemy is the ship object at
-    *(S + 36), S = *0x8034727C, HP at +24: after FRAMES it is held at 1, so
-    the next broadside sinks it (Belleza's flagship at a507a outlasted
-    90,000 frames of a level-1 crew). The player's ship (+32) is left alone."""
-    lab(tmp_path)
-    script = (
-        "set 803475cc 6 set 80311ac0 1fb setb 80311ac8 61 set 8034727c 80400000 "
-        "set 80400020 80410000 set 80400024 80420000 set 80410018 3e8 set 80420018 7530 "
-        "safe frame frame safe get 80420018 "  # 2 frames in: not yet
-        "frame safe get 80420018 get 80410018 "  # 3: held at 1, the player's ship untouched
-        "set 80420018 7530 frame safe get 80420018"  # a repair, put back
-    )
-    out, err = play(driver, tmp_path, script, SOA_LAB="finish:0-100:3")
-    assert "loaded 1" in out, err
-    assert [x for x in out.splitlines() if x.startswith("804")] == [
-        "80420018=00007530",
-        "80420018=00000001",
-        "80410018=000003E8",
-        "80420018=00000001",
-    ], out
-    assert "finish: the battle from frame 0 has gone 3 frames: 1 enemy(s) held at 1 HP" in err, err
-
-
-@needs_cc
 def test_the_lab_finishes_a_battle_that_has_gone_on_too_long_once(driver, tmp_path):
     """finish:F-G:FRAMES: in scene 7, once the battle has gone FRAMES frames,
     each enemy still standing (slots 4 to 11) goes to 1 HP and is held
