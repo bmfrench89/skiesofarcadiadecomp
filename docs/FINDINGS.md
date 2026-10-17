@@ -8930,6 +8930,39 @@ here).
   walker aimed at 1858, "set in 002a 002b 002c": flags 1856 to 2047 are one map's temporaries, cleared on a load
   (story-flags.md), and every town's loop sets its own 1858. Requirements now leave them out (136 lines in the
   index, none on one; a test).
+- **Runs u4-G2 and u4-G3: the gate again, and a choice answered the same way every time** [V, `build/reach/u4-G2`,
+  `u4-G3`, stopped by hand]: u4-G2 stood in the Fortress Gate's battle (`a519a`) from about 95000 to 193000 with
+  Vyse firing his cannon each turn: run 10's lesson above, the gate falls only to the Moon Stone Cannon. u4-G3,
+  with Vyse rotating Focus, Focus, S-Cannon, broke it on the first try (92015 to 103470), and 313 to 315 followed
+  by 106111 on the Delphinus. Then 316 was passed over at 145123. Gilder (`a035g` 3004) hears "this strange
+  noise up here"; once it is found (field flag 1055, set by no script) he asks "What do you say?", first
+  "Actually, I'm not quite finished looking around", then "I've pretty much seen everything", which plays the
+  cutscene that sets 316. `assist` took the first option every time. Now a choice is answered, from when it
+  comes, with the option the walker's starts of its entry have reached, in turn: the first the first time, the
+  second the next (a test; `assist`'s old test now times its A from the choice, not the beat).
+- **Run u4-G4: 316, and a landing the walker could not sail to** [V, `build/reach/u4-G4`, stopped by hand at
+  frame 150000]: with that, the fourth start of Gilder's talk set 316 at 113780, the Delphinus took to the air,
+  and the lab's `save` saved at `a103a`'s save point at 125797 (`build/savetest/card-partG-sail.raw`, READY). Then
+  317, set on the deserted island (`a017a`), took the walker to every landing near the ship and never there: the
+  world map (`a099g`) loads its islands by the ship's distance, and 099g's 4014, which lands on the island and
+  has no condition, never had a volume near. On the world map a landing the story lines know that ranks before
+  every live entry is now started without its volume, when the game says the entry is live, and logged "in
+  place of the sail there" (a test): the hooks' kind of stand-in, for a landing.
+- **A run's name reused:** part G's runs of 2026-10-16 and 17 were named `u4-G1` to `u4-G5`, names the part-G
+  runs of 2026-10-15 had already used, and `reach.py run` wrote over their logs (their old frames stay beside the
+  new log). The earlier entries citing `build/reach/u4-G1`, `u4-G2` and `u4-G4` above now point at the later
+  runs; their own logs are gone. Later runs take names not yet used, and `reach.py run` now refuses a name
+  whose folder holds a run log (a test).
+- **Run u4-G5: the island by the sail, and Brabham's price** [V, `build/reach/u4-G5`, stopped by hand at frame
+  40000]: from the sailing card, `a099g`'s 4014 was started with no volume near at 3652 ("in place of the sail
+  there") and 317 was set at 3801 on the deserted island. 318 was passed over at 38660: `a017a`'s 3000 and 3001
+  set it once Vyse has paid Brabham 25,000 gold for the hull (field flag 1724) and Izmael 75,000 for the base
+  (1725), the second payment playing the scene (`IF (sys[0] 25000 >=)` and `75000`; sys[0] is the gold at
+  0x8030BB40, story-flags.md). Run u4-G11 found the party with 44,143, short of the 100,000 [first guessed
+  here as short of Brabham's 25,000 alone, from part D's 3,344; corrected]. Gathering the rest from encounters
+  would take on the order of 200,000 frames a try. The lab's new `gold:MAP:N` raises the gold to N once, on MAP
+  with the field free, logged before and after: a stand-in of the hooks' kind for what a player would have
+  gathered by then (a test).
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

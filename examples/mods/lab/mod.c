@@ -79,9 +79,10 @@
  *                  6 at 0x80346E64, its task at 0x80346E4C, as mods/autotext
  *                  reads them): what the walker needs where a pad script's A
  *                  every 150 frames would talk to whatever stands nearest.
- *                  A choice in an event the walker backed out of (a
- *                  shopkeeper's) gets down, down, A from when it comes, and
- *                  the next time up, A, instead.
+ *                  A choice gets the first option the first time the walker
+ *                  starts its entry, the second the next, in turn; one in an
+ *                  event the walker backed out of (a shopkeeper's) gets
+ *                  down, down, A from when it comes, and the next time up, A.
  *   flag:MAP:N     once, at the first safe point where map MAP (004a; 099f is
  *                  the world map at that story stage) runs with no event,
  *                  set flag N, its word read and written back with the bit
@@ -99,6 +100,13 @@
  *                  battles drop, counted on each return from one (op 183,
  *                  0x8030E474); the walker never moves the player, so reach
  *                  U4's part-F walker met none.
+ *   gold:MAP:N     once, at the first safe point where map MAP runs with no
+ *                  event, the party's gold (0x8030BB40, the scripts' sys[0])
+ *                  raised to N if it is less, logged before and after: what a
+ *                  player would have gathered by then, which a run from a part
+ *                  card has not. On a017a part G's story waits on 25,000 to
+ *                  Brabham for the hull and 75,000 to Izmael for the base
+ *                  (`IF (sys[0] 25000 >=)`, `75000`); the party had 44,143.
  *   dump:F:C:N     once, at the first safe point at or after frame F, N bytes
  *                  (a multiple of 4, at most 8192) from the address the chain
  *                  C ends on (C's steps as peek's; *0x8034727C is the ship
@@ -193,6 +201,10 @@
 #define PHASE_ORDER 2u
 #define PRESS_HOLD 10u
 #define WANDER_LEG 90u /* frames the wander item holds the stick one way */
+#define GOLD 0x8030BB40u /* the party's gold, the scripts' sys[0] (story-flags.md) */
+#define GOLD_CAP 99999999u
+#define CHOICE_BEAT 30u /* frames between assist's presses in a choice */
+#define CHOICE_TURNS 2u /* options assist takes in turn, start by start of an entry */
 #define PRESS_GAP 60u
 #define MAX_PRESSES 32
 #define MAX_ALTS 4
@@ -213,7 +225,8 @@ enum {
     ITEM_SAVE,
     ITEM_FLAG,
     ITEM_FINISH,
-    ITEM_WANDER
+    ITEM_WANDER,
+    ITEM_GOLD
 };
 
 #define STORY_FLAG_WORDS 0x80310B3Cu /* flag n: bit n & 31 of the word +4 * (n >> 5) (story-flags.md 1) */
@@ -465,6 +478,10 @@ static int parse_item(char* s)
     } else if (strcmp(s, "wander") == 0) {
         it->kind = ITEM_WANDER;
         if (!parse_frames(a, it) || !(it->base = story_map_word(b))) return 0;
+    } else if (strcmp(s, "gold") == 0) {
+        char* end;
+        it->kind = ITEM_GOLD;
+        if (!(it->base = story_map_word(a)) || !parse_u32(b, &end, &it->id) || *end || it->id > GOLD_CAP) return 0;
     } else if (strcmp(s, "flag") == 0) {
         char* end;
         it->kind = ITEM_FLAG;
@@ -655,15 +672,26 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
              * (the third, leave), and the next time up, A (the last, should
              * the list wrap). A press on a fixed beat instead fell, every
              * time, after the talk the A had chosen: 170,000 frames. */
-            static uint32_t choice_from, choice_n;
+            /* Any other choice gets, from when it comes, the option the
+             * walker's starts of its entry have reached: the first the first
+             * time, the second the next, and so on in turn. a035g's Gilder
+             * asks "What do you say?", "not quite finished" first and "I've
+             * pretty much seen everything" second; answering the first every
+             * time, reach U4's part-G walker passed 316 over. */
+            static uint32_t choice_from, choice_n, choice_k;
             static int was_choice;
-            int choice = g_backed_out && frame >= it->from && frame <= it->to && at_choice();
+            int choice = frame >= it->from && frame <= it->to && at_choice();
             if (choice && !was_choice) {
                 choice_from = frame;
-                choice_n++;
+                if (g_backed_out) choice_n++;
+                choice_k = g_last_start && g_last_start->runs > 1 ? (g_last_start->runs - 1) % CHOICE_TURNS : 0;
             }
             was_choice = choice;
-            if (choice) {
+            if (choice && !g_backed_out) {
+                uint32_t t = frame - choice_from, beat = t / CHOICE_BEAT;
+                if (t % CHOICE_BEAT < 2 && beat >= 1 && beat <= choice_k + 1)
+                    pad->buttons |= beat <= choice_k ? SOA_PAD_DOWN : SOA_PAD_A;
+            } else if (choice) {
                 uint32_t t = frame - choice_from;
                 if (choice_n & 1)
                     pad->buttons |= t >= 30 && t < 32   ? SOA_PAD_DOWN
@@ -1459,6 +1487,44 @@ static uint32_t door_rank(uint32_t map, uint32_t aim, uint32_t f)
     return best >= STORY_FAR ? STORY_FAR : best + 1;
 }
 
+/* On the world map, a landing the story lines know that ranks before every
+ * live entry, though its volume is not there: the world map loads its islands
+ * by the ship's distance, and the walker cannot sail. Started in place of the
+ * sail there, when the game says the entry is live; reach U4's part-G walker,
+ * the Delphinus out, landed wherever was near and never at the deserted
+ * island (099g's 4014), where 317 is set. Returns whether one started. */
+static int sail(Item* it, uint32_t map, uint32_t aim, uint32_t f, uint32_t best)
+{
+    uint32_t id = 0, rank = best, sc, args[1], live = 0, started = 0;
+    Seen* s;
+    int i;
+    for (i = 0; i < g_nstory; i++) {
+        const StoryLine* l = &g_story[i];
+        if (l->map != map || l->id < 3000 || l->id > 6999) continue;
+        s = seen_of(map, l->id);
+        if (!s || s->trap || !story_fresh(s, aim, f)) continue;
+        sc = story_score(map, l->id, aim);
+        if (sc >= rank) continue;
+        args[0] = l->id;
+        if (!g_api->call_guest(FN_ENTRY_LIVE, args, 1, NULL, 0, &live, NULL) || live != 1) continue;
+        id = l->id;
+        rank = sc;
+    }
+    if (!id) return 0;
+    args[0] = id;
+    if (!g_api->call_guest(FN_ENTRY_START, args, 1, NULL, 0, &started, NULL)) return 0;
+    s = seen_of(map, id);
+    if (s) s->runs++;
+    story_count(s, aim, f);
+    g_last_start = s;
+    it->last++;
+    it->why[0] = '\0';
+    logf_("walk: a%03u%c entry %u started at frame %u with no volume here, in place of the sail there (the story's "
+          "rank toward flag %u: %u)",
+          (unsigned)(map >> 8), (char)(map & 0xFF), id, f, aim, rank);
+    return 1;
+}
+
 /* One safe point of the walker: it->started is the last frame the field was
  * busy (or an entry was started), it->last the number of entries started. */
 /* Logs why the walker waits, once each time the reason changes. */
@@ -1709,6 +1775,7 @@ static void walk(Item* it)
                   (unsigned)(map >> 8), (char)(map & 0xFF), h->hook, f, aim, hook_rank);
             return;
         }
+        if ((map >> 8) == 99 && sail(it, map, aim, f, best_score)) return;
     }
     if (!best_vol) {
         snprintf(why, sizeof why, "no live entry: %u volume(s) in the talk, check and exit ranges, %u asked", seen,
@@ -2007,6 +2074,23 @@ static void set_flag(Item* it)
           it->base >> 8, (char)(it->base & 0xFF), g_api->frame(), addr, w, w | 1u << (it->id & 31));
 }
 
+static void set_gold(Item* it)
+{
+    uint32_t g = 0;
+    if (g_api->map() != it->base || g_api->scene() != 6 || g_api->field_state() != 8 ||
+        g_api->story_flag(FLAG_EVENT) || !g_api->read32(GOLD, &g))
+        return;
+    it->state = 1;
+    if (g >= it->id) {
+        logf_("gold: %u on a%03u%c at frame %u, already %u or more", g, it->base >> 8, (char)(it->base & 0xFF),
+              g_api->frame(), it->id);
+        return;
+    }
+    g_api->write32(GOLD, it->id);
+    logf_("gold: %u -> %u on a%03u%c at frame %u, in place of what a player would have gathered by then", g, it->id,
+          it->base >> 8, (char)(it->base & 0xFF), g_api->frame());
+}
+
 static void on_safe_point(void* user)
 {
     uint32_t f = g_api->frame();
@@ -2027,6 +2111,8 @@ static void on_safe_point(void* user)
             if (f <= it->to) save_point(it);
         } else if (it->kind == ITEM_WALK) {
             if (f <= it->to) walk(it);
+        } else if (it->kind == ITEM_GOLD) {
+            if (it->state == 0) set_gold(it);
         } else if (it->kind == ITEM_FLAG) {
             if (it->state == 0) set_flag(it);
         } else if (it->kind == ITEM_PEEK && f <= it->to) {

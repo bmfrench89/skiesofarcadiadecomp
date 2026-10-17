@@ -113,6 +113,17 @@ def test_a_stale_lab_library_is_refused(tmp_path):
     reach.check_fresh(lib, src)
 
 
+def test_a_name_that_already_holds_a_run_is_refused(tmp_path):
+    """FINDINGS cites runs by name; a second run under one would write over
+    the first's log (part G's runs of 2026-10-17 did)."""
+    reach.check_new(tmp_path / "u4-G1")
+    (tmp_path / "u4-G1").mkdir()
+    reach.check_new(tmp_path / "u4-G1")  # a folder with no log: nothing to lose
+    (tmp_path / "u4-G1" / "run.log").write_text("[run] ...")
+    with pytest.raises(SystemExit, match="already holds a run"):
+        reach.check_new(tmp_path / "u4-G1")
+
+
 def test_a_name_that_is_not_a_folder_name_is_refused():
     for bad in ("../x", "a/b", ""):
         with pytest.raises(SystemExit):

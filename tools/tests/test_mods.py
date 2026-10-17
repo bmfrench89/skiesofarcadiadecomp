@@ -1584,15 +1584,46 @@ def test_the_walker_waits_where_the_players_own_a_press_would_do_nothing(driver,
 
 
 @needs_cc
+def test_assist_takes_the_next_option_when_the_walker_starts_an_entry_again(driver, tmp_path):
+    """a035g's Gilder asks "What do you say?", "not quite finished" first:
+    answering the first option every time, the walker passed 316 over. Now the
+    first start of an entry answers its choice with the first option, the
+    second start with the second (down, then A, thirty frames apart)."""
+    lab(tmp_path)
+    script = (
+        "set 803475cc 6 set 80311aec 8 set 80311ac0 23 setb 80311ac8 67 set 8030cea4 80400008 "
+        "set 80347524 80400800 set 80400808 bbc set 80400810 16 walkfns game "
+        "frame frame frame frame safe "  # Gilder's talk, the first time
+        "set 80346e4c 80400000 set 80346e64 00060000 pad 50 0000 pad 80 0000 "  # his choice: A
+        "set 80346e4c 0 pad 90 0000 frame frame frame frame safe "  # done; his talk again
+        "set 80346e4c 80400000 set 80346e64 00060000 pad 200 0000 pad 230 0000 pad 260 0000"  # down, A
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="walk:0-5000:3;assist:0-5000:150")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("fn_80210550")] == [
+        "fn_80210550(3004)"
+    ] * 2, out
+    assert [x for x in out.splitlines() if x.startswith("pad ")] == [
+        "pad 50 0000 filtered",
+        "pad 80 0100 filtered",
+        "pad 90 0000 filtered",
+        "pad 200 0000 filtered",
+        "pad 230 0004 filtered",
+        "pad 260 0100 filtered",
+    ], out
+
+
+@needs_cc
 def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_path):
-    """assist:F-G:EVERY: on the beat, A in scene 7 or while the field's message
-    window (task 0x80346E4C) holds a choice (state 6 at 0x80346E64); never on
-    a quiet field, a page that is not a choice, or off the beat."""
+    """assist:F-G:EVERY: on the beat, A in scene 7; and while the field's
+    message window (task 0x80346E4C) holds a choice (state 6 at 0x80346E64),
+    A for two frames thirty after it came (the first option); never on a
+    quiet field, a page that is not a choice, or off the beat."""
     lab(tmp_path)
     script = (
         "set 803475cc 6 pad 100 0000 "  # the field, no window
         "set 80346e4c 80400000 set 80346e64 00040000 pad 150 0000 "  # a page (state 4)
-        "set 80346e64 00060000 pad 200 0000 pad 201 0000 pad 202 0000 "  # a choice: on the beat only
+        "set 80346e64 00060000 pad 200 0000 pad 230 0000 pad 231 0000 pad 232 0000 "  # a choice, 30 frames on
         "set 80346e4c 0 set 803475cc 7 pad 250 0000 "  # a battle
         "set 803475cc 6 set 80311aec 4 pad 300 0000 "  # its results screen
         "set 80311aec 8 pad 350 0000 "  # the field running again
@@ -1608,9 +1639,10 @@ def test_the_lab_assist_presses_a_only_in_a_battle_or_at_a_choice(driver, tmp_pa
     assert pads == [
         "pad 100 0000 filtered",
         "pad 150 0000 filtered",
-        "pad 200 0100 filtered",
-        "pad 201 0100 filtered",
-        "pad 202 0000 filtered",
+        "pad 200 0000 filtered",
+        "pad 230 0100 filtered",
+        "pad 231 0100 filtered",
+        "pad 232 0000 filtered",
         "pad 250 0100 filtered",
         "pad 300 0100 filtered",
         "pad 350 0000 filtered",
@@ -1911,6 +1943,72 @@ def test_the_walker_stands_in_for_the_ships_arrival_at_a_hook_twice_then_later(d
         "a099f hook: flag 1766 set at frame 4, in place of the arrival this map's script waits for "
         "(the story's rank toward flag 100: 1)"
     ), err
+
+
+@needs_cc
+def test_the_walker_lands_where_the_story_goes_though_the_island_is_far(driver, tmp_path):
+    """The world map loads its islands by the ship's distance, and the walker
+    cannot sail: 099g's 4014 lands on the deserted island, where 317 is set,
+    and its volume never came near. On the world map a landing the lines know
+    that ranks before every live entry is started without its volume, said
+    so; on a map the lines do not have, nothing is."""
+    lab(tmp_path)
+    (tmp_path / "story.txt").write_text("099g M04014 w017a\n017a loop s317\n", encoding="utf-8")
+    said = (
+        "a099g entry 4014 started at frame 4 with no volume here, in place of the sail there "
+        "(the story's rank toward flag 317: 1)"
+    )
+    for letter, landed in (
+        ("67", True),
+        ("68", False),
+    ):  # 099g, then 099h, which the lines do not have
+        script = (
+            f"set 803475cc 6 set 80311aec 8 set 80311ac0 63 setb 80311ac8 {letter} walkfns game "
+            "frame frame frame frame safe"
+        )
+        out, err = play(
+            driver,
+            tmp_path,
+            script,
+            SOA_LAB="story:317-317;walk:0-1000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        assert ("fn_80210550(4014)" in out) == landed, (out, err)
+        assert (said in err) == landed, err
+
+
+@needs_cc
+def test_the_lab_gives_the_gold_a_player_would_have_once_on_its_map(driver, tmp_path):
+    """gold:MAP:N waits for MAP's field to run with no event, then raises the
+    gold (0x8030BB40, the scripts' sys[0]) to N, said so, once: a017a's
+    Brabham wants 25,000, which a run from a part card has not gathered. Gold
+    already at N or more is left alone."""
+    lab(tmp_path)
+    script = (
+        "set 8030bb40 d10 set 803475cc 6 set 80311aec 8 set 80311ac0 11 setb 80311ac8 62 safe "  # a017b
+        "setb 80311ac8 61 set 80310bc0 80000000 safe "  # a017a, an event running
+        "set 80310bc0 0 frame safe get 8030bb40 "  # quiet: 3344 -> 25000
+        "set 8030bb40 0 frame safe get 8030bb40"  # spent: not given twice
+    )
+    out, err = play(driver, tmp_path, script, SOA_LAB="gold:017a:25000")
+    assert "loaded 1" in out, err
+    assert [x for x in out.splitlines() if x.startswith("8030BB40")] == [
+        "8030BB40=000061A8",
+        "8030BB40=00000000",
+    ], out
+    assert err.count("lab: gold: ") == 1, err
+    assert (
+        "gold: 3344 -> 25000 on a017a at frame 1, in place of what a player would have gathered by then"
+        in err
+    ), err
+    out, err = play(
+        driver,
+        tmp_path,
+        script.replace("set 8030bb40 d10", "set 8030bb40 7530", 1),
+        SOA_LAB="gold:017a:25000",
+    )
+    assert "gold: 30000 on a017a at frame 1, already 25000 or more" in err, err
 
 
 @needs_cc

@@ -123,9 +123,20 @@ def environment(args: argparse.Namespace, folder: Path, base: dict[str, str]) ->
     return env
 
 
+def check_new(folder: Path) -> None:
+    """Refuse a run name that already holds a run: FINDINGS cites runs by
+    name, and part G's runs of 2026-10-17 wrote over the logs of 2026-10-15's
+    under the same names."""
+    if (folder / "run.log").exists():
+        raise SystemExit(
+            f"{folder} already holds a run, which FINDINGS may cite: give the run another name"
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     if not NAME.fullmatch(args.name):
         raise SystemExit(f"{args.name!r} is not a plain folder name")
+    check_new(ROOT / "build" / "reach" / args.name)
     card = Path(args.card)
     if not card.is_file():
         raise SystemExit(f"no card at {card}")
