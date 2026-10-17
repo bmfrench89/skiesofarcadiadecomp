@@ -228,6 +228,7 @@ static const uint8_t g_leg_x[4] = {128, 255, 128, 0}, g_leg_y[4] = {255, 128, 0,
 #define GOLD_CAP 99999999u
 #define CHOICE_BEAT 30u /* frames between assist's presses in a choice */
 #define CHOICE_TURNS 2u /* options assist takes in turn, start by start of an entry */
+#define MENU_WARPS 6u /* a line warping to this many places is a travel menu */
 #define CHOICE_OPTIONS 3u /* and ask by ask within one start: the most a choice here has */
 #define PRESS_GAP 60u
 #define MAX_PRESSES 32
@@ -1003,6 +1004,13 @@ static int story_line(char* p)
             return 0;
         g_story_words[g_story_nwords++] = v;
     }
+    /* A line other than a map's loop that warps to MENU_WARPS places or more
+     * is a travel menu (a034a's rorensu and warp_city, 24 and 25 places), or
+     * a talk that opens one, and the walker cannot choose where: its warps are
+     * no way it can take. Through a034a's menus a019a's 4001 ranked 3 from
+     * a122b, and took its other way, to the world map (reach U4's u4-H15). No
+     * other entry in the index warps to more than four places. */
+    if (l->nwarps >= MENU_WARPS && strcmp(name, "loop") != 0) l->nwarps = 0;
     g_nstory++;
     return 1;
 }

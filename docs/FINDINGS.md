@@ -9118,6 +9118,20 @@ here).
   a warp to map 99 is `099` and the letter its entry set B[6] to (`019d M04005 w099i`), else `099@`, which the lab
   resolves to the letter B[6] holds when it measures; each world map letter is its own place (a test each,
   failing with the letter taken from the name, or ignoring B[6]). 113 lines of the index say `w099@`.
+- **Runs u4-H15 and u4-H16: travel menus, and part H's tail held by an early flag** [V, `build/reach/u4-H15`,
+  `u4-H16`]: from the Mt. Kazai card u4-H15 set 359 to 362 and 364 again by 28826, saved at `a019d` (34477,
+  `build/savetest/card-partH-019d-364.raw`) and passed 380 over at 62493. Aiming at 381 it took `a019a`'s 4001, which
+  ranked 3 from `a122b` through `a034a`: the index gave `a034a`'s talks and its `rorensu`, `warp_city` and
+  `don_warp` 24 or 25 warps each, a travel menu whose place the walker cannot choose, and `w122a` among them. 4001
+  took its other way, op 238 with B[6] at 0, to stage a; there the walker set stage a's hook 1764 (a part-A
+  arrival) toward `a205a`, and the game went on into a ship battle (`a573a`). A line other than a loop that warps
+  to six places or more now counts as a menu, its warps no way to take (a test, failing without it); 53 lines of
+  the index are such, and no other entry warps to more than four. u4-H16, from the new card with `--story
+  381-399`, then found nothing on `a019d` that ranks toward 381: `a019d`'s 4005, the way out that sets B[6] to 8
+  (stage i, `a122`'s), is never live there, and the walker went round `a019d` and `a019b` until it was stopped at
+  37000 [I: 4005 opens after the betrayal, 380, which waits on 365 clear]. Every card since `card-partH-020a.raw`
+  carries 365 set early, so part H's tail (381 on) waits for a run from `card-partH.raw` that leaves `a019d` for the
+  world map only after the betrayal.
 - **A port message corrected along the way:** a capture into a folder that does not exist said "cannot write" for
   each of its three files and then "captured frame N" (reach U5's first capture try). `runtime/gx.c` now says
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3

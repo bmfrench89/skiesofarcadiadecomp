@@ -2253,6 +2253,36 @@ def test_the_walker_stands_in_for_the_arrival_a_story_flag_waits_on(driver, tmp_
 
 
 @needs_cc
+def test_a_travel_menus_warps_are_no_way_the_walker_can_take(driver, tmp_path):
+    """A line other than a loop that warps to six places or more is a travel
+    menu (a034a's rorensu, 25), whose place the walker cannot choose: its
+    warps lead nowhere for the distances, and an exit that reached the aim only
+    through one ranks nowhere. A loop's warps, which its own conditions pick,
+    still count."""
+    lab(tmp_path)
+    menu = "w122a w002c w004a w008b w010a w013d"
+    vol = "set 80347524 80400800 set 80400808 fa1 set 80400810 8 walkfns game "
+    here = "set 803475cc 6 set 80311aec 8 set 80311ac0 13 setb 80311ac8 61 frame frame frame frame safe"
+    for line, rank in (
+        (f"034a M03005 {menu}", "the story's rank: none"),
+        (f"034a loop {menu}", "the story's rank toward flag 381: 3"),
+    ):
+        (tmp_path / "story.txt").write_text(
+            f"019a M04001 w034a\n{line}\n122a M04000 w122b\n122b M03000 s381\n", encoding="utf-8"
+        )
+        out, err = play(
+            driver,
+            tmp_path,
+            vol + here,
+            SOA_LAB="story:380-399;walk:0-5000:3",
+            SOA_LAB_STORY=str(tmp_path / "story.txt"),
+        )
+        assert "loaded 1" in out, err
+        started = [x for x in err.splitlines() if "entry 4001 started" in x]
+        assert len(started) == 1 and rank in started[0], (line, err)
+
+
+@needs_cc
 def test_a_warp_to_the_world_map_goes_to_the_letter_b6_holds(driver, tmp_path):
     """`019a M04001 w099@`: the world map loads at the letter B[6] gives, and
     each letter is its own place. With B[6] at 8 (stage i, whose 4022 lands
