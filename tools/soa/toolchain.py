@@ -556,24 +556,26 @@ def gnu_args(args: list[str]) -> list[str]:
     """The msvc spellings cc() is handed, in gcc's: /D, /I, /Fo, /Fe and /c.
 
     A POSIX absolute path is a file, not a flag, even when it begins like one
-    (/Data/soa/gx.c, /Images/...), so one that exists passes through. /Fo
-    naming a directory is gnu_commands()'s, since gcc has no spelling for it
-    with several sources."""
+    (/Data/soa/gx.c, /Images/...), so one that exists passes through -- but
+    /c, /I and /D alone are always the flags: on Windows "/c" is the folder
+    c at the drive's root, and one made by some other program (2026-10-18)
+    turned every compile into a link. /Fo naming a directory is gnu_commands()'s,
+    since gcc has no spelling for it with several sources."""
     out: list[str] = []
     it = iter(args)
     for a in it:
-        if a.startswith("/") and os.path.exists(a):
-            out.append(a)
-        elif a in ("/I", "/D"):
+        if a in ("/I", "/D"):
             out += [f"-{a[1]}", next(it)]
+        elif a == "/c":
+            out.append("-c")
+        elif a.startswith("/") and os.path.exists(a):
+            out.append(a)
         elif a.startswith(("/I", "/D")):
             out.append(f"-{a[1]}{a[2:]}")
         elif a.startswith("/Fe:"):
             out += ["-o", a[4:]]
         elif a.startswith(("/Fe", "/Fo")):
             out += ["-o", a[3:]]
-        elif a == "/c":
-            out.append("-c")
         else:
             out.append(a)
     return out

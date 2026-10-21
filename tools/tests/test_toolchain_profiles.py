@@ -374,6 +374,21 @@ def test_a_posix_path_that_begins_like_a_flag_is_a_file(monkeypatch):
     assert toolchain.gnu_args(["/c", "/Data/soa/gx.c", "/DX"]) == ["-c", "/Data/soa/gx.c", "-DX"]
 
 
+def test_the_bare_flags_stay_flags_whatever_exists(monkeypatch):
+    """On Windows "/c" is the folder c at the drive's root: one made by
+    another program (2026-10-18) once turned every gnu compile here into a
+    link."""
+    monkeypatch.setattr(toolchain.os.path, "exists", lambda a: True)
+    assert toolchain.gnu_args(["/c", "/I", "inc", "/D", "X=1", "x.c"]) == [
+        "-c",
+        "-I",
+        "inc",
+        "-D",
+        "X=1",
+        "x.c",
+    ]
+
+
 def test_compile_runtime_s_strict_set_is_the_profile_s():
     import compile_runtime
 
