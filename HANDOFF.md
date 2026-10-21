@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1730 |
+| Python tests | 1743 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -433,7 +433,14 @@ M16b (`mods/`'s three DLL mods onto declared options) goes with P1's presets.
 `docs/specs/mod-order.md`). `mod_order` (`SOA_MOD_ORDER`) orders mods by id and turns them off with `-ID`; `overrides =`
 lets one mod's writes land on another's and loads it after; two mods whose patches can write the same bytes on one
 frame are refused with both lines. In the game a twin of `encounters-off` writing 0x10 was refused, then with
-`overrides` loaded and its 0x10 was what each frame left. **Next:** T10, the modding guide and tool.
+`overrides` loaded and its 0x10 was what each frame left. T10 followed (below).
+
+**Then T10, the same day: the mod kit and the guide** (FINDINGS "T10", `docs/specs/mod-kit.md`):
+`tools/mod.py` `new`, `build`, `check` (the port's loader against the real DOL, no game), `test` (the fake guest, now
+`tools/soa/modkit.py`) and `api` (`docs/MODDING-API.md`, held current by a test); the guide is `docs/MODDING.md`. A
+`new` patch mod and a `new --dll` mod built by `build` ran in the game unchanged. **Next:** the mod framework track
+(D-38) is done but for T10's owner check, which joins PLAN-NEXT §0 step 3, the owner's sitting. After it, the owner
+chooses among mods (M8, M7, R0, R1), 60 fps (H17a) and widescreen (M10); M16b goes with P1's presets.
 
 **Before that, 2026-10-14 to 10-17:**
 

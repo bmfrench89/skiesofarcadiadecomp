@@ -9309,3 +9309,29 @@ here).
   first where folder order would have put it second.
 - **Not in M17:** M8's page for the list, comparing a DLL's writes (made at the call, never declared), dependency
   keys and zip install.
+
+**T10: the mod kit and the modding guide, built and run on this PC.** 2026-10-21. Spec: `docs/specs/mod-kit.md`.
+
+- **What it is** [V]: `tools/mod.py` with `new DIR [--dll]` (a manifest 2 `mod.ini` with the pinned
+  `dol_sha1`, and a working `patches.txt` line or a `mod.c`), `build` (the mod's library with the port's
+  toolchain, refused when its header names a machine other than the port's, so a 32-bit `mod.dll` is named
+  rather than failing as "error 193"), `check` (the port's own `runtime/mod.c` on the fake guest against the real
+  DOL, no game), `test` (the fake guest with the mod's `dol_sha1` swapped and a script of the driver's commands)
+  and `api` (`docs/MODDING-API.md`, generated from `runtime/soa_mod.h`). The fake guest moved from
+  `test_mods.py` into `tools/soa/modkit.py`, which `test_mods.py` and `test_mod_library.py` import. The guide is
+  `docs/MODDING.md`.
+- **A driver defect found by `check`** [V]: the fake guest read the DOL into an 8 KB buffer, enough for the fake
+  DOL and never tried on the real one; against `extracted/sys/main.dol` the SHA-1 came out `7fb09188...` and every
+  mod was refused. It reads the whole file now; the tests' fake DOL is unchanged.
+- **The checks, each shown able to fail** [V]: 13 cases in the new `test_mod_kit.py`. The mutations: `check`
+  returning 0 whatever the driver printed (2 failed), the machine test removed (1), `test` keeping the mod's own
+  `dol_sha1` (1), a member added to `soa_mod.h` without `api --write` (1), and the guide's example address
+  misspelled (1). On this PC `check` loads all four examples and `mods/`'s three against the real DOL, and refuses
+  a `dol_sha1` changed by one digit and an address one digit short, each with its line.
+- **In the game** [V, `build/t10/` (game data, kept here)]: `new build/t10/mods/hello`, and `new
+  build/t10/mods/native --dll` then `build`, unchanged, run by the port for 3,400 frames from a copy of
+  `card-partG.raw` with the walk mix of seed 33. Both loaded; `native` logged `entered a299a at frame 386` and
+  `entered a116a at frame 2737`; `hello`'s patch applied 1939 times from frame 368 and the step counter read 0 at
+  3000 and 3300.
+- **Left:** the owner's check, a small mod built from the guide alone (PLAN-NEXT §0 step 3), and whether the
+  player package ships the kit (`tools/package.py` lists the build's tools only).

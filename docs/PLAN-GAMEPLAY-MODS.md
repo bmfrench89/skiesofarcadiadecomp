@@ -772,7 +772,8 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 *Done:* a test re-finds each confirmed address from a code reference, and fails when one address is changed.
 
-**T10. A mod kit and `docs/MODDING.md`** — *several days, after M4 (done) and M5.*
+**T10. A mod kit and `docs/MODDING.md`** — *several days, after M4 (done) and M5. Done 2026-10-21 but for the
+owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FINDINGS "T10".*
 - **`tools/mod.py`:**
   - `new` scaffolds a mod;
   - `build` makes an x64 DLL without a developer prompt, and refuses 32-bit, which fails today with a bare "error 193";

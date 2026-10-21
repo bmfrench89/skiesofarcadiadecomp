@@ -212,7 +212,8 @@ The owner answered four questions, with the research behind them summarised in t
        119 of 576 with the story runs' names; LINEPTWIDTH the one renderer question.
     3. One owner sitting, the display at 60 or 120 Hz, confirming what is built but never checked: sessions A and B
        (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked, its window
-       captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`).
+       captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`);
+       and, since 2026-10-21, T10's: a small mod built from [MODDING.md](MODDING.md) alone.
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
     (H17a) and widescreen (M10).
@@ -229,7 +230,10 @@ The owner answered four questions, with the research behind them summarised in t
        [specs/mod-order.md](specs/mod-order.md)): `mod_order`/`SOA_MOD_ORDER` orders mods and turns them off,
        `overrides` lets one mod's writes land on another's, and two mods that can write the same bytes on one frame
        are refused with both lines; each mod's writes and callbacks are listed at load. M8's page waits for M8.
-    5. T10, a modding guide and tool.
+    5. T10, a modding guide and tool. **Done 2026-10-21 on this PC but for its owner check** (FINDINGS "T10",
+       [specs/mod-kit.md](specs/mod-kit.md)): `tools/mod.py` (`new`, `build`, `check`, `test`, `api`),
+       [MODDING.md](MODDING.md) and the generated [MODDING-API.md](MODDING-API.md); the fake guest moved into
+       `tools/soa/modkit.py`. **Owner:** build a small mod from the guide alone, at the next sitting.
 
     Each is proven on this PC before it is called done.
   - **Decompilation stays targeted** (D-39): a function is decompiled only when a mod must change its insides

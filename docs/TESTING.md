@@ -37,10 +37,11 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 1475 passed, 41 skipped in 977.75s
 ```
 
-1730 tests in 92 files, none of which reads the disc (the run above is 2026-10-09's, at 1516, before
+1743 tests in 93 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
+when it is there and skip without it (the run above is 2026-10-09's, at 1516, before
 R5c's five in `test_setup.py`, M6's 32 in `test_mods.py`, `test_progress.py`'s 13 and reach's 95 in
-`test_soak.py`, `test_mods.py`, `test_reach.py` and `test_sct.py`, and M16's 47 and M17's 22 in
-`test_mods.py`, `test_settings.py` and `test_toolchain_profiles.py`). The two FMA probes of
+`test_soak.py`, `test_mods.py`, `test_reach.py` and `test_sct.py`, M16's 47 and M17's 22 in
+`test_mods.py`, `test_settings.py` and `test_toolchain_profiles.py`, and T10's 13 in `test_mod_kit.py`). The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -188,7 +189,8 @@ another, 1644 and 202 of 208, and another, 1645 and 203 of 209, and another, 164
 of 213, and another, 1651 and 208 of 214, and one more in each of `test_sct.py` and `test_mods.py`, 1653 and
 209 of 215, and again, 1655 and 210 of 216, and two more in each, 1659 and 212 of 218, and one more in `test_sct.py`, 1660, and one in `test_mods.py`, 1661 and 213 of 219, and on 2026-10-21 M16's 45 in `test_mods.py`, one in
 `test_settings.py` and one in `test_toolchain_profiles.py`, 1708 and 258 of 264, and M17's 21 in `test_mods.py` and one in `test_settings.py`,
-1730 and 279 of 285 (all measured). The
+1730 and 279 of 285, and T10's 13 in a new file, `test_mod_kit.py`, 1743 in 93 files and 6 of its 13
+skipping with MSVC hidden (all measured). The
 "neither" row took two runs. The first, with another session's 13 uncommitted
 tests in the tree, gave `1065 passed, 483 skipped`. The second, with that file
 left out, gave `2 failed, 1050 passed, 483 skipped`: two of

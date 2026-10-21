@@ -1,0 +1,159 @@
+# Making mods
+
+A mod changes what the game does without changing the port. It is a folder holding a `mod.ini` and
+either a `patches.txt` (memory writes, no code) or a `mod.c` built into `mod.dll` (`mod.so` off
+Windows) on the port's mod API, or both. This page is the guide; the API reference, member by member,
+is [MODDING-API.md](MODDING-API.md), generated from `runtime/soa_mod.h`. The kit is `tools/mod.py`.
+
+**Mods must not carry the game.** A mod is your text and your code. `tools/guard.py` refuses anything in
+a mod folder that is not text, and no file taken from the disc belongs in one.
+
+## A first mod in fifteen minutes
+
+You need the port built (README), the game extracted (`extracted/sys/main.dol` is what `check` reads), and
+Python.
+
+1. **Make it.** `python tools/mod.py new mymods/hello` writes `mymods/hello/mod.ini` and a
+   `patches.txt` with one working line: the step counter at `0x80346D28` held at 0 in the field, so no
+   random battle can start (the same line as `examples/mods/encounters-off`).
+2. **Check it.** `python tools/mod.py check mymods/hello` loads it with the port's own loader against
+   your DOL, without starting the game, and prints what the port would: `loads`, or the file, the line
+   and why not. Change the address to `0x8034d28` and run it again to see a refusal.
+3. **Try it on the fake guest.** `python tools/mod.py test mymods/hello set 803475cc 6 set 80346d28 63
+   frame get 80346d28` runs it on a stand-in for the game: the scene word set to the field, the counter
+   to 0x63, one frame end, and the counter read back -- `80346D28=00000000`. No disc is needed, so a
+   mod's own CI can do this.
+4. **Play it.** Point the port at the folder above your mod: `mods = C:\path\to\mymods` in `soa.ini`, or
+   `$env:SOA_MODS = 'mymods'`. The log says `[mod] loaded Hello ...` and lists what it writes. Walk
+   around a field: no random battle comes. Battles the story starts itself still happen.
+
+## Finding an address
+
+The game keeps its state in fixed words, which a mod reads and writes. Some the port already names:
+
+| Address | What it is |
+|---|---|
+| `0x803475CC` | the scene: 6 is the field, 7 a battle |
+| `0x80311AEC` | the field's state: 3 and 5 loading, 8 running |
+| `0x80311AC0`, byte `0x80311AC8` | the map the field has committed to, number and letter (`116`, `'a'`) |
+| `0x80310B3C` | the story flags: flag n is bit n % 32 of the word at `+ n / 32 * 4` |
+| `0x80346D28` | the step counter the random-battle roll reads |
+| `0x803474BC` | a pointer to the map's encounter table: eight zones of 132 bytes, each one's rate the u16 at +2 |
+
+The research behind them is in `docs/research/` (`encounters.md` for the battle words) and
+`docs/FINDINGS.md`. To find your own, watch a word while you play: `SOA_PEEK=0x80346D28@1000-1100`
+prints it at each of those frames, and `SOA_POKE=2000:0x80346D28=0x186A0` stores a value once to see
+what the game does with it (both in README's table of switches). Addresses are the console's, big-endian,
+in its 24 MB of RAM (`0x80000000`-`0x817FFFFF`).
+
+## patches.txt
+
+One write per line, applied at the end of a frame:
+
+```
+# trigger     [width]  address                  value         [for z=A..B]  [when condition...]
+every_frame            0x80346d28           =   0                           when scene=6
+on_map_load   u16      [0x803474bc]+2+z*132 *=  0.5           for z=0..7
+once          u8       0x80310b40           =   0x10                        when map=116a
+```
+
+- **Triggers:** `every_frame`; `once`, the first frame its conditions hold; `on_map_load`, the first
+  frame the field runs after a load -- including the reload after every battle, which puts the map's
+  words back as the disc has them.
+- **Widths:** `u32` (the default), `u16`, `u8`, and `s32`, `s16`, `s8` for signed values. A write is
+  aligned to its width.
+- **Addresses:** `0x` and exactly eight lowercase hex digits; or `[0x803474bc]+2`, the word at that
+  address taken as a pointer, plus an offset. `+z*N` steps through a `for z=A..B`, one write per z (up
+  to 64).
+- **Values:** `= value`, hex or decimal, negative for a signed width; or `*= k`, which multiplies what is
+  there by k (up to four decimals), clamped to the width, on `on_map_load` only, and never twice over a
+  word a reload left as the patch made it.
+- **Conditions,** all of which must hold: `scene=N`, `state=N`, `map=NNNx`.
+- **Refused, with the line:** a misspelled address, one in the hardware window, outside RAM, unaligned or
+  inside the game's code; a value the width cannot hold; an unknown trigger or condition. A mod with any
+  fault is not loaded at all: half a mod is worse than none.
+
+## Options a player sets
+
+A manifest 2 `mod.ini` may declare up to 16 options (docs/specs/mod-options.md):
+
+```
+option = factor enum 0|0.25|0.5|1|2 0.5      # NAME TYPE [DOMAIN] DEFAULT
+option = strength int 0..100 50
+option = scenes bool 1
+```
+
+The types are `int LO..HI`, `bool`, `enum A|B|C`, `string` and `seed`. A player sets one in `soa.ini`
+as `ID.NAME = VALUE` (`encounter-scale.factor = 1`); a check sets it as
+`$env:SOA_MOD_OPT = 'encounter-scale.factor=1'`. `patches.txt` reads one as `${factor}`; a DLL reads
+one with `api->option("factor")` or `api->option_int("strength", &v)`. A value outside its domain
+refuses the mod and names the entry. A recording names the values that are not their defaults.
+`examples/mods/encounter-scale` and `examples/mods/map-log` each declare one.
+
+## Order, and two mods on the same bytes
+
+Mods load in folder-name order unless `mod_order` in `soa.ini` (`SOA_MOD_ORDER`) lists them:
+`mod_order = map-log, encounter-scale, -lab` loads those first, in that order, and `-lab` turns `lab`
+off. When your patch can write bytes another mod's patch writes, on a frame where both can apply, the
+later mod is refused and both lines are named -- unless both write the same value there, or one says
+`overrides = OTHER-ID` in its `mod.ini`, which also loads it after the other so its write lands last
+(docs/specs/mod-order.md). A DLL's writes are made at the call and are not compared.
+
+## A native mod
+
+`python tools/mod.py new mymods/native --dll` writes a `mod.c` that logs each map entered;
+`python tools/mod.py build mymods/native` compiles it into `mod.dll` with the compiler the port uses
+(no developer prompt) and refuses a library built for another machine -- a 32-bit `mod.dll` would
+otherwise fail in the port as a bare "error 193". Then `check` and `test` as above.
+
+The port calls your `soa_mod_init(api, version)` once, before the game's first instruction. Register
+your callbacks there and return 0; return anything else, after saying why with `api->log`, to refuse
+yourself. The callbacks, and where each runs:
+
+| Callback | When | What it may do |
+|---|---|---|
+| `on_frame_end` | inside the copy that ends each frame | read and write memory only |
+| `on_safe_point` | the top of the game's main loop, nothing started | anything, `call_guest` too |
+| `on_map_loaded` | at a safe point, once per map entered (reloads too) | anything |
+| `on_scene_change` | at a safe point, when the scene word changes | anything |
+| `pad_filter` | every controller read, before the game sees it | change the pad |
+| `projection_filter` | each new projection, before a vertex uses it | change the six numbers |
+| `texture_provider` | each texture decode | hand back a replacement image |
+
+**The rules** (each one the port enforces or depends on):
+
+- Everything runs on the game's CPU thread. Never call the API from a thread of your own.
+- Registration closes when `soa_mod_init` returns; a later one returns 0 and is never called.
+- `on_frame_end` runs inside the frame's copy: memory writes only, never `call_guest`.
+- `call_guest` calls one of the game's functions, from a safe-point, scene or map callback only, never
+  inside an interrupt handler; every register comes back as it was.
+- The table only grows at its end. Check `api->size >= SOA_MOD_HAS(member)` before using anything
+  appended after `log` (pad filters, projections, textures, `call_guest`, host buttons, pad 2, options):
+  an older port may not have it, and a newer one always does.
+- Pointer patches belong on load triggers. In a battle `0x803474BC` still names the field's table while
+  its memory holds something else, so a write through it every frame lands in the battle's data.
+- Memory writes are refused, returning 0, outside RAM, unaligned, or inside the game's code -- the same
+  refusals as a `patches.txt` line.
+
+## Recordings and replays
+
+A recording (`SOA_PAD_RECORD`) names every mod it was made with, by id, version and a hash of its files,
+in load order, with any option away from its default. Replay it with the same mods and it plays the same;
+the port says when the mods differ. Pad 2 and the host buttons (LB, View, the stick clicks) are not in
+recordings yet, so a mod that reads them does not replay exactly.
+
+## What the kit can and cannot tell you
+
+`check` and `test` run the port's own loader, so a mod they load is one the port loads, with the same
+refusals in the same words. They cannot tell you what it does in the game. The fake guest has no game:
+memory is what your script stores, the one function `call_guest` reaches is a stand-in at `0x80003100`
+that adds two numbers, and nothing draws. Play the game to see a mod work, with `SOA_PEEK` on the words
+it writes. The fake guest grows with the API; `tools/soa/modkit.py` is the driver, shared with the
+port's own tests.
+
+## Examples
+
+- `examples/mods/encounters-off`: one patch, no options.
+- `examples/mods/encounter-scale`: a pointer, a `for` run, `*=`, and an option.
+- `examples/mods/map-log`: the native template, with an option.
+- `mods/encounter-rate`, `mods/autotext`, `mods/coop`: the native mods the port ships.

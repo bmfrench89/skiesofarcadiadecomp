@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from soa import toolchain  # noqa: E402
-from test_mods import DRIVER, SHA, fake_dol  # noqa: E402
+from soa.modkit import DRIVER, fake_dol  # noqa: E402
+from soa.modkit import FAKE_SHA as SHA  # noqa: E402
 
 PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
 needs_cc = pytest.mark.skipif(
