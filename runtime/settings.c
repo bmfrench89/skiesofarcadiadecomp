@@ -79,6 +79,7 @@ static const Setting k_settings[] = {
     {"scale", "SOA_SCALE", "the window's starting size in multiples of 640x480; by default the largest that fits"},
     {"threads", "SOA_THREADS", "rasterizer threads"},
     {"mods", "SOA_MODS", "a folder of mods"},
+    {"mod_order", "SOA_MOD_ORDER", "mod ids, comma-separated, in the order they load; -ID turns one off (M17)"},
     {"card", "SOA_CARD", "the memory card image for slot A"},
     {"record", "SOA_PAD_RECORD", "record controller input to this file"},
     {"nosound", "SOA_NOSOUND", "1 opens no audio device"},

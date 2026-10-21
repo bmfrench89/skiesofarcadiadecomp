@@ -4182,3 +4182,170 @@ def test_m16_the_example_dll_s_option_leaves_scene_changes_out(driver, tmp_path)
     _, off = play(driver, tmp_path, script, SOA_MOD_OPT="map-log.scenes=0")
     assert "[mod] map-log: scene 6 -> 7" in on, on
     assert "scene 6 -> 7" not in off and "logs map entries, and changes nothing" in off, off
+
+
+# --------------------------------------------------------------------------
+# M17: the order mods load in, mods turned off, and two mods writing the same
+# bytes (docs/specs/mod-order.md).
+# --------------------------------------------------------------------------
+
+
+def two(root: Path, a: str, b: str, a_extra: str = "", b_extra: str = "") -> None:
+    """Mods `a` and `b` (folders and ids alike), each one patches.txt line."""
+    mod(root, "a", ini=ini2("a") + a_extra, patches=a + "\n")
+    mod(root, "b", ini=ini2("b") + b_extra, patches=b + "\n")
+
+
+def order_of(out: str) -> list[str]:
+    line = next(x for x in out.splitlines() if x.startswith("describe ["))
+    return [e.split("@")[0] for e in line[len("describe [mods=") : -1].split(",") if e]
+
+
+@needs_cc
+def test_m17_the_list_orders_the_mods_and_turns_them_off(driver, tmp_path):
+    """Listed first in the list's order, the rest by folder name; -ID is off.
+    The mutation, the list ignored, leaves folder order."""
+    for i, name in enumerate("abc"):
+        mod(tmp_path, name, ini=ini2(name), patches=f"every_frame 0x8034{0x6D28 + 4 * i:04x} = 1\n")
+    out, err = play(driver, tmp_path, "describe")
+    assert order_of(out) == ["a", "b", "c"], out
+    out, err = play(driver, tmp_path, "describe", SOA_MOD_ORDER="c, a")
+    assert order_of(out) == ["c", "a", "b"], out
+    out, err = play(driver, tmp_path, "describe", SOA_MOD_ORDER="c,-b,zz,c")
+    assert order_of(out) == ["c", "a"], out
+    assert "/b is turned off by SOA_MOD_ORDER; not loaded" in err, err
+    assert "SOA_MOD_ORDER: `zz` names no mod in" in err, err
+    assert "SOA_MOD_ORDER: `c` is named twice; its second place is passed over" in err, err
+
+
+@needs_cc
+def test_m17_a_version_1_mod_is_listed_by_its_folder(driver, tmp_path):
+    mod(tmp_path, "old-one", patches="every_frame 0x80346d28 = 1\n")
+    mod(tmp_path, "new", ini=ini2("new"), patches="every_frame 0x80346d2c = 1\n")
+    out, _ = play(driver, tmp_path, "describe", SOA_MOD_ORDER="old-one")
+    assert order_of(out) == ["old-one:" + order_of(out)[0].split(":")[1], "new"], out
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "a, b, at",
+    [
+        (
+            "every_frame 0x80346d28 = 0 when scene=6",
+            "every_frame 0x80346d28 = 1 when scene=6",
+            "80346D28",
+        ),
+        ("once 0x80346d28 = 0", "every_frame 0x80346d28 = 1 when map=116a", "80346D28"),
+        ("every_frame 0x80346d28 = 5", "every_frame u8 0x80346d2b = 1", "80346D2B"),
+        ("every_frame 0x80346d30 = 5", "every_frame u16 0x80346d28+z*4 = 1 for z=0..3", "80346D30"),
+        (
+            "on_map_load u16 [0x803474bc]+2+z*132 *= 0.5 for z=0..7",
+            "on_map_load u16 [0x803474bc]+134 = 9",
+            "[803474BC]+134",
+        ),
+    ],
+)
+def test_m17_two_mods_on_the_same_bytes_refuse_the_later(driver, tmp_path, a, b, at):
+    """Both places named. The mutation, the byte test always false, loads
+    every pair."""
+    two(tmp_path, a, b)
+    out, err = play(driver, tmp_path)
+    assert "loaded 1" in out, err
+    assert (
+        f"b/patches.txt:1: it writes {at}, as a/patches.txt:1 does, and both can apply on one frame"
+        in err
+    ), err
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ("every_frame 0x80346d28 = 0 when scene=6", "every_frame 0x80346d28 = 1 when scene=7"),
+        ("every_frame 0x80346d28 = 0 when state=3", "every_frame 0x80346d28 = 1 when state=8"),
+        ("every_frame 0x80346d28 = 0 when map=116a", "every_frame 0x80346d28 = 1 when map=117a"),
+        ("every_frame u16 0x80346d28 = 1", "every_frame u16 0x80346d2a = 1"),
+        ("every_frame 0x80400000 = 1", "on_map_load u16 [0x803474bc]+2 = 1"),
+        ("on_map_load u16 [0x803474bc]+2 = 1", "on_map_load u16 [0x80347400]+2 = 1"),
+        ("every_frame 0x80346d28 = 0 when scene=6", "once 0x80346d28 = 0"),
+    ],
+)
+def test_m17_what_cannot_meet_loads_both(driver, tmp_path, a, b):
+    """Conditions that cannot both hold, bytes side by side, what cannot be
+    compared before the game runs, and the same value at the same place. The
+    mutation, the condition test always true, refuses the first three."""
+    two(tmp_path, a, b)
+    out, err = play(driver, tmp_path)
+    assert "loaded 2" in out, err
+
+
+@needs_cc
+def test_m17_one_mod_s_own_patches_may_meet(driver, tmp_path):
+    mod(tmp_path, "a", ini=ini2("a"), patches="every_frame 0x80346d28 = 1\nonce 0x80346d28 = 2\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 1" in out, err
+
+
+@needs_cc
+def test_m17_overrides_lets_it_through_and_loads_it_last(driver, tmp_path):
+    """b overrides a: listed first, it loads second, its value is the one a
+    frame leaves, and the pair is said. The mutation, the reordering
+    skipped, leaves a's value."""
+    line_a, line_b = "every_frame 0x80346d28 = 1", "every_frame 0x80346d28 = 2"
+    two(tmp_path, line_a, line_b, b_extra="overrides = a\n")
+    out, err = play(driver, tmp_path, "describe frame get 80346d28", SOA_MOD_ORDER="b,a")
+    assert "loaded 2" in out, err
+    assert order_of(out) == ["a", "b"] and "80346D28=00000002" in out, out
+    assert "/b loads after a, which it overrides" in err, err
+    assert "[mod] b/patches.txt:1 overrides a/patches.txt:1 at 80346D28" in err, err
+
+
+@needs_cc
+def test_m17_mods_that_override_each_other_are_both_refused(driver, tmp_path):
+    two(
+        tmp_path,
+        "every_frame 0x80346d28 = 1",
+        "every_frame 0x80346d28 = 2",
+        a_extra="overrides = b\n",
+        b_extra="overrides = x, a\n",
+    )
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out, err
+    assert "each name the other in `overrides`, so which wins cannot be known" in err, err
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "line, why",
+    [
+        ("overrides = A", "overrides: `A` is not an id"),
+        ("overrides =", "`overrides` names the ids"),
+    ],
+)
+def test_m17_a_bad_overrides_refuses_the_mod(driver, tmp_path, line, why):
+    mod(tmp_path, "a", ini=ini2("a") + line + "\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "a/mod.ini:7: " + why in err, err
+
+
+@needs_cc
+def test_m17_overrides_is_a_manifest_2_key(driver, tmp_path):
+    mod(tmp_path, "old", ini=f"name = old\napi = 1\ndol_sha1 = {SHA}\noverrides = a\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "`overrides` is a manifest 2 key" in err, err
+
+
+@needs_cc
+def test_m17_each_mod_s_writes_and_callbacks_are_listed(driver, tmp_path):
+    mod(tmp_path / "p", "zero", ini=ini2("zero"), patches=PATCH + RATES.format(k="0.5"))
+    _, err = play(driver, tmp_path / "p")
+    assert (
+        "[mod] zero writes, patches.txt:1: every_frame u32 80346D28 = 00000000 when scene=6" in err
+    ), err
+    assert (
+        "[mod] zero writes, patches.txt:2: on_map_load u16 [803474BC]+2+z*132 *= 0.5 for z=0..7"
+        in err
+    ), err
+    dll(tmp_path / "d", "native")
+    _, err = play(driver, tmp_path / "d")
+    assert "[mod] native registers: frame end, safe point, map load, scene change" in err, err

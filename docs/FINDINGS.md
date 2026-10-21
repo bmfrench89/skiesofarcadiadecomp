@@ -9279,3 +9279,33 @@ here).
   `/D` alone are now always the flags; a test with every path existing fails on the old order.
 - **Not in M16:** M8's page (M8 does not exist yet; `mod.c` keeps the declarations for it), and moving `mods/`'s
   three DLL mods off `SOA_ENCOUNTERS`, `SOA_AUTOTEXT` and `SOA_COOP` (M16b, with P1's presets).
+
+**M17: the mod list's order, mods turned off, and conflicts, built and run on this PC.** 2026-10-21. Spec:
+`docs/specs/mod-order.md`.
+
+- **What it is** [V, `runtime/mod.c`, `settings.c`]: `SOA_MOD_ORDER` (soa.ini `mod_order`) lists mods by id, a
+  version 1 mod by its folder: those load first in its order, the rest by folder name, `-ID` turns one off, and
+  an unknown or repeated name is said. The ids and `overrides` are read from every `mod.ini` before anything
+  loads. A manifest 2 key, `overrides = ID, ...`, loads the mod after each mod it names; two that name each other
+  are both refused. When a mod's patch can write bytes an earlier mod's patch writes -- two direct patches, or two
+  through one pointer word, compared target by target, with conditions that can both hold -- the later mod is
+  refused with both lines, unless one overrides the other or both write the same value with the same width over
+  the same targets (the exemption came from the suite: `test_mods_past_the_recording_line_are_counted_not_cut`'s
+  twelve mods all hold the step counter at 0, which undoes nothing). At load each mod's writes are listed a line
+  a patch and a DLL's callbacks in one line.
+- **The checks, each shown able to fail** [V]: 21 new cases in `test_mods.py` and one in `test_settings.py`. The
+  mutations: the list ignored (1 failed), the byte test always false (5), the condition test always true (3), the
+  same-value exemption dropped (1), the reordering skipped (1), `mod_order` dropped from `k_settings` (1). The M16
+  and M17 tests pass built by llvm-mingw too; `compile_runtime.py` 39/39, the self test 0 failures.
+- **In the game** [V, `build/m17/` (game data, kept here)]: two 3,400-frame runs from copies of `card-partG.raw`,
+  the walk mix of seed 33, `SOA_SETTINGS=0`, `SOA_MOD_ORDER=map-log`, a recording each, and a mods folder holding
+  `encounters-off`, `map-log` and `twin`, a copy of `encounters-off` with its id changed and its patch writing
+  `0x10`. Without `overrides`, twin was refused at load, `twin/patches.txt:1: it writes 80346D28, as
+  encounters-off/patches.txt:9 does, and both can apply on one frame`, two mods loaded and the step counter read 0
+  at frames 3000 and 3300. With `overrides = encounters-off` in twin's `mod.ini`, three loaded, the log said
+  `twin/patches.txt:1 overrides encounters-off/patches.txt:9 at 80346D28`, both patches applied 1939 times from
+  frame 368, and the counter read `00000010` at 3000 and 3300: twin's write is the one a frame leaves. Both
+  recordings' `# config` lines begin `mods=map-log@1.0:661a58f8,encounters-off@1.0:0dcf5dd6`, the list's mod
+  first where folder order would have put it second.
+- **Not in M17:** M8's page for the list, comparing a DLL's writes (made at the call, never declared), dependency
+  keys and zip install.

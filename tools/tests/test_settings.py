@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
                                   "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED",
-                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B", "SOA_AUTOTEXT", "SOA_MOD_OPT"};
+                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B", "SOA_AUTOTEXT", "SOA_MOD_OPT", "SOA_MOD_ORDER"};
     const char* disc;
     unsigned i;
     char rec[320];
@@ -148,6 +148,7 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_ENCOUNTERS_HOLD_B": "0",
         "SOA_AUTOTEXT": "on",
         "SOA_MOD_OPT": "-",
+        "SOA_MOD_ORDER": "-",
     }, got
     assert "13 setting(s) applied, 0 overridden" in err, err
 
@@ -191,6 +192,14 @@ def test_a_mods_option_joins_soa_mod_opt_and_the_environment_wins(driver):
         "encounter-scale.factor = 1 is overridden by SOA_MOD_OPT=encounter-scale.factor=0" in err
     ), err
     assert "1 setting(s) applied, 1 overridden" in err, err
+
+
+@needs_msvc
+def test_mod_order_sets_the_list(driver):
+    """M17: soa.ini's `mod_order` is SOA_MOD_ORDER, as every key is its switch."""
+    (driver.parent / "soa.ini").write_text("mod_order = map-log, -lab\n", encoding="utf-8")
+    _, got, err = run(driver)
+    assert got["SOA_MOD_ORDER"] == "map-log, -lab", (got, err)
 
 
 @needs_msvc

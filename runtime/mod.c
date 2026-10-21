@@ -86,6 +86,15 @@
  * DLL reads it through the API's option calls, and the recording carries
  * the values that are not their defaults after the mod's hash.
  *
+ * The order (M17, docs/specs/mod-order.md). SOA_MOD_ORDER lists mods by id
+ * (a version 1 mod by its folder): those load first, in its order, the rest
+ * by folder name, and `-ID` turns one off. A mod.ini's `overrides = ID, ...`
+ * loads it after each mod it names. Two mods whose patches can write the same
+ * bytes on one frame -- direct addresses, or offsets through one pointer word,
+ * conditions that can both hold -- refuse the later one with both lines,
+ * unless one overrides the other or both write the one value there. Each
+ * loaded mod's writes are listed a line a patch, a DLL's callbacks in one.
+ *
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
 #include "mod.h"
@@ -143,6 +152,7 @@ typedef struct {
     char name[96];  /* what mod.ini calls it */
     char id[64];    /* manifest 2: its stable id, and its version -- the recording's id@version */
     char version[32];
+    char overrides[256]; /* M17: the ids, or version 1 folders, its writes may land on: "a,b" */
     uint32_t hash;  /* FNV-1a of mod.ini, patches.txt and mod.dll, for the recording */
     unsigned first, count;
     void* dll;          /* the loaded mod.dll, or NULL */
@@ -1381,6 +1391,156 @@ static int substitute(Where* w, char* line, const Option* opts, int n)
     return 1;
 }
 
+/* ---- M17: the order, mods turned off, conflicts (docs/specs/mod-order.md) - */
+
+/* What a list names a mod by: its id, or a version 1 mod's folder. */
+static const char* mod_key(const Mod* m) { return m->id[0] ? m->id : m->dir; }
+
+/* Whether the comma-separated `list` holds `name`. */
+static int in_list(const char* list, const char* name)
+{
+    size_t n = strlen(name);
+    const char* p = list;
+    if (!n) return 0;
+    while (*p) {
+        const char* comma = strchr(p, ',');
+        size_t k = comma ? (size_t)(comma - p) : strlen(p);
+        if (k == n && !strncmp(p, name, n)) return 1;
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
+/* `overrides = a, b`: ids, by the id rule, into "a,b". */
+static void parse_overrides(Where* w, char* val, char* out, size_t cap)
+{
+    char* tok[32];
+    size_t used = 0;
+    int k, i;
+    char* c;
+    for (c = val; *c; c++)
+        if (*c == ',') *c = ' ';
+    k = split(val, tok, 32);
+    if (k <= 0) { refuse(w, "`overrides` names the ids of mods whose writes this one's may land on, a, b%s%s", "", ""); return; }
+    for (i = 0; i < k; i++) {
+        int n;
+        if (!good_id(tok[i])) {
+            refuse(w, "overrides: `%s` is not an id: lowercase letters, digits, '.', '_' and '-', a letter or digit "
+                      "first%s", tok[i], "");
+            return;
+        }
+        n = snprintf(out + used, cap - used, "%s%s", used ? "," : "", tok[i]);
+        if (n < 0 || (size_t)n >= cap - used) { refuse(w, "`overrides` names more than %s characters of ids%s", "255", ""); return; }
+        used += (size_t)n;
+    }
+}
+
+/* Whether two patches' conditions can hold on one frame: not when both name
+ * a scene, a state or a map and the two differ. */
+static int conds_can_meet(const Patch* a, const Patch* b)
+{
+    if (a->has_scene && b->has_scene && a->scene != b->scene) return 0;
+    if (a->has_state && b->has_state && a->state != b->state) return 0;
+    if (a->has_map && b->has_map && (a->map_number != b->map_number || a->map_letter != b->map_letter)) return 0;
+    return 1;
+}
+
+/* Whether two patches' bytes can meet, known before the game runs: two
+ * direct patches, or two through one pointer word, compared on every target;
+ * a direct and a pointer patch, or two pointers, cannot be. The first byte
+ * they share, an address or the pointer's offset, in *at. */
+static int bytes_meet(const Patch* a, const Patch* b, uint32_t* at)
+{
+    uint32_t za, zb;
+    unsigned long long abase, bbase;
+    if (a->ptr != b->ptr || (a->ptr && a->ea != b->ea)) return 0;
+    abase = a->ptr ? a->off : a->ea;
+    bbase = b->ptr ? b->off : b->ea;
+    for (za = a->z0; za <= a->z1; za++) {
+        unsigned long long lo = abase + (unsigned long long)za * a->stride, hi = lo + a->width;
+        for (zb = b->z0; zb <= b->z1; zb++) {
+            unsigned long long lo2 = bbase + (unsigned long long)zb * b->stride, hi2 = lo2 + b->width;
+            if (lo < hi2 && lo2 < hi) {
+                *at = (uint32_t)(lo > lo2 ? lo : lo2);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The same value written over the same targets by both: no conflict. */
+static int same_write(const Patch* a, const Patch* b)
+{
+    return !a->mul && !b->mul && a->width == b->width && a->value == b->value && a->ptr == b->ptr &&
+           a->ea == b->ea && a->off == b->off && a->stride == b->stride && a->z0 == b->z0 && a->z1 == b->z1;
+}
+
+/* The patches from `first` on, the mod `m`'s, against every earlier mod's:
+ * bytes that can meet when both can apply refuse it, unless one of the two
+ * names the other in `overrides`, which is said. */
+static void check_conflicts(Where* w, unsigned first, const Mod* m)
+{
+    unsigned i, j;
+    for (i = first; i < g_patch_n && !w->failed; i++)
+        for (j = 0; j < first; j++) {
+            const Patch *p = &g_patches[i], *q = &g_patches[j];
+            const Mod* o = &g_mods[q->mod];
+            char at[40], other[160];
+            uint32_t byte;
+            if (!conds_can_meet(p, q) || !bytes_meet(p, q, &byte)) continue;
+            if (same_write(p, q)) continue; /* the one value at the one place: neither undoes the other */
+            if (p->ptr) snprintf(at, sizeof at, "[%08X]+%u", p->ea, byte);
+            else snprintf(at, sizeof at, "%08X", byte);
+            if (in_list(m->overrides, mod_key(o)) || in_list(o->overrides, mod_key(m))) {
+                int mine = in_list(m->overrides, mod_key(o));
+                fprintf(stderr, "[mod] %s/patches.txt:%u overrides %s/patches.txt:%u at %s\n", mine ? m->dir : o->dir,
+                        mine ? p->line : q->line, mine ? o->dir : m->dir, mine ? q->line : p->line, at);
+                continue;
+            }
+            snprintf(other, sizeof other, "%s/patches.txt:%u", o->dir, q->line);
+            w->line = p->line;
+            refuse(w, "it writes %s, as %s does, and both can apply on one frame; one of the two mods must name "
+                      "the other in `overrides`", at, other);
+            return;
+        }
+}
+
+static void describe_patch(const Patch* p, char* buf, size_t cap);
+
+/* What a loaded mod writes and registers, a line each (M17). */
+static void list_mod(int mi)
+{
+    static const char* const k_kind[CB_KINDS] = {"frame end", "safe point", "map load", "scene change",
+                                                 "controller read", "projection", "texture"};
+    const Mod* m = &g_mods[mi];
+    char what[200], when[96], kinds[160];
+    unsigned i;
+    int k, c;
+    size_t used = 0;
+    for (i = m->first; i < m->first + m->count; i++) {
+        const Patch* p = &g_patches[i];
+        int n = 0;
+        when[0] = '\0';
+        if (p->has_scene) n += snprintf(when + n, sizeof when - (size_t)n, " scene=%u", p->scene);
+        if (p->has_state) n += snprintf(when + n, sizeof when - (size_t)n, " state=%u", p->state);
+        if (p->has_map) snprintf(when + n, sizeof when - (size_t)n, " map=%03u%c", p->map_number, p->map_letter);
+        describe_patch(p, what, sizeof what);
+        fprintf(stderr, "[mod] %s writes, patches.txt:%u: %s%s%s\n", m->dir, p->line, what, when[0] ? " when" : "",
+                when);
+    }
+    kinds[0] = '\0';
+    for (k = 0; k < CB_KINDS; k++)
+        for (c = 0; c < g_cb_n[k]; c++)
+            if (g_cb[k][c].mod == mi) {
+                int n = snprintf(kinds + used, sizeof kinds - used, "%s%s", used ? ", " : "", k_kind[k]);
+                if (n > 0 && (size_t)n < sizeof kinds - used) used += (size_t)n;
+                break;
+            }
+    if (kinds[0]) fprintf(stderr, "[mod] %s registers: %s\n", m->dir, kinds);
+}
+
 static void load_one(CpuState* s, const char* root, const char* dir, const char* dol_sha1,
                      const uint8_t* dol, size_t dol_size)
 {
@@ -1473,6 +1633,9 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
                     refuse(&w, "made for the DOL with SHA-1 %s, and this is %s", val, dol_sha1);
                 else
                     m.hash = 1; /* seen and matching; replaced by the content hash below */
+            } else if (!strcmp(key, "overrides")) {
+                if (!v2_key) v2_key = "overrides";
+                parse_overrides(&w, val, m.overrides, sizeof m.overrides);
             } else if (!strcmp(key, "option")) {
                 if (!v2_key) v2_key = "option";
                 parse_option(&w, opts, opt_n, val);
@@ -1480,7 +1643,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
                 fprintf(stderr, "[mod] %s:%u: `%s` is not a key this port knows; a key beginning x_ is kept for later ports, so the mod loads without it\n",
                         path, w.line, key);
             } else {
-                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api, dol_sha1 or option%s", key, "");
+                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api, dol_sha1, option or overrides%s", key, "");
             }
         }
     }
@@ -1511,6 +1674,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
             w.line = 0;
             refuse(&w, "no patches in it%s%s", "", "");
         }
+        if (!w.failed) check_conflicts(&w, before, &m);
     }
     dll = -1;
     if (!w.failed) {
@@ -1540,6 +1704,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
             if (opts[i].set)
                 fprintf(stderr, "[mod] %s: option %s = %s, from SOA_MOD_OPT (its default %s)\n", dir, opts[i].name,
                         opts[i].value, opts[i].def);
+        list_mod(g_mod_n - 1);
     }
     free(ini);
     free(patches);
@@ -1564,6 +1729,127 @@ static void option_text(int m, char* out, size_t cap)
         out[used] = ']';
         out[used + 1] = '\0';
     }
+}
+
+/* One folder before anything loads (M17): what a list names it by, what it
+ * overrides, and whether it is turned off or cannot be ordered. */
+typedef struct {
+    char key[64];
+    char overrides[256];
+    int rank, off, bad;
+} Planned;
+
+/* `id` and `overrides` from a mod.ini, read as plain text: its place in the
+ * order must not depend on whether the rest of the file is right, which
+ * load_one says. */
+static void peek_ini(const char* path, const char* folder, Planned* p)
+{
+    size_t n = 0;
+    char* ini = slurp_text(path, &n);
+    const char* t;
+    char line[LINE_MAX_LEN];
+    snprintf(p->key, sizeof p->key, "%s", folder);
+    p->overrides[0] = '\0';
+    if (!ini) return;
+    for (t = ini; next_line(&t, line) != 0;) {
+        char *eq, *key, *val, *tok[32];
+        int k, i;
+        size_t used = 0;
+        if ((eq = strchr(line, '#')) != NULL) *eq = '\0';
+        if (!(eq = strchr(line, '='))) continue;
+        *eq = '\0';
+        key = line;
+        val = eq + 1;
+        if (split(key, tok, 2) != 1) continue;
+        key = tok[0];
+        if (!strcmp(key, "id")) {
+            if (split(val, tok, 2) == 1 && good_id(tok[0])) snprintf(p->key, sizeof p->key, "%s", tok[0]);
+        } else if (!strcmp(key, "overrides")) {
+            char* c;
+            for (c = val; *c; c++)
+                if (*c == ',') *c = ' ';
+            k = split(val, tok, 32);
+            for (i = 0; i < k; i++) {
+                int w = snprintf(p->overrides + used, sizeof p->overrides - used, "%s%s", used ? "," : "", tok[i]);
+                if (w < 0 || (size_t)w >= sizeof p->overrides - used) break;
+                used += (size_t)w;
+            }
+        }
+    }
+    free(ini);
+}
+
+/* SOA_MOD_ORDER onto the planned folders: each name it lists gets its place
+ * (rank), and `-NAME` turns that mod off. */
+static void read_order(const char* dir, Planned* plan, int n)
+{
+    const char* env = getenv("SOA_MOD_ORDER");
+    char buf[2048], *p, *next;
+    int rank = 0, i;
+    if (!env || !*env) return;
+    snprintf(buf, sizeof buf, "%s", env);
+    for (p = buf; p; p = next) {
+        char* tok[2];
+        int off;
+        next = strchr(p, ',');
+        if (next) *next++ = '\0';
+        if (split(p, tok, 2) != 1) {
+            if (*p && split(p, tok, 2) != 0) fprintf(stderr, "[mod] SOA_MOD_ORDER: `%s` is not one name; passed over\n", p);
+            continue;
+        }
+        off = tok[0][0] == '-';
+        for (i = 0; i < n && strcmp(plan[i].key, tok[0] + off) != 0; i++) {}
+        if (i == n)
+            fprintf(stderr, "[mod] SOA_MOD_ORDER: `%s` names no mod in %s; passed over\n", tok[0] + off, dir);
+        else if (plan[i].rank >= 0)
+            fprintf(stderr, "[mod] SOA_MOD_ORDER: `%s` is named twice; its second place is passed over\n", tok[0] + off);
+        else {
+            plan[i].rank = rank++;
+            plan[i].off = off;
+        }
+    }
+}
+
+/* The order mods load in: the list's first, then the rest by folder name;
+ * then each mod moved after every mod it overrides, so its write lands
+ * last. Two that override each other cannot be ordered and are marked bad. */
+static int plan_order(const char* dir, char (*folders)[64], Planned* plan, int n, int* order)
+{
+    int i, j, k = 0, pass, moved = 1;
+    for (i = 0; i < n; i++)
+        if (plan[i].rank >= 0) order[k++] = i;
+    for (i = 1; i < k; i++) /* by rank: insertion, k is small */
+        for (j = i; j > 0 && plan[order[j - 1]].rank > plan[order[j]].rank; j--) {
+            int t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+        }
+    for (i = 0; i < n; i++)
+        if (plan[i].rank < 0) order[k++] = i;
+    for (i = 0; i < k; i++)
+        for (j = i + 1; j < k; j++)
+            if (in_list(plan[order[i]].overrides, plan[order[j]].key) &&
+                in_list(plan[order[j]].overrides, plan[order[i]].key) && !plan[order[i]].off && !plan[order[j]].off) {
+                plan[order[i]].bad = plan[order[j]].bad = 1;
+                fprintf(stderr, "[mod] %s/%s and %s/%s each name the other in `overrides`, so which wins cannot be "
+                                "known; neither is loaded\n", dir, folders[order[i]], dir, folders[order[j]]);
+            }
+    for (pass = 0; moved && pass <= k * k; pass++) {
+        moved = 0;
+        for (i = 0; i < k && !moved; i++)
+            for (j = i + 1; j < k && !moved; j++) {
+                int a = order[i], t;
+                if (plan[a].bad || plan[order[j]].bad || !in_list(plan[a].overrides, plan[order[j]].key)) continue;
+                for (t = i; t < j; t++) order[t] = order[t + 1];
+                order[j] = a;
+                moved = 1;
+                if (!plan[a].off && !plan[order[j - 1]].off)
+                    fprintf(stderr, "[mod] %s/%s loads after %s, which it overrides\n", dir, folders[a],
+                            plan[order[j - 1]].key);
+            }
+    }
+    if (moved) fprintf(stderr, "[mod] the mods' `overrides` go round in a circle; the order stands as it is\n");
+    return k;
 }
 
 static int cmp_name(const void* a, const void* b) { return strcmp((const char*)a, (const char*)b); }
@@ -1610,7 +1896,25 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     sha1_hex(dol, dol_size, sha);
     g_s = s;
     mod_note_dol(dol, dol_size);
-    for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
+    {
+        static Planned plan[MOD_MAX * 2];
+        int order[MOD_MAX * 2], k;
+        for (i = 0; i < n; i++) {
+            char path[600];
+            snprintf(path, sizeof path, "%s/%s/mod.ini", dir, names[i]);
+            peek_ini(path, names[i], &plan[i]);
+            plan[i].rank = -1;
+            plan[i].off = plan[i].bad = 0;
+        }
+        read_order(dir, plan, n);
+        k = plan_order(dir, names, plan, n, order);
+        for (i = 0; i < k; i++) {
+            if (plan[order[i]].off)
+                fprintf(stderr, "[mod] %s/%s is turned off by SOA_MOD_ORDER; not loaded\n", dir, names[order[i]]);
+            else if (!plan[order[i]].bad)
+                load_one(s, dir, names[order[i]], sha, dol, dol_size);
+        }
+    }
     check_option_entries();
     /* The recording's line: every mod by name and hash while they fit -- a
      * manifest 2 mod as id@version, a version 1 mod by its folder -- 24 bytes

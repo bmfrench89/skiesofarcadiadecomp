@@ -225,7 +225,10 @@ The owner answered four questions, with the research behind them summarised in t
     3. M16, declared options. **Done 2026-10-21 on this PC** (FINDINGS "M16", [specs/mod-options.md](specs/mod-options.md)):
        `option = NAME TYPE [DOMAIN] DEFAULT` in `mod.ini`, values from `SOA_MOD_OPT` and soa.ini's `ID.NAME` lines,
        `${NAME}` in `patches.txt`, `option`/`option_int` for a DLL, the values in the recording; M8's page waits for M8.
-    4. M17, load order and conflict reports.
+    4. M17, load order and conflict reports. **Done 2026-10-21 on this PC** (FINDINGS "M17",
+       [specs/mod-order.md](specs/mod-order.md)): `mod_order`/`SOA_MOD_ORDER` orders mods and turns them off,
+       `overrides` lets one mod's writes land on another's, and two mods that can write the same bytes on one frame
+       are refused with both lines; each mod's writes and callbacks are listed at load. M8's page waits for M8.
     5. T10, a modding guide and tool.
 
     Each is proven on this PC before it is called done.

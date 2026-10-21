@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1708 |
+| Python tests | 1730 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -425,9 +425,15 @@ machine, so the session took the mod framework's next item (PLAN-NEXT §0, D-38)
 `option = NAME TYPE [DOMAIN] DEFAULT`; `SOA_MOD_OPT` and soa.ini's `ID.NAME = VALUE` set them; `patches.txt` reads
 `${NAME}`; a DLL calls `option` and `option_int`; the recording names values away from their defaults. In the game,
 `encounter-scale.factor=0` zeroed `a116a`'s four live rates where the default halved them, and `map-log.scenes=0`
-left out every scene change. A folder `C:\c`, made 2026-10-18 by another program and left in place, had broken every
-gnu-profile compile through `toolchain.gnu_args`; fixed. **Next:** M17 (load order and conflict reports), then T10;
+left out every scene change. A folder `C:\c`, made 2026-10-18 by another program (the owner's to delete; a safety check stops a session), had broken every
+gnu-profile compile through `toolchain.gnu_args`; fixed. M17 followed (below);
 M16b (`mods/`'s three DLL mods onto declared options) goes with P1's presets.
+
+**Then M17, the same day: the mod list's order and conflicts, done on this PC** (FINDINGS "M17",
+`docs/specs/mod-order.md`). `mod_order` (`SOA_MOD_ORDER`) orders mods by id and turns them off with `-ID`; `overrides =`
+lets one mod's writes land on another's and loads it after; two mods whose patches can write the same bytes on one
+frame are refused with both lines. In the game a twin of `encounters-off` writing 0x10 was refused, then with
+`overrides` loaded and its 0x10 was what each frame left. **Next:** T10, the modding guide and tool.
 
 **Before that, 2026-10-14 to 10-17:**
 

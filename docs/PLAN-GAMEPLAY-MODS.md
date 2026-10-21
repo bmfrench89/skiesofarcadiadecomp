@@ -1297,7 +1297,9 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - M8 draws each mod's page with no per-mod UI code.
   - An environment override (`SOA_MOD_OPT=mod.option=value`), because checks ignore `soa.ini`.
   - Out-of-range values are refused.
-- **M17. A mod list with order and a conflict report** — *a day to several days.*
+- **M17. A mod list with order and a conflict report** — *a day to several days. Done 2026-10-21 but for M8's
+  page: specified in [specs/mod-order.md](specs/mod-order.md), evidence in FINDINGS "M17". A DLL's writes are not
+  compared (they are made at the call); dependency keys and zip install stay deferred.*
   - Today folder name decides order: a byte-wise `strcmp` qsort (`mod.c:924`), then loaded in that order (`:928`). A second patch to the same word silently wins: the per-frame apply loop (`:977`) writes every patch in load order, with no overlap check.
   - Refuse overlapping writes unless one mod declares `overrides`, and only when their conditions can overlap.
   - List what each mod patches and registers.
