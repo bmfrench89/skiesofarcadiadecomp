@@ -3874,3 +3874,311 @@ def test_coop_only_in_a_battle(driver, tmp_path):
     shipped(tmp_path / "b", src.replace(gate, "int battle = 1,"), folder=COOP)
     out, _ = play(driver, tmp_path / "b", script, SOA_COOP="1")
     assert pressed(out) != [1, 2, 3], out
+
+
+# --------------------------------------------------------------------------
+# M16: options each mod declares (docs/specs/mod-options.md). mod.ini
+# declares them, SOA_MOD_OPT (and soa.ini, through settings.c) sets them,
+# patches.txt reads ${NAME} and a DLL the API's option calls.
+# --------------------------------------------------------------------------
+
+OPTIONS = (
+    "rate int -5..127 32",
+    "scenes bool 1",
+    "factor enum 0|0.5|1 0.5",
+    "tag string field",
+    "seed seed 7",
+)
+
+
+def ini2(mod_id: str, *options: str) -> str:
+    """A manifest 2 mod.ini for the fake DOL, declaring `options`."""
+    head = (
+        f"manifest = 2\nid = {mod_id}\nversion = 1.0\nname = {mod_id}\napi = 1\ndol_sha1 = {SHA}\n"
+    )
+    return head + "".join(f"option = {o}\n" for o in options)
+
+
+OPTION_SOURCE = r"""
+#include "soa_mod.h"
+#include <stdio.h>
+
+static const SoaModApi* A;
+static const char* const k_names[] = {"rate", "scenes", "factor", "tag", "seed", "nope"};
+
+static void each(const char* when)
+{
+    char b[160];
+    unsigned i;
+    for (i = 0; i < sizeof k_names / sizeof k_names[0]; i++) {
+        int64_t v = -999;
+        const char* t = A->option(k_names[i]);
+        int got = A->option_int(k_names[i], &v);
+        snprintf(b, sizeof b, "%s %s [%s] %d %lld", when, k_names[i], t ? t : "(null)", got, (long long)v);
+        A->log(b);
+    }
+}
+
+static void sp(void* u)
+{
+    static int once;
+    (void)u;
+    if (!once++) each("safe");
+}
+
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    if (api->size < SOA_MOD_HAS(option_int)) return 1;
+    A = api;
+    each("init");
+    api->on_safe_point(sp, NULL);
+    return 0;
+}
+"""
+
+
+def option_dll(root: Path, mod_id: str = "opts") -> Path:
+    d = mod(root, mod_id, patches=None, ini=ini2(mod_id, *OPTIONS))
+    (d / "mod_src.c").write_text(OPTION_SOURCE, encoding="utf-8")
+    library(d, d / "mod_src.c")
+    return d
+
+
+def option_reads(err: str, when: str) -> dict[str, str]:
+    """What the DLL logged for each name at `when`: `[text] got value`."""
+    pre = f"[mod] opts: {when} "
+    rows = [line[len(pre) :].split(" ", 1) for line in err.splitlines() if line.startswith(pre)]
+    return {name: rest for name, rest in rows}
+
+
+@needs_cc
+def test_m16_every_type_reads_back_through_the_api(driver, tmp_path):
+    """Unset, each option is its default; set through SOA_MOD_OPT, its value,
+    in one spelling (a seed of 0x3039 reads 12345), from init and from a
+    callback alike. An enum or a string is text only; an undeclared name is
+    NULL and 0. The mutation, api_option answering the default whatever
+    was set, fails the second half."""
+    option_dll(tmp_path)
+    out, err = play(driver, tmp_path, "safe")
+    assert "loaded 1" in out, err
+    defaults = {
+        "rate": "[32] 1 32",
+        "scenes": "[1] 1 1",
+        "factor": "[0.5] 0 -999",
+        "tag": "[field] 0 -999",
+        "seed": "[7] 1 7",
+        "nope": "[(null)] 0 -999",
+    }
+    assert option_reads(err, "init") == defaults, err
+    assert option_reads(err, "safe") == defaults, err
+    assert "from SOA_MOD_OPT" not in err, err
+    opt = "opts.rate=-5 opts.scenes=0 opts.factor=1 opts.tag=a.b+c opts.seed=0x3039"
+    out, err = play(driver, tmp_path, "safe", SOA_MOD_OPT=opt)
+    assert "loaded 1" in out, err
+    values = {
+        "rate": "[-5] 1 -5",
+        "scenes": "[0] 1 0",
+        "factor": "[1] 0 -999",
+        "tag": "[a.b+c] 0 -999",
+        "seed": "[12345] 1 12345",
+        "nope": "[(null)] 0 -999",
+    }
+    assert option_reads(err, "init") == values, err
+    assert option_reads(err, "safe") == values, err
+    assert "[mod] opts: option seed = 12345, from SOA_MOD_OPT (its default 7)" in err, err
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "option, why",
+    [
+        ("rate", "an option is `option = NAME TYPE [DOMAIN] DEFAULT`"),
+        ("Rate bool 1", "a name is a lowercase letter"),
+        ("_rate bool 1", "a name is a lowercase letter"),
+        ("ra-te bool 1", "a name is a lowercase letter"),
+        ("a" * 32 + " bool 1", "under 32"),
+        ("rate float 1", "`float` is not an option's type"),
+        ("rate int 32", "an int or enum is NAME TYPE DOMAIN DEFAULT"),
+        ("rate bool 0..1 1", "a bool, string or seed is NAME TYPE DEFAULT"),
+        ("rate int 5..1 3", "`5..1` is not a range"),
+        ("rate int 0..3000000000 3", "is not a range"),
+        ("rate int 00..5 3", "is not a range"),
+        ("rate int 0..127 128", "its default, 128, is not a whole number from 0 to 127"),
+        ("rate int 0..127 -0", "its default, -0, is not"),
+        ("rate bool 2", "its default, 2, is not 0 or 1"),
+        ("rate enum a|b c", "its default, c, is not one of a|b"),
+        ("rate enum a|b|a a", "is not a list of choices"),
+        ("rate enum a||b a", "is not a list of choices"),
+        ("rate enum a|b$ a", "is not a list of choices"),
+        ("rate enum " + "|".join(f"c{i}" for i in range(17)) + " c0", "is not a list of choices"),
+        ("rate string a,b", "its default, a,b, is not 1 to 63"),
+        ("rate seed 0x123456789", "its default, 0x123456789, is not a 32-bit number"),
+    ],
+)
+def test_m16_a_bad_declaration_refuses_the_mod_with_its_line(driver, tmp_path, option, why):
+    """Each fault of section 1, on mod.ini's line 7. The mutation, the
+    default's domain check dropped, fails the `its default` cases."""
+    mod(tmp_path, "bad", ini=ini2("bad", option))
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out, err
+    assert "bad/mod.ini:7: " in err and why in err, err
+
+
+@needs_cc
+def test_m16_declaring_the_same_name_twice_or_seventeen_is_refused(driver, tmp_path):
+    mod(tmp_path / "a", "twice", ini=ini2("twice", "rate bool 1", "rate bool 0"))
+    out, err = play(driver, tmp_path / "a")
+    assert "loaded 0" in out and "twice/mod.ini:8: option `rate` is declared twice" in err, err
+    many = [f"o{i} bool 1" for i in range(17)]
+    mod(tmp_path / "b", "many", ini=ini2("many", *many))
+    out, err = play(driver, tmp_path / "b")
+    assert "loaded 0" in out, err
+    assert "many/mod.ini:23: more than 16 options; option `o16`" in err, err
+    mod(tmp_path / "c", "sixteen", ini=ini2("sixteen", *many[:16]))
+    out, err = play(driver, tmp_path / "c")
+    assert "loaded 1" in out, err
+
+
+@needs_cc
+def test_m16_an_option_is_a_manifest_2_key(driver, tmp_path):
+    ini = f"name = old\napi = 1\ndol_sha1 = {SHA}\noption = rate bool 1\n"
+    mod(tmp_path, "old", ini=ini)
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out and "`option` is a manifest 2 key" in err, err
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "entry, why",
+    [
+        ("opts.rate=128", "`opts.rate=128`: the value is not a whole number from 0 to 127"),
+        ("opts.rate=12a", "the value is not a whole number"),
+        ("opts.rate=", "the value is not a whole number"),
+        ("opts.factor=2", "`opts.factor=2`: the value is not one of 0|0.5|1"),
+        ("opts.factor=0.50", "the value is not one of 0|0.5|1"),
+        ("opts.scenes=yes", "the value is not 0 or 1"),
+        ("opts.tag=a;b", "the value is not 1 to 63"),
+        ("opts.seed=-1", "the value is not a 32-bit number"),
+        ("opts.speed=1", "`opts.speed=1`: the mod declares no option `speed`"),
+        ("opts.rate=1 opts.rate=2", "`opts.rate=2`: option `rate` is given twice"),
+    ],
+)
+def test_m16_a_bad_value_refuses_the_mod_naming_the_entry(driver, tmp_path, entry, why):
+    """A mod run with defaults when a value was asked for would be doing
+    something else. The mutation, the values' domain check skipped, loads
+    the out-of-range cases."""
+    options = ("rate int 0..127 32", *OPTIONS[1:])
+    mod(tmp_path, "opts", ini=ini2("opts", *options))
+    out, err = play(driver, tmp_path, SOA_MOD_OPT=entry)
+    assert "loaded 0" in out, err
+    line = next((ln for ln in err.splitlines() if "the mod is not loaded" in ln), "")
+    assert line.startswith("[mod] SOA_MOD_OPT: `") and why in line, err
+
+
+@needs_cc
+def test_m16_an_entry_for_no_mod_is_said_and_the_rest_load(driver, tmp_path):
+    """An entry naming an id no mod has does nothing and says so; one that
+    is not ID.NAME=VALUE is passed over with a line; another mod's entry
+    leaves this one alone. An id may hold '.', so the name is after the last."""
+    mod(tmp_path, "a.b", ini=ini2("a.b", "rate int 0..9 1"), patches=RATES.format(k="1"))
+    opt = "ghost.rate=3 junk a.b.rate=4 =x"
+    out, err = play(driver, tmp_path, "describe", SOA_MOD_OPT=opt)
+    assert "loaded 1" in out, err
+    assert (
+        "SOA_MOD_OPT: `ghost.rate=3`: no mod with id `ghost` is loaded; it does nothing" in err
+    ), err
+    assert "SOA_MOD_OPT: `junk` is not ID.NAME=VALUE; passed over" in err, err
+    assert "SOA_MOD_OPT: `=x` is not ID.NAME=VALUE" in err, err
+    assert "option rate = 4, from SOA_MOD_OPT" in err, err
+    assert re.search(r"describe \[mods=a\.b@1\.0:[0-9a-f]{8}\[rate=4\]\]", out), out
+
+
+def encounter_scale(root: Path) -> Path:
+    """The shipped examples/mods/encounter-scale, made for the fake DOL."""
+    src = ROOT / "examples" / "mods" / "encounter-scale"
+    ini = (src / "mod.ini").read_text(encoding="utf-8")
+    pinned = ini.split("dol_sha1 = ")[1].split()[0]
+    d = root / "encounter-scale"
+    d.mkdir(parents=True)
+    (d / "mod.ini").write_text(ini.replace(pinned, SHA), encoding="utf-8")
+    (d / "patches.txt").write_text(
+        (src / "patches.txt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return d
+
+
+@needs_cc
+def test_m16_the_example_s_factor_is_its_option(driver, tmp_path):
+    """encounter-scale's `*= ${factor}`: halved by default, zeroed at 0,
+    left at 1, doubled at 2. The mutation, ${NAME} replaced by the default,
+    fails every value set."""
+    encounter_scale(tmp_path)
+    script = table([40] * 8) + load(116) + gets()
+    got = {}
+    for value in (None, "0", "1", "2"):
+        env = {"SOA_MOD_OPT": f"encounter-scale.factor={value}"} if value else {}
+        out, err = play(driver, tmp_path, script, **env)
+        assert "loaded 1" in out, err
+        got[value] = read_rates(out)[0]
+    assert got == {None: [20] * 8, "0": [0] * 8, "1": [40] * 8, "2": [80] * 8}, got
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "line, why",
+    [
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= ${speed} for z=0..7", "`${speed}` names no"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= $factor for z=0..7", "a `$` begins ${NAME}"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= ${factor for z=0..7", "a `$` begins ${NAME}"),
+        ("on_map_load u16 [0x803474bc]+2+z*132 *= ${} for z=0..7", "a `$` begins ${NAME}"),
+        ("every_frame u8 0x80346d28 = ${tag}", "`field` is not a value a u8 holds"),
+        ("every_frame 0x80346d28 = 0" + " " * 450 + "${long}", "longer than 511 characters once"),
+    ],
+)
+def test_m16_a_bad_substitution_refuses_the_mod_at_its_line(driver, tmp_path, line, why):
+    ini = ini2("subs", "factor enum 0|0.5 0.5", "tag string field", "long string " + "x" * 63)
+    mod(tmp_path, "subs", ini=ini, patches=line + "\n")
+    out, err = play(driver, tmp_path)
+    assert "loaded 0" in out, err
+    assert "subs/patches.txt:1: " in err and why in err, err
+
+
+@needs_cc
+def test_m16_a_comment_s_dollar_is_left_alone(driver, tmp_path):
+    patches = "# costs $5, see ${nothing}\nevery_frame 0x80346d28 = ${v} when scene=6 # ${nope}\n"
+    mod(tmp_path, "c", ini=ini2("c", "v int 0..9 3"), patches=patches)
+    out, err = play(driver, tmp_path, "set 803475cc 6 frame get 80346d28")
+    assert "loaded 1" in out and "80346D28=00000003" in out, (out, err)
+
+
+@needs_cc
+def test_m16_the_recording_names_the_values_that_are_not_defaults(driver, tmp_path):
+    """At its defaults a mod reads as it always did, so old recordings still
+    match; away from them, its values follow its hash, and a value equal to
+    the default is no change. The mutation, the values left out, fails the
+    third run."""
+    encounter_scale(tmp_path)
+    plain, _ = play(driver, tmp_path, "describe")
+    assert re.search(r"describe \[mods=encounter-scale@1\.0:[0-9a-f]{8}\]$", plain, re.M), plain
+    same, _ = play(driver, tmp_path, "describe", SOA_MOD_OPT="encounter-scale.factor=0.5")
+    assert same == plain
+    zero, _ = play(driver, tmp_path, "describe", SOA_MOD_OPT="encounter-scale.factor=0")
+    assert "[factor=0]]" in zero and zero.replace("[factor=0]]", "]") == plain, (plain, zero)
+
+
+@needs_cc
+def test_m16_the_example_dll_s_option_leaves_scene_changes_out(driver, tmp_path):
+    """examples/mods/map-log declares `scenes`; at 0 it logs no scene change."""
+    d = tmp_path / "map-log"
+    d.mkdir()
+    ini = (ROOT / "examples" / "mods" / "map-log" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "examples" / "mods" / "map-log" / "mod.c")
+    script = "set 803475cc 6 safe set 803475cc 7 safe"
+    _, on = play(driver, tmp_path, script)
+    _, off = play(driver, tmp_path, script, SOA_MOD_OPT="map-log.scenes=0")
+    assert "[mod] map-log: scene 6 -> 7" in on, on
+    assert "scene 6 -> 7" not in off and "logs map entries, and changes nothing" in off, off

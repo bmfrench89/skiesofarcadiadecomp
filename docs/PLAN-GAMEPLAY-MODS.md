@@ -1289,7 +1289,9 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Today `mod.c` refuses any `api` but the literal "1" (`mod.c:818`, checked here), so the first API bump would refuse every existing mod.
   - Recordings name mods as `id@version:hash`. Two mods with the same id are refused, because X2's chunk key and T2's lock depend on unique ids.
   - Later, a separate slice beside M13 and R1: a `requires =` key for compiled-in sites and events, `soa.exe --build-info`, and a mod-shipped build.txt limited to modsites lines (a mod cannot supply the native body an `hle.txt` line needs).
-- **M16. Options each mod declares** — *several days.*
+- **M16. Options each mod declares** — *several days. Done 2026-10-21 but for M8's page, which waits for M8:
+  specified in [specs/mod-options.md](specs/mod-options.md), evidence in FINDINGS "M16". Moving `mods/`'s three
+  DLL mods onto declared options is M16b, with P1's presets.*
   - Typed options (int range, bool, enum, string, seed) in `mod.ini`, with values in `soa.ini` under the mod's id.
   - `${name}` substitution in `patches.txt`, and an API call for DLLs.
   - M8 draws each mod's page with no per-mod UI code.

@@ -1,7 +1,8 @@
 /*
  * An example native mod (docs/PLAN-60FPS-MODS.md M3): it logs every map the
  * party enters and every scene change, and counts the frames it saw. It
- * changes nothing in the game; it is the template to copy.
+ * changes nothing in the game; it is the template to copy. Its mod.ini
+ * declares one option, `scenes`, which this reads through the API (M16).
  *
  * Build it beside its mod.ini, from the repository root:
  *
@@ -42,13 +43,18 @@ static void on_scene_change(void* user, uint32_t from, uint32_t to)
 
 SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
 {
-    /* log is the last member this mod calls, so a port whose table reaches it
+    int64_t scenes = 1;
+    /* log is the last member this mod needs, so a port whose table reaches it
      * has everything the mod needs, whatever was appended since. */
     if (version < 1 || api->size < SOA_MOD_HAS(log)) return 1;
     g_api = api;
+    /* option_int is appended to the table, so an older port without it
+     * leaves the option at the default mod.ini gives it. */
+    if (api->size >= SOA_MOD_HAS(option_int)) api->option_int("scenes", &scenes);
     api->on_safe_point(on_safe_point, NULL);
     api->on_map_loaded(on_map_loaded, NULL);
-    api->on_scene_change(on_scene_change, NULL);
-    api->log("map-log loaded: it logs map entries and scene changes, and changes nothing");
+    if (scenes) api->on_scene_change(on_scene_change, NULL);
+    api->log(scenes ? "map-log loaded: it logs map entries and scene changes, and changes nothing"
+                    : "map-log loaded: it logs map entries, and changes nothing");
     return 0;
 }

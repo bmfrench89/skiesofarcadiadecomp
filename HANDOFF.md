@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1661 |
+| Python tests | 1708 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,7 +417,19 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-14)
+## Where the last session stopped (2026-10-21)
+
+**Latest, 2026-10-21: M16, declared mod options, done on this PC** (FINDINGS "M16",
+`docs/specs/mod-options.md`). PC step 2 (reach U4 and U5) was already done, and step 3 needs the owner at the
+machine, so the session took the mod framework's next item (PLAN-NEXT §0, D-38). A manifest 2 `mod.ini` declares
+`option = NAME TYPE [DOMAIN] DEFAULT`; `SOA_MOD_OPT` and soa.ini's `ID.NAME = VALUE` set them; `patches.txt` reads
+`${NAME}`; a DLL calls `option` and `option_int`; the recording names values away from their defaults. In the game,
+`encounter-scale.factor=0` zeroed `a116a`'s four live rates where the default halved them, and `map-log.scenes=0`
+left out every scene change. A folder `C:\c`, made 2026-10-18 by another program and left in place, had broken every
+gnu-profile compile through `toolchain.gnu_args`; fixed. **Next:** M17 (load order and conflict reports), then T10;
+M16b (`mods/`'s three DLL mods onto declared options) goes with P1's presets.
+
+**Before that, 2026-10-14 to 10-17:**
 
 **The state at the stop (2026-10-14, the PC session after the cloud's R5c and M6):** the cloud branch is merged
 (`main` fast-forwarded to 1c1fefd and pushed, CI green), and PLAN-NEXT §0's PC step 1 is done (FINDINGS "R5c and M6

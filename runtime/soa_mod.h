@@ -165,6 +165,17 @@ typedef struct SoaModApi {
      * is connected there, 0 otherwise. Meaningful inside pad_filter, which
      * runs at each of the game's controller reads. Not in recordings yet. */
     int (*read_pad)(uint32_t port, SoaPad* out);
+
+    /* Appended (M16). The value of an option this mod declares in its
+     * mod.ini (`option = NAME TYPE [DOMAIN] DEFAULT`): what soa.ini or
+     * SOA_MOD_OPT set, checked against its domain when the mod loaded, or
+     * the default. `option` gives the text, kept for the run -- an int,
+     * bool or seed as a decimal; `option_int` gives an int, bool or seed as
+     * a number and returns 1, and returns 0 for an enum or a string. NULL
+     * and 0 for a name the mod did not declare, and for a call from outside
+     * its soa_mod_init and its callbacks (docs/specs/mod-options.md). */
+    const char* (*option)(const char* name);
+    int (*option_int)(const char* name, int64_t* out);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

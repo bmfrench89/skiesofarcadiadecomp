@@ -9244,3 +9244,38 @@ here).
   "captured" only when all three files were written whole, and otherwise "frame N was not captured: k of its 3
   files written"; seen both ways in a 320-frame run, with the self test, the replay (23/23) and `title` (4 of 4)
   after it.
+
+**M16: options each mod declares, built and run on this PC.** 2026-10-21. Spec: `docs/specs/mod-options.md`.
+
+- **What it is** [V, `runtime/mod.c`, `settings.c`, `soa_mod.h`]: a manifest 2 `mod.ini` declares up to 16
+  options, `option = NAME TYPE [DOMAIN] DEFAULT`, of the types `int LO..HI`, `bool`, `enum A|B|C`, `string` and
+  `seed`. `SOA_MOD_OPT` sets them (`ID.NAME=VALUE`, apart by spaces), and soa.ini's `ID.NAME = VALUE` lines join it
+  where the environment does not give the key. A value outside its domain, an undeclared name or a key given twice
+  refuses the mod naming the entry; an entry for no loaded mod is said. `patches.txt` reads `${NAME}` before the
+  line is parsed, a DLL calls `option` or `option_int` (appended to `SoaModApi`, the version still 1), and the
+  recording carries values away from their defaults after the mod's hash, `id@version:hash[name=value]`, so a
+  recording made with every mod at its defaults reads as before. `examples/mods/encounter-scale` now declares
+  `factor` (`0|0.25|0.5|1|2`, default 0.5) and `examples/mods/map-log` declares `scenes` (bool, default 1).
+- **The checks, each shown able to fail** [V]: 45 new cases in `test_mods.py` (every type read back through a DLL,
+  21 bad declarations, 10 bad values, entries for no mod, the example's factor at its default and at 0, 1 and 2,
+  six bad substitutions, a comment's `$`, the recording, map-log's option) and one in `test_settings.py`. Each
+  Done line's mutation failed its check: `api_option` answering the default (1 failed), the default's domain check
+  dropped (6), the values' domain check skipped (8), `${NAME}` replaced by the default (1), the values left out of
+  the recording (1), soa.ini's line added over the environment's (1). The same tests pass built by llvm-mingw
+  (`SOA_CC=mingw`), and `test_mingw.py` passes.
+- **In the game** [V, `build/m16/` (game data, kept here)]: two 4,500-frame runs from copies of
+  `card-partG.raw`, the walk mix of seed 33, every 500th frame drawn, `SOA_SETTINGS=0`, `SOA_MODS` naming a folder
+  holding `encounter-scale` and `map-log` (the DLL `--link` built). With nothing set, `a116a`'s load logged
+  `80E84402: 002D -> 0016` and its three neighbours (the default 0.5; zones 4-7 at 0 stay 0), and the report read
+  `*= 0.5 ... applied 1 time(s)`; map-log logged 5 scene changes. With `SOA_MOD_OPT='encounter-scale.factor=0
+  map-log.scenes=0'` the same load logged `002D -> 0000` for zones 0-3, the report `*= 0`, the log named both
+  options with their defaults, and map-log registered 2 callbacks, not 3, and logged no scene change. Both exited
+  0 at frame 4500 with the pointer at `0x803474BC` holding `80E84400` at 3300 and 4400; the last snapshot, frame
+  4000, is the save screen at the prison's save point, where the walk had opened it.
+- **A trap found on the way, fixed** [V]: a folder `C:\c` (holding `C:\c\Users\bmfre\.mm-rpg-framework\...`, made
+  2026-10-18 by another program on this machine, left in place) made `os.path.exists("/c")` true, so
+  `toolchain.gnu_args` passed cl's `/c` through as a file and every gnu-profile compile became a link:
+  `test_mingw.py` and `SOA_CC=mingw` failed with undefined symbols in files nobody had touched. `/c`, `/I` and
+  `/D` alone are now always the flags; a test with every path existing fails on the old order.
+- **Not in M16:** M8's page (M8 does not exist yet; `mod.c` keeps the declarations for it), and moving `mods/`'s
+  three DLL mods off `SOA_ENCOUNTERS`, `SOA_AUTOTEXT` and `SOA_COOP` (M16b, with P1's presets).

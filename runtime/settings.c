@@ -14,6 +14,12 @@
  * dropped in silence. `disc` is the extracted directory the port reads when
  * none is given on the command line.
  *
+ * A key with a '.' is a mod's option (M16, docs/specs/mod-options.md):
+ * `encounter-scale.factor = 1` is the option `factor` of the mod whose id is
+ * encounter-scale. No mod is loaded yet, so it cannot be checked here; it is
+ * added to SOA_MOD_OPT as `encounter-scale.factor=1`, unless SOA_MOD_OPT
+ * already gives that key, and mod.c checks it against the mod's declaration.
+ *
  * Checks never read it: SOA_SETTINGS=0 turns it off, and scenario.py,
  * perfbench.py and the self test all run with the file off, so a player's
  * settings can never move a check.
@@ -352,6 +358,44 @@ const char* settings_recorded(char* out, size_t cap)
     return out;
 }
 
+/* Whether SOA_MOD_OPT already gives `key` (`key=` at an entry's start). */
+static int mod_opt_has(const char* opt, const char* key)
+{
+    size_t n = strlen(key);
+    const char* p = opt;
+    while (p && *p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, key, n) && p[n] == '=') return 1;
+        p = strpbrk(p, " \t");
+    }
+    return 0;
+}
+
+/* soa.ini's `ID.NAME = VALUE`, onto SOA_MOD_OPT where it does not give the
+ * key already: 1 applied, 0 overridden, -1 not one word and passed over. */
+static int fold_mod_option(const char* path, unsigned lineno, const char* key, const char* value)
+{
+    const char* had = getenv("SOA_MOD_OPT");
+    char now[4096];
+    if (!*value || strpbrk(key, " \t=") || strpbrk(value, " \t")) {
+        fprintf(stderr, "[settings] %s:%u: `%s = %s`: a mod's option and its value are one word each; ignored\n",
+                path, lineno, key, value);
+        return -1;
+    }
+    if (had && mod_opt_has(had, key)) {
+        fprintf(stderr, "[settings] %s = %s is overridden by SOA_MOD_OPT=%s in the environment\n", key, value, had);
+        return 0;
+    }
+    if (snprintf(now, sizeof now, "%s%s%s=%s", had && *had ? had : "", had && *had ? " " : "", key, value) >=
+        (int)sizeof now) {
+        fprintf(stderr, "[settings] %s:%u: `%s`: SOA_MOD_OPT would pass %u characters; ignored\n", path, lineno, key,
+                (unsigned)sizeof now - 1);
+        return -1;
+    }
+    set_env("SOA_MOD_OPT", now);
+    return 1;
+}
+
 /* Read soa.ini, if there is one and SOA_SETTINGS is not 0, into the
  * environment where the environment is silent. Returns the `disc` directory
  * it names, or NULL. */
@@ -386,12 +430,18 @@ const char* settings_load(void)
             under_root(value, g_disc, sizeof g_disc);
             continue;
         }
+        if (strchr(key, '.')) {
+            int got = fold_mod_option(path, lineno, key, value);
+            if (got > 0) applied++;
+            else if (!got) overridden++;
+            continue;
+        }
         for (i = 0; i < N_SETTINGS; i++)
             if (!strcmp(key, k_settings[i].key)) break;
         if (i == N_SETTINGS) {
             fprintf(stderr, "[settings] %s:%u: `%s` is not a setting this port knows (disc", path, lineno, key);
             for (i = 0; i < N_SETTINGS; i++) fprintf(stderr, ", %s", k_settings[i].key);
-            fprintf(stderr, "); ignored\n");
+            fprintf(stderr, ", or a mod's option as ID.NAME); ignored\n");
             continue;
         }
         if (getenv(k_settings[i].env)) {
@@ -426,6 +476,7 @@ const char* settings_load(void)
         if (!g_disc[0]) under_root("extracted", g_disc, sizeof g_disc);
         for (i = 0; i < N_SETTINGS; i++)
             if (k_settings[i].mod && getenv(k_settings[i].env) && *getenv(k_settings[i].env)) mod_key = 1;
+        if (getenv("SOA_MOD_OPT") && *getenv("SOA_MOD_OPT")) mod_key = 1;
         if (mod_key && !getenv("SOA_MODS")) {
             under_root("mods", p, sizeof p);
             set_env("SOA_MODS", p);

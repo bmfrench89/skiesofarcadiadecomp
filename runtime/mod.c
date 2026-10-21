@@ -76,6 +76,16 @@
  * later ports: this one says it does not know it and loads the mod anyway,
  * where any other unknown key refuses it, so a misspelling is still caught.
  *
+ * Options (M16, docs/specs/mod-options.md). A manifest 2 mod.ini may declare
+ * up to 16, `option = NAME TYPE [DOMAIN] DEFAULT`, of the types int (with
+ * LO..HI), bool, enum (with A|B|C), string and seed. SOA_MOD_OPT sets them,
+ * `ID.NAME=VALUE` entries apart by spaces, and settings.c adds soa.ini's
+ * `ID.NAME = VALUE` lines to it; a value outside its option's domain, an
+ * undeclared name or a key given twice refuses the mod, naming the entry.
+ * patches.txt's `${NAME}` is the value, put in before the line is read, a
+ * DLL reads it through the API's option calls, and the recording carries
+ * the values that are not their defaults after the mod's hash.
+ *
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
 #include "mod.h"
@@ -140,8 +150,26 @@ typedef struct {
     unsigned long long writes; /* guest writes its callbacks made that the API took (the report) */
 } Mod;
 
+/* An option a mod declares in its mod.ini (M16, docs/specs/mod-options.md):
+ * its domain, its default and the value in effect, both in one spelling. */
+#define OPTION_MAX 16
+enum { O_INT, O_BOOL, O_ENUM, O_STRING, O_SEED };
+static const char* const k_otype[] = {"int", "bool", "enum", "string", "seed"};
+
+typedef struct {
+    char name[32];
+    uint8_t type, set; /* set: SOA_MOD_OPT gave it a value */
+    long long lo, hi;  /* int's range */
+    char choices[128]; /* enum's A|B|C */
+    char def[64], value[64];
+} Option;
+
 static Mod g_mods[MOD_MAX];
 static int g_mod_n;
+/* Each mod's options by its slot in g_mods, filled as it loads: a value the
+ * API hands out stays where it is for the run, init included. */
+static Option g_opts[MOD_MAX][OPTION_MAX];
+static int g_opt_n[MOD_MAX];
 static Patch g_patches[PATCH_MAX];
 static unsigned g_patch_n;
 static Slot g_slots[SLOT_MAX];
@@ -755,6 +783,31 @@ static int api_read_pad(uint32_t port, SoaPad* out)
     return port == 2 && g_pad_reader ? g_pad_reader(port, out) : 0;
 }
 
+/* M16: the calling mod's option `name` -- the mod whose init or callback is
+ * running, the one in its init not yet counted in g_mod_n -- or NULL. */
+static const Option* find_option(int mod, const char* name)
+{
+    int i;
+    if (!name || mod < 0 || mod >= MOD_MAX || (mod >= g_mod_n && !(g_in_init && mod == g_mod_n))) return NULL;
+    for (i = 0; i < g_opt_n[mod]; i++)
+        if (!strcmp(g_opts[mod][i].name, name)) return &g_opts[mod][i];
+    return NULL;
+}
+
+static const char* api_option(const char* name)
+{
+    const Option* o = find_option(g_cur_mod, name);
+    return o ? o->value : NULL;
+}
+
+static int api_option_int(const char* name, int64_t* out)
+{
+    const Option* o = find_option(g_cur_mod, name);
+    if (!o || !out || o->type == O_ENUM || o->type == O_STRING) return 0;
+    *out = (int64_t)strtoll(o->value, NULL, 10);
+    return 1;
+}
+
 static const SoaModApi g_api = {
     sizeof(SoaModApi), SOA_MOD_API_VERSION,
     api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
@@ -768,6 +821,8 @@ static const SoaModApi g_api = {
     api_call_guest,
     api_host_buttons,
     api_read_pad,
+    api_option,
+    api_option_int,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
@@ -1040,6 +1095,292 @@ static int good_version(const char* s)
     return 1;
 }
 
+/* ---- M16: options a mod declares (docs/specs/mod-options.md) ------------ */
+
+/* What an enum's choice and a string may hold: nothing that could break a
+ * patches.txt line or the recording's config line. */
+static int word_ok(const char* s, size_t max)
+{
+    size_t i, n = strlen(s);
+    if (!n || n > max) return 0;
+    for (i = 0; i < n; i++)
+        if (!(isalnum((unsigned char)s[i]) || s[i] == '.' || s[i] == '_' || s[i] == '+' || s[i] == '-')) return 0;
+    return 1;
+}
+
+/* A signed decimal that fits 32 bits, no leading zero, no `-0`. */
+static int parse_int(const char* t, long long* out)
+{
+    const char* d = t[0] == '-' ? t + 1 : t;
+    size_t i, n = strlen(d);
+    long long v;
+    if (!n || n > 10 || (d[0] == '0' && (n > 1 || d != t))) return 0;
+    for (i = 0; i < n; i++)
+        if (d[i] < '0' || d[i] > '9') return 0;
+    v = strtoll(t, NULL, 10);
+    if (v < -2147483648ll || v > 2147483647ll) return 0;
+    *out = v;
+    return 1;
+}
+
+/* Whether `v` is one of `choices` ("a|b|c"), spelled alike. */
+static int one_of(const char* choices, const char* v)
+{
+    size_t n = strlen(v);
+    const char* p = choices;
+    for (;;) {
+        const char* bar = strchr(p, '|');
+        size_t k = bar ? (size_t)(bar - p) : strlen(p);
+        if (k == n && !strncmp(p, v, n)) return 1;
+        if (!bar) return 0;
+        p = bar + 1;
+    }
+}
+
+/* `v` checked against the option's domain and put in its one spelling. */
+static int option_value(const Option* o, const char* v, char* canon, size_t cap)
+{
+    long long i;
+    uint32_t u;
+    switch (o->type) {
+    case O_INT:
+        if (!parse_int(v, &i) || i < o->lo || i > o->hi) return 0;
+        snprintf(canon, cap, "%lld", i);
+        return 1;
+    case O_BOOL:
+        if (strcmp(v, "0") != 0 && strcmp(v, "1") != 0) return 0;
+        break;
+    case O_ENUM:
+        if (!one_of(o->choices, v)) return 0;
+        break;
+    case O_STRING:
+        if (!word_ok(v, 63)) return 0;
+        break;
+    default:
+        if (!parse_u32(v, &u)) return 0;
+        snprintf(canon, cap, "%u", u);
+        return 1;
+    }
+    snprintf(canon, cap, "%s", v);
+    return 1;
+}
+
+/* What a value of the option has to be, for a refusal. */
+static void option_domain(const Option* o, char* out, size_t cap)
+{
+    switch (o->type) {
+    case O_INT: snprintf(out, cap, "a whole number from %lld to %lld", o->lo, o->hi); break;
+    case O_BOOL: snprintf(out, cap, "0 or 1"); break;
+    case O_ENUM: snprintf(out, cap, "one of %s", o->choices); break;
+    case O_STRING: snprintf(out, cap, "1 to 63 letters, digits, '.', '_', '+' and '-'"); break;
+    default: snprintf(out, cap, "a 32-bit number, 0x and hex digits or decimal"); break;
+    }
+}
+
+/* `option = NAME TYPE [DOMAIN] DEFAULT`, into the mod's next slot. */
+static void parse_option(Where* w, Option* opts, int* n, char* val)
+{
+    char *tok[5], why[160];
+    Option o;
+    int k = split(val, tok, 5), i, want;
+    size_t c;
+    memset(&o, 0, sizeof o);
+    if (k < 3) {
+        refuse(w, "an option is `option = NAME TYPE [DOMAIN] DEFAULT`, as in option = factor enum 0|0.5|1 0.5%s%s", "", "");
+        return;
+    }
+    c = strlen(tok[0]);
+    if (c >= sizeof o.name || !islower((unsigned char)tok[0][0])) c = 0;
+    for (i = 0; c && tok[0][i]; i++)
+        if (!(islower((unsigned char)tok[0][i]) || isdigit((unsigned char)tok[0][i]) || tok[0][i] == '_')) c = 0;
+    if (!c) {
+        refuse(w, "option `%s`: a name is a lowercase letter, then lowercase letters, digits and '_', under 32 "
+                  "characters%s", tok[0], "");
+        return;
+    }
+    snprintf(o.name, sizeof o.name, "%s", tok[0]);
+    for (i = 0; i < *n; i++)
+        if (!strcmp(opts[i].name, o.name)) { refuse(w, "option `%s` is declared twice%s", o.name, ""); return; }
+    if (*n == OPTION_MAX) { refuse(w, "more than %s options; option `%s` is one too many", "16", o.name); return; }
+    for (i = 0; i < 5 && strcmp(tok[1], k_otype[i]) != 0; i++) {}
+    if (i == 5) { refuse(w, "`%s` is not an option's type: int, bool, enum, string or seed%s", tok[1], ""); return; }
+    o.type = (uint8_t)i;
+    want = o.type == O_INT || o.type == O_ENUM ? 4 : 3;
+    if (k != want) {
+        refuse(w, "option `%s`: %s", o.name,
+               want == 4 ? "an int or enum is NAME TYPE DOMAIN DEFAULT, as in rate int 0..127 32"
+                         : "a bool, string or seed is NAME TYPE DEFAULT, as in scenes bool 1");
+        return;
+    }
+    if (o.type == O_INT) {
+        char* dots = strstr(tok[2], "..");
+        int ok = dots != NULL;
+        if (ok) {
+            *dots = '\0';
+            ok = parse_int(tok[2], &o.lo) && parse_int(dots + 2, &o.hi) && o.lo <= o.hi;
+            *dots = '.';
+        }
+        if (!ok) {
+            refuse(w, "option `%s`: `%s` is not a range: LO..HI, whole numbers, LO no more than HI", o.name, tok[2]);
+            return;
+        }
+    } else if (o.type == O_ENUM) {
+        char copy[128], *p = copy;
+        int count = 0, ok = strlen(tok[2]) < sizeof o.choices;
+        snprintf(copy, sizeof copy, "%s", tok[2]);
+        while (ok) {
+            char* bar = strchr(p, '|');
+            if (bar) *bar = '\0';
+            ok = word_ok(p, 31) && ++count <= 16;
+            /* a repeat: the choice already among the ones before it */
+            if (ok && p != copy) {
+                p[-1] = '\0';
+                ok = !one_of(copy, p);
+                p[-1] = '|';
+            }
+            if (!bar) break;
+            *bar = '|';
+            p = bar + 1;
+        }
+        if (!ok) {
+            refuse(w, "option `%s`: `%s` is not a list of choices: 1 to 16, A|B|C, each 1 to 31 letters, digits, "
+                      "'.', '_', '+' and '-', no two alike, under 128 characters in all", o.name, tok[2]);
+            return;
+        }
+        snprintf(o.choices, sizeof o.choices, "%s", tok[2]);
+    }
+    if (!option_value(&o, tok[want - 1], o.def, sizeof o.def)) {
+        char msg[300];
+        option_domain(&o, why, sizeof why);
+        snprintf(msg, sizeof msg, "option `%s`: its default, %.40s, is not %s", o.name, tok[want - 1], why);
+        refuse(w, "%s%s", msg, "");
+        return;
+    }
+    snprintf(o.value, sizeof o.value, "%s", o.def);
+    opts[(*n)++] = o;
+}
+
+/* One `ID.NAME=VALUE` entry of SOA_MOD_OPT, split in place: 1, or 0 when it
+ * is not one. The id may hold '.', a name never does, so the last '.'
+ * before the '=' parts them. */
+static int opt_entry(char* e, char** id, char** name, char** value)
+{
+    char *eq = strchr(e, '='), *dot;
+    if (!eq) return 0;
+    *eq = '\0';
+    dot = strrchr(e, '.');
+    if (!dot || dot == e || !dot[1]) { *eq = '='; return 0; }
+    *dot = '\0';
+    *id = e;
+    *name = dot + 1;
+    *value = eq + 1;
+    return 1;
+}
+
+#define OPT_ENV_MAX 4096
+
+/* SOA_MOD_OPT's entries that name the mod `id`, onto its options: an
+ * undeclared name, a value outside its domain, or one key given twice
+ * refuses the mod, naming the entry: 0. */
+static int apply_options(const char* id, Option* opts, int n)
+{
+    const char* env = getenv("SOA_MOD_OPT");
+    char buf[OPT_ENV_MAX], *tok[256], *eid, *name, *value, why[200];
+    int k, i, j;
+    Where w;
+    if (!env || !*env) return 1;
+    w.path = "SOA_MOD_OPT";
+    w.line = 0;
+    w.failed = 0;
+    snprintf(buf, sizeof buf, "%s", env);
+    k = split(buf, tok, 256);
+    for (i = 0; i < k && !w.failed; i++) {
+        char entry[300];
+        snprintf(entry, sizeof entry, "%s", tok[i]);
+        if (!opt_entry(tok[i], &eid, &name, &value) || strcmp(eid, id) != 0) continue;
+        for (j = 0; j < n && strcmp(opts[j].name, name) != 0; j++) {}
+        if (j == n) { refuse(&w, "`%s`: the mod declares no option `%s`", entry, name); break; }
+        if (opts[j].set) { refuse(&w, "`%s`: option `%s` is given twice", entry, name); break; }
+        if (!option_value(&opts[j], value, opts[j].value, sizeof opts[j].value)) {
+            option_domain(&opts[j], why, sizeof why);
+            refuse(&w, "`%s`: the value is not %s", entry, why);
+            break;
+        }
+        opts[j].set = 1;
+    }
+    return !w.failed;
+}
+
+/* The entries no loaded mod reads, said once loading ends, and entries that
+ * are not ID.NAME=VALUE at all. */
+static void check_option_entries(void)
+{
+    const char* env = getenv("SOA_MOD_OPT");
+    char buf[OPT_ENV_MAX], *tok[256], *id, *name, *value;
+    int k, i, m;
+    if (!env || !*env) return;
+    if (strlen(env) >= sizeof buf) fprintf(stderr, "[mod] SOA_MOD_OPT is longer than %d characters; the rest is not read\n", OPT_ENV_MAX - 1);
+    snprintf(buf, sizeof buf, "%s", env);
+    k = split(buf, tok, 256);
+    if (k < 0) fprintf(stderr, "[mod] SOA_MOD_OPT holds more than 256 entries; the rest are not read\n");
+    for (i = 0; i < k; i++) {
+        char entry[300];
+        snprintf(entry, sizeof entry, "%s", tok[i]);
+        if (!opt_entry(tok[i], &id, &name, &value)) {
+            fprintf(stderr, "[mod] SOA_MOD_OPT: `%s` is not ID.NAME=VALUE; passed over\n", entry);
+            continue;
+        }
+        for (m = 0; m < g_mod_n && strcmp(g_mods[m].id, id) != 0; m++) {}
+        if (m == g_mod_n)
+            fprintf(stderr, "[mod] SOA_MOD_OPT: `%s`: no mod with id `%s` is loaded; it does nothing\n", entry, id);
+    }
+}
+
+/* `${NAME}` on a patches.txt line replaced by the option's value, before the
+ * line is read; a '#' ends what is replaced, as it ends the line. 0, having
+ * refused, on a `$` that does not begin a declared option's `${NAME}`. */
+static int substitute(Where* w, char* line, const Option* opts, int n)
+{
+    char out[LINE_MAX_LEN];
+    size_t used = 0;
+    const char* p = line;
+    if (!strchr(line, '$')) return 1;
+    while (*p && *p != '#') {
+        const char* add = p;
+        size_t len = 1;
+        if (*p == '$') {
+            const char* end = p[1] == '{' ? strchr(p + 2, '}') : NULL;
+            char name[40];
+            int j;
+            if (!end || end == p + 2 || (size_t)(end - p - 2) >= sizeof name) {
+                refuse(w, "a `$` begins ${NAME}, the name of an option the mod declares%s%s", "", "");
+                return 0;
+            }
+            memcpy(name, p + 2, (size_t)(end - p - 2));
+            name[end - p - 2] = '\0';
+            for (j = 0; j < n && strcmp(opts[j].name, name) != 0; j++) {}
+            if (j == n) {
+                refuse(w, "`${%s}` names no option the mod declares%s", name, "");
+                return 0;
+            }
+            add = opts[j].value;
+            len = strlen(add);
+            p = end + 1;
+        } else {
+            p++;
+        }
+        if (used + len >= sizeof out) {
+            refuse(w, "longer than %s characters once its options are put in%s", "511", "");
+            return 0;
+        }
+        memcpy(out + used, add, len);
+        used += len;
+    }
+    out[used] = '\0';
+    memcpy(line, out, used + 1);
+    return 1;
+}
+
 static void load_one(CpuState* s, const char* root, const char* dir, const char* dol_sha1,
                      const uint8_t* dol, size_t dol_size)
 {
@@ -1053,6 +1394,8 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     char num[16];
     Where w;
     Mod m;
+    Option* opts;
+    int* opt_n;
     unsigned before = g_patch_n, slots_before = g_slot_n;
     (void)s;
     memset(&m, 0, sizeof m);
@@ -1070,6 +1413,9 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         free(ini);
         return;
     }
+    opts = g_opts[g_mod_n];
+    opt_n = &g_opt_n[g_mod_n];
+    *opt_n = 0;
     for (t = ini; (got = next_line(&t, line)) != 0;) {
         char* eq;
         w.line++;
@@ -1127,11 +1473,14 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
                     refuse(&w, "made for the DOL with SHA-1 %s, and this is %s", val, dol_sha1);
                 else
                     m.hash = 1; /* seen and matching; replaced by the content hash below */
+            } else if (!strcmp(key, "option")) {
+                if (!v2_key) v2_key = "option";
+                parse_option(&w, opts, opt_n, val);
             } else if (!strncmp(key, "x_", 2)) {
                 fprintf(stderr, "[mod] %s:%u: `%s` is not a key this port knows; a key beginning x_ is kept for later ports, so the mod loads without it\n",
                         path, w.line, key);
             } else {
-                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api or dol_sha1%s", key, "");
+                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api, dol_sha1 or option%s", key, "");
             }
         }
     }
@@ -1145,7 +1494,10 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     if (!w.failed && !m.name[0]) refuse(&w, "no `name = `%s%s", "", "");
     if (!w.failed && !have_api) refuse(&w, "no `api = %s`%s", manifest == 2 ? "" : "1", "");
     if (!w.failed && !m.hash) refuse(&w, "no `dol_sha1 = ` naming the DOL it was made for%s%s", "", "");
-    if (w.failed) { free(ini); return; }
+    if (w.failed || (m.id[0] && !apply_options(m.id, opts, *opt_n))) {
+        free(ini);
+        return;
+    }
 
     patches = slurp_text(ppath, &patches_n);
     if (patches) {
@@ -1153,7 +1505,7 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         for (t = patches; !w.failed && (got = next_line(&t, line)) != 0;) {
             w.line++;
             if (got == 2) refuse(&w, "a line longer than %s characters%s", "511", "");
-            else parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
+            else if (substitute(&w, line, opts, *opt_n)) parse_patch(&w, line, dol, dol_size, (unsigned)g_mod_n);
         }
         if (!w.failed && g_patch_n == before) {
             w.line = 0;
@@ -1184,9 +1536,34 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         else
             fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
                     m.count, m.dll ? " and " MOD_LIB : "", MOD_API);
+        for (i = 0; i < *opt_n; i++)
+            if (opts[i].set)
+                fprintf(stderr, "[mod] %s: option %s = %s, from SOA_MOD_OPT (its default %s)\n", dir, opts[i].name,
+                        opts[i].value, opts[i].def);
     }
     free(ini);
     free(patches);
+}
+
+/* `[name=value;...]` for each of mod `m`'s options away from its default,
+ * in the order declared, or "" when there are none. */
+static void option_text(int m, char* out, size_t cap)
+{
+    size_t used = 0;
+    int i;
+    out[0] = '\0';
+    for (i = 0; i < g_opt_n[m]; i++) {
+        const Option* o = &g_opts[m][i];
+        int k;
+        if (!strcmp(o->value, o->def)) continue;
+        k = snprintf(out + used, cap - used, "%s%s=%s", used ? ";" : "[", o->name, o->value);
+        if (k < 0 || (size_t)k >= cap - used) break;
+        used += (size_t)k;
+    }
+    if (used && used + 1 < cap) {
+        out[used] = ']';
+        out[used + 1] = '\0';
+    }
 }
 
 static int cmp_name(const void* a, const void* b) { return strcmp((const char*)a, (const char*)b); }
@@ -1234,19 +1611,25 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     g_s = s;
     mod_note_dol(dol, dol_size);
     for (i = 0; i < n; i++) load_one(s, dir, names[i], sha, dol, dol_size);
+    check_option_entries();
     /* The recording's line: every mod by name and hash while they fit -- a
      * manifest 2 mod as id@version, a version 1 mod by its folder -- 24 bytes
      * kept back so the rest can still be named, as a count and one hash over
      * all of them, rather than cut off mid-entry or dropped. The hash takes
      * each by the same name the line would have given it, so a manifest 2
-     * mod past the line is still keyed by id and not by where it sits. */
+     * mod past the line is still keyed by id and not by where it sits. A mod
+     * with an option away from its default carries the values after its hash
+     * (M16), so a mod at its defaults reads as it always did. */
     g_describe[0] = '\0';
     for (i = 0; i < g_mod_n; i++) {
         size_t room = sizeof g_describe - 24 - used;
-        int k = g_mods[i].id[0]
-                    ? snprintf(g_describe + used, room, "%s%s@%s:%08x", i ? "," : "mods=", g_mods[i].id, g_mods[i].version,
-                               g_mods[i].hash)
-                    : snprintf(g_describe + used, room, "%s%s:%08x", i ? "," : "mods=", g_mods[i].dir, g_mods[i].hash);
+        char opt[OPTION_MAX * 100];
+        int k;
+        option_text(i, opt, sizeof opt);
+        k = g_mods[i].id[0]
+                ? snprintf(g_describe + used, room, "%s%s@%s:%08x%s", i ? "," : "mods=", g_mods[i].id,
+                           g_mods[i].version, g_mods[i].hash, opt)
+                : snprintf(g_describe + used, room, "%s%s:%08x", i ? "," : "mods=", g_mods[i].dir, g_mods[i].hash);
         if (k < 0 || (size_t)k >= room) {
             g_describe[used] = '\0';
             break;
@@ -1257,10 +1640,11 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
         uint32_t rest = 2166136261u;
         int left = g_mod_n - i;
         for (; i < g_mod_n; i++) {
-            char key[sizeof g_mods[i].id + sizeof g_mods[i].version + 1];
+            char key[sizeof g_mods[i].id + sizeof g_mods[i].version + 1], opt[OPTION_MAX * 100];
             if (g_mods[i].id[0]) snprintf(key, sizeof key, "%s@%s", g_mods[i].id, g_mods[i].version);
             else snprintf(key, sizeof key, "%s", g_mods[i].dir);
-            rest = fnv1a(fnv1a(rest, key, strlen(key)), (const char*)&g_mods[i].hash, 4);
+            option_text(i, opt, sizeof opt);
+            rest = fnv1a(fnv1a(fnv1a(rest, key, strlen(key)), (const char*)&g_mods[i].hash, 4), opt, strlen(opt));
         }
         snprintf(g_describe + used, sizeof g_describe - used, "%s+%d more:%08x", used ? "," : "mods=", left, rest);
     }

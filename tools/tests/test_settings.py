@@ -41,7 +41,7 @@ int main(int argc, char** argv)
 {
     static const char* names[] = {"SOA_RENDER", "SOA_WINDOW", "SOA_SCALE", "SOA_THREADS", "SOA_MODS",
                                   "SOA_CARD", "SOA_PAD_RECORD", "SOA_NOSOUND", "SOA_UNCAP", "SOA_SEED",
-                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B", "SOA_AUTOTEXT"};
+                                  "SOA_ENCOUNTERS", "SOA_ENCOUNTERS_HOLD_B", "SOA_AUTOTEXT", "SOA_MOD_OPT"};
     const char* disc;
     unsigned i;
     char rec[320];
@@ -147,6 +147,7 @@ def test_each_key_sets_its_switch_and_disc_names_the_directory(driver):
         "SOA_ENCOUNTERS": "half",
         "SOA_ENCOUNTERS_HOLD_B": "0",
         "SOA_AUTOTEXT": "on",
+        "SOA_MOD_OPT": "-",
     }, got
     assert "13 setting(s) applied, 0 overridden" in err, err
 
@@ -168,6 +169,28 @@ def test_an_unknown_key_is_reported_with_its_line_and_the_rest_still_apply(drive
     assert got["SOA_RENDER"] == "1", got
     assert "soa.ini:2: `rendr` is not a setting this port knows" in err, err
     assert "soa.ini:3: `just words` is not `key = value`" in err, err
+
+
+@needs_msvc
+def test_a_mods_option_joins_soa_mod_opt_and_the_environment_wins(driver):
+    """M16: `ID.NAME = VALUE` cannot be checked before mods load, so it is
+    added to SOA_MOD_OPT for mod.c to check -- unless SOA_MOD_OPT gives the
+    key already, which wins as every environment switch does. The mutation,
+    soa.ini's line added whatever the environment gave, fails the second run."""
+    (driver.parent / "soa.ini").write_text(
+        "encounter-scale.factor = 1\nmap-log.scenes = 0\nx.y = a b\n", encoding="utf-8"
+    )
+    _, got, err = run(driver)
+    assert got["SOA_MOD_OPT"] == "encounter-scale.factor=1 map-log.scenes=0", got
+    assert got["SOA_MODS"] == str(driver.parent / "mods"), got  # an option names a mod
+    assert "soa.ini:3: `x.y = a b`: a mod's option and its value are one word each" in err, err
+    assert "2 setting(s) applied, 0 overridden" in err, err
+    _, got, err = run(driver, SOA_MOD_OPT="encounter-scale.factor=0")
+    assert got["SOA_MOD_OPT"] == "encounter-scale.factor=0 map-log.scenes=0", got
+    assert (
+        "encounter-scale.factor = 1 is overridden by SOA_MOD_OPT=encounter-scale.factor=0" in err
+    ), err
+    assert "1 setting(s) applied, 1 overridden" in err, err
 
 
 @needs_msvc
