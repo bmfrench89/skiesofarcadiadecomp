@@ -48,6 +48,8 @@ SHADERS = [
     ("filters.comp", "filters_comp_mutated", ("GXV_MUTATE_FILTER",)),
     ("present.frag", "present_frag", ()),
     ("present.frag", "present_frag_offset", ("GXV_MUTATE_PRESENT",)),
+    ("overlay.frag", "overlay_frag", ()),
+    ("overlay.frag", "overlay_frag_opaque", ("GXV_MUTATE_OVERLAY",)),
 ]
 
 

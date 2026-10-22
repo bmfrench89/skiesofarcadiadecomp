@@ -46,4 +46,9 @@ int menu_input(int key);
  * it is open: a dimmed panel in the middle, scaled to the buffer. */
 void menu_draw(uint8_t* bgra, int w, int h, int stride);
 
+/* The same drawn for the GPU to blend over the picture (M8b): `bgra` cleared
+ * to nothing, the panel's ground translucent, the rest opaque. 1 when it drew
+ * the menu, 0 when the menu is closed. */
+int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride);
+
 #endif

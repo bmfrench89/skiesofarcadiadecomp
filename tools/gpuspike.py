@@ -1762,9 +1762,12 @@ def logictest(prof: toolchain.Profile) -> int:
 
 RE_PRESENT = re.compile(r"^present (\d+) of (\d+) layouts exact, at scale (\d+)$", re.M)
 RE_FILTERS = re.compile(r"^filters (\d+) of (\d+) cases exact, at scale (\d+)$", re.M)
+RE_OVERLAY = re.compile(r"^overlay (\d+) of (\d+) targets within one$", re.M)
 
 
-def present(prof: toolchain.Profile, mutate: str | None, filters: bool = False) -> int:
+def present(
+    prof: toolchain.Profile, mutate: str | None, filters: bool = False, overlay: bool = False
+) -> int:
     """V8's presenter: two synthetic screen copies through the GPU's present
     pass into eight target sizes at both layouts, each held to picture_scale's
     picture (the CPU presenter's), every pixel's colour exact. --mutate
@@ -1775,7 +1778,7 @@ def present(prof: toolchain.Profile, mutate: str | None, filters: bool = False) 
     out = build_dir(prof) / "present"
     out.mkdir(parents=True, exist_ok=True)
     args = [str(exe_path(prof)), "--backend", "gpu", "--out", str(out), "--present"]
-    args.append("2" if filters else "1")
+    args.append("3" if overlay else "2" if filters else "1")
     if mutate:
         args += ["--mutate", mutate]
     proc = subprocess.run(
@@ -1784,6 +1787,12 @@ def present(prof: toolchain.Profile, mutate: str | None, filters: bool = False) 
     if skipped(proc):
         return SKIP
     print(proc.stdout.strip())
+    if overlay:
+        # M8b: the menu's overlay blended over the picture, at scale 1
+        m = RE_OVERLAY.search(proc.stdout)
+        ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2)
+        print(f"[gpuspike] present {'passes' if ok else 'FAILS'}")
+        return 0 if ok else 1
     m = (RE_FILTERS if filters else RE_PRESENT).search(proc.stdout)
     ok = proc.returncode == 0 and bool(m) and m.group(1) == m.group(2) and int(m.group(3)) == SCALE
     print(f"[gpuspike] present {'passes' if ok else 'FAILS'}")
@@ -2255,6 +2264,11 @@ def main(argv: list[str] | None = None) -> int:
         help="present: P5a's filters on the GPU against picture.c (V8b)",
     )
     ap.add_argument(
+        "--overlay",
+        action="store_true",
+        help="present: the menu's overlay blended on the GPU, within one of the exact blend (M8b)",
+    )
+    ap.add_argument(
         "--scale",
         type=int,
         choices=(1, 2, 3),
@@ -2302,7 +2316,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "copyimage":
         return copyimage(prof, args.mutate)
     if args.command == "present":
-        return present(prof, args.mutate, args.filters)
+        return present(prof, args.mutate, args.filters, args.overlay)
     if args.command == "logictest":
         return logictest(prof)
     if args.command == "time":

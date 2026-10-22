@@ -1090,6 +1090,70 @@ static int present_check(void)
     return exact != total;
 }
 
+/* M8b: the menu's overlay on the GPU (--present 3). A synthetic picture,
+ * every pixel its own colour, through the present pass into a target at fit,
+ * with an overlay blended over it whose pixels fall in three classes: clear
+ * (the picture untouched), the menu panel's ground (11, 11, 11 at 191/255)
+ * and opaque colours of their own. The reference is the exact blend,
+ * (o * a + p * (255 - a)) / 255, on picture_scale's picture: every channel of
+ * every pixel within one (the GPU rounds its own unit arithmetic). Two
+ * targets, the window at 2x and 1920x1080. */
+static int present_overlay_check(void)
+{
+    static const int sizes[2][2] = {{1280, 960}, {1920, 1080}};
+    const int w = 640, h = 480;
+    uint8_t* bgra = (uint8_t*)malloc((size_t)w * h * 4);
+    uint8_t* ovl = (uint8_t*)malloc(1920u * 1080u * 4u);
+    uint8_t* ref = (uint8_t*)malloc(1920u * 1080u * 4u);
+    uint8_t* got = (uint8_t*)malloc(1920u * 1080u * 4u);
+    unsigned si, i, within = 0;
+    if (!bgra || !ovl || !ref || !got) return 1;
+    for (i = 0; i < (unsigned)(w * h); i++) {
+        uint32_t v = i * 2654435761u;
+        bgra[i * 4 + 0] = (uint8_t)v;
+        bgra[i * 4 + 1] = (uint8_t)(v >> 8);
+        bgra[i * 4 + 2] = (uint8_t)(v >> 16);
+        bgra[i * 4 + 3] = 255;
+    }
+    for (si = 0; si < 2; si++) {
+        int dw = sizes[si][0], dh = sizes[si][1], x, y;
+        unsigned bad = 0, worst = 0;
+        for (y = 0; y < dh; y++)
+            for (x = 0; x < dw; x++) {
+                uint8_t* o = ovl + ((size_t)y * dw + x) * 4;
+                int kind = (x / 7 + y / 5) % 3;
+                if (kind == 0) o[0] = o[1] = o[2] = o[3] = 0;
+                else if (kind == 1) { o[0] = o[1] = o[2] = 11; o[3] = 191; }
+                else { o[0] = (uint8_t)x; o[1] = (uint8_t)y; o[2] = 200; o[3] = 255; }
+            }
+        if (!gxv_present_check_overlay(bgra, w, h, dw, dh, PICTURE_FIT, ovl, got)) {
+            printf("overlay into %dx%d: the check could not run\n", dw, dh);
+            continue;
+        }
+        picture_scale(bgra, w, h, ref, dw, dh, PICTURE_FIT);
+        for (i = 0; i < (unsigned)(dw * dh); i++) {
+            const uint8_t* o = ovl + (size_t)i * 4;
+            int c, off = 0;
+            for (c = 0; c < 3; c++) {
+                int want = (o[c] * o[3] + ref[i * 4 + c] * (255 - o[3]) + 127) / 255;
+                int d = got[i * 4 + c] - want;
+                if (d < 0) d = -d;
+                if (d > off) off = d;
+            }
+            if (off > 1) bad++;
+            if ((unsigned)off > worst) worst = (unsigned)off;
+        }
+        if (!bad) within++;
+        else printf("overlay into %dx%d: %u pixels more than one off, the worst by %u\n", dw, dh, bad, worst);
+    }
+    printf("overlay %u of 2 targets within one\n", within);
+    free(bgra);
+    free(ovl);
+    free(ref);
+    free(got);
+    return within != 2;
+}
+
 /* V8b: P5a's filters on the GPU (--present 2). A synthetic picture, every
  * pixel its own colour, drawn at SOA_GPU_SCALE's k, through each filter set
  * -- two gammas, the three colour-blind models corrected and simulated, with
@@ -1636,7 +1700,7 @@ int main(int argc, char** argv)
             fprintf(stderr, "[gpuspike] --present wants --backend gpu\n");
             return 2;
         }
-        failures = present == 2 ? present_filters_check() : present_check();
+        failures = present == 3 ? present_overlay_check() : present == 2 ? present_filters_check() : present_check();
         gxv_shutdown();
         return failures ? 1 : 0;
     }

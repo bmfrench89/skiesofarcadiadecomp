@@ -637,17 +637,11 @@ static void menu_key(int key)
 
 /* F1 or View+LS: the menu opened -- the game held under the menu's own
  * reason, and drawn again, since no frame will come while it is held -- or
- * closed. The Vulkan presenter draws on the GPU and has no overlay pass yet
- * (M8b), so there it says why and stays closed. */
+ * closed. The Vulkan presenter blends it over its picture (M8b). */
 static void menu_toggle_ui(void)
 {
     if (menu_is_open()) {
         menu_key(MENU_TOGGLE);
-        return;
-    }
-    if (g_vk) {
-        fprintf(stderr, "[menu] the Vulkan presenter does not draw the menu yet (M8b), so it stays closed; "
-                        "SOA_PRESENTER=dxgi draws it\n");
         return;
     }
     if (!g_shown_w) return; /* nothing drawn yet to draw it over */
@@ -742,7 +736,7 @@ static void menu_check(long frame)
 {
     unsigned long long screen0, screen1;
     uint32_t frame0, frame1;
-    size_t n = (size_t)g_shown_w * (size_t)g_shown_h * 4;
+    size_t n = g_bgra ? (size_t)g_shown_w * (size_t)g_shown_h * 4 : 0; /* the GPU presenter converts none */
     char path[600];
     const char* dir = getenv("SOA_FRAMES_DIR");
     FILE* f;
@@ -942,8 +936,10 @@ static unsigned __stdcall ui_thread(void* arg)
             if (g_filters && !gxv_present_filters(&tables))
                 fprintf(stderr, "[window] the GPU's filter pass could not be made; presenting with DXGI\n");
             else if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
+            {
                 g_vk = 1;
-            else
+                gxv_present_overlay(menu_draw_overlay); /* M8b: the menu blended over the GPU's picture */
+            } else
                 fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);
         }
         if (!g_vk && !(p && !strcmp(p, "gdi"))) {

@@ -67,6 +67,13 @@ int gxv_present_filters(const PicTables* t);
  * gxv_start; without it the cache is build/gxv-pipelines.bin, relative. */
 void gxv_set_root(const char* root);
 int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend, uint8_t* out);
+/* M8b: the window's overlay (menu.c's menu_draw_overlay), asked for at each
+ * present to draw a client-sized B G R A picture with alpha, 1 when it drew
+ * one; blended over the picture. NULL draws none. Any thread. */
+void gxv_present_overlay(int (*fn)(uint8_t* bgra, int w, int h, int stride));
+/* M8b's check: as gxv_present_check at scale 1, with `overlay` (dw x dh) blended over it. */
+int gxv_present_check_overlay(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, const uint8_t* overlay,
+                              uint8_t* out);
 /* What ran: draws, the draws rebuilt by clipping, vertices uploaded,
  * submissions, and the GPU's own time for them (timestamp queries). */
 void gxv_report(void);

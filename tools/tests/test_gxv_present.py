@@ -68,3 +68,18 @@ def test_a_changed_colour_coefficient_fails_it():
     proc = run_present("--filters", "--mutate", "filter")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "filters 12 of 24 cases exact, at scale 1" in proc.stdout
+
+
+def test_the_menu_s_overlay_blends_over_the_picture():
+    """M8b: the menu's overlay -- clear, the panel's translucent ground, and
+    opaque -- blended over the presented picture on the GPU, every channel
+    within one of the exact blend, at 2x and at 1920x1080."""
+    proc = run_present("--overlay")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "overlay 2 of 2 targets within one" in proc.stdout
+
+
+def test_an_opaque_overlay_fails_it():
+    proc = run_present("--overlay", "--mutate", "overlay")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "overlay 0 of 2 targets within one" in proc.stdout

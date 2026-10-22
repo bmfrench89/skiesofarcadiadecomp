@@ -455,6 +455,7 @@ int menu_input(int key)
 typedef struct {
     uint8_t* px;
     int w, h, stride, s;
+    int alpha; /* M8b: drawing an overlay for the GPU, alpha its own, over nothing */
 } Canvas;
 
 static void fill(const Canvas* c, int x, int y, int w, int h, uint32_t rgb)
@@ -466,18 +467,27 @@ static void fill(const Canvas* c, int x, int y, int w, int h, uint32_t rgb)
             row[i * 4 + 0] = (uint8_t)(rgb & 0xFF);
             row[i * 4 + 1] = (uint8_t)(rgb >> 8 & 0xFF);
             row[i * 4 + 2] = (uint8_t)(rgb >> 16 & 0xFF);
+            if (c->alpha) row[i * 4 + 3] = 0xFF;
         }
     }
 }
 
-/* The panel's ground: the picture under it dimmed to a quarter. */
+/* The panel's ground: the picture under it dimmed to a quarter. As an
+ * overlay, the colour and alpha that blend to the same -- 11 at 191/255 over
+ * a picture value p gives about p/4 + 8. */
 static void dim(const Canvas* c, int x, int y, int w, int h)
 {
     int i, j, k;
     for (j = y < 0 ? 0 : y; j < y + h && j < c->h; j++) {
         uint8_t* row = c->px + (size_t)j * (size_t)c->stride;
-        for (i = x < 0 ? 0 : x; i < x + w && i < c->w; i++)
+        for (i = x < 0 ? 0 : x; i < x + w && i < c->w; i++) {
+            if (c->alpha) {
+                row[i * 4 + 0] = row[i * 4 + 1] = row[i * 4 + 2] = 11;
+                row[i * 4 + 3] = 191;
+                continue;
+            }
             for (k = 0; k < 3; k++) row[i * 4 + k] = (uint8_t)(row[i * 4 + k] / 4 + 8);
+        }
     }
 }
 
@@ -500,7 +510,26 @@ static void text(const Canvas* c, int x, int y, const char* s, uint32_t rgb)
 #define PICKED 0xFFF0A0u
 #define FAINT 0x9AA0AAu
 
+static void draw(uint8_t* bgra, int w, int h, int stride, int alpha);
+
 void menu_draw(uint8_t* bgra, int w, int h, int stride)
+{
+    draw(bgra, w, h, stride, 0);
+}
+
+/* M8b: the same as an overlay the GPU blends over the picture: the buffer
+ * cleared to nothing, the panel's ground translucent, the rest opaque. 1 when
+ * the menu is open and was drawn, 0 (and nothing written) when it is not. */
+int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride)
+{
+    int j;
+    if (!menu_is_open() || !bgra || w <= 0 || h <= 0) return 0;
+    for (j = 0; j < h; j++) memset(bgra + (size_t)j * (size_t)stride, 0, (size_t)w * 4);
+    draw(bgra, w, h, stride, 1);
+    return 1;
+}
+
+static void draw(uint8_t* bgra, int w, int h, int stride, int alpha)
 {
     static const char* const k_title[] = {"Skies of Arcadia", "Mods", "", "Settings"};
     Item it[64];
@@ -512,6 +541,7 @@ void menu_draw(uint8_t* bgra, int w, int h, int stride)
     c.w = w;
     c.h = h;
     c.stride = stride;
+    c.alpha = alpha;
     n = items(it, 64);
     rows = n < ROWS_SHOWN ? n : ROWS_SHOWN;
     c.s = w / ((COLS + 2) * CELL_W);

@@ -50,6 +50,8 @@
 #include "present_vert.h"
 #include "present_frag.h"
 #include "present_frag_offset.h"
+#include "overlay_frag.h"
+#include "overlay_frag_opaque.h"
 #include "picture.h"
 
 /* The shader reads a Vertex as 39 floats; gxr.h's layout is what it reads. */
@@ -243,6 +245,7 @@ static unsigned long long g_n_land_waits, g_n_cimg_served;
  * landed, instead of the pool's. */
 static int g_mut_land_at_copy, g_mut_cimg_cpu;
 static int g_mut_present; /* --mutate present (V8): present.frag one column over */
+static int g_mut_overlay; /* --mutate overlay (M8b): the overlay drawn opaque, the picture under it lost */
 static int g_mut_filter;  /* --mutate filter (V8b): filters.comp with one colour coefficient changed */
 /* Logic ops (V4b): native (Vulkan's logicOp, where the device has it), blend
  * (OR and AND as blends, exact when an operand is 0 or 255, 3.5) or snapshot
@@ -2473,6 +2476,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "land-at-copy")) g_mut_land_at_copy = 1;
     else if (!strcmp(name, "cimg-cpu")) g_mut_cimg_cpu = 1;
     else if (!strcmp(name, "present")) g_mut_present = 1;
+    else if (!strcmp(name, "overlay")) g_mut_overlay = 1;
     else if (!strcmp(name, "filter")) g_mut_filter = 1;
     else if (!strcmp(name, "measure")) g_measure = 1;
     else if (!strcmp(name, "logic-copy")) g_mut_logic = MUT_LOGIC_COPY;
@@ -3263,6 +3267,18 @@ static VkDescriptorSet g_pres_set;
 static VkCommandPool g_pres_cpool;
 static VkCommandBuffer g_pres_cb;
 static VkFence g_pres_fence;
+/* The menu over the picture (M8b, docs/specs/menu.md): a second pipeline on
+ * the present pass's layout that blends a client-sized overlay -- one B G R A
+ * word a pixel, drawn on the CPU by the window's function -- over what the
+ * pass drew. Its buffer is made once, big enough for 3840x2400. */
+#define OVERLAY_BYTES (3840u * 2400u * 4u)
+static VkPipeline g_ovl_pipe;
+static VkDescriptorSet g_ovl_set;
+static VkBuffer g_ovl_buf;
+static uint8_t* g_ovl_map;
+static int g_ovl_draw; /* the next present_record blends it */
+static int (*g_ovl_fn)(uint8_t* bgra, int w, int h, int stride);
+static int g_ovl_said;
 static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
 /* P5a's filters on the GPU (V8b): the pass, its tables (picture.c's, laid
  * out as filters.comp reads them), which filters are on, and the frame that
@@ -3340,7 +3356,7 @@ static int present_pipeline(VkRenderPass pass)
     VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 * 4};
     VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+    VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}; /* the screen buffer, and M8b's overlay */
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     VkDescriptorBufferInfo bi = {0};
@@ -3369,7 +3385,7 @@ static int present_pipeline(VkRenderPass pass)
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges = &pr;
     if (vkCreatePipelineLayout(g_dev, &pli, NULL, &g_pres_layout) != VK_SUCCESS) return 0;
-    dpi.maxSets = 1;
+    dpi.maxSets = 2;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(g_dev, &dpi, NULL, &g_pres_dpool) != VK_SUCCESS) return 0;
@@ -3423,9 +3439,65 @@ static int present_pipeline(VkRenderPass pass)
     pi.layout = g_pres_layout;
     pi.renderPass = pass;
     r = vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, &g_pres_pipe);
-    vkDestroyShaderModule(g_dev, vs, NULL);
     vkDestroyShaderModule(g_dev, fs, NULL);
+    if (r == VK_SUCCESS) {
+        /* M8b: the overlay, on the same layout and vertex stage, blended:
+         * colour by its alpha, and the picture by what is left */
+        VkShaderModule ofs = VK_NULL_HANDLE;
+        si.codeSize = g_mut_overlay ? sizeof overlay_frag_opaque : sizeof overlay_frag;
+        si.pCode = g_mut_overlay ? overlay_frag_opaque : overlay_frag;
+        if (vkCreateShaderModule(g_dev, &si, NULL, &ofs) == VK_SUCCESS) {
+            st[1].module = ofs;
+            ba.blendEnable = VK_TRUE;
+            ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            ba.colorBlendOp = VK_BLEND_OP_ADD;
+            ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            ba.alphaBlendOp = VK_BLEND_OP_ADD;
+            if (vkCreateGraphicsPipelines(g_dev, g_pcache, 1, &pi, NULL, &g_ovl_pipe) != VK_SUCCESS)
+                g_ovl_pipe = VK_NULL_HANDLE;
+            vkDestroyShaderModule(g_dev, ofs, NULL);
+        }
+        ai.descriptorSetCount = 1;
+        if (g_ovl_pipe && vkAllocateDescriptorSets(g_dev, &ai, &g_ovl_set) != VK_SUCCESS) g_ovl_set = VK_NULL_HANDLE;
+    }
+    vkDestroyShaderModule(g_dev, vs, NULL);
     return r == VK_SUCCESS;
+}
+
+/* M8b: the overlay's buffer, made once and bound to its set; 0 when it cannot
+ * be (the presenter then draws no overlay, and says so once). */
+static int overlay_ready(int w, int h)
+{
+    if (!g_ovl_pipe || !g_ovl_set) return 0;
+    if ((size_t)w * (size_t)h * 4 > OVERLAY_BYTES) {
+        if (!g_ovl_said++) say("the menu is not drawn over a %dx%d window: the overlay holds 3840x2400 at most", w, h);
+        return 0;
+    }
+    if (!g_ovl_buf) {
+        VkDescriptorBufferInfo bi = {0};
+        VkWriteDescriptorSet wr = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        if (!make_buffer(OVERLAY_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_ovl_buf, &g_ovl_map)) {
+            g_ovl_buf = VK_NULL_HANDLE;
+            return 0;
+        }
+        bi.buffer = g_ovl_buf;
+        bi.range = VK_WHOLE_SIZE;
+        wr.dstSet = g_ovl_set;
+        wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo = &bi;
+        vkUpdateDescriptorSets(g_dev, 1, &wr, 0, NULL);
+    }
+    return 1;
+}
+
+void gxv_present_overlay(int (*fn)(uint8_t* bgra, int w, int h, int stride))
+{
+    plat_lock(&g_present_lock);
+    g_ovl_fn = fn;
+    plat_unlock(&g_present_lock);
 }
 
 /* The presenter's command buffer and fence, its own pool: the window's
@@ -3526,6 +3598,14 @@ static void present_record(VkRenderPass pass, VkFramebuffer fb, int w, int h, un
     vkCmdSetScissor(g_pres_cb, 0, 1, &sc);
     vkCmdPushConstants(g_pres_cb, g_pres_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
     vkCmdDraw(g_pres_cb, 3, 1, 0, 0);
+    if (g_ovl_draw) {
+        /* M8b: the overlay over it, written by the host before this submit */
+        int32_t ow = w;
+        vkCmdBindPipeline(g_pres_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ovl_pipe);
+        vkCmdBindDescriptorSets(g_pres_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pres_layout, 0, 1, &g_ovl_set, 0, NULL);
+        vkCmdPushConstants(g_pres_cb, g_pres_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof ow, &ow);
+        vkCmdDraw(g_pres_cb, 3, 1, 0, 0);
+    }
     vkCmdEndRenderPass(g_pres_cb);
 }
 
@@ -3708,7 +3788,12 @@ static int present_once(unsigned slot, int mode)
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return 0;
     g_swap_k = (k + 1) % g_swap_n;
     vkResetFences(g_dev, 1, &g_pres_fence);
+    /* M8b: the window's overlay into its buffer, which the fence above has
+     * freed, when it has one to draw */
+    g_ovl_draw = g_ovl_fn && overlay_ready((int)g_swap_ext.width, (int)g_swap_ext.height) &&
+                 g_ovl_fn(g_ovl_map, (int)g_swap_ext.width, (int)g_swap_ext.height, (int)g_swap_ext.width * 4);
     present_record(g_pres_pass, g_swap_fb[img], (int)g_swap_ext.width, (int)g_swap_ext.height, slot, mode);
+    g_ovl_draw = 0;
     vkEndCommandBuffer(g_pres_cb);
     si.waitSemaphoreCount = 1;
     si.pWaitSemaphores = &g_swap_ready[k];
@@ -3886,7 +3971,23 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
  * on the GPU (gxv_present_filters), the image goes through them first, as a
  * new frame, blended toward the check's last by `blend` (V8b). Not with a
  * window open. */
+static int present_check_with(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend,
+                              const uint8_t* overlay, uint8_t* out);
+
 int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend, uint8_t* out)
+{
+    return present_check_with(bgra, w, h, k, dw, dh, mode, blend, NULL, out);
+}
+
+/* M8b's check: the same, with `overlay` (dw x dh B G R A) blended over it. */
+int gxv_present_check_overlay(const uint8_t* bgra, int w, int h, int dw, int dh, int mode, const uint8_t* overlay,
+                              uint8_t* out)
+{
+    return present_check_with(bgra, w, h, 1, dw, dh, mode, 1.0, overlay, out);
+}
+
+static int present_check_with(const uint8_t* bgra, int w, int h, int k, int dw, int dh, int mode, double blend,
+                              const uint8_t* overlay, uint8_t* out)
 {
     VkImage img;
     VkImageView view;
@@ -3945,7 +4046,13 @@ int gxv_present_check(const uint8_t* bgra, int w, int h, int k, int dw, int dh, 
         g_filt_pending = 1;
     }
     vkResetFences(g_dev, 1, &g_pres_fence);
+    if (overlay) {
+        if (!overlay_ready(dw, dh)) return 0;
+        memcpy(g_ovl_map, overlay, (size_t)dw * dh * 4);
+        g_ovl_draw = 1;
+    }
     present_record(g_pres_check_pass, fb, dw, dh, g_filt_on ? SCREEN_SHOWN : SCREEN_SCRATCH, mode);
+    g_ovl_draw = 0;
     memset(&rg, 0, sizeof rg);
     rg.bufferOffset = 0;
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -4059,6 +4166,11 @@ void gxv_present_resize(int w, int h)
 {
     (void)w;
     (void)h;
+}
+
+void gxv_present_overlay(int (*fn)(uint8_t* bgra, int w, int h, int stride))
+{
+    (void)fn;
 }
 
 void gxv_set_root(const char* root)
