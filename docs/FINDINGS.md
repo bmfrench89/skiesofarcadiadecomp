@@ -9393,3 +9393,20 @@ here).
   read directly, `ded574b5-...`, is Windows' best performance. The battery's own figures, read the same way:
   54,080 of 68,512 mWh remaining, rate 0 on AC.
 - **Left:** a run on battery, the owner's at the next sitting, its mWh against `powercfg /batteryreport`.
+
+**P1b's sky run, attempted: what map 99 needs, and why part K's card cannot give it.** 2026-10-21.
+
+- **Read from the code** [V static, `tools/disasm.py`]: in the roll, map 99 takes its zone from the low half of the
+  word at `0x80346CD4` (`800C1F6C..800C1F80`: `lwz r0,-31308(r13)` and `rlwinm r28,r0,0,16,31` when the map number is
+  99, else `lhz r28,-29458(r13)`, the field's `0x8034740E`). Its table is the same pointer, `0x803474BC`, which
+  fn_800C1A50 points at a region's sub-table: the region is the word at `0x80346CD8` (1 to 15, else the pointer is
+  cleared and no roll runs), grouped by the world letter at `0x80310A22`. The test mode now reads the zone that way on
+  map 99 (a fake-guest test; reading the field's zone there fails it).
+- **Measured on part K's card** [V, `build/p1b/sky-probe`, `sky-probe2`, `sky-peek`]: it Continues onto `a099l`. The
+  lab's `wander` stopped at once on a discovery's message ("You have found the Aurora!"), which waits for A; with the
+  walk mix every trial stuck at zone 0. A run holding A with the stick turned left and right from frame 3000 to 9300
+  peeked the world zone, the region, the table pointer, the step counter and the movement float at five frames: all
+  0 throughout, and the frames at 3500 and 9000 are the same picture. The ship did not move, and where it sits has no
+  region, so no table and no roll.
+- **Left:** flying the ship (its controls are not established here) to a region with a table, from a card that
+  starts there. The sky run stays open; PLAN-NEXT names it the first thing to cut.

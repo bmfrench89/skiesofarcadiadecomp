@@ -4227,6 +4227,20 @@ def test_encounter_rate_test_mode_presses_on_through_the_results_and_not_the_tit
 
 
 @needs_cc
+def test_encounter_rate_test_mode_reads_the_world_map_s_zone_where_the_roll_does(driver, tmp_path):
+    """On map 99 the zone is the low half of the word at 0x80346CD4, not the
+    u16 at 0x8034740E (0x800C1F70); the rate still comes through the table
+    pointer, which fn_800C1A50 sets to the region's sub-table. The mutation,
+    the field's zone read on map 99, logs zone 3 here."""
+    shipped(tmp_path)
+    world = TRIAL_FIELD + "set 80311ac0 63 setb 80311ac8 6c set 80346cd4 5 set 80400210 1e "
+    out, err = play(
+        driver, tmp_path, world + "frame set 80346d28 438 frame", SOA_ENCOUNTERS_TEST="1"
+    )
+    assert trials(err) == ["trial 0 0.5 5 30 5 30 600 clear"], err
+
+
+@needs_cc
 def test_encounter_rate_without_the_test_mode_runs_no_trial(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(driver, tmp_path, TRIAL_FIELD + "frame frame get 80346d28")

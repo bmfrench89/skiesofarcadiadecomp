@@ -62,6 +62,8 @@
 #define FIELD_RUNNING 8u
 #define STEP_COUNTER 0x80346D28u /* frames moved since the last reset; the roll reads it */
 #define ZONE 0x8034740Eu         /* u16: the ground's zone, 1-8 counted */
+#define WORLD_MAP 99u
+#define WORLD_ZONE 0x80346CD4u   /* the world map's zone: the low half of this word */
 #define TABLE 0x803474BCu        /* the map's .ect: a zone's rate is the u16 at +2 + (zone - 1) * 132 */
 #define ESCAPE 0x8030B7ABu       /* the party's escape override */
 #define PHASE 0x8034733Cu        /* 1 while a battle takes the party's commands */
@@ -116,12 +118,19 @@ static int base_now(int* game, int* who, unsigned* item)
     return base;
 }
 
-/* The zone underfoot and its rate in the map's table; rate 0 outside 1-8. */
+/* The zone underfoot and its rate in the map's table; rate 0 outside 1-8.
+ * The world map, 99, reads its zone from the low half of the word at
+ * 0x80346CD4 (0x800C1F70), and fn_800C1A50 points the table at its region's
+ * sub-table (research/encounters.md). */
 static void zone_rate(uint32_t* zone, uint32_t* rate)
 {
     uint16_t z = 0, r = 0;
-    uint32_t table = 0;
-    g_api->read16(ZONE, &z);
+    uint32_t table = 0, world = 0;
+    if ((g_api->map() >> 8) == WORLD_MAP) {
+        if (g_api->read32(WORLD_ZONE, &world)) z = (uint16_t)world;
+    } else {
+        g_api->read16(ZONE, &z);
+    }
     if (z >= 1 && z <= 8 && g_api->read32(TABLE, &table) && table) g_api->read16(table + 2u + (z - 1u) * 132u, &r);
     *zone = z;
     *rate = r;
