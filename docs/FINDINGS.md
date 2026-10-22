@@ -9372,3 +9372,24 @@ here).
   The reach runs' pattern, `Start-Process` with its own redirection, does not wrap.
 - **Left:** the sky run (map 99 takes its zone from `[0x80346CD4]` and its own sub-table, fn_800C1A50, which the
   test mode does not read), the first thing PLAN-NEXT names to cut.
+
+**H20: a power line in every run report.** 2026-10-21. Spec: `docs/specs/power-line.md`.
+
+- **What it is** [V, `runtime/power.c`, `power.h`, `plat.c`]: the port reads the power state when the run's
+  settings are taken and again at the report, and the report gets one `[power]` line: AC or battery, the charge,
+  the power plan's name and Windows' power mode, and, when both readings are on battery with a remaining
+  capacity, the mWh used in all and per 1000 frames drawn. A run that changed source, or whose battery reads more
+  at the end, says so instead of a number. `plat_power_read` is the only reader: on Windows `GetSystemPowerStatus`
+  and, from `powrprof.dll` loaded at the call so no link line changes, `CallNtPowerInformation(SystemBatteryState)`,
+  `PowerGetActiveScheme`/`PowerReadFriendlyName` and `PowerGetEffectiveOverlayScheme`; on Linux
+  `/sys/class/power_supply`; elsewhere nothing, said as "not known".
+- **The checks** [V]: `test_power.py` builds `power.c` with a driver and holds the line for six pairs of readings
+  (AC; battery with 4,210 mWh over 36,000 frames, 116 a 1000; a changed source; a battery that rose; no battery;
+  nothing known) and main.c to registering it; taking the energy end minus start fails the battery case and makes
+  the risen one a figure. `test_memguard.py` and `test_profiler.py`, which link main.c from a list, link power.c
+  now. `compile_runtime.py` 40/40 (power.c the new one), `test_mingw.py` passes, the self test 0 failures.
+- **On this PC** [V]: a 600-frame run's report said `[power] AC, battery 79%, plan Turbo, mode best performance`.
+  `powercfg /getactivescheme` names the scheme `6fecc5ae-...` "(Turbo)" (Armoury Crate's), and the overlay scheme
+  read directly, `ded574b5-...`, is Windows' best performance. The battery's own figures, read the same way:
+  54,080 of 68,512 mWh remaining, rate 0 on AC.
+- **Left:** a run on battery, the owner's at the next sitting, its mWh against `powercfg /batteryreport`.

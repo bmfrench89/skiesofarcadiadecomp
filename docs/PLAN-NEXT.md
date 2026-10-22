@@ -213,7 +213,8 @@ The owner answered four questions, with the research behind them summarised in t
     3. One owner sitting, the display at 60 or 120 Hz, confirming what is built but never checked: sessions A and B
        (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked, its window
        captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`);
-       and, since 2026-10-21, T10's: a small mod built from [MODDING.md](MODDING.md) alone.
+       and, since 2026-10-21, T10's: a small mod built from [MODDING.md](MODDING.md) alone, and H20's: a run on battery,
+       its `[power]` line's mWh against `powercfg /batteryreport`.
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
     (H17a) and widescreen (M10).
@@ -594,7 +595,7 @@ cost least.
 | — | **Owner session B** (C8) | — | — | 14, 16, 19 landed | **Owner** |
 | gap | **L3a** toolchain profiles and `--cc` (`tools/` only; clang output goes to `gen/clang`). **Done, 8bd7c79**; its review ran (cee8a5b, seventeen findings fixed) | hours | none | — | — |
 | gap | **L2a** the SIMD blend behind an x86-64 guard, with `perfbench --exe`. **Done, 5af18b3** | hours | `--link` (gxr_tev.c) | D-12 "yes" (recommended) | — |
-| gap | **H20** a power line in every run report | hours | `--link` | its Done written first (planning session) | — |
+| gap | **H20** a power line in every run report. **Done 2026-10-21** but for a battery run, the owner's (FINDINGS "H20", [specs/power-line.md](specs/power-line.md)) | hours | `--link` | its Done written first (planning session) | — |
 
 **Why C5a went first, before P6b and P1a.** It is cheap: hours, and a log that changes nothing drawn.
 And if the defect is real, it sits under two things everything after it relies on:

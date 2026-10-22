@@ -1408,7 +1408,8 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - First: per-monitor DPI awareness, a resizable window, borderless fullscreen (Alt+Enter, F11 or a chord), letterboxing, a hidden cursor.
   - Then: fullscreen keys in M5, P5's sharp-bilinear filter, H9 rows for 144 Hz and VRR panels, and M10's aspect as a parameter (16:9 or 16:10).
   - *Done:* replay 23/23 and `title --check`, with no `SOA_HASH` comparison between live runs (rule 7); **Owner** confirms on the device.
-- **H20. A power line in every run report** — *hours. A gap filler in PLAN-NEXT M1; its Done is written first.* AC or battery, the battery percentage, the power plan's name, and mWh used on battery. Energy per drawn frame feeds the GPU-backend decision.
+- **H20. A power line in every run report** — *hours. A gap filler in PLAN-NEXT M1; its Done is written first. Done
+  2026-10-21 but for a battery run, the owner's ([specs/power-line.md](specs/power-line.md), FINDINGS "H20").* AC or battery, the battery percentage, the power plan's name, and mWh used on battery. Energy per drawn frame feeds the GPU-backend decision.
 - **H8** already falls back to GDI: `SOA_PRESENTER=gdi` selects it, and it takes over when DXGI cannot start (`window.c:327-329`, FINDINGS "H8"). The proposal is only that the path stays when H8 closes, and that **H15d** puts SIMD behind an x64 guard with a scalar path, so Linux and ARM stay possible.
 - **Done lines in Track H that compare two live runs (rule 7).** Two unmodded title runs differ on 22 of 40 hashes (FINDINGS "M3c"), so each of these fails with no defect:
   - **H9 (:272-273).** Drop "and `SOA_HASH` lines are unchanged" (:273). Headless runs keep today's path by construction (:265), and replay 23/23 plus `title --check` already cover it. Replace :272's "The audio report is unchanged" with the one-run audio-rate check in section F's M11 entry.

@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1756 |
+| Python tests | 1763 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -445,6 +445,11 @@ chooses among mods (M8, M7, R0, R1), 60 fps (H17a) and widescreen (M10); M16b go
 **Then P1b, the encounter contrast, the same evening** (FINDINGS "P1b"): `mods/encounter-rate`'s test mode and
 `tools/encounter_check.py`; the 400,000-frame field run in a116a passed at rate 45 (r 26, 51 and 104 at k 0.5, 1
 and 2; no battle in 77 off and 77 hold trials). The sky run waits on map 99's encounter path.
+
+**Then H20, a power line in every run report** (FINDINGS "H20"): `[power] AC, battery 79%, plan Turbo, mode best
+performance` on this PC; on battery it adds the mWh the run used and per 1000 frames. A battery run joins the owner's
+sitting. **Next, unblocked:** P1b's sky run (map 99's encounter path, research first), M16b with P1's presets, or
+the owner's choice of track after the sitting.
 
 **Before that, 2026-10-14 to 10-17:**
 

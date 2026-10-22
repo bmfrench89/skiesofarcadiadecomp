@@ -388,3 +388,139 @@ double plat_process_cpu(double* user, double* kernel)
     return 0.0;
 }
 #endif
+
+/* ---- H20: the power state (docs/specs/power-line.md) -------------------- */
+
+#include "power.h"
+
+#ifdef _WIN32
+/* SYSTEM_BATTERY_STATE as ntpoapi.h lays it out, spelled here so no power
+ * header or library is needed: powrprof.dll is loaded at the call. */
+typedef struct {
+    BYTE ac_online, present, charging, discharging, spare[3], tag;
+    DWORD max_capacity, remaining; /* mWh */
+    LONG rate;
+    DWORD estimated, alert1, alert2;
+} PlatBatteryState;
+
+typedef LONG(WINAPI* PlatCallNtPowerInformation)(int, void*, ULONG, void*, ULONG);
+typedef DWORD(WINAPI* PlatPowerGetActiveScheme)(HKEY, GUID**);
+typedef DWORD(WINAPI* PlatPowerReadFriendlyName)(HKEY, const GUID*, const GUID*, const GUID*, UCHAR*, DWORD*);
+typedef DWORD(WINAPI* PlatPowerGetEffectiveOverlayScheme)(GUID*);
+
+/* Windows 10 and 11's power modes, by their overlay scheme's GUID. */
+static const struct {
+    unsigned long d1;
+    const char* name;
+} k_modes[] = {
+    {0x961cc777ul, "best power efficiency"},
+    {0x00000000ul, "balanced"},
+    {0x3af9b8d9ul, "better performance"},
+    {0xded574b5ul, "best performance"},
+};
+
+int plat_power_read(PlatPower* p)
+{
+    SYSTEM_POWER_STATUS st;
+    HMODULE lib;
+    memset(p, 0, sizeof *p);
+    p->ac = p->battery = p->percent = -1;
+    p->mwh = -1;
+    if (GetSystemPowerStatus(&st)) {
+        p->known = 1;
+        p->ac = st.ACLineStatus == 0 ? 0 : st.ACLineStatus == 1 ? 1 : -1;
+        p->battery = (st.BatteryFlag & 128) ? 0 : st.BatteryFlag == 255 ? -1 : 1;
+        p->percent = st.BatteryLifePercent <= 100 ? st.BatteryLifePercent : -1;
+    }
+    lib = LoadLibraryA("powrprof.dll");
+    if (!lib) return p->known;
+    {
+        PlatCallNtPowerInformation info =
+            (PlatCallNtPowerInformation)(void (*)(void))GetProcAddress(lib, "CallNtPowerInformation");
+        PlatPowerGetActiveScheme active =
+            (PlatPowerGetActiveScheme)(void (*)(void))GetProcAddress(lib, "PowerGetActiveScheme");
+        PlatPowerReadFriendlyName friendly =
+            (PlatPowerReadFriendlyName)(void (*)(void))GetProcAddress(lib, "PowerReadFriendlyName");
+        PlatPowerGetEffectiveOverlayScheme overlay =
+            (PlatPowerGetEffectiveOverlayScheme)(void (*)(void))GetProcAddress(lib, "PowerGetEffectiveOverlayScheme");
+        PlatBatteryState bs;
+        GUID* scheme = NULL;
+        GUID mode;
+        size_t i;
+        if (info && info(5 /* SystemBatteryState */, NULL, 0, &bs, sizeof bs) == 0 && bs.present) {
+            p->known = 1;
+            p->battery = 1;
+            p->mwh = (long long)bs.remaining;
+        }
+        if (active && friendly && active(NULL, &scheme) == 0 && scheme) {
+            WCHAR name[64];
+            DWORD bytes = sizeof name;
+            if (friendly(NULL, scheme, NULL, NULL, (UCHAR*)name, &bytes) == 0) {
+                name[63] = 0;
+                WideCharToMultiByte(CP_UTF8, 0, name, -1, p->plan, (int)sizeof p->plan, NULL, NULL);
+                p->plan[sizeof p->plan - 1] = '\0';
+            }
+            LocalFree(scheme);
+        }
+        if (overlay && overlay(&mode) == 0) {
+            snprintf(p->mode, sizeof p->mode, "%08lx", (unsigned long)mode.Data1);
+            for (i = 0; i < sizeof k_modes / sizeof k_modes[0]; i++)
+                if (mode.Data1 == k_modes[i].d1) snprintf(p->mode, sizeof p->mode, "%s", k_modes[i].name);
+        }
+    }
+    FreeLibrary(lib);
+    return p->known;
+}
+#elif defined(__linux__)
+#include <dirent.h>
+
+/* One sysfs file's first line, without its newline: 1, or 0 unread. */
+static int sys_line(const char* dir, const char* name, char* out, size_t cap)
+{
+    char path[512];
+    FILE* f;
+    size_t n;
+    snprintf(path, sizeof path, "/sys/class/power_supply/%s/%s", dir, name);
+    if (!(f = fopen(path, "r"))) return 0;
+    if (!fgets(out, (int)cap, f)) out[0] = '\0';
+    fclose(f);
+    n = strlen(out);
+    while (n && (out[n - 1] == '\n' || out[n - 1] == '\r')) out[--n] = '\0';
+    return out[0] != '\0';
+}
+
+int plat_power_read(PlatPower* p)
+{
+    DIR* d;
+    struct dirent* e;
+    memset(p, 0, sizeof *p);
+    p->ac = p->battery = p->percent = -1;
+    p->mwh = -1;
+    if (!(d = opendir("/sys/class/power_supply"))) return 0;
+    while ((e = readdir(d)) != NULL) {
+        char type[32], v[64];
+        if (e->d_name[0] == '.' || !sys_line(e->d_name, "type", type, sizeof type)) continue;
+        if (!strcmp(type, "Mains") && sys_line(e->d_name, "online", v, sizeof v)) {
+            p->known = 1;
+            if (p->ac != 1) p->ac = atoi(v) ? 1 : 0; /* any supply online is AC */
+        } else if (!strcmp(type, "Battery")) {
+            p->known = 1;
+            p->battery = 1;
+            if (sys_line(e->d_name, "capacity", v, sizeof v)) p->percent = atoi(v);
+            if (sys_line(e->d_name, "energy_now", v, sizeof v)) p->mwh = atoll(v) / 1000; /* uWh */
+        }
+    }
+    closedir(d);
+    if (p->known && p->battery < 0) p->battery = 0;
+    if (p->ac < 0 && p->battery == 1) p->ac = 0;
+    return p->known;
+}
+#else
+int plat_power_read(PlatPower* p)
+{
+    memset(p, 0, sizeof *p);
+    p->ac = p->battery = p->percent = -1;
+    p->mwh = -1;
+    return 0;
+}
+#endif

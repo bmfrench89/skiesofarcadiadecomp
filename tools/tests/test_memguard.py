@@ -211,7 +211,9 @@ def build(tmp_path):
     (tmp_path / "disc_sys.c").write_text(embed.disc_sys_c(None), encoding="utf-8")
     runtime = ROOT / "runtime"
     sources = [
-        *(runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c")),
+        *(
+            runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c", "power.c")
+        ),  # power: H20
         *(runtime / f for f in ("disc.c", "sha1.c")),  # disc-layer I1
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",

@@ -17,6 +17,7 @@
 #include "mod.h"
 #include "picture.h"
 #include "plat.h"
+#include "power.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1353,6 +1354,8 @@ int main(int argc, char** argv)
         hle_on_report(si_motor_stop);
         atexit(si_motor_stop);
         if (seed_init(seed, sizeof seed)) hle_on_report(seed_report);
+        power_start(); /* the power line (H20): read now, and again at the report */
+        hle_on_report(power_report);
         settings_record_as("seed", seed);
         settings_check_mods(mod_loaded);
         settings_recorded(extra, sizeof extra);
