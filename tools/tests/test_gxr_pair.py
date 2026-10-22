@@ -764,7 +764,9 @@ def test_the_screen_ring_hands_out_whole_frames(world):
         assert len(reads) >= 4, f"{threads} threads: the reader took too few frames to say anything"
         assert pub.group(3) == "0", f"{threads} threads: a slot changed while its reader held it"
         bad = [h for h in reads if h not in frames]
-        assert not bad, f"{threads} threads: {len(bad)} of {len(reads)} reads were not a whole frame"
+        assert not bad, (
+            f"{threads} threads: {len(bad)} of {len(reads)} reads were not a whole frame"
+        )
 
 
 @needs_msvc
