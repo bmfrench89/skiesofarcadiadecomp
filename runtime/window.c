@@ -55,6 +55,11 @@ static uint8_t* g_bgra; /* the frame converted for GDI */
 static int g_shown_w, g_shown_h;
 static int g_ring_on;     /* the frames come from gxr's screen ring (H17b) */
 static GxrShown g_frame;  /* the ring's slot being shown: the UI thread's until its next take */
+/* H17b: refreshes each image is held while in-between images are shown (1 at
+ * 60 Hz, 2 at 120), 0 while they are not; and what was shown, for the report. */
+static unsigned g_mid_ivl;
+static plat_a32 g_shown_mid, g_shown_cut, g_shown_none;
+static void interp_pace(double hz);
 
 /* ---- the paced presenter (PLAN-60FPS-MODS H8) ----------------------------
  *
@@ -242,6 +247,11 @@ static void present_report_locked(void)
                     100.0 * most);
     }
     fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
+    if (gxr_interp())
+        fprintf(stderr, "[interp] shown: %ld in-between images; %ld frames held at a cut, %ld with none (over budget, or "
+                        "not built); %ld frames replaced in the ring before they were shown\n",
+                (long)plat_load32(&g_shown_mid), (long)plat_load32(&g_shown_cut), (long)plat_load32(&g_shown_none),
+                gxr_ring_missed());
     if (g_drift_started && g_pt_n > 1) {
         /* the guest's VI against the wall clock, and so against the display:
          * H9 locks the two only where the display's rate is a multiple of 60 */
@@ -484,6 +494,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         g_refresh_ms = refresh_ms();
         hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
         g_interval = present_interval(hz, 30);
+        interp_pace(hz);
         fprintf(stderr, "[window] the display changed: %.1f Hz, each frame held %u refresh(es)\n", hz, g_interval);
         return DefWindowProc(h, m, w, l);
     }
@@ -558,12 +569,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 /* The renderer's newest frame into g_bgra and through P5a's filters, timed
  * at the display's clock so the flash limiter counts seconds as shown; the
  * answer is the limiter's blend, 1 where it held nothing back. */
-static double filter_on_cpu(LARGE_INTEGER t0)
+static double filter_image(LARGE_INTEGER t0, const uint8_t* src, int w, int h)
 {
-    int w, h, x, y;
+    int x, y;
     double a = 1.0;
-    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
-    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
     if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
     for (y = 0; y < h; y++) {
         const uint8_t* s = src + (size_t)y * EFB_W * 4;
@@ -579,6 +588,43 @@ static double filter_on_cpu(LARGE_INTEGER t0)
     }
     g_shown_w = w; g_shown_h = h;
     return a;
+}
+
+static double filter_on_cpu(LARGE_INTEGER t0)
+{
+    int w, h;
+    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
+    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
+    return filter_image(t0, src, w, h);
+}
+
+/* H17b: whether in-between images are shown -- DXGI's presenter, frames from
+ * the ring, the display at a whole multiple of 60 Hz, turbo off -- and the
+ * producer told, so it builds none that nobody would see. Said when it
+ * changes. */
+static void interp_pace(double hz)
+{
+    static int said = -1;
+    const char* why = NULL;
+    unsigned n = present_interp(hz);
+    if (!gxr_interp()) return;
+    /* a check's knob: shown at any rate, one refresh an image, so the path runs on a display that
+     * cannot pace it evenly (85 Hz); never for play */
+    if (!n && getenv("SOA_INTERP_ANYRATE") && atoi(getenv("SOA_INTERP_ANYRATE"))) n = 1;
+    if (!g_ring_on || !g_dxgi) why = "the presenter is not DXGI's flip model";
+    else if (!n) why = "the display is not at a whole multiple of 60 Hz";
+    else if (g_turbo_shown) why = "turbo is on, which shows 60 real frames a second instead";
+    g_mid_ivl = why ? 0 : n;
+    gxr_interp_show(g_mid_ivl != 0);
+    if (g_mid_ivl) g_interval = g_mid_ivl;
+    if (said != (int)g_mid_ivl) {
+        said = (int)g_mid_ivl;
+        if (g_mid_ivl)
+            fprintf(stderr, "[interp] in-between images shown at %.1f Hz, each image held %u refresh(es); every real frame "
+                            "a 60 Hz refresh later than without\n", hz, g_mid_ivl);
+        else
+            fprintf(stderr, "[interp] in-between images not shown, so none is built: %s (%.1f Hz)\n", why, hz);
+    }
 }
 
 /* The frame on screen: a new one from the renderer (`fresh`), converted and
@@ -602,6 +648,20 @@ static void present(int fresh)
             note_present();
         }
         return;
+    }
+    if (fresh && g_ring_on && g_mid_ivl && g_dxgi) {
+        /* H17b: the image between the frame before and this one, for one 60 Hz
+         * refresh, unless the frame is a cut or had none; then the frame. With
+         * a frame latency of one, the second present waits for the first. */
+        if (g_frame.mid && !g_frame.cut) {
+            filter_image(t0, g_frame.mid, g_frame.w, g_frame.h);
+            dxgi_present(g_shown_w, g_shown_h);
+            plat_inc32(&g_shown_mid);
+            QueryPerformanceCounter(&t0);
+            g_pw_t0 = t0.QuadPart;
+        } else {
+            plat_inc32(g_frame.cut ? &g_shown_cut : &g_shown_none);
+        }
     }
     if (fresh || !g_shown_w) filter_on_cpu(t0);
     if (g_dxgi) dxgi_present(g_shown_w, g_shown_h);
@@ -950,6 +1010,7 @@ static unsigned __stdcall ui_thread(void* arg)
             if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
         }
         hle_on_report(present_report);
+        interp_pace(hz);
         fprintf(stderr, "[window] the display refreshes every %.2f ms (%.1f Hz; the mode says %lu Hz)%s\n",
                 g_refresh_ms, hz, EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm) ? dm.dmDisplayFrequency : 0ul,
                 g_interval == 1 ? ", not a multiple of 30: each frame takes the next refresh" : "");
@@ -994,6 +1055,7 @@ static unsigned __stdcall ui_thread(void* arg)
             double hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
             g_turbo_shown = tick_turbo_now();
             g_interval = present_interval(hz, g_turbo_shown ? 60 : 30);
+            interp_pace(hz);
             fprintf(stderr, "[window] frame %ld: turbo %s, each frame held %u refresh(es)\n", now,
                     g_turbo_shown ? "on" : "off", g_interval);
         }

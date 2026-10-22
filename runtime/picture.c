@@ -49,6 +49,14 @@ unsigned present_interval(double hz, int fps)
     return n;
 }
 
+unsigned present_interp(double hz)
+{
+    double r = hz / 60.0;
+    unsigned n = (unsigned)(r + 0.5);
+    if (!(hz > 0.0) || n < 1 || n > 4 || r - (double)n >= 0.02 || (double)n - r >= 0.02) return 0;
+    return n;
+}
+
 void picture_scale(const uint8_t* src, int w, int h, uint8_t* dst, int dw, int dh, int mode)
 {
     PicRect r = picture_layout(w, h, dw, dh, mode);

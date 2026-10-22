@@ -77,11 +77,15 @@ typedef struct {
     const uint8_t* real; /* RGBA, `stride` bytes a row */
     const uint8_t* mid;  /* the image between the frame before and this one, or NULL */
     int w, h, stride;
+    int cut; /* the frame is a camera cut: its in-between image is not to be shown */
 } GxrShown;
 void gxr_ring_enable(void);
 int gxr_ring_take(GxrShown* out); /* 1 with the newest frame, if one was published since the last take */
 long gxr_ring_published(void);
 long gxr_ring_missed(void); /* published, then replaced before a take */
+/* The window says whether in-between images can be shown at all (a display at
+ * a whole multiple of 60 Hz): 0 stops the producer building them. */
+void gxr_interp_show(int on);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

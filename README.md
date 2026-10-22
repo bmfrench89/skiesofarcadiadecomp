@@ -362,7 +362,7 @@ mods = C:\Games\Skies\mods
 
 The keys are `disc`, `render`, `gpu`, `gpu_scale`, `window`, `scale`, `threads`, `mods`, `mod_order`, `card`,
 `record` (`SOA_PAD_RECORD`), `nosound`, `uncap`, `seed`, `encounters`,
-`encounters_hold_b`, `autotext`, `coop`, `rumble`, `fullscreen`, `scaler`, `unfocused`, `deflicker`, `turbo`, `gamma`, `colorblind`, `colorblind_mode` and `flash_limit`, each standing for the switch below. A key
+`encounters_hold_b`, `autotext`, `coop`, `rumble`, `fullscreen`, `scaler`, `unfocused`, `deflicker`, `interp`, `turbo`, `gamma`, `colorblind`, `colorblind_mode` and `flash_limit`, each standing for the switch below. A key
 that changes what the game does (`seed`, the two `encounters` keys,
 `autotext`, `coop` and `turbo`) is also written into a pad recording's `# config` line when it is
 in effect. The `encounters` keys, `autotext` and `coop` are read by the mods

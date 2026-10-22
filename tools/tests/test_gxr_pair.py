@@ -183,6 +183,12 @@ static void draw_frame(CpuState* s, const char* scene, int k)
         quad(s, 300.25f + dx[k], 300.0f + dy[k], 340.25f + dx[k], 340.0f + dy[k], GREEN);
         copy_efb(s, 0x00600000u, 640, 480, 0x843);
         quad(s, 400.25f + dx[k], 100.0f + dy[k], 440.25f + dx[k], 140.0f + dy[k], BLUE);
+    } else if (!strcmp(scene, "far")) {
+        /* H17b's cut detector, in perspective (it reads 3D draws): 2 is the
+         * triangle moved about 360 px, every draw matched and moved far, as at
+         * a camera cut; 3 is a quad instead, nothing matched. */
+        if (k == 3) quad(s, 300.25f, 200.0f, 340.25f, 240.0f, RED);
+        else tri(s, 100.25f + (k == 2 ? 300.0f : 0.0f), 100.0f + (k == 2 ? 200.0f : 0.0f), 36.0f, RED);
     } else if (!strcmp(scene, "twins")) {
         /* Two triangles with one key (colour is a vertex attribute, not part of
          * it). 4 is F+1 with the two in the other order; 5 is where that order
@@ -201,7 +207,7 @@ static void draw_frame(CpuState* s, const char* scene, int k)
 }
 
 static const struct { const char* name; int persp, frames; } SCENES[] = {
-    {"move", 0, 3}, {"persp", 1, 3}, {"depth", 1, 2}, {"tex", 0, 4}, {"copies", 0, 3}, {"twins", 0, 5},
+    {"move", 0, 3}, {"persp", 1, 3}, {"depth", 1, 2}, {"tex", 0, 4}, {"copies", 0, 3}, {"twins", 0, 5}, {"far", 1, 3},
 };
 
 /* build/fifo is the pinned corpus (CLAUDE.md): a capture must go anywhere else. */
@@ -345,7 +351,17 @@ int main(int argc, char** argv)
 }
 """
 
-SCENES = ("move", "persp", "depth", "tex", "copies", "twins")
+SCENES = ("move", "persp", "depth", "tex", "copies", "twins", "far")
+
+# H17b's cut detector: name: (A, B, SOA_INTERP_CUT or None, cut expected). The
+# last proves the move rule is what calls far.move a cut: with no share able
+# to pass it, the same pair is not one.
+CUTS = {
+    "persp.small": ("persp/0001", "persp/0002", None, 0),
+    "far.move": ("far/0001", "far/0002", None, 1),
+    "far.new": ("far/0001", "far/0003", None, 1),
+    "far.move.never": ("far/0001", "far/0002", "64:1", 0),
+}
 
 # name: (mode, captures..., SOA_PAIR_T). A capture is "<scene>/<frame>";
 # "tex/mut" and "move/strip" are made by the fixture from real ones.
@@ -537,7 +553,16 @@ def world(tmp_path_factory):
             extra={"SOA_THREADS": threads, "SOA_HASH": "1", "SOA_GXR_STALL": "2:1:3000"},
         )
         rings[threads] = r
-    yield {"out": out, "runs": results, "strip": strip, "rings": rings}
+    cuts = {}
+    for name, (a, b, knob, _) in CUTS.items():
+        log = out / f"{name}.cutlog"
+        extra = {"SOA_INTERP": "1", "SOA_INTERP_LOG": str(log)}
+        if knob:
+            extra["SOA_INTERP_CUT"] = knob
+        r = run("pair", str(out / a), str(out / b), extra=extra)
+        assert r.returncode == 0, f"{name}: exit {r.returncode}\n{r.stdout}{r.stderr}"
+        cuts[name] = log.read_text()
+    yield {"out": out, "runs": results, "strip": strip, "rings": rings, "cuts": cuts}
     # Twenty-odd 24 MB images: pytest keeps the last three temporary trees.
     for ram in out.rglob("*.ram"):
         ram.unlink()
@@ -740,6 +765,18 @@ def test_the_screen_ring_hands_out_whole_frames(world):
         assert pub.group(3) == "0", f"{threads} threads: a slot changed while its reader held it"
         bad = [h for h in reads if h not in frames]
         assert not bad, f"{threads} threads: {len(bad)} of {len(reads)} reads were not a whole frame"
+
+
+@needs_msvc
+def test_the_cut_detector(world):
+    """H17b's Done line 3: a pair whose 3D draws all match but move far, as at
+    a camera cut, is a cut, and so is one where nothing matches; H10's small
+    move is not. The in-between copy's line in SOA_INTERP_LOG says which."""
+    for name, (*_, want) in CUTS.items():
+        lines = world["cuts"][name].splitlines()
+        assert len(lines) == 1, f"{name}: one in-between image, got {lines}"
+        got = int(re.search(r"\bcut (\d)", lines[0]).group(1))
+        assert got == want, f"{name}: cut {got}, wanted {want}: {lines[0]}"
 
 
 @needs_msvc

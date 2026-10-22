@@ -84,6 +84,10 @@ static uint8_t* g_bgra; /* the frame converted, BGRA, for P5a and the scaler */
 static int g_shown_w, g_shown_h;
 static int g_ring_on;     /* the frames come from gxr's screen ring (H17b) */
 static GxrShown g_frame;  /* the ring's slot being shown: the UI thread's until its next take */
+/* H17b: refreshes each image is held while in-between images are shown, 0
+ * while they are not; and what was shown, for the report (window.c's). */
+static unsigned g_mid_ivl;
+static plat_a32 g_shown_mid, g_shown_cut, g_shown_none;
 static uint8_t* g_scaled; /* the texture's contents, client-sized */
 static int g_bw, g_bh;
 static Uint32 g_wake; /* the event type that wakes this thread: data 1 fullscreen, 2 the motor, 3 the menu */
@@ -200,6 +204,11 @@ static void present_report(void)
                 frames, held, 100.0 * most);
     }
     fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
+    if (gxr_interp())
+        fprintf(stderr, "[interp] shown: %ld in-between images; %ld frames held at a cut, %ld with none (over budget, or "
+                        "not built); %ld frames replaced in the ring before they were shown\n",
+                (long)plat_load32(&g_shown_mid), (long)plat_load32(&g_shown_cut), (long)plat_load32(&g_shown_none),
+                gxr_ring_missed());
     if (g_drift_started && g_pt_n > 1) {
         double secs = (double)(g_pt[g_pt_n - 1] - g_host0) / plat_mono_hz();
         double guest = (double)(irq_retrace_count() - g_guest0);
@@ -232,11 +241,43 @@ static void set_vsync(void)
     else g_vsync = 0;
 }
 
+/* H17b: in-between images are shown where the display is at a whole multiple
+ * of 60 Hz, the renderer's vsync holds that many refreshes, and turbo is off;
+ * the producer is told either way. Said when it changes (window.c's rule). */
+static void interp_pace(double hz)
+{
+    static int said = -1;
+    const char* why = NULL;
+    unsigned n = present_interp(hz);
+    if (!gxr_interp()) return;
+    /* a check's knob: shown at any rate, one refresh an image, so the path runs on a display that
+     * cannot pace it evenly (85 Hz); never for play */
+    if (!n && getenv("SOA_INTERP_ANYRATE") && atoi(getenv("SOA_INTERP_ANYRATE"))) n = 1;
+    if (!n) why = "the display is not at a whole multiple of 60 Hz";
+    else if (g_turbo_shown) why = "turbo is on, which shows 60 real frames a second instead";
+    else {
+        g_interval = n;
+        set_vsync();
+        if (g_vsync != (int)n) why = "the renderer's vsync cannot hold the refreshes it needs";
+    }
+    g_mid_ivl = why ? 0 : n;
+    gxr_interp_show(g_mid_ivl != 0);
+    if (said != (int)g_mid_ivl) {
+        said = (int)g_mid_ivl;
+        if (g_mid_ivl)
+            fprintf(stderr, "[interp] in-between images shown at %.1f Hz, each image held %u refresh(es); every real frame "
+                            "a 60 Hz refresh later than without\n", hz, g_mid_ivl);
+        else
+            fprintf(stderr, "[interp] in-between images not shown, so none is built: %s (%.1f Hz)\n", why, hz);
+    }
+}
+
 static void pace(int fps)
 {
     double hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
     g_interval = present_interval(hz, fps);
     set_vsync();
+    interp_pace(hz);
 }
 
 /* ---- rumble (si.c, M18) ---------------------------------------------------- */
@@ -453,11 +494,9 @@ static void close_window(void)
 
 /* The renderer's newest frame into g_bgra and through P5a's filters, timed
  * at the display's clock so the flash limiter counts seconds as shown. */
-static void filter_on_cpu(uint64_t t0)
+static void filter_image(uint64_t t0, const uint8_t* src, int w, int h)
 {
-    int w, h, x, y;
-    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
-    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
+    int x, y;
     if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
     if (!g_bgra) return;
     for (y = 0; y < h; y++) {
@@ -474,6 +513,14 @@ static void filter_on_cpu(uint64_t t0)
     }
     g_shown_w = w;
     g_shown_h = h;
+}
+
+static void filter_on_cpu(uint64_t t0)
+{
+    int w, h;
+    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
+    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
+    filter_image(t0, src, w, h);
 }
 
 /* g_bgra into a client-sized texture where picture_layout puts it, nearest
@@ -515,6 +562,18 @@ static void sdl_present(int w, int h)
 static void present(int fresh)
 {
     g_pw_t0 = plat_mono_raw();
+    if (fresh && g_ring_on && g_mid_ivl) {
+        /* H17b: the in-between image for one 60 Hz refresh, unless the frame
+         * is a cut or had none; the frame's own present then waits on vsync */
+        if (g_frame.mid && !g_frame.cut) {
+            filter_image(g_pw_t0, g_frame.mid, g_frame.w, g_frame.h);
+            sdl_present(g_shown_w, g_shown_h);
+            plat_inc32(&g_shown_mid);
+            g_pw_t0 = plat_mono_raw();
+        } else {
+            plat_inc32(g_frame.cut ? &g_shown_cut : &g_shown_none);
+        }
+    }
     if (fresh || !g_shown_w) filter_on_cpu(g_pw_t0);
     if (g_shown_w) sdl_present(g_shown_w, g_shown_h);
 }

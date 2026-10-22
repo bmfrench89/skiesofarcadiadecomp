@@ -177,6 +177,26 @@ static int g_interp;
 static unsigned g_pair_flags; /* the pair machinery's mode (H10, "frame pairs" below) */
 static unsigned long long g_interp_images, g_interp_checked, g_interp_same;
 static uint64_t g_interp_ticks;
+/* H17b (docs/specs/interp-live.md). g_mid_on: this frame builds its in-between
+ * stream, decided at the frame's start (interp_frame_begin) and constant
+ * through it; only a window's run ever turns it off. g_mid_allowed: the window
+ * can show one (gxr_interp_show). The frame's 3D draws for the cut detector,
+ * keyed, matched, and matched with a vertex moved more than each of
+ * CUT_PX's distances; reset at the screen copy. */
+typedef struct RingSlot RingSlot; /* H17b's screen ring, with the screen buffers below */
+static RingSlot* g_ring;          /* NULL: no presenter takes frames from it */
+static int g_mid_on = 1;
+static plat_a32 g_mid_allowed = 1;
+static const double CUT_PX[4] = {16.0, 32.0, 64.0, 128.0};
+static unsigned g_f_keyed3d, g_f_matched3d, g_f_far[4];
+static double g_f_worst;
+static int g_cut_idx = 2;        /* which of CUT_PX the detector reads */
+static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D draws moved past it (FINDINGS "H17b") */
+static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
+static unsigned long long g_cuts, g_over_budget;
+static double g_ms_on, g_ms_off, g_ms_last;
+static int g_mid_last = 1;
+static uint64_t g_busy_mark[MAX_THREADS + 1];
 
 /* A test knob (PLAN-60FPS-MODS H14): SOA_GXR_STALL=<worker>:<kind>:<us>[,...]
  * makes that worker wait that many microseconds before every command of that
@@ -251,6 +271,21 @@ int gxr_enabled(void)
         {
             const char* ip = getenv("SOA_INTERP");
             g_interp = ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
+            const char* lg = getenv("SOA_INTERP_LOG");
+            const char* cut = getenv("SOA_INTERP_CUT");
+            if (g_interp && lg && *lg && !(g_interp_log = fopen(lg, "w")))
+                fprintf(stderr, "[interp] cannot write SOA_INTERP_LOG=%s\n", lg);
+            if (g_interp_log) g_draw_every = 1; /* the log is of every frame, snapshots or not */
+            if (cut && *cut) { /* px:share, px one of 16, 32, 64, 128 */
+                double px = 0.0, sh = 0.0;
+                int i;
+                if (sscanf(cut, "%lf:%lf", &px, &sh) == 2)
+                    for (i = 0; i < 4; i++)
+                        if (CUT_PX[i] == px) { g_cut_idx = i; g_cut_share = sh; }
+                if (CUT_PX[g_cut_idx] != px || g_cut_share != sh)
+                    fprintf(stderr, "[interp] SOA_INTERP_CUT=%s is not px:share with px 16, 32, 64 or 128; %.0f:%.2f\n", cut,
+                            CUT_PX[g_cut_idx], g_cut_share);
+            }
             if (g_interp && g_draw_limit) {
                 fprintf(stderr, "[interp] SOA_INTERP is refused with SOA_GXR_DRAWS: a frame cut short has no in-between image; off\n");
                 g_interp = 0;
@@ -2391,9 +2426,10 @@ static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ort
 /* After a draw's vertices are transformed and before it is published: keep
  * them as this frame's, or move them to the point between the frame before
  * and this one. Only x, y, z, w -- colours and texture coordinates stay F+1's. */
-static void pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairClaim c)
+static double pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairClaim c)
 {
     unsigned i;
+    double worst = 0.0;
     if (c.cur_off != PAIR_NONE) {
         float (*d)[4] = g_pair[g_pair_cur].pos + c.cur_off;
         for (i = 0; i < count; i++) {
@@ -2406,7 +2442,6 @@ static void pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairC
     if (c.prev_off != PAIR_NONE) {
         float (*p)[4] = g_pair[g_pair_cur ^ 1].pos + c.prev_off;
         float t = g_pair_t, u = 1.0f - g_pair_t;
-        double worst = 0.0;
         for (i = 0; i < count; i++) {
             if (p[i][3] > 0.0f && v[i].w > 0.0f) {
                 double dx = ((double)v[i].x / v[i].w - (double)p[i][0] / p[i][3]) * rc->wd;
@@ -2423,6 +2458,7 @@ static void pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairC
         if (worst > g_pair_maxdisp) g_pair_maxdisp = worst;
         if (worst > 32.0) g_pair_over32++;
     }
+    return worst;
 }
 
 /* The screen copy ends a frame: what was recorded becomes the frame before. */
@@ -2435,12 +2471,69 @@ static void pair_rotate(void)
     pair_reset(&g_pair[g_pair_cur]);
     g_pair_ndraw = 0;
     g_pair_rotations++;
+    g_f_keyed3d = g_f_matched3d = 0;
+    memset(g_f_far, 0, sizeof g_f_far);
+    g_f_worst = 0.0;
 }
 
 /* The in-between stream runs while both are set, which only SOA_INTERP allows. */
 static int interp_on(void)
 {
-    return g_interp && (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
+    return g_interp && g_mid_on && (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
+}
+
+void gxr_interp_show(int on)
+{
+    plat_cas32(&g_mid_allowed, on ? 0 : 1, on ? 1 : 0);
+}
+
+/* At each frame's start, after the gate's drain has every worker finished
+ * with the frame before: does this frame get an in-between stream? Only a
+ * window's run asks (the screen ring is on); a headless one builds every
+ * image, as H17a does. The frame before's cost is the busiest worker's busy
+ * time over it. With an in-between stream, keep it while that fits the frame
+ * time; without, predict it from the ratio of frames with one to frames
+ * without, and start again only with a tenth to spare. */
+static void interp_frame_begin(void)
+{
+    const double budget = 1000.0 / 30.0 - 2.0;
+    uint64_t most = 0;
+    double ms, ratio;
+    int i, keep;
+    if (!g_interp || !g_ring || g_workers <= 0) return;
+    for (i = 1; i <= g_workers; i++) {
+        uint64_t b = (uint64_t)plat_load64((plat_a64*)&g_ts[i].busy); /* rule 4, and charge()'s store */
+        if (b - g_busy_mark[i] > most) most = b - g_busy_mark[i];
+        g_busy_mark[i] = b;
+    }
+    ms = gxr_seconds(most) * 1e3;
+    g_ms_last = ms;
+    if (g_mid_last) g_ms_on = g_ms_on > 0.0 ? 0.8 * g_ms_on + 0.2 * ms : ms;
+    else g_ms_off = g_ms_off > 0.0 ? 0.8 * g_ms_off + 0.2 * ms : ms;
+    ratio = g_ms_on > 0.0 && g_ms_off > 0.0 ? g_ms_on / g_ms_off : 2.0;
+    if (ratio < 1.0) ratio = 1.0;
+    keep = g_mid_last ? ms <= budget : ms * ratio <= budget * 0.9;
+    if (!plat_load32(&g_mid_allowed)) keep = 0;
+    else if (!keep) g_over_budget++;
+    g_mid_on = g_mid_last = keep;
+}
+
+/* The gate (H14): the frame before is over, every worker done with it. */
+static void gate(void)
+{
+    drain(W_GATE);
+    interp_frame_begin();
+}
+
+/* The frame's in-between image is a cut's: its 3D draws mostly unmatched
+ * (under H4's 90%), or mostly matched and moved far, as at a camera cut, where
+ * the lerp makes a frame belonging to neither. A frame with no 3D draw is
+ * never one. */
+static int frame_is_cut(void)
+{
+    if (!g_f_keyed3d) return 0;
+    if ((double)g_f_matched3d < 0.9 * (double)g_f_keyed3d) return 1;
+    return (double)g_f_far[g_cut_idx] > g_cut_share * (double)g_f_matched3d;
 }
 
 int gxr_interp(void)
@@ -2523,7 +2616,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
 
     /* Every drain on this path comes before tev_prepare: the gate (a screen
      * copy was the last frame's end), then the arena and the graveyard. */
-    if (g_frame_gate) drain(W_GATE);
+    if (g_frame_gate) gate();
     if (g_arena_used + sizeof(Vertex) * count * (mid ? 2u : 1u) + 16 > ARENA_BYTES) drain(W_ARENA);
     if (tex_graveyard_full()) drain(W_GRAVE);
     draw_tripwire(bp, prim);
@@ -2572,9 +2665,20 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     if (mid) { /* F+1's positions recorded and drawn; the lerp goes to the copy */
         PairClaim rec = {pc.cur_off, PAIR_NONE}, lerp = {PAIR_NONE, pc.prev_off};
+        double worst;
         pair_positions(&D->rc, v, count, rec);
         memcpy(v2, v, sizeof(Vertex) * count);
-        pair_positions(&D->rc, v2, count, lerp);
+        worst = pair_positions(&D->rc, v2, count, lerp);
+        if (!(xf[0x1026] & 1)) { /* a 3D draw: the cut detector's */
+            int k;
+            g_f_keyed3d++;
+            if (pc.prev_off != PAIR_NONE) {
+                g_f_matched3d++;
+                for (k = 0; k < 4; k++)
+                    if (worst > CUT_PX[k]) g_f_far[k]++;
+                if (worst > g_f_worst) g_f_worst = worst;
+            }
+        }
     } else if (g_pair_flags) {
         pair_positions(&D->rc, v, count, pc);
     }
@@ -2787,15 +2891,15 @@ static uint8_t g_screen_mid[EFB_H][EFB_W][4]; /* H17a: the last in-between image
  * command is over (its entry fence), so fillers come one at a time and
  * g_ring_back needs no atomic: each filler's own increment of g_ring_done
  * orders it after the last. */
-typedef struct {
+struct RingSlot {
     uint8_t real[EFB_H][EFB_W][4];
     uint8_t mid[EFB_H][EFB_W][4];
-    int w, h, has_mid;
-} RingSlot;
+    int w, h, has_mid, cut;
+};
 #define RING_FRESH 4
 #define CP_LAST 1
 #define CP_MID 2
-static RingSlot* g_ring; /* NULL: no presenter takes frames from it */
+#define CP_CUT 4
 static plat_a32 g_ring_state = 1, g_ring_done, g_ring_pub, g_ring_miss;
 static int g_ring_back, g_ring_front = 2;
 
@@ -2819,6 +2923,7 @@ static void ring_fill(const DrawCmd* D)
     S = &g_ring[g_ring_back];
     for (y = 0; y < h; y++) memcpy(S->real[y], g_screen[y], (size_t)w * 4);
     S->has_mid = (D->cp_ring & CP_MID) != 0;
+    S->cut = (D->cp_ring & CP_CUT) != 0;
     if (S->has_mid)
         for (y = 0; y < h; y++) memcpy(S->mid[y], g_screen_mid[y], (size_t)w * 4);
     S->w = w;
@@ -2851,6 +2956,7 @@ int gxr_ring_take(GxrShown* out)
     out->w = S->w;
     out->h = S->h;
     out->stride = EFB_W * 4;
+    out->cut = S->cut;
     return 1;
 }
 
@@ -3264,7 +3370,7 @@ static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uin
 static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
-    if (g_frame_gate) drain(W_GATE);
+    if (g_frame_gate) gate();
     D = claim_slot(2, 0, 0); /* after a foreign copy this carries its exit fence */
     D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
@@ -3333,7 +3439,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * neighbouring workers, and workers advance independently. Without this
      * the frame depends on SOA_THREADS. */
     foreign = copy_is_foreign(half, filtered, y0);
-    if (g_frame_gate) drain(W_GATE);
+    if (g_frame_gate) gate();
     if (g_legacy && foreign) {
         static unsigned last_frame = ~0u;
         unsigned frame = gx_frame_count();
@@ -3458,6 +3564,14 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
         D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
         D->cp_ring = CP_LAST | CP_MID;
+        if (frame_is_cut()) {
+            D->cp_ring |= CP_CUT;
+            g_cuts++;
+        }
+        if (g_interp_log)
+            fprintf(g_interp_log, "%u keyed3d %u matched3d %u far16 %u far32 %u far64 %u far128 %u worst %.1f cut %d busy %.2f\n",
+                    gx_frame_count(), g_f_keyed3d, g_f_matched3d, g_f_far[0], g_f_far[1], g_f_far[2], g_f_far[3], g_f_worst,
+                    (D->cp_ring & CP_CUT) != 0, g_ms_last);
         if (g_workers > 0) {
             publish();
         } else {
@@ -3637,6 +3751,7 @@ void gxr_report(void)
                 g_interp_images, g_pair_matched, g_pair_unmatched + g_pair_demoted, g_pair_demoted,
                 g_interp_images ? gxr_seconds(g_interp_ticks) * 1e3 / (double)g_interp_images : 0.0,
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
+        fprintf(stderr, "%llu cuts, %llu frames without one over budget; ", g_cuts, g_over_budget);
         if (g_interp == 2)
             fprintf(stderr, "the real picture unchanged by its in-between copy at %llu of %llu frames\n", g_interp_same,
                     g_interp_checked);

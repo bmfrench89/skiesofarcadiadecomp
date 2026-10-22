@@ -24,6 +24,12 @@ PicRect picture_layout(int src_w, int src_h, int dst_w, int dst_h, int mode);
  * clamped to 1-4 -- 2 at 60 Hz, 4 at 120, 1 at 85 and 144 (H8's rule). */
 unsigned present_interval(double hz, int fps);
 
+/* H17b: the refreshes each image is held when 60 images a second are shown
+ * (an in-between image, then its real frame), or 0 where the display's rate
+ * is not within 0.02 of a whole multiple of 60, which cannot pace them
+ * evenly: 1 at 60 Hz, 2 at 120, 0 at 85 and 144. */
+unsigned present_interp(double hz);
+
 /* ---- P5a: filters on the frame at its own size, before it is scaled ----
  * The frame is BGRA, 8 bits a channel, as window.c presents it. In order:
  * the colour-blind model in linear light, then gamma, then the flash limiter

@@ -103,6 +103,8 @@ int main(void)
             printf("%d %d %d %d\n", r.x, r.y, r.w, r.h);
         } else if (!strcmp(cmd, "interval") && scanf("%lf %d", &hz, &a) == 2) {
             printf("%u\n", present_interval(hz, a));
+        } else if (!strcmp(cmd, "interp") && scanf("%lf", &hz) == 1) {
+            printf("%u\n", present_interp(hz));
         } else if (!strcmp(cmd, "filter") && scanf("%31s %15s %15s %15s %d", g, cb, md, fl, &n) == 5) {
             /* n pixels, r g b each, through the filters on a 1 x n frame:
              * the refusal ("-" for none), then the pixels */
@@ -239,6 +241,19 @@ SPEC = [
 INTERVALS = [((60.0, 30), 2), ((85.0, 30), 1), ((120.0, 30), 4), ((144.0, 30), 1), ((59.94, 30), 2)]
 # at turbo the game makes up to 60 images a second (M11a): the same rule at 60 fps
 INTERVALS_60 = [((60.0, 60), 1), ((85.0, 60), 1), ((120.0, 60), 2), ((144.0, 60), 1)]
+# H17b: refreshes an image at 60 images a second, 0 where they cannot be paced
+INTERP = [
+    (60.0, 1),
+    (59.94, 1),
+    (120.0, 2),
+    (119.88, 2),
+    (85.0, 0),
+    (144.0, 0),
+    (75.0, 0),
+    (240.0, 4),
+    (300.0, 0),
+    (0.0, 0),
+]
 
 
 def layouts(exe, cases):
@@ -255,6 +270,8 @@ def test_the_spec_s_layouts_and_intervals(driver):
     assert got == [want for _, want in INTERVALS], got
     got = [int(v) for v in ask(driver, [f"interval {hz} {fps}" for (hz, fps), _ in INTERVALS_60])]
     assert got == [want for _, want in INTERVALS_60], got
+    got = [int(v) for v in ask(driver, [f"interp {hz}" for hz, _ in INTERP])]
+    assert got == [want for _, want in INTERP], got
 
 
 @needs_msvc

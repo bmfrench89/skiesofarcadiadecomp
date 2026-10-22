@@ -73,6 +73,9 @@ const uint8_t* gxr_screen(int* w, int* h) { *w = 640; *h = 480; return g_screen;
 /* H17b's screen ring, which the window takes its frames from: the one frame,
  * handed out again each time the count moves */
 static long g_taken;
+int gxr_interp(void) { return 0; }
+void gxr_interp_show(int on) { (void)on; }
+long gxr_ring_missed(void) { return 0; }
 void gxr_ring_enable(void) {}
 int gxr_ring_take(GxrShown* f)
 {
