@@ -422,6 +422,8 @@ int plat_realpath(const char* in, char* out, size_t cap);
 const char* plat_dl_why(void);
 int plat_list_dirs(const char* dir, void (*fn)(const char* name, void* u), void* u);
 double plat_process_cpu(double* user, double* kernel);
+/* `from` moved over `to`, replacing it whole (M8's soa.ini writes): 1, or 0. */
+int plat_replace_file(const char* from, const char* to);
 
 /* ---- threads (L2) --------------------------------------------------------
  * plat_thread_start runs fn(arg) on a new thread and returns 1, or 0 if none

@@ -180,6 +180,9 @@ static int g_mod_n;
  * API hands out stays where it is for the run, init included. */
 static Option g_opts[MOD_MAX][OPTION_MAX];
 static int g_opt_n[MOD_MAX];
+/* The mods SOA_MOD_ORDER turned off, by what it names them (M8's page). */
+static char g_off[MOD_MAX * 2][64];
+static int g_off_n;
 static Patch g_patches[PATCH_MAX];
 static unsigned g_patch_n;
 static Slot g_slots[SLOT_MAX];
@@ -1909,8 +1912,10 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
         read_order(dir, plan, n);
         k = plan_order(dir, names, plan, n, order);
         for (i = 0; i < k; i++) {
-            if (plan[order[i]].off)
+            if (plan[order[i]].off) {
                 fprintf(stderr, "[mod] %s/%s is turned off by SOA_MOD_ORDER; not loaded\n", dir, names[order[i]]);
+                if (g_off_n < MOD_MAX * 2) snprintf(g_off[g_off_n++], sizeof g_off[0], "%s", plan[order[i]].key);
+            }
             else if (!plan[order[i]].bad)
                 load_one(s, dir, names[order[i]], sha, dol, dol_size);
         }
@@ -2128,6 +2133,42 @@ const char* mod_describe(void) { return g_describe; }
 
 /* Whether a mod with this manifest 2 id is loaded: settings.c asks, for a
  * setting only that mod reads. */
+/* ---- M8: what the menu's Mods page reads (docs/specs/menu.md) --------- */
+
+int mod_menu_count(void) { return g_mod_n; }
+
+/* Mod m's name, and the key a list names it by (its id, or a version 1
+ * mod's folder); NULL past the end. */
+const char* mod_menu_name(int m, const char** key)
+{
+    if (m < 0 || m >= g_mod_n) return NULL;
+    if (key) *key = mod_key(&g_mods[m]);
+    return g_mods[m].name;
+}
+
+int mod_menu_option_count(int m) { return m >= 0 && m < g_mod_n ? g_opt_n[m] : 0; }
+
+/* Mod m's option i: its name, type (0 int, 1 bool, 2 enum, 3 string, 4
+ * seed), int range, enum choices ("a|b"), value in effect and default. */
+int mod_menu_option(int m, int i, ModMenuOption* out)
+{
+    const Option* o;
+    if (m < 0 || m >= g_mod_n || i < 0 || i >= g_opt_n[m]) return 0;
+    o = &g_opts[m][i];
+    out->name = o->name;
+    out->type = o->type;
+    out->lo = o->lo;
+    out->hi = o->hi;
+    out->choices = o->choices;
+    out->value = o->value;
+    out->def = o->def;
+    return 1;
+}
+
+/* The mods turned off, so the page can turn one back on. */
+int mod_menu_off_count(void) { return g_off_n; }
+const char* mod_menu_off_key(int i) { return i >= 0 && i < g_off_n ? g_off[i] : NULL; }
+
 int mod_loaded(const char* id)
 {
     int i;

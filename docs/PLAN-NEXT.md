@@ -217,7 +217,7 @@ The owner answered four questions, with the research behind them summarised in t
        its `[power]` line's mWh against `powercfg /batteryreport`.
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
-    (H17a) and widescreen (M10).
+    (H17a) and widescreen (M10). **Chosen 2026-10-21 (D-40): M8 first**, built ahead of the sitting.
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").
@@ -973,6 +973,7 @@ until you say otherwise.
 | D-37 | What the PC session leads with, beside the Android path | owner, 2026-10-14 | the PC track | **answered 2026-10-14: make it 100% first**: scripted runs into what no run has reached, fixing what breaks, and one owner sitting at 60 or 120 Hz; then mods, 60 fps or widescreen, the owner's choice (§0) |
 | D-38 | What the cloud session takes on after R5c | owner, 2026-10-14 | the cloud track | **answered 2026-10-14: the mod framework**: the mod tests without MSVC, then M16, M17, M6 and T10, each proven on the owner's PC (§0) |
 | D-39 | Whether hand decompilation goes broader | owner, 2026-10-14 | F4-F7 | **answered 2026-10-14: keep it targeted**: only what a mod must change on the inside |
+| D-40 | What the PC session takes next, with the mod framework done and step 3 waiting on the owner | owner, 2026-10-21 | M8 | **answered 2026-10-21: M8, the in-game menu**, ahead of 60 fps (H17a) and widescreen (M10); built while the owner is away, its windowed Done at the next sitting |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:

@@ -34,6 +34,10 @@ const char* settings_recorded(char* out, size_t cap);
 void settings_record_as(const char* key, const char* value);
 void settings_check_mods(int (*loaded)(const char* id));
 int settings_root_for(const char* exe, char* out, size_t cap);
+int settings_with(const char* text, const char* key, const char* value, char* out, size_t cap);
+int settings_set(const char* key, const char* value);
+int settings_menu_count(void);
+int settings_menu_item(int index, const char** key, const char** choices, const char** what, const char** value);
 int should_hide_console(unsigned procs, unsigned stderr_type);
 static const char* g_loaded; /* the one mod id "loaded", from argv */
 static int loaded(const char* id) { return g_loaded && !strcmp(id, g_loaded); }
@@ -45,6 +49,34 @@ int main(int argc, char** argv)
     const char* disc;
     unsigned i;
     char rec[320];
+    if (argc > 4 && !strcmp(argv[1], "with")) {
+        /* M8: argv[2]'s text with argv[3] = argv[4] in it */
+        static char in[65536], out[70000];
+        FILE* f = fopen(argv[2], "rb");
+        size_t n = f ? fread(in, 1, sizeof in - 1, f) : 0;
+        int k;
+        if (f) fclose(f);
+        in[n] = '\0';
+        k = settings_with(in, argv[3], argv[4], out, sizeof out);
+        printf("%d\n", k);
+        f = fopen("with.out", "wb"); /* bytes as written: stdout would turn \n into \r\n on Windows */
+        if (f && k > 0) fwrite(out, 1, (size_t)k, f);
+        if (f) fclose(f);
+        return 0;
+    }
+    if (argc > 3 && !strcmp(argv[1], "set")) {
+        printf("set %d\n", settings_set(argv[2], argv[3]));
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "menu")) {
+        int i, n = settings_menu_count();
+        for (i = 0; i < n; i++) {
+            const char *key, *choices, *what, *value;
+            settings_menu_item(i, &key, &choices, &what, &value);
+            printf("menu %s [%s] (%s)\n", key, choices, value);
+        }
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[1], "root")) {
         char out[1024];
         settings_root_for(argv[2], out, sizeof out);
@@ -476,3 +508,70 @@ def test_soa_ini_is_looked_for_at_the_root_then_beside_the_exe_never_the_working
     assert str(driver_cc.parent / "soa.ini") in which(), "beside the executable"
     (root / "soa.ini").write_text("scale = 2\n", encoding="utf-8")
     assert str(root / "soa.ini") in which(), "the root's first"
+
+
+# M8: the menu writes soa.ini (docs/specs/menu.md).
+
+INI = "# a player's file\r\n\r\nrender = 1\r\nscaler = integer   # whole multiples\r\n# turbo = both\r\nmods = C:\\m\r\n"
+
+
+def with_key(driver, tmp_path, text: str, key: str, value: str) -> str:
+    f = tmp_path / "in.ini"
+    f.write_bytes(text.encode("utf-8"))
+    out = subprocess.run(
+        [str(driver), "with", str(f), key, value],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=True,
+    ).stdout
+    body = (tmp_path / "with.out").read_bytes()
+    assert int(out) == len(body), out
+    return body.decode("utf-8")
+
+
+@needs_msvc
+def test_a_key_is_replaced_in_place_and_nothing_else_moves(driver, tmp_path):
+    """The line's value changes, its comment and line end stay, and every
+    other line -- comments, blanks, a commented-out key of the same name --
+    is as it was. The mutation, the file rewritten from its keys alone,
+    loses the comments."""
+    got = with_key(driver, tmp_path, INI, "scaler", "fit")
+    assert got == INI.replace("scaler = integer   # whole", "scaler = fit # whole"), repr(got)
+    got = with_key(driver, tmp_path, INI, "turbo", "sky")
+    assert got == INI + "turbo = sky\n", repr(got)  # the commented-out line is not the key's
+    got = with_key(driver, tmp_path, "render=1", "deflicker", "0")
+    assert got == "render=1\ndeflicker = 0\n", repr(got)
+    assert with_key(driver, tmp_path, "", "gpu", "vulkan") == "gpu = vulkan\n"
+
+
+@needs_msvc
+def test_settings_set_writes_the_file_the_run_read(driver, tmp_path):
+    ini = driver.parent / "soa.ini"
+    ini.write_bytes(INI.encode("utf-8"))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    out = subprocess.run(
+        [str(driver), "set", "scaler", "fit"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=True,
+    )
+    assert "set 1" in out.stdout and "soa.ini: scaler = fit" in out.stderr, out
+    want = INI.replace("scaler = integer   # whole", "scaler = fit # whole")
+    assert ini.read_bytes().decode("utf-8") == want
+    assert not (driver.parent / "soa.ini.new").exists()
+
+
+@needs_msvc
+def test_the_menu_offers_the_closed_keys_and_no_mod_s(driver):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    env["SOA_SCALER"] = "fit"
+    out = subprocess.run(
+        [str(driver), "menu"], capture_output=True, text=True, env=env, timeout=60, check=True
+    ).stdout
+    assert "menu scaler [integer|fit] (fit)" in out, out
+    assert "menu turbo [battle|sky|both] ()" in out, out
+    assert "encounters" not in out and "autotext" not in out, out  # a mod's keys: its own page

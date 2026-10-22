@@ -71,6 +71,9 @@ void mod_set_host_buttons(uint32_t (*fn)(void));
  * replaced by the slice that builds its action -- H19a fullscreen, M11a
  * turbo, M8 the menu -- so CH1 depends on none of them. */
 int window_toggle_fullscreen(void); /* window.c, H19a */
+int window_menu_toggle(void);       /* window.c, M8: the menu, on the UI thread */
+int menu_is_open(void);             /* menu.c, M8 */
+void si_set_menu_open(int (*fn)(void));
 int tick_turbo_toggle(void);        /* tick.c, M11a */
 const char* settings_root(void); /* settings.c, M5b */
 int settings_console_to_log(char* path, size_t cap);
@@ -92,6 +95,10 @@ static void on_chord(int chord, unsigned frame)
     case 1: /* view+rs: turbo, from the next safe point (M11a) */
         fprintf(stderr, "[chord] frame %u: %s -> %s %s\n", frame, si_chord_name(chord, 0), si_chord_name(chord, 1),
                 tick_turbo_toggle() ? "on" : "off");
+        break;
+    case 2: /* view+ls: the menu (M8), on the UI thread */
+        fprintf(stderr, "[chord] frame %u: %s -> %s%s\n", frame, si_chord_name(chord, 0), si_chord_name(chord, 1),
+                window_menu_toggle() ? "" : " (no window: logged only)");
         break;
     default:
         fprintf(stderr, "[chord] frame %u: %s -> %s (not built yet)\n", frame, si_chord_name(chord, 0),
@@ -1347,6 +1354,7 @@ int main(int argc, char** argv)
          * that skip it; window.c stops it on focus loss and close. */
         si_set_motor_strength(rumble && *rumble ? atoi(rumble) : 100);
         si_set_chord_handler(on_chord);
+        si_set_menu_open(menu_is_open); /* M8: the pad withheld while it is open */
         tick_set_hold(clock_pause_requested);
         si_set_pad2_source(window_pad2); /* P10a: port 2 for mods */
         mod_set_pad_reader(si_read_pad);

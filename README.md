@@ -315,6 +315,16 @@ keyboard is read only while the window is in front, so switching to another
 window releases every key; the gamepad keeps driving the game whatever has the
 focus.
 
+**The menu** (M8, `docs/specs/menu.md`): View+LS on a pad, or F1, opens it over
+the picture and holds the game until it closes. Up and down choose, left and
+right change, A or Enter goes in, B or Escape comes back (and closes it from its
+first page); LB and RB, or Page Up and Down, step a number by a tenth. Its pages:
+Resume, Mods (each mod on or off, and the options it declares), Settings (every
+`soa.ini` key with a fixed set of values), Fullscreen and Turbo (applied at
+once), and Quit. Every other change is written to `soa.ini` and read when the
+game next starts, which the page says. The Vulkan presenter does not draw it
+yet (`SOA_PRESENTER=dxgi` does).
+
 To record a session and play it back:
 
 ```powershell
@@ -406,7 +416,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FULLSCREEN=1` | start in borderless fullscreen (`fullscreen = 1`); F11, Alt+Enter and View+LB toggle it |
 | `SOA_DEFLICKER=0` | the picture without the game's deflicker: the copy to the screen blends each row with the rows above and below it, which suits an interlaced television and softens a progressive display; `0` copies it unfiltered (`deflicker = 0`, P5b). The game's own copies to textures keep their filter. A replay with it set hashes differently from the manifest, by design |
 | `SOA_SCALER=integer\|fit` | how the picture fills the window (`scaler`): `integer`, the default, the largest whole multiple of 640x480, sharp, with black bars; `fit`, the largest 4:3 that fits, nearest neighbour, uneven pixels (H19a) |
-| `SOA_WINDOW_TEST=fs@N,win@N,size:WxH@N` | a check's knob: at each presented frame named, fullscreen, windowed or a client size, then one `[window] frame F: client WxH, image WxH at +X+Y, ...` line; `python tools/tests/test_picture.py <log>` checks those lines (H19a) |
+| `SOA_WINDOW_TEST=fs@N,win@N,size:WxH@N` | a check's knob: at each presented frame named, fullscreen, windowed or a client size, then one `[window] frame F: client WxH, image WxH at +X+Y, ...` line; `python tools/tests/test_picture.py <log>` checks those lines (H19a) `menu@N` opens the menu over that frame and says whether the game's picture and the converted frame were left as they were (`unchanged` or `CHANGED`), writes the presented buffer as `menu-N.bmp` into `SOA_FRAMES_DIR` (or `build`), and closes it (M8) |
 | `SOA_WINDOW=0` / `=1` | force the window off (render headless) or on |
 | `SOA_PRESENTER=gdi` | show the window with GDI on an 8 ms poll instead of the DXGI flip-model presenter, which holds each frame for a whole number of the display's refreshes (2 at 60 Hz, 4 at 120; the next refresh at other rates). With `SOA_GPU=vulkan` the GPU presents its own picture through a Vulkan swap chain, paced the same way, unless `SOA_PRESENTER` is `dxgi` or `gdi`; P5a's picture filters run on the GPU at the size it draws, the flash limiter deciding its blend on the CPU (V8b). The report ends with a histogram of present intervals either way |
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |

@@ -524,3 +524,17 @@ int plat_power_read(PlatPower* p)
     return 0;
 }
 #endif
+
+/* ---- M8: a file moved over another, whole ------------------------------- */
+
+#ifdef _WIN32
+int plat_replace_file(const char* from, const char* to)
+{
+    return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+#else
+int plat_replace_file(const char* from, const char* to)
+{
+    return rename(from, to) == 0; /* atomic on one file system */
+}
+#endif

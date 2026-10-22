@@ -17,7 +17,9 @@ uint64_t clock_host_ns(void);                  /* the host's monotonic time */
 uint64_t clock_advance_at(uint64_t host_ns);  /* guest ns, advancing to host_ns (the guest thread) */
 uint64_t clock_peek_at(uint64_t host_ns);     /* guest ns at host_ns, writing nothing (the report) */
 void clock_set_speed_at(unsigned speed, uint64_t host_ns);
-void clock_pause(int on);                     /* any thread; takes effect at the next read */
+void clock_pause(int on);                     /* any thread; takes effect at the next read: focus's */
+enum { CLOCK_PAUSE_FOCUS = 1, CLOCK_PAUSE_MENU = 2 }; /* the reasons to hold the game (M8) */
+void clock_pause_for(unsigned reason, int on); /* one reason set or cleared; any one holds it */
 int clock_pause_requested(void);
 unsigned clock_epoch(void);                   /* bumped by each gap, speed change and resume */
 unsigned clock_speed(void);

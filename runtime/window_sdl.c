@@ -32,6 +32,8 @@
 #include "gxr.h"
 #include "picture.h"
 #include "plat.h"
+#include "clock.h"
+#include "menu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +48,7 @@ void si_set_motor_sink(void (*fn)(unsigned speed));
 void si_set_motor_window(int open);
 void si_motor_stop(void);
 int tick_turbo_now(void);
+int tick_turbo_toggle(void);
 void clock_pause(int on);
 void audio_set_muted(int on);
 
@@ -81,7 +84,7 @@ static uint8_t* g_bgra; /* the frame converted, BGRA, for P5a and the scaler */
 static int g_shown_w, g_shown_h;
 static uint8_t* g_scaled; /* the texture's contents, client-sized */
 static int g_bw, g_bh;
-static Uint32 g_wake; /* the event type that wakes this thread: data 1 fullscreen, 2 the motor */
+static Uint32 g_wake; /* the event type that wakes this thread: data 1 fullscreen, 2 the motor, 3 the menu */
 
 /* ---- the paced presenter: window.c's H8, on SDL's renderer ---------------- */
 static unsigned g_interval = 2;  /* refreshes each frame is held */
@@ -495,6 +498,7 @@ static void sdl_present(int w, int h)
     r = picture_layout(w, h, g_bw, g_bh, g_scaler);
     if (r.w < 1 || r.h < 1) return;
     picture_scale(g_bgra, w, h, g_scaled, g_bw, g_bh, g_scaler);
+    menu_draw(g_scaled, g_bw, g_bh, g_bw * 4); /* M8: over the scaled copy only, when it is open */
     if (!SDL_UpdateTexture(g_tex, NULL, g_scaled, g_bw * 4) || !SDL_RenderTexture(g_ren, g_tex, NULL, NULL)) {
         g_present_failed++;
         return;
@@ -563,8 +567,80 @@ static void on_focus(int away)
     if (g_unfocused_pause) clock_pause(away);
 }
 
+/* ---- M8: the menu (docs/specs/menu.md), as window.c has it --------------- */
+
+static int g_menu_turbo; /* turbo as the menu shows it: a toggle lands at the next safe point */
+
+static void menu_act(int act)
+{
+    if (act & MENU_ACT_FULLSCREEN) set_fullscreen(!g_fullscreen);
+    if (act & MENU_ACT_TURBO) {
+        tick_turbo_toggle();
+        g_menu_turbo = !g_menu_turbo;
+    }
+    menu_set_state(g_fullscreen, g_menu_turbo);
+    if (act & MENU_ACT_CLOSE) {
+        clock_pause_for(CLOCK_PAUSE_MENU, 0);
+        fprintf(stderr, "[menu] closed\n");
+    }
+    if (act & MENU_ACT_QUIT) close_window();
+    if ((act & (MENU_ACT_REDRAW | MENU_ACT_CLOSE | MENU_ACT_FULLSCREEN)) && g_shown_w) present(0);
+}
+
+/* F1 or View+LS: opened -- the game held under the menu's reason, and drawn
+ * again, since no frame comes while it is held -- or closed. */
+static void menu_toggle_ui(void)
+{
+    if (menu_is_open()) {
+        menu_act(menu_input(MENU_TOGGLE));
+        return;
+    }
+    if (!g_shown_w) return;
+    g_menu_turbo = tick_turbo_now();
+    menu_set_state(g_fullscreen, g_menu_turbo);
+    menu_open();
+    clock_pause_for(CLOCK_PAUSE_MENU, 1);
+    fprintf(stderr, "[menu] open at frame %ld\n", gxr_presented());
+    present(0);
+}
+
+/* A key or a pad button, while the menu is open: 1 when it was the menu's. */
+static int menu_event(const SDL_Event* e)
+{
+    int k = -1;
+    if (e->type == SDL_EVENT_KEY_DOWN) {
+        SDL_Keycode key = e->key.key;
+        if (key == SDLK_F1) {
+            if (!e->key.repeat) menu_toggle_ui();
+            return 1;
+        }
+        if (!menu_is_open()) return 0;
+        k = key == SDLK_UP ? MENU_UP : key == SDLK_DOWN ? MENU_DOWN : key == SDLK_LEFT ? MENU_LEFT
+          : key == SDLK_RIGHT ? MENU_RIGHT : key == SDLK_PAGEUP ? MENU_BIG_LEFT : key == SDLK_PAGEDOWN ? MENU_BIG_RIGHT
+          : key == SDLK_RETURN || key == SDLK_SPACE ? MENU_OK : key == SDLK_ESCAPE || key == SDLK_BACKSPACE ? MENU_BACK
+          : -1;
+    } else if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && menu_is_open()) {
+        SDL_Gamepad* g = SDL_GetGamepadFromID(e->gbutton.which);
+        int b = e->gbutton.button;
+        if ((b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_LEFT_STICK) && g &&
+            SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_BACK) && SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
+            menu_toggle_ui();
+            return 1;
+        }
+        k = b == SDL_GAMEPAD_BUTTON_DPAD_UP ? MENU_UP : b == SDL_GAMEPAD_BUTTON_DPAD_DOWN ? MENU_DOWN
+          : b == SDL_GAMEPAD_BUTTON_DPAD_LEFT ? MENU_LEFT : b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT ? MENU_RIGHT
+          : b == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ? MENU_BIG_LEFT : b == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER ? MENU_BIG_RIGHT
+          : b == SDL_GAMEPAD_BUTTON_SOUTH ? MENU_OK : b == SDL_GAMEPAD_BUTTON_EAST ? MENU_BACK : -1;
+    } else {
+        return 0;
+    }
+    if (k >= 0) menu_act(menu_input(k));
+    return menu_is_open() || k >= 0;
+}
+
 static void on_event(const SDL_Event* e)
 {
+    if (menu_event(e)) return;
     switch (e->type) {
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -626,6 +702,7 @@ static void on_event(const SDL_Event* e)
         break;
     default:
         if (e->type == g_wake && e->user.code == 1) set_fullscreen(!g_fullscreen);
+        if (e->type == g_wake && e->user.code == 3) menu_toggle_ui();
         break;
     }
 }
@@ -808,6 +885,14 @@ int window_toggle_fullscreen(void)
 {
     if (!g_open) return 0;
     wake(1);
+    return 1;
+}
+
+/* The View+LS chord (M8): the menu, on the window's thread. */
+int window_menu_toggle(void)
+{
+    if (!g_open) return 0;
+    wake(3);
     return 1;
 }
 

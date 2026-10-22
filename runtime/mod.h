@@ -29,6 +29,24 @@ const char* mod_describe(void);
 /* One line per patch: how often it was applied, and first at which frame. */
 void mod_report(void);
 
+/* M8's Mods page: the loaded mods, their declared options, and the ones
+ * SOA_MOD_ORDER turned off (mod.c; docs/specs/menu.md). Read on the UI
+ * thread; nothing here changes once mod_load has returned. */
+typedef struct ModMenuOption {
+    const char* name;
+    int type; /* 0 int, 1 bool, 2 enum, 3 string, 4 seed */
+    long long lo, hi;
+    const char* choices; /* an enum's "a|b|c" */
+    const char* value;   /* in effect this run */
+    const char* def;
+} ModMenuOption;
+int mod_menu_count(void);
+const char* mod_menu_name(int m, const char** key);
+int mod_menu_option_count(int m);
+int mod_menu_option(int m, int i, ModMenuOption* out);
+int mod_menu_off_count(void);
+const char* mod_menu_off_key(int i);
+
 /* The DOL's code sections, noted whether or not a mod loads (main.c). */
 void mod_note_dol(const uint8_t* dol, size_t dol_size);
 void mod_set_host_buttons(uint32_t (*fn)(void)); /* CH1: si.c's host buttons, for the API */

@@ -82,22 +82,22 @@ static const Setting k_settings[] = {
     {"mod_order", "SOA_MOD_ORDER", "mod ids, comma-separated, in the order they load; -ID turns one off (M17)"},
     {"card", "SOA_CARD", "the memory card image for slot A"},
     {"record", "SOA_PAD_RECORD", "record controller input to this file"},
-    {"nosound", "SOA_NOSOUND", "1 opens no audio device"},
+    {"nosound", "SOA_NOSOUND", "1 opens no audio device", 0, NULL, "0|1"},
     {"uncap", "SOA_UNCAP", "from this frame on, a frame waits one field: the whole game up to twice as fast"},
     {"seed", "SOA_SEED", "a number: the game's field-load and battle-start reseeds follow it (P6)", 1},
     {"encounters", "SOA_ENCOUNTERS", "off, half, normal or double: how often random battles come (mod encounter-rate)",
      1, "encounter-rate", "off|half|normal|double"},
     {"encounters_hold_b", "SOA_ENCOUNTERS_HOLD_B", "0: holding B no longer keeps random battles away (mod encounter-rate)",
      1, "encounter-rate", "0|1"},
-    {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)"},
+    {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)", 0, NULL, "0|1"},
     {"turbo", "SOA_TURBO", "battle, sky or both: up to twice as fast there (View+RS toggles it)", 1, NULL, "battle|sky|both"},
-    {"deflicker", "SOA_DEFLICKER", "0 draws the picture without the game's deflicker filter: sharper on a progressive display"},
-    {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)"},
+    {"deflicker", "SOA_DEFLICKER", "0 draws the picture without the game's deflicker filter: sharper on a progressive display", 0, NULL, "0|1"},
+    {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)", 0, NULL, "integer|fit"},
     {"gamma", "SOA_GAMMA", "0.5 to 2.5: the picture lighter above 1, darker below"},
-    {"colorblind", "SOA_COLORBLIND", "off, protan, deutan or tritan: colours corrected for that colour blindness"},
-    {"colorblind_mode", "SOA_COLORBLIND_MODE", "correct (the default) or simulate: show what that colour blindness sees instead"},
-    {"flash_limit", "SOA_FLASH_LIMIT", "1: no more than three flashes in any second, as WCAG counts them"},
-    {"unfocused", "SOA_UNFOCUSED", "run (the default), mute or pause: with another window in front, mute ignores the pad and silences the game, pause holds it"},
+    {"colorblind", "SOA_COLORBLIND", "off, protan, deutan or tritan: colours corrected for that colour blindness", 0, NULL, "off|protan|deutan|tritan"},
+    {"colorblind_mode", "SOA_COLORBLIND_MODE", "correct (the default) or simulate: show what that colour blindness sees instead", 0, NULL, "correct|simulate"},
+    {"flash_limit", "SOA_FLASH_LIMIT", "1: no more than three flashes in any second, as WCAG counts them", 0, NULL, "0|1"},
+    {"unfocused", "SOA_UNFOCUSED", "run (the default), mute or pause: with another window in front, mute ignores the pad and silences the game, pause holds it", 0, NULL, "run|mute|pause"},
     {"rumble", "SOA_RUMBLE", "0 to 100: how hard the pad rumbles when the game asks; default 100, 0 is off"},
     {"autotext", "SOA_AUTOTEXT", "0, on or a number of frames: a complete page of dialogue turns itself (mod autotext)", 1,
      "autotext", NULL},
@@ -395,6 +395,125 @@ static int fold_mod_option(const char* path, unsigned lineno, const char* key, c
     }
     set_env("SOA_MOD_OPT", now);
     return 1;
+}
+
+/* ---- M8: the menu's side (docs/specs/menu.md) ----------------------------- */
+
+/* `text`, a soa.ini, with `key = value` in it: the key's line replaced where
+ * there is one (its comment kept), appended where there is not, every other
+ * line, comment and blank left as it was. The length written to out, or -1
+ * when it does not fit. A key is matched as settings_load reads it: before
+ * any '#', trimmed, up to the '='. */
+int settings_with(const char* text, const char* key, const char* value, char* out, size_t cap)
+{
+    size_t used = 0, klen = strlen(key);
+    int done = 0;
+    const char* p = text ? text : "";
+    while (*p) {
+        const char* end = strchr(p, '\n');
+        size_t n = end ? (size_t)(end - p) + 1 : strlen(p);
+        const char *a = p, *eq, *hash;
+        int k;
+        while (a < p + n && (*a == ' ' || *a == '\t')) a++;
+        eq = memchr(a, '=', (size_t)(p + n - a));
+        hash = memchr(a, '#', (size_t)(p + n - a));
+        if (!done && eq && (!hash || hash > eq)) {
+            const char* ke = eq;
+            while (ke > a && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+            if ((size_t)(ke - a) == klen && !strncmp(a, key, klen)) {
+                /* the key's line: its value replaced, a trailing comment and the line end kept */
+                const char* tail = hash ? hash : p + n;
+                const char* le = p + n;
+                if (!hash) {
+                    while (le > p && (le[-1] == '\n' || le[-1] == '\r')) le--;
+                    tail = le;
+                }
+                k = snprintf(out + used, cap - used, "%.*s= %s%s%.*s", (int)(eq - p), p, value, hash ? " " : "",
+                             (int)(p + n - tail), tail);
+                if (k < 0 || (size_t)k >= cap - used) return -1;
+                used += (size_t)k;
+                done = 1;
+                p += n;
+                continue;
+            }
+        }
+        if (n >= cap - used) return -1;
+        memcpy(out + used, p, n);
+        used += n;
+        p += n;
+    }
+    if (!done) {
+        const char* nl = used && out[used - 1] != '\n' ? "\n" : "";
+        int k = snprintf(out + used, cap - used, "%s%s = %s\n", nl, key, value);
+        if (k < 0 || (size_t)k >= cap - used) return -1;
+        used += (size_t)k;
+    }
+    out[used] = '\0';
+    return (int)used;
+}
+
+/* Write `key = value` into the soa.ini this run read (or <root>/soa.ini when
+ * there was none), keeping the rest: written beside it, then moved over it.
+ * 1, or 0 having said why. */
+int settings_set(const char* key, const char* value)
+{
+    char path[1100], tmp[1120];
+    static char old[65536], now[65536 + 1024];
+    size_t n = 0;
+    FILE* f;
+    if (!settings_path(path, sizeof path)) snprintf(path, sizeof path, "%s" PLAT_SEP "soa.ini", settings_root());
+    old[0] = '\0';
+    if ((f = fopen(path, "rb")) != NULL) {
+        n = fread(old, 1, sizeof old - 1, f);
+        old[n] = '\0';
+        fclose(f);
+        if (n == sizeof old - 1) {
+            fprintf(stderr, "[settings] %s is too long to edit here; `%s = %s` is not saved\n", path, key, value);
+            return 0;
+        }
+    }
+    if (settings_with(old, key, value, now, sizeof now) < 0) {
+        fprintf(stderr, "[settings] `%s = %s` does not fit in %s; not saved\n", key, value, path);
+        return 0;
+    }
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    if (!(f = fopen(tmp, "wb")) || fwrite(now, 1, strlen(now), f) != strlen(now) || fclose(f) != 0) {
+        fprintf(stderr, "[settings] cannot write %s; `%s = %s` is not saved\n", tmp, key, value);
+        return 0;
+    }
+    if (!plat_replace_file(tmp, path)) {
+        fprintf(stderr, "[settings] cannot move %s over %s; `%s = %s` is not saved\n", tmp, path, key, value);
+        return 0;
+    }
+    fprintf(stderr, "[settings] %s: %s = %s\n", path, key, value);
+    return 1;
+}
+
+/* The keys the menu offers: a closed set of values and no mod of their own
+ * (a mod's are its options, on its own page). */
+int settings_menu_count(void)
+{
+    size_t i;
+    int n = 0;
+    for (i = 0; i < N_SETTINGS; i++)
+        if (k_settings[i].choices && !k_settings[i].mod) n++;
+    return n;
+}
+
+/* The i-th of them: its key, its choices ("a|b"), what it does, and its value
+ * in effect ("" for the port's default). 0 past the end. */
+int settings_menu_item(int index, const char** key, const char** choices, const char** what, const char** value)
+{
+    size_t i;
+    for (i = 0; i < N_SETTINGS; i++) {
+        if (!k_settings[i].choices || k_settings[i].mod || index-- > 0) continue;
+        *key = k_settings[i].key;
+        *choices = k_settings[i].choices;
+        *what = k_settings[i].what;
+        *value = getenv(k_settings[i].env) ? getenv(k_settings[i].env) : "";
+        return 1;
+    }
+    return 0;
 }
 
 /* Read soa.ini, if there is one and SOA_SETTINGS is not 0, into the

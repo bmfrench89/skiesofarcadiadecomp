@@ -85,6 +85,9 @@ void gxr_set_output(const char* p) { (void)p; }
 void watch_init(void) {}
 void window_start(void) {}
 int window_toggle_fullscreen(void) { return 0; }
+int window_menu_toggle(void) { return 0; } /* M8 */
+int menu_is_open(void) { return 0; }
+void si_set_menu_open(int (*fn)(void)) { (void)fn; }
 const char* settings_root(void) { return "."; }
 int settings_console_to_log(char* path, size_t cap) { (void)path; (void)cap; return 0; }
 void si_set_path_root(const char* root) { (void)root; }

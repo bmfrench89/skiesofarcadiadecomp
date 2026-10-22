@@ -46,6 +46,8 @@ int main(void)
             clock_set_speed_at((unsigned)a, b);
         } else if (!strcmp(cmd, "pause") && scanf("%llu", &a) == 1) {
             clock_pause((int)a);
+        } else if (!strcmp(cmd, "menu") && scanf("%llu", &a) == 1) {
+            clock_pause_for(CLOCK_PAUSE_MENU, (int)a);
         }
     }
     return 0;
@@ -193,3 +195,33 @@ def test_peeking_writes_nothing(driver):
     )
     assert out[2] == (3 * MS,) and out[3] == (MS,), out
     assert out[4][0] == MS and out[4][1] == 1, out
+
+
+@needs_msvc
+def test_the_menu_s_hold_and_focus_s_are_apart(driver):
+    """M8: the menu holds the game under a reason of its own. A focus pause
+    that ends while the menu is open does not release it, and the menu
+    closing under a focus pause does not either; only when both are gone
+    does the clock run. The mutation, one flag for both, runs it early."""
+    got = run(
+        driver,
+        [
+            "config 1 0",
+            f"adv {T0}",
+            f"adv {T0 + 10 * MS}",
+            "menu 1",
+            f"adv {T0 + 20 * MS}",
+            "pause 1",
+            f"adv {T0 + 1 * S}",
+            "pause 0",
+            f"adv {T0 + 2 * S}",
+            "menu 0",
+            "pause 1",
+            f"adv {T0 + 3 * S}",
+            "pause 0",
+            f"adv {T0 + 3 * S + 1 * MS}",
+            f"adv {T0 + 3 * S + 5 * MS}",
+        ],
+    )
+    guest = [g for g, _, _ in got]
+    assert guest == [0, 10 * MS, 20 * MS, 20 * MS, 20 * MS, 20 * MS, 20 * MS, 24 * MS], got

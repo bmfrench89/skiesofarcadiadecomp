@@ -52,12 +52,17 @@ void si_set_path_root(const char* root);
 int si_read_pad(unsigned port, void* out);
 void si_set_chord_handler(void (*fn)(int chord, unsigned frame));
 uint32_t si_host_buttons(void);
+void si_set_menu_open(int (*fn)(void));
+
+/* The in-game menu (M8), open over DRIVER_MENU's frames "from,to". */
+static unsigned g_menu_from = ~0u, g_menu_to;
 
 /* The window's host buttons (CH1): none here -- a script's are the test. */
 int window_host(uint16_t* host) { (void)host; return 0; }
 static void chord(int c, unsigned f) { printf("chord %u %d\n", f, c); }
 
 static unsigned g_frame;
+static int menu_open_now(void) { return g_frame >= g_menu_from && g_frame < g_menu_to; }
 static uint64_t g_retrace;
 static int g_live;
 
@@ -98,6 +103,8 @@ int main(int argc, char** argv)
     uint16_t was_pad2 = 0xFFFF;
     unsigned f, k;
     si_set_chord_handler(chord);
+    if (getenv("DRIVER_MENU") && sscanf(getenv("DRIVER_MENU"), "%u,%u", &g_menu_from, &g_menu_to) == 2)
+        si_set_menu_open(menu_open_now);
     g_live = argc > 1 && strcmp(argv[1], "record") == 0;
     if (getenv("DRIVER_ROOT")) si_set_path_root(getenv("DRIVER_ROOT")); /* main.c's settings_root (M5b) */
     if (getenv("DRIVER_EXTRA")) {
@@ -553,3 +560,30 @@ def test_with_soa_pad2_the_game_still_sees_one_controller(driver, tmp_path):
     transfer on channel 1 still ends in no reply."""
     out, _ = run(driver, tmp_path, "script", {"SOA_PAD2": "5:a", "DRIVER_CHAN1": "1"}, last=10)
     assert "chan1 norep 1" in out, out
+
+
+def state_at(out: str, frame: int) -> str:
+    """The report the guest read at `frame`: the last change at or before it."""
+    now = ""
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0].isdigit() and int(parts[0]) <= frame:
+            now = " ".join(parts[1:])
+    return now
+
+
+@needs_msvc
+def test_the_menu_withholds_the_pad_before_the_recording(driver, tmp_path):
+    """M8: while the menu is open (frames 10 to 29 here) the guest reads a
+    neutral pad though the person holds A, the recording holds neutral too,
+    and so its replay -- with no menu -- reads what the session read. The
+    mutation, withholding after the recording takes its copy, records the A
+    and the replay reads it."""
+    rec = tmp_path / "menu.pad"
+    menu, _ = run(driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec), "DRIVER_MENU": "10,30"})
+    plain, _ = run(driver, tmp_path, "record", {})
+    assert state_at(plain, 15) != state_at(plain, 5), plain  # A held at 15, not at 5
+    assert state_at(menu, 15) == state_at(menu, 5), menu  # withheld
+    assert state_at(menu, 35) == state_at(plain, 35), (menu, plain)  # and given back after
+    again, _ = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)})
+    assert again == menu, rec.read_text()

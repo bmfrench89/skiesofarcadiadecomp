@@ -22,6 +22,8 @@
 #include "gxr.h"
 #include "picture.h"
 #include "gxv.h"
+#include "clock.h"
+#include "menu.h"
 #include <windows.h>
 #include <xinput.h>
 #include <process.h>
@@ -110,6 +112,11 @@ void clock_pause(int on);
 static volatile int g_away;        /* another window is in front */
 void audio_set_muted(int on);
 #define WM_APP_FULLSCREEN (WM_APP + 1)
+#define WM_APP_MENU (WM_APP + 7) /* M8: View+LS from the guest thread */
+int tick_turbo_toggle(void);
+/* The menu (M8, menu.c), on this thread: toggled, and a key into it. */
+static void menu_toggle_ui(void);
+static void menu_key(int key);
 
 static void note_present(void)
 {
@@ -297,6 +304,7 @@ static void dxgi_present(int w, int h)
     PicRect r = picture_layout(w, h, g_bw, g_bh, g_scaler);
     if (g_bw < 1 || g_bh < 1 || r.w < 1 || r.h < 1) return;
     picture_scale(g_bgra, w, h, g_scaled, g_bw, g_bh, g_scaler);
+    menu_draw(g_scaled, g_bw, g_bh, g_bw * 4); /* M8: over the scaled copy only, when it is open */
     if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) {
         g_present_failed++;
         return;
@@ -410,6 +418,22 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         PostQuitMessage(0);
         return 0;
     case WM_KEYDOWN:
+        if (w == VK_F1) {
+            menu_toggle_ui();
+            return 0;
+        }
+        if (menu_is_open()) {
+            /* the menu has the keyboard: the game is held and its pad withheld */
+            if (w == VK_UP) menu_key(MENU_UP);
+            else if (w == VK_DOWN) menu_key(MENU_DOWN);
+            else if (w == VK_LEFT) menu_key(MENU_LEFT);
+            else if (w == VK_RIGHT) menu_key(MENU_RIGHT);
+            else if (w == VK_PRIOR) menu_key(MENU_BIG_LEFT);
+            else if (w == VK_NEXT) menu_key(MENU_BIG_RIGHT);
+            else if (w == VK_RETURN || w == VK_SPACE) menu_key(MENU_OK);
+            else if (w == VK_ESCAPE || w == VK_BACK) menu_key(MENU_BACK);
+            return 0;
+        }
         if (w == VK_ESCAPE) {
             if (g_fullscreen) set_fullscreen(0); /* Escape leaves fullscreen first (Q-O3) */
             else { g_open = 0; PostQuitMessage(0); }
@@ -421,6 +445,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         return DefWindowProc(h, m, w, l);
+    case WM_APP_MENU:
+        menu_toggle_ui();
+        return 0;
     case WM_APP_FULLSCREEN:
         set_fullscreen(w == 2 ? !g_fullscreen : (int)w);
         return 0;
@@ -492,7 +519,26 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                 SetRect(&bar, 0, r.y, r.x, r.y + r.h); FillRect(dc, &bar, black);
                 SetRect(&bar, r.x + r.w, r.y, rc.right, r.y + r.h); FillRect(dc, &bar, black);
                 SetStretchBltMode(dc, COLORONCOLOR);
-                if (!StretchDIBits(dc, r.x, r.y, r.w, r.h, 0, 0, g_shown_w, g_shown_h, g_bgra, &bi, DIB_RGB_COLORS, SRCCOPY))
+                if (menu_is_open() && rc.right > 0 && rc.bottom > 0) {
+                    /* M8: the picture scaled into a client-sized copy, the menu over that, drawn 1:1 */
+                    static uint8_t* buf;
+                    static size_t cap;
+                    size_t need = (size_t)rc.right * (size_t)rc.bottom * 4;
+                    if (need > cap) {
+                        free(buf);
+                        buf = (uint8_t*)malloc(need);
+                        cap = buf ? need : 0;
+                    }
+                    if (buf) {
+                        picture_scale(g_bgra, g_shown_w, g_shown_h, buf, rc.right, rc.bottom, g_scaler);
+                        menu_draw(buf, rc.right, rc.bottom, rc.right * 4);
+                        bi.bmiHeader.biWidth = rc.right;
+                        bi.bmiHeader.biHeight = -rc.bottom;
+                        if (!StretchDIBits(dc, 0, 0, rc.right, rc.bottom, 0, 0, rc.right, rc.bottom, buf, &bi,
+                                           DIB_RGB_COLORS, SRCCOPY))
+                            g_present_failed++;
+                    }
+                } else if (!StretchDIBits(dc, r.x, r.y, r.w, r.h, 0, 0, g_shown_w, g_shown_h, g_bgra, &bi, DIB_RGB_COLORS, SRCCOPY))
                     g_present_failed++;
             }
             note_present();
@@ -563,10 +609,182 @@ static void present(int fresh)
     }
 }
 
+/* ---- M8: the menu (docs/specs/menu.md) ------------------------------------ */
+
+static int g_menu_turbo; /* turbo as the menu shows it: a toggle lands at the next safe point */
+
+/* What the menu asks of the window. */
+static void menu_act(int act)
+{
+    if (act & MENU_ACT_FULLSCREEN) set_fullscreen(!g_fullscreen);
+    if (act & MENU_ACT_TURBO) {
+        tick_turbo_toggle(); /* applied at the safe point, when the game runs again */
+        g_menu_turbo = !g_menu_turbo;
+    }
+    menu_set_state(g_fullscreen, g_menu_turbo);
+    if (act & MENU_ACT_CLOSE) {
+        clock_pause_for(CLOCK_PAUSE_MENU, 0);
+        fprintf(stderr, "[menu] closed\n");
+    }
+    if (act & MENU_ACT_QUIT) PostMessageA(g_hwnd, WM_CLOSE, 0, 0);
+    if ((act & (MENU_ACT_REDRAW | MENU_ACT_CLOSE | MENU_ACT_FULLSCREEN)) && g_shown_w) present(0);
+}
+
+static void menu_key(int key)
+{
+    menu_act(menu_input(key));
+}
+
+/* F1 or View+LS: the menu opened -- the game held under the menu's own
+ * reason, and drawn again, since no frame will come while it is held -- or
+ * closed. The Vulkan presenter draws on the GPU and has no overlay pass yet
+ * (M8b), so there it says why and stays closed. */
+static void menu_toggle_ui(void)
+{
+    if (menu_is_open()) {
+        menu_key(MENU_TOGGLE);
+        return;
+    }
+    if (g_vk) {
+        fprintf(stderr, "[menu] the Vulkan presenter does not draw the menu yet (M8b), so it stays closed; "
+                        "SOA_PRESENTER=dxgi draws it\n");
+        return;
+    }
+    if (!g_shown_w) return; /* nothing drawn yet to draw it over */
+    g_menu_turbo = tick_turbo_now();
+    menu_set_state(g_fullscreen, g_menu_turbo);
+    menu_open();
+    clock_pause_for(CLOCK_PAUSE_MENU, 1);
+    fprintf(stderr, "[menu] open at frame %ld\n", gxr_presented());
+    present(0);
+}
+
+/* The pad while the menu is open, read here, on the UI thread: the game is
+ * held at its safe point and polls nothing. The d-pad or the left stick
+ * moves, A enters, B goes back, LB and RB step an int by a tenth, View+LS
+ * closes; a held direction repeats after 400 ms, every 110 ms. */
+static void menu_pad(void)
+{
+    static const struct {
+        WORD mask;
+        int key;
+    } k_map[] = {{XINPUT_GAMEPAD_DPAD_UP, MENU_UP},          {XINPUT_GAMEPAD_DPAD_DOWN, MENU_DOWN},
+                 {XINPUT_GAMEPAD_DPAD_LEFT, MENU_LEFT},      {XINPUT_GAMEPAD_DPAD_RIGHT, MENU_RIGHT},
+                 {XINPUT_GAMEPAD_LEFT_SHOULDER, MENU_BIG_LEFT}, {XINPUT_GAMEPAD_RIGHT_SHOULDER, MENU_BIG_RIGHT},
+                 {XINPUT_GAMEPAD_A, MENU_OK},                {XINPUT_GAMEPAD_B, MENU_BACK}};
+    static WORD last;
+    static int fresh = 1, held = -1;
+    static DWORD next;
+    const WORD chord = XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_LEFT_THUMB;
+    XINPUT_STATE xs;
+    WORD btn;
+    DWORD now = GetTickCount();
+    size_t i;
+    if (!menu_is_open()) {
+        fresh = 1;
+        held = -1;
+        return;
+    }
+    if (g_pad_slot < 0 || XInputGetState((DWORD)g_pad_slot, &xs) != ERROR_SUCCESS) return;
+    btn = xs.Gamepad.wButtons;
+    if (xs.Gamepad.sThumbLY > 16000) btn |= XINPUT_GAMEPAD_DPAD_UP;
+    if (xs.Gamepad.sThumbLY < -16000) btn |= XINPUT_GAMEPAD_DPAD_DOWN;
+    if (xs.Gamepad.sThumbLX < -16000) btn |= XINPUT_GAMEPAD_DPAD_LEFT;
+    if (xs.Gamepad.sThumbLX > 16000) btn |= XINPUT_GAMEPAD_DPAD_RIGHT;
+    if (fresh) { /* what opened it is still held: nothing until it is let go */
+        fresh = 0;
+        last = btn;
+        return;
+    }
+    if ((btn & chord) == chord && (last & chord) != chord) {
+        last = btn;
+        menu_toggle_ui();
+        return;
+    }
+    for (i = 0; i < sizeof k_map / sizeof k_map[0]; i++)
+        if ((btn & k_map[i].mask) && !(last & k_map[i].mask)) {
+            held = (int)i;
+            next = now + 400;
+            last = btn;
+            menu_key(k_map[i].key);
+            return;
+        }
+    if (held >= 0 && (btn & k_map[held].mask) && k_map[held].key <= MENU_BIG_RIGHT && (LONG)(now - next) >= 0) {
+        next = now + 110;
+        menu_key(k_map[held].key);
+    }
+    if (held >= 0 && !(btn & k_map[held].mask)) held = -1;
+    last = btn;
+}
+
+/* The View+LS chord (CH1), from the guest thread: posted to this one. */
+int window_menu_toggle(void)
+{
+    if (!g_open || !g_hwnd) return 0;
+    PostMessageA(g_hwnd, WM_APP_MENU, 0, 0);
+    return 1;
+}
+
+/* SOA_WINDOW_TEST's menu@F (M8's check): the menu opened over frame F, and
+ * the game's picture (g_screen, whose hash the frame lines carry) and the
+ * converted frame (g_bgra) hashed before and after a present with it open --
+ * both must be unchanged, the menu drawn into the scaled copy alone -- the
+ * presented buffer written as a BMP to look at, and the menu closed. */
+static uint32_t fnv_bytes(const uint8_t* p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
+static void menu_check(long frame)
+{
+    unsigned long long screen0, screen1;
+    uint32_t frame0, frame1;
+    size_t n = (size_t)g_shown_w * (size_t)g_shown_h * 4;
+    char path[600];
+    const char* dir = getenv("SOA_FRAMES_DIR");
+    FILE* f;
+    screen0 = gxr_screen_hash();
+    frame0 = fnv_bytes(g_bgra, n);
+    menu_toggle_ui();
+    if (!menu_is_open()) {
+        fprintf(stderr, "[window] frame %ld: the menu did not open\n", frame);
+        return;
+    }
+    present(0);
+    screen1 = gxr_screen_hash();
+    frame1 = fnv_bytes(g_bgra, n);
+    fprintf(stderr, "[window] frame %ld: menu open; the game's picture %016llx before, %016llx after; the converted "
+                    "frame %08x before, %08x after: %s\n", frame, screen0, screen1, frame0, frame1,
+            screen0 == screen1 && frame0 == frame1 ? "unchanged" : "CHANGED");
+    snprintf(path, sizeof path, "%s/menu-%ld.bmp", dir && *dir ? dir : "build", frame);
+    if (g_dxgi && g_scaled && (f = fopen(path, "wb")) != NULL) {
+        /* a 32-bit top-down BMP of the buffer the swap chain was given */
+        uint8_t hdr[54] = {'B', 'M'};
+        uint32_t size = 54u + (uint32_t)g_bw * (uint32_t)g_bh * 4u, v;
+        int i;
+        for (i = 0; i < 4; i++) hdr[2 + i] = (uint8_t)(size >> (8 * i));
+        hdr[10] = 54;
+        hdr[14] = 40;
+        for (i = 0; i < 4; i++) hdr[18 + i] = (uint8_t)((uint32_t)g_bw >> (8 * i));
+        v = (uint32_t)(-g_bh);
+        for (i = 0; i < 4; i++) hdr[22 + i] = (uint8_t)(v >> (8 * i));
+        hdr[26] = 1;
+        hdr[28] = 32;
+        fwrite(hdr, 1, sizeof hdr, f);
+        fwrite(g_scaled, 1, (size_t)g_bw * (size_t)g_bh * 4, f);
+        fclose(f);
+        fprintf(stderr, "[window] frame %ld: the menu as presented, %dx%d: %s\n", frame, g_bw, g_bh, path);
+    }
+    menu_toggle_ui(); /* closed again: the game is held while it is open, and no later frame would come */
+}
+
 /* SOA_WINDOW_TEST=fs@300,win@600,size:1000x700@900 (H19a's check): at each
  * presented frame named, fullscreen, windowed or a client size, then one
  * [window] line with what came of it. Checked by tools/tests/test_picture.py. */
-typedef struct { long frame; int kind, w, h; } WindowAct; /* kind 0 fs, 1 win, 2 size */
+typedef struct { long frame; int kind, w, h; } WindowAct; /* kind 0 fs, 1 win, 2 size, 3 menu (M8) */
 static WindowAct g_acts[16];
 static int g_act_n, g_act_i;
 
@@ -579,6 +797,7 @@ static void window_test_parse(void)
         memset(&a, 0, sizeof a);
         if (!strncmp(p, "fs@", 3)) { a.kind = 0; p += 3; }
         else if (!strncmp(p, "win@", 4)) { a.kind = 1; p += 4; }
+        else if (!strncmp(p, "menu@", 5)) { a.kind = 3; p += 5; }
         else if (!strncmp(p, "size:", 5)) {
             a.kind = 2;
             a.w = (int)strtol(p + 5, &end, 10);
@@ -781,6 +1000,10 @@ static unsigned __stdcall ui_thread(void* arg)
         }
         if (g_act_i < g_act_n && now >= g_acts[g_act_i].frame) {
             const WindowAct* a = &g_acts[g_act_i++];
+            if (a->kind == 3) {
+                menu_check(now);
+                continue;
+            }
             if (a->kind == 0) set_fullscreen(1);
             else if (a->kind == 1) set_fullscreen(0);
             else {
@@ -805,6 +1028,7 @@ static unsigned __stdcall ui_thread(void* arg)
         }
         if (logged_resize) window_line(now);
         if (now != last) { last = now; present(1); }
+        menu_pad();
         MsgWaitForMultipleObjects(0, NULL, FALSE, 8, QS_ALLINPUT);
     }
 }
@@ -1010,6 +1234,7 @@ void window_start(void) {}
 int window_open(void) { return 0; }
 int window_host(uint16_t* host) { (void)host; return 0; }
 int window_toggle_fullscreen(void) { return 0; }
+int window_menu_toggle(void) { return 0; }
 int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]) { (void)buttons; (void)stick; (void)cstick; (void)trig; return 0; }
 #endif

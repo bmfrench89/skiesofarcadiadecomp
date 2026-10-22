@@ -41,7 +41,7 @@ static uint64_t g_gap_ns = 2000000000ull;
 static volatile unsigned g_epoch;
 static unsigned long long g_gaps;
 static uint64_t g_excluded_ns;
-static plat_a32 g_pause_req; /* set by whichever thread hears of a pause, read by the guest's */
+static plat_a32 g_pause_req; /* the reasons held (CLOCK_PAUSE_*), set by whichever thread hears of one, read by the guest's */
 static int g_paused;
 static void (*g_gap_note)(double gap_s);
 
@@ -71,7 +71,7 @@ uint64_t clock_advance_at(uint64_t host_ns)
         g_last_host_ns = g_origin_host_ns = host_ns;
         return g_guest_ns;
     }
-    if (plat_load32(&g_pause_req) != g_paused) {
+    if ((plat_load32(&g_pause_req) != 0) != g_paused) {
         if (!g_paused) {
             /* up to the pause, then nothing until it ends */
             if (host_ns > g_last_host_ns) g_guest_ns += (host_ns - g_last_host_ns) * g_speed;
@@ -115,9 +115,21 @@ void clock_set_speed_at(unsigned speed, uint64_t host_ns)
     g_epoch++;
 }
 
+/* One reason to hold the game set or cleared, the others left as they are:
+ * the menu's hold (M8) outlasts a focus pause that ends under it, and the
+ * reverse. */
+void clock_pause_for(unsigned reason, int on)
+{
+    int32_t old, want;
+    do {
+        old = plat_load32(&g_pause_req);
+        want = on ? (old | (int32_t)reason) : (old & ~(int32_t)reason);
+    } while (plat_cas32(&g_pause_req, old, want) != old);
+}
+
 void clock_pause(int on)
 {
-    plat_cas32(&g_pause_req, on ? 0 : 1, on ? 1 : 0);
+    clock_pause_for(CLOCK_PAUSE_FOCUS, on);
 }
 
 int clock_pause_requested(void)

@@ -777,6 +777,17 @@ static void pad_log(const PadState* st, unsigned frame)
  * normally means no window at all (main.c decides that), but an explicit
  * SOA_WINDOW=1 alongside it should watch the script run, not silently drop
  * it. */
+/* Whether the in-game menu is open (M8, menu.c's menu_is_open, set by
+ * main.c): while it is, the live pad is withheld -- neutral -- here, before
+ * a recording takes its copy, so a recording made around the menu replays
+ * the same. A replay is the whole input and is never withheld. */
+static int (*g_menu_open)(void);
+
+void si_set_menu_open(int (*fn)(void))
+{
+    g_menu_open = fn;
+}
+
 static void pad_sample(PadState* st, unsigned frame)
 {
     *st = PAD_NEUTRAL;
@@ -790,6 +801,7 @@ static void pad_sample(PadState* st, unsigned frame)
         st->buttons = buttons_now(st->stick);
     }
     st->buttons &= BTN_ALL; /* the report carries twelve buttons and nothing else */
+    if (g_menu_open && g_menu_open()) *st = PAD_NEUTRAL;
 }
 
 /* A mod's say in every read (mod.c, PLAN-60FPS-MODS M3b): after the recording
