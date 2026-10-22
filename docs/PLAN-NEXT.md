@@ -219,8 +219,8 @@ The owner answered four questions, with the research behind them summarised in t
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
     (H17a) and widescreen (M10). **Chosen 2026-10-21 (D-40): M8 first**, built ahead of the sitting:
-    M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)); M8b, the Vulkan
-    presenter's overlay, follows.
+    M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)), and M8b, the Vulkan
+    presenter's overlay, 2026-10-22 (FINDINGS "M8b").
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").

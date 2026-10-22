@@ -322,8 +322,8 @@ first page); LB and RB, or Page Up and Down, step a number by a tenth. Its pages
 Resume, Mods (each mod on or off, and the options it declares), Settings (every
 `soa.ini` key with a fixed set of values), Fullscreen and Turbo (applied at
 once), and Quit. Every other change is written to `soa.ini` and read when the
-game next starts, which the page says. The Vulkan presenter does not draw it
-yet (`SOA_PRESENTER=dxgi` does).
+game next starts, which the page says. Every presenter draws it, the GPU's
+(`gpu = vulkan`) included.
 
 To record a session and play it back:
 

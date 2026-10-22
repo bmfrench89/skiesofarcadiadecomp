@@ -453,8 +453,9 @@ sitting. **Then M16b** (FINDINGS "M16b"): the shipped mods' settings as options,
 
 **Then M8a, the in-game menu** (FINDINGS "M8a", `docs/specs/menu.md`): View+LS or F1 opens it over the picture,
 holds the game, withholds the pad before any recording, and writes soa.ini (Mods with their options and on/off,
-Settings); fullscreen and turbo apply at once. Checked in a window here and on Linux in a container. **Next:** M8b
-(the Vulkan presenter's overlay), or the owner's sitting, whose list now includes the menu in a window. P1b's
+Settings); fullscreen and turbo apply at once. Checked in a window here and on Linux in a container. **Then M8b** (FINDINGS
+"M8b"): the Vulkan presenter blends the menu over its picture. **Next:** the owner's sitting, whose list now
+includes the menu in a window; then the owner's next choice (M7a/b's warps and saves from the menu, 60 fps, widescreen). P1b's
 sky run is attempted and open (FINDINGS "P1b's sky run, attempted"): map 99's encounter path is read, but
 part K's ship sits where no region has a table and did not move under A and the stick.
 

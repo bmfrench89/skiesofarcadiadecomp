@@ -570,7 +570,7 @@ Actions are queued to the safe point, and an environment variable drives them fo
 
 **M8. Overlay and hotkeys** — *a day to several days, `--link`. **Owner:** one windowed session. M8a built
 2026-10-21 ([specs/menu.md](specs/menu.md), FINDINGS "M8a"): the menu on the CPU presenters, its Done rewritten as
-PLAN-GAMEPLAY-MODS §F asked; M8b (Vulkan) and the warps and saves (M7a/b) follow. Scheduled with M7a/b as the first slices after the GPU gate (PLAN-NEXT, after M5), per PLAN-GAMEPLAY-MODS F.*
+PLAN-GAMEPLAY-MODS §F asked; M8b, the Vulkan presenter's overlay, built 2026-10-22; the warps and saves (M7a/b) follow. Scheduled with M7a/b as the first slices after the GPU gate (PLAN-NEXT, after M5), per PLAN-GAMEPLAY-MODS F.*
 - The overlay is drawn in `window.c`'s `present()` after the RGBA to BGRA conversion, and never into `g_screen`.
 - The UI thread only posts requests to a queue, which is drained at the safe point.
 - While the menu is open, the keyboard stops reaching the pad.

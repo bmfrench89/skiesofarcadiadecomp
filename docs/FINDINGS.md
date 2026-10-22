@@ -9458,3 +9458,23 @@ owner's choice that day, PLAN-NEXT D-40.
   `test_power.py` passed under Xvfb (14), once the SDL test's driver had the menu's stubs.
 - **Left:** the owner's Done (open it in a window with the pad, set an encounter preset and turn a mod off, restart,
   see both), M8b (the Vulkan presenter's overlay), and warps and saves from the menu (M7a/b).
+
+**M8b: the menu blended over the Vulkan presenter's picture.** 2026-10-22. Spec: `docs/specs/menu.md`.
+
+- **What it is** [V, `runtime/gxv.c`, `runtime/gxv/overlay.frag`, `runtime/menu.c`]: a second pipeline on the present
+  pass's layout and vertex stage, with alpha blending, draws a client-sized overlay over what the pass drew. The
+  overlay is one B G R A word a pixel in a host-visible buffer made once for up to 3840x2400; the window's function,
+  `menu_draw_overlay`, fills it before each present is recorded (after the presenter's fence, so the GPU is done
+  with the last one) and says whether there was anything to draw. Clear outside the panel, the panel's ground 11 at
+  alpha 191 (about the CPU path's p/4 + 8), text and border opaque. `window.c` registers it when the Vulkan presenter
+  opens; the menu no longer refuses there.
+- **The check, shown able to fail** [V]: `gpuspike.py present --overlay` presents a synthetic picture with an overlay
+  of three classes -- clear, the panel's translucent ground, opaque colours -- at 2x and 1920x1080, and holds every
+  channel of every pixel within one of the exact blend: 2 of 2 on this PC's AMD Radeon. `--mutate overlay` (every
+  overlay pixel opaque) gave 0 of 2, the 1920x1080 case 1,209,565 pixels off by up to 255. The presenter's 32 layouts
+  and 24 filter cases stay exact. `test_gxv_present.py` holds both cases.
+- **In a window** [V, `build/m8b/`]: part G's card with `gpu = vulkan` (a 1280x960 swap chain, format 44), and
+  `SOA_WINDOW_TEST=menu@2900`: the menu opened and closed, the game's picture `10fe051e25fab908` before and after
+  (`unchanged`; the GPU presenter converts no frame on the CPU, so that hash is of nothing), and the report counted
+  3097 presents for 3094 screen copies, the three more the menu's. The swap chain's image is not read back, so the
+  overlay's pixels in the window rest on the check above; the owner sees it at the sitting.

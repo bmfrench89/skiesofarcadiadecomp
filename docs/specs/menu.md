@@ -6,7 +6,8 @@ amendment, and the rule-7 rewrite of its Done) and the M16/M17 specs, which leav
 it touches was mapped first (window.c's present path, si.c's pad, the chords, the safe point, settings.c, mod.c).
 
 **Status: M8a built 2026-10-21**, Done lines 1-6 met on this PC and in a Linux container (FINDINGS "M8a"); line 7
-is the owner's, at the next sitting.
+is the owner's, at the next sitting. **M8b built 2026-10-22** (FINDINGS "M8b"): the Vulkan presenter blends the
+menu over its picture, held by `gpuspike.py present --overlay`.
 
 **Why.** Every setting the port has is a line in `soa.ini` or an environment variable. On a handheld with no
 keyboard, that means leaving the game to change anything. M8 is the menu a player opens from the pad.
@@ -35,12 +36,13 @@ keyboard, that means leaving the game to change anything. M8 is the menu a playe
   scaled into it, never into the game's picture (`g_screen`), which the frame hashes and snapshots are taken from:
   a dimmed panel and text from a small font of the port's own (5x7, ASCII, drawn scaled to the window). With the
   game held, no frame arrives, so the menu asks for a re-present when it changes.
-- **The Vulkan presenter** draws its picture on the GPU; its overlay pass is M8b. Until then, opening the menu
-  there says why it does not open, and nothing is held.
+- **The Vulkan presenter** draws its picture on the GPU, so the menu is drawn there as an overlay the GPU blends
+  (M8b): `menu_draw_overlay` writes it, clear where the menu is not, the panel's ground 11 at 191/255 (which blends
+  to about the CPU path's p/4 + 8), the rest opaque, into a buffer a second pipeline on the present pass reads.
 
 ## 2. Not in M8a
 
-M8b (the Vulkan overlay), warps and saves from the menu (M7a/b's actions, which the plan's first Done wanted), a
+Warps and saves from the menu (M7a/b's actions, which the plan's first Done wanted), a
 mod's order changed from the menu (M17's list is written by hand for now), and live re-application of options.
 
 ## 3. Done
