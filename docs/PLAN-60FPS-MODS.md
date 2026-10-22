@@ -370,7 +370,7 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - Replay 23/23 at 1, 2, 3 and 8 threads.
 - H10's synthetic midpoint test still passes.
 
-**H17a. Interpolation, headless, off by default** — *several days, `--link`. Not blocked by the GPU decision: it builds a second stream of draw commands, which a GPU backend would draw as well. Ordered after the comfort pack and C5b (PLAN-NEXT M2). Commands reach their EFB through `DrawCmd.efb`, set in `claim_slot` (specs/gpu-backend.md 3.1). Its Done lines below were restated 2026-09-25 as PLAN-GAMEPLAY-MODS F's same-run checks.*
+**H17a. Interpolation, headless, off by default** — *several days, `--link`. Not blocked by the GPU decision: it builds a second stream of draw commands, which a GPU backend would draw as well. Ordered after the comfort pack and C5b (PLAN-NEXT M2). Commands reach their EFB through `DrawCmd.efb`, set in `claim_slot` (specs/gpu-backend.md 3.1). Its Done lines below were restated 2026-09-25 as PLAN-GAMEPLAY-MODS F's same-run checks. **Done 2026-10-22** to `docs/specs/interp.md`'s restatement of them (FINDINGS "H17a").*
 `SOA_INTERP=1` does the following:
 - keeps frame N's vertices across the drain, in H10's layout;
 - needs no texture kept alive for a second frame: each in-between command is built alongside the real one and samples what F+1 samples (ARCHITECTURE section 12);

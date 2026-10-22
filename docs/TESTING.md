@@ -37,12 +37,12 @@ minutes here, nearly all of it the Python tests. Nothing here reads
 1475 passed, 41 skipped in 977.75s
 ```
 
-1780 tests in 96 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
+1781 tests in 96 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
 when it is there and skip without it (the run above is 2026-10-09's, at 1516, before
 R5c's five in `test_setup.py`, M6's 32 in `test_mods.py`, `test_progress.py`'s 13 and reach's 95 in
 `test_soak.py`, `test_mods.py`, `test_reach.py` and `test_sct.py`, M16's 47 and M17's 22 in
 `test_mods.py`, `test_settings.py` and `test_toolchain_profiles.py`, T10's 13 in `test_mod_kit.py`, P1b's 10 in `test_encounter_check.py` and 4 in `test_mods.py`, H20's 7 in `test_power.py`, M16b's 3 in `test_mods.py`, and M8a's 6 in `test_menu.py` and 5 in
-`test_settings.py`, `test_clock.py` and `test_padrec.py`, and M8b's 2 in `test_gxv_present.py`). The two FMA probes of
+`test_settings.py`, `test_clock.py` and `test_padrec.py`, and M8b's 2 in `test_gxv_present.py`, and H17a's 1 in `test_gxr_pair.py`). The two FMA probes of
 `test_toolchain_fp.py` skip wherever no clang is found (set `SOA_CLANG_CL`), as in
 a default run here, `test_mingw.py`'s archive test where no symbolic link can be made
 (Windows without developer mode), `test_window_sdl.py` wherever there is no X display or
@@ -109,7 +109,7 @@ its own and run it, some of the C as well:
 | `test_poke.py` | 16 | SOA_POKE: a malformed switch is refused out loud rather than driving a run that looks like it ignored you |
 | `test_decomp.py` | 15 | the `dc_*` rename scanner, on declarations that look like functions and are not; and the one `units.txt` reader, which refuses a row it cannot read |
 | `test_bindings.py` | 15 | the binding lists (`hle.txt`, `hooks.txt`, `savepoints.txt`, `trace.txt`): a line that is not an entry, or a repeated address, is an error naming its file and line |
-| `test_gxr_pair.py` | 15 | H10's in-between image, on the renderer built alone: synthetic frames captured through the real capture path and replayed as pairs. A triangle moved by 2d lands at d pixel for pixel; perspective and depth motion give the view-space midpoint; t=0 and t=1 give the two frames; an unmatched draw comes from F+1; copies to texture are skipped with their clears kept; equal keys pair in stream order; the pairs written are fifopair's; and `gxr_flush` never touches the pair state |
+| `test_gxr_pair.py` | 16 | H10's in-between image, on the renderer built alone: synthetic frames captured through the real capture path and replayed as pairs. A triangle moved by 2d lands at d pixel for pixel; perspective and depth motion give the view-space midpoint; t=0 and t=1 give the two frames; an unmatched draw comes from F+1; copies to texture are skipped with their clears kept; equal keys pair in stream order; the pairs written are fifopair's; `gxr_flush` never touches the pair state; and H17a's live stream (`SOA_INTERP=1`, B drawn once with both streams) writes `B.png` and `B.mid.png` byte for byte as the three passes do, at 1 and 4 threads |
 | `test_seed.py` | 15 | `runtime/seed.c`, built alone: the race seed's values are MurmurHash3's finaliser over the seed, the site and the site's call count (against an independent Python one), exactly the three OSGetTick sites are pinned, each counts its own calls, a seed that is not 32 bits is refused and the seed in effect is handed back in decimal; each pin prints its line, and the module's own log check (`python tools/tests/test_seed.py <log>`) fails an edited value, a missing pin, a wrong count, a wrong seed and a run that never left a battle; and each site is in the translated code once, followed by srand |
 | `test_aklz.py` | 14 | the AKLZ container decoder, on hand-built streams |
 | `test_formats.py` | 14 | the disc's format parsers, on synthesised fixtures |
@@ -195,7 +195,7 @@ skipping with MSVC hidden, and P1b's 10 in a new file, `test_encounter_check.py`
 files and 282 of `test_mods.py`'s 288 skipping with MSVC hidden, and H20's 7 in a new file, `test_power.py`, 1763 in 95 files
 and 6 of its 7 skipping with MSVC hidden, and one more in `test_mods.py` for the sky's zone, 1764 and 283 of 289,
 and M16b's 3 there, 1767 and 286 of 292, and M8a's 6 in a new file, `test_menu.py`, and 5 more, 1778 in 96
-files, `test_menu.py`'s 6 all skipping with MSVC hidden, and M8b's 2 in `test_gxv_present.py`, 1780 (all
+files, `test_menu.py`'s 6 all skipping with MSVC hidden, and M8b's 2 in `test_gxv_present.py`, 1780, and H17a's 1 in `test_gxr_pair.py`, 1781, 636 skipped with MSVC hidden (all
 measured). The
 "neither" row took two runs. The first, with another session's 13 uncommitted
 tests in the tree, gave `1065 passed, 483 skipped`. The second, with that file

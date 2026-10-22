@@ -42,8 +42,8 @@ supply your own dump of a disc you own.
 ✅ works  ·  🟡 built, but partial or not yet confirmed  ·  ❌ not started
 
 The two tables below are written by hand and were last checked on 2026-10-14
-against [HANDOFF.md](HANDOFF.md) and [docs/FINDINGS.md](docs/FINDINGS.md), which
-hold the evidence for each row; [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) says what
+against [HANDOFF.md](HANDOFF.md) and [docs/FINDINGS.md](docs/FINDINGS.md) (the 60 fps row on
+2026-10-22), which hold the evidence for each row; [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) says what
 comes next. The decompilation table after them is generated, and a test fails
 when it falls behind.
 
@@ -60,7 +60,7 @@ when it falls behind.
 | Picture: CPU renderer | ✅ | A software GameCube graphics pipeline; the heaviest field runs at the game's 30 fps cap |
 | Picture: GPU renderer (Vulkan) | 🟡 | Built for Windows (`SOA_GPU=vulkan`, up to 3x resolution), not yet checked in a play session; no GPU path on Linux or Android yet |
 | Widescreen | ❌ | Slice M10 |
-| 60 fps | ❌ | Slice H17a; `SOA_UNCAP` runs everything faster, which is not the same thing |
+| 60 fps | 🟡 | The in-between images are built, headless (`SOA_INTERP=1`, H17a): 32 to 43 images a second on the Ally X's CPU renderer. Not shown in a window yet (H17b). `SOA_UNCAP` runs everything faster, which is not the same thing |
 | Mods | 🟡 | Loader and API built (slices M1 to M6); three mods ship: `encounter-rate`, `autotext` and `coop`. Texture packs are not built yet (M9) |
 
 ### Platforms
@@ -422,6 +422,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_FRAMES=n` | run n video frames (numbered 0..n-1), then stop and print the report |
 | `SOA_GAME=path` | a split build only (`recompile.py --cc gcc --split`, Android's arrangement on Linux; specs/android.md L12a): the game library to load, in place of `libsoa_game.so` beside the launcher. It is checked before it is loaded, and refused in words if it was built for another machine, another page size or other sources, or made from another disc's executable |
 | `SOA_SNAP=n` / `SOA_SNAP=n@A-B` | write `build/frames/NNNN.png` every n frames, or every nth from frame A to B; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
+| `SOA_INTERP=1` / `=check` | build every frame a second time for the image between it and the frame before (specs/interp.md, H17a): matched draws at the midpoint of their two positions, the rest as the newer frame draws them, into an EFB of its own that nothing shows yet (H17b). With `SOA_SNAP`, frame N's in-between image is written as `NNNN.mid.png` beside `NNNN.png`; the report's `[interp]` line says how many were made and the images a second. `check` also hashes each real frame before and after its in-between copy, at the cost of a wait a frame. Off by default; refused with `SOA_GPU` and `SOA_GXR_DRAWS` |
 | `SOA_FRAMES_DIR=path` | where `SOA_SNAP` writes instead of `build/frames`, made if missing. Every run shares `build/frames`, so a job whose snapshots will be judged afterwards (`tools/soak.py check --frames`) needs its own |
 | `SOA_PAD2=frame:buttons,...` | a script for controller port 2 in `SOA_PAD`'s grammar, for checks: port 2 is read by mods (`read_pad` in `runtime/soa_mod.h`, for couch co-op) and never by the game, which still sees one controller. In play, port 2 is the next connected XInput pad after port 1's (P10a) |
 | `SOA_PAD=frame:buttons,...` | scripted controller for headless runs, e.g. `1700:start,1800:a`; `+` combines (`1800:a+sup`), `3600:a@150` repeats A every 150 frames, `9000:sup#120` holds the stick up for 120 frames; `lb`, `view`, `ls` and `rs` are the host buttons, which never reach the game (`1700:view+lb` is the fullscreen chord) |
@@ -465,7 +466,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_MEMPOKE=a,b` | store a word at each guest address before the game boots and read it back; an address past the console's 24 MB, e.g. `0x81800000`, is how to fire the out-of-range tripwire on purpose (needs no disc) |
 | `SOA_STRICT=1` | stop at the first hardware access outside the modelled range, with a guest backtrace (almost always a garbage pointer); without it the first twenty are reported and the run goes on |
 | `SOA_HASH=1` | print an FNV-1a hash of every frame the port presents (what `tools/scenario.py replay` compares) |
-| `--replay A B` | render two consecutive captures, A to `A.png` and B to `B.png`, then the image halfway between them to `B.mid.png`: every draw of B matched in A has its positions interpolated, the rest are drawn as B draws them (PLAN-60FPS-MODS H10). `SOA_PAIR_T=t` (0 to 1, default 0.5) picks another point, `SOA_PAIR_LIST=file` writes the matched pairs, and `python tools/midpoint.py` runs every check on the five pairs in `build/perfset` |
+| `--replay A B` | render two consecutive captures, A to `A.png` and B to `B.png`, then the image halfway between them to `B.mid.png`: every draw of B matched in A has its positions interpolated, the rest are drawn as B draws them (PLAN-60FPS-MODS H10). `SOA_PAIR_T=t` (0 to 1, default 0.5) picks another point, `SOA_PAIR_LIST=file` writes the matched pairs, and `python tools/midpoint.py` runs every check on the five pairs in `build/perfset`. With `SOA_INTERP=1`, B is drawn once with both streams (H17a), to the same two files |
 | `SOA_MMIO=1` | log the first few accesses of every hardware register as they happen |
 | `SOA_SELFTEST=1` | run the library and device checks instead of the game |
 | `SOA_PROFILE=n` | `0` turns off the end-of-run sampling profile (one fewer thread); `n>1` shows n rows |
@@ -492,7 +493,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1780 tests; any that need a dump skip themselves
+python -m pytest                     # 1781 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

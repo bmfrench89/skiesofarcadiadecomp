@@ -3367,7 +3367,8 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         t0 = gxr_ticks();
         if (g_legacy && foreign) drain(W_COPY_BEFORE);
         g_target = 1;
-        D = claim_slot(1, g_published, 0); /* own count; after every in-between draw */
+        /* the fence: after every in-between draw */
+        D = claim_slot(1, g_published, 0); /* own count */
         D->s = s;
         D->cp_image = NULL;
         D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];

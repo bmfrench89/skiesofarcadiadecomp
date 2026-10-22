@@ -9478,3 +9478,55 @@ owner's choice that day, PLAN-NEXT D-40.
   (`unchanged`; the GPU presenter converts no frame on the CPU, so that hash is of nothing), and the report counted
   3097 presents for 3094 screen copies, the three more the menu's. The swap chain's image is not read back, so the
   overlay's pixels in the window rest on the check above; the owner sees it at the sitting.
+
+**H17a: the in-between image, built live and headless; the workers are what fall short of 60.** 2026-10-22. Spec:
+`docs/specs/interp.md`; the owner's choice D-41 ("60fps go"). Runs in `build/h17a/` on this PC (the Ally X on AC,
+plan Turbo, 12 workers).
+
+- **What it is** [V, `runtime/gxr.c`, `runtime/gx.c`]: `SOA_INTERP=1` records and lerps in the one pass. Each draw
+  is published as before, with F+1's positions recorded for the next frame, then published again for EFB 1 with the
+  same TEV, pixel and raster setup and its own vertex block, lerped where the draw matched. Both blocks are taken from
+  the arena together, because `run_here` hands the arena back after each command. A copy to texture is the real
+  stream's alone; its clear goes to both EFBs. The screen copy is published twice, the second into `g_screen_mid`,
+  which the presented count, the frame gate, the hash and the rotation never see. `SOA_SNAP` writes `NNNN.mid.png`
+  beside `NNNN.png` and draws frame N-1 as well, since N's image lerps from it. `SOA_INTERP=check` hashes each real
+  frame's picture before and after its in-between copy. It is refused with a backend and with `SOA_GXR_DRAWS`.
+- **Off changes nothing** [V]: replay 23/23 at 1, 2, 3 and 8 threads, and `title --check` 4 of 4. *Mutation:* the
+  blend routed by `!D->efb` made all 23 captures differ.
+- **The live stream is H10's midpoint, byte for byte** [V, `test_gxr_pair.py`]: `--replay A B` with `SOA_INTERP=1`
+  draws B once with both streams. Its `B.png` and `B.mid.png` equal the three-pass replay's for all ten pair runs (six
+  scenes), at 1 and 4 threads, with the same `[pair]` counts. *Mutations:* the in-between command without its lerp
+  (`B.mid.png` differs); the in-between screen copy written into `g_screen` (`B.png` differs).
+- **The in-between pass leaves the real picture alone** [V]: `SOA_INTERP=check` on Part L's `126a`, every frame
+  drawn, reported "unchanged at 3000 of 3000 frames" (`field-check.log`). So did the four snapshot runs, at every frame
+  (5000, 4400, 3000 and 8100), though there most frames are not drawn. The mutation above is the check's.
+- **The images, opened** [V, `build/h17a/*/`]:
+  - *Field,* `126a` frames 2899, 2900.mid and 2900: Vyse, the anchor's save point and the minimap sit between the two
+    frames. 18,223 pixels differ from 2899 and 12,422 from 2900; the two frames differ in 20,489.
+  - *Cutscene,* Alfonso's bridge at 4499 and 4500: the same, at 20,904, 17,415 and 26,549. The dialogue box's blinking
+    cursor is in 4499 and not 4500, and the in-between follows 4500, as an unmatched 2D draw should.
+  - *Ship battle,* `550a` at 8000, the Delphinus against the Black Pirates: the interface and the ships in place, 559
+    pixels from frame 8000.
+  - *Battle,* `a101b` at 3900: right. At 4000, which is a camera cut, the in-between mixes the two views into a frame
+    that belongs to neither. That is the cut H17b's detector exists for; H17a has none, as its spec says.
+- **The measurement** [V, `build/h17a/<scene>-off.log`, `-on.log`]: every frame drawn, uncapped from the window's
+  first frame (`SOA_UNCAP`, `SOA_FRAMETIME_FROM`), off then on, one run each.
+
+  | scene, window | off: frames a second | on: real frames a second | on: images a second | short of 60 by |
+  |---|---|---|---|---|
+  | field, `126a` 2500-3000 | 32.5 | 20.4 | 40.8 | 1.47x |
+  | cutscene, the opening 4000-5000 | 20.4 | 16.1 | 32.2 | 1.86x |
+  | battle, `a101b` 3700-4400 | 23.5 | 16.6 | 33.2 | 1.81x |
+  | ship battle, `550a` 7500-8100 | 24.1 | 21.7 | 43.4 | 1.38x |
+
+  Building the in-between stream costs the producer 0.77 to 1.11 ms a frame (the `[interp]` line). Over each whole
+  run, worker busy time roughly doubled (field 367 s to 773 s, ship 1409 s to 2895 s), and the producer's wait on the
+  workers grew from 2 to 12 s to 23 to 95 s. So with interpolation on, the producer waits for the workers: **the
+  workers miss the in-between budget, not the guest thread.** By that reading PLAN-NEXT A2 (b) does not reopen H13 or
+  H16. Its own test (the guest thread's time a real frame at p95, less `SelectThread` and the spins) needs a profile
+  these runs did not take. For A3 the input is the table: on this machine the CPU renderer reaches 32 to 43 images a
+  second with interpolation, 1.4 to 1.9 times short of 60. That gap is gate G1's question (a GPU backend, V12 for its
+  second EFB) or H15d's, and not H17b's: H17b repeats a frame when over budget.
+- **Not done here:** showing the images (H17b), the cut detector (H17b), the artifact classes (H18), and the GPU
+  backend's second EFB (V12). The `[interp]` line's images a second are over the whole run, title and capped stretch
+  included; the table's come from `[frametime]`'s window.

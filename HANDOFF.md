@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1780 |
+| Python tests | 1781 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,7 +417,18 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-21)
+## Where the last session stopped (2026-10-22)
+
+**Latest, 2026-10-22: H17a, interpolation headless, done on this PC** (FINDINGS "H17a", `docs/specs/interp.md`;
+the owner chose 60 fps, D-41). `SOA_INTERP=1` builds every draw a second time into a second EFB, the image between
+the frame before and this one; `SOA_SNAP` writes it as `NNNN.mid.png`, and `SOA_INTERP=check` proves the real picture
+untouched (3000 of 3000 frames in `126a`). The live stream is H10's midpoint byte for byte (`test_gxr_pair.py`), and
+off changes nothing (replay 23/23 at 1, 2, 3, 8 threads). Measured: 32 to 43 images a second with it on (field 40.8,
+cutscene 32.2, battle 33.2, ship 43.4), the workers short and not the guest. **Next:** H17b, the images in a window
+with the cut detector and repeat-when-over-budget, whose Done is the owner's session D at 60 or 120 Hz (PLAN-NEXT M2
+row 4); the owner's sitting still holds the menu, Vulkan menu look, battery run and mod-guide checks.
+
+**Before that, 2026-10-21:**
 
 **Latest, 2026-10-21: M16, declared mod options, done on this PC** (FINDINGS "M16",
 `docs/specs/mod-options.md`). PC step 2 (reach U4 and U5) was already done, and step 3 needs the owner at the

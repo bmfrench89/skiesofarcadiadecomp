@@ -203,11 +203,11 @@ int main(void)
         /* else neither blend nor logic op: the source as it is */
         px.blend_kind = t & 1 ? 2u : 1u;
         memcpy(g_efb[0][0], dst, 4);
-        blend_pixel(&px, 0, 0, src);
+        blend_pixel(&px, g_efb, 0, 0, src);
         memcpy(o1, g_efb[0][0], 4);
         px.blend_kind = 0;
         memcpy(g_efb[0][0], dst, 4);
-        blend_pixel(&px, 0, 0, src);
+        blend_pixel(&px, g_efb, 0, 0, src);
         memcpy(o2, g_efb[0][0], 4);
         n++;
         if (memcmp(o1, o2, 4) && ++bad <= 5)
@@ -300,7 +300,7 @@ static void one(uint32_t pe_control, uint32_t cmode)
     bp[0x43] = pe_control;
     pixel_prepare(bp, &px);
     memcpy(g_efb[0][0], dst, 4);
-    blend_pixel(&px, 0, 0, src);
+    blend_pixel(&px, g_efb, 0, 0, src);
     printf("[dstalpha] format %u cmode %06X: %d,%d,%d\n", pe_control & 7, cmode, g_efb[0][0][0], g_efb[0][0][1],
            g_efb[0][0][2]);
 }

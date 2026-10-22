@@ -5,6 +5,9 @@ Written 2026-10-22 for the owner's choice that day (PLAN-NEXT D-41: "60fps go"),
 M2 row 3, ARCHITECTURE.md section 12's retention rules, and gpu-backend.md 3.1's routing. The code was mapped
 first, at 14ee174.
 
+**Done 2026-10-22** (FINDINGS "H17a"): all five Done lines below, each with its mutation. The measurement is 32 to
+43 images a second with interpolation on this PC, the workers short and not the guest thread.
+
 **Why.** The game makes 30 images a second. 60 needs an image between each pair, made from the two frames'
 geometry: H10 showed offline that matching draws across a pair and lerping their positions makes a right
 midpoint in all five pairs. H17a makes those images during a run, headless, as a second stream of draw
@@ -38,10 +41,13 @@ commands, so H17b can show them in a window and the GPU backend can draw the sam
   own (`g_screen_mid`) and touches none of the real frame's state -- not `g_screen`, the presented count, the
   frame gate, the rotation, the hash or the PNG naming.
 - **Headless output:** where `SOA_SNAP` writes frame N as `NNNN.png`, the image between N-1 and N is written as
-  `NNNN.mid.png`.
+  `NNNN.mid.png`. Snapshot mode skips the draws of frames it is not writing, so with `SOA_INTERP` frame N-1 is
+  drawn as well: its positions are what N's in-between image lerps from.
 - **The report,** one `[interp]` line at the end: in-between images made, draws matched and drawn from F+1, the
   producer's extra time per image, the images a second the run reached with them (real and in-between), and how
-  many real frames' `g_screen` the in-between pass left as it was.
+  many real frames' `g_screen` the in-between pass left as it was. That last needs the producer to wait for the
+  real copy before publishing the in-between one, which moves the frame's one full wait earlier, so it is a mode
+  of its own, `SOA_INTERP=check`, and `SOA_INTERP=1` says it did not check.
 - **Refused, said:** `SOA_INTERP` with a GPU backend (its second EFB is V12), and with `SOA_GXR_DRAWS`.
 
 ## 3. Not in H17a
