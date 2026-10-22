@@ -94,6 +94,13 @@ double gxr_producer_span(void) { return g_cal_seconds; }
 
 uint8_t g_efb[EFB_H][EFB_W][4];
 uint32_t g_efb_z[EFB_H][EFB_W];
+/* H17a (docs/specs/interp.md): the in-between image's EFB. Every consumer
+ * takes its EFB from the command it runs (DrawCmd.efb), never from a global:
+ * EFB_C and EFB_Z, 0 the real frame's, 1 this. */
+static uint8_t g_efb_mid[EFB_H][EFB_W][4];
+static uint32_t g_efb_mid_z[EFB_H][EFB_W];
+#define EFB_C(D) ((D)->efb ? g_efb_mid : g_efb)
+#define EFB_Z(D) ((D)->efb ? g_efb_mid_z : g_efb_z)
 
 static int g_enabled = -1;
 static unsigned g_snap_every; /* SOA_SNAP=n; frames are numbered by gx_frame_count() so the PNG names agree with SOA_FRAMES and SOA_PAD */
@@ -369,6 +376,8 @@ void gxr_reset_efb(void)
     int x, y;
     for (y = 0; y < EFB_H; y++)
         for (x = 0; x < EFB_W; x++) { memcpy(g_efb[y][x], col, 4); g_efb_z[y][x] = z ? z : 0xFFFFFFu; }
+    memcpy(g_efb_mid, g_efb, sizeof g_efb); /* H17a: the in-between image starts where the frame does */
+    memcpy(g_efb_mid_z, g_efb_z, sizeof g_efb_z);
     if (g_backend && g_backend->reset_efb) g_backend->reset_efb(bp);
 }
 
@@ -900,9 +909,9 @@ static void to_screen(const RasterCfg* rc, Vertex* v)
 
 /* ---- pixels --------------------------------------------------------------- */
 
-PIXEL_INLINE void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t src[4])
+PIXEL_INLINE void blend_pixel(const PixelCfg* px, uint8_t (*efb)[EFB_W][4], int x, int y, const uint8_t src[4])
 {
-    uint8_t* dst = g_efb[y][x];
+    uint8_t* dst = efb[y][x];
     int out[4], i;
     int sa = px->const_alpha >= 0 ? px->const_alpha : src[3], da = dst[3];
 
@@ -948,17 +957,17 @@ PIXEL_INLINE void blend_pixel(const PixelCfg* px, int x, int y, const uint8_t sr
     if (px->alpha_upd) dst[3] = (uint8_t)sa;
 }
 
-PIXEL_INLINE int depth_test(const PixelCfg* px, int x, int y, float depth)
+PIXEL_INLINE int depth_test(const PixelCfg* px, uint32_t (*efb_z)[EFB_W], int x, int y, float depth)
 {
     uint32_t z = (uint32_t)(depth < 0.0f ? 0.0f : (depth > 1.0f ? 16777215.0f : depth * 16777215.0f)); /* see fog_apply */
-    uint32_t cur = g_efb_z[y][x];
+    uint32_t cur = efb_z[y][x];
     int pass;
     if (!px->z_en) return 1;
     switch (px->z_func) {
     case 0: pass = 0; break; case 1: pass = z < cur; break; case 2: pass = z == cur; break; case 3: pass = z <= cur; break;
     case 4: pass = z > cur; break; case 5: pass = z != cur; break; case 6: pass = z >= cur; break; default: pass = 1; break;
     }
-    if (pass && px->z_upd) g_efb_z[y][x] = z;
+    if (pass && px->z_upd) efb_z[y][x] = z;
     return pass;
 }
 
@@ -981,18 +990,18 @@ PIXEL_INLINE int shade(const DrawCmd* D, int x, int y, const int col[2][4], cons
         g_tev_narrate = 0;
         fprintf(stderr, "[gxr] pixel %d,%d: col0 %d,%d,%d,%d tex0 %.3f,%.3f lod %.2f depth %.6f z-buf %.6f -> tev %d,%d,%d,%d alpha_ok %d blend %d z_en %d z_func %u\n",
                 x, y, col[0][0], col[0][1], col[0][2], col[0][3], tex[0][0], tex[0][1], tex[0][3], depth,
-                (float)g_efb_z[y][x] / 16777215.0f, o[0], o[1], o[2], o[3], ok, D->px.blend_en, D->px.z_en, D->px.z_func);
+                (float)EFB_Z(D)[y][x] / 16777215.0f, o[0], o[1], o[2], o[3], ok, D->px.blend_en, D->px.z_en, D->px.z_func);
     }
     /* Z before texturing (PE_CONTROL ztop) or after: order matters only for
      * alpha-tested pixels, so test late unless ztop is set -- or unless the
      * draw's alpha test passes every alpha, when the order cannot matter and
      * testing first spares the TEV every fragment depth would discard (H15a). */
-    if ((D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) return SHADE_DEPTH;
+    if ((D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, EFB_Z(D), x, y, depth)) return SHADE_DEPTH;
     tev_pixel(&D->tev, col, tex, out, &alpha_ok);
     if (!alpha_ok) return SHADE_ALPHA;
-    if (!(D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, x, y, depth)) return SHADE_DEPTH;
+    if (!(D->px.ztop || D->tev.alpha_always) && !depth_test(&D->px, EFB_Z(D), x, y, depth)) return SHADE_DEPTH;
     fog_apply(&D->px, out, depth);
-    blend_pixel(&D->px, x, y, out);
+    blend_pixel(&D->px, EFB_C(D), x, y, out);
     return SHADE_DRAWN;
 }
 
@@ -2522,7 +2531,7 @@ static inline int my_row(int y)
     return g_nthreads <= 1 || (unsigned)y % (unsigned)g_nthreads == (unsigned)(t_tid - 1);
 }
 
-static void efb_clear(uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, int w, int h)
+static void efb_clear(const DrawCmd* D, uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, int w, int h)
 {
     uint32_t z = zreg & 0xFFFFFFu;
     uint8_t col[4] = {(uint8_t)(ar & 0xFF), (uint8_t)((gb >> 8) & 0xFF), (uint8_t)(gb & 0xFF), (uint8_t)((ar >> 8) & 0xFF)};
@@ -2531,8 +2540,8 @@ static void efb_clear(uint32_t ar, uint32_t gb, uint32_t zreg, int x0, int y0, i
         if (y < 0 || !my_row(y)) continue;
         for (x = x0; x < x0 + w && x < EFB_W; x++) {
             if (x < 0) continue;
-            memcpy(g_efb[y][x], col, 4);
-            g_efb_z[y][x] = z;
+            memcpy(EFB_C(D)[y][x], col, 4);
+            EFB_Z(D)[y][x] = z;
         }
     }
 }
@@ -2564,6 +2573,7 @@ static uint32_t copy_extent(uint32_t ow, uint32_t oh, unsigned tw, unsigned th, 
 
 static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, uint32_t v, int x0, int y0, int w, int h)
 {
+    uint8_t (*efb)[EFB_W][4] = EFB_C(D);
     uint32_t dest = (dest_reg & 0x1FFFFFu) << 5;
     unsigned tpf = (v >> 3) & 15;
     unsigned fmt = tpf / 2 + (tpf & 1) * 8; /* EFBCopyFormat */
@@ -2635,14 +2645,14 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
                 if (half && sx + 1 < EFB_W && sy + 1 < EFB_H) {
                     int k;
                     for (k = 0; k < 4; k++)
-                        px[k] = (uint8_t)((g_efb[sy][sx][k] + g_efb[sy][sx + 1][k] + g_efb[sy + 1][sx][k] + g_efb[sy + 1][sx + 1][k]) / 4);
+                        px[k] = (uint8_t)((efb[sy][sx][k] + efb[sy][sx + 1][k] + efb[sy + 1][sx][k] + efb[sy + 1][sx + 1][k]) / 4);
                 } else {
                     /* Filter before the format conversion below: for RGB565,
                      * RGB5A3 and R4 , blending the quantised values gives a
                      * different answer from quantising the blend. Alpha keeps
                      * the centre row's -- the console has no alpha plane to
                      * filter here, PE_CONTROL being RGB8_Z24 in every capture. */
-                    memcpy(px, g_efb[sy][sx], 4);
+                    memcpy(px, efb[sy][sx], 4);
                     if (filtered) filter_sample(D, sx, sy, ytop, ybot, px);
                 }
             }
@@ -2677,6 +2687,7 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
 }
 
 static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
+static uint8_t g_screen_mid[EFB_H][EFB_W][4]; /* H17a: the last in-between image copied out, RGBA */
 static int g_screen_w = EFB_W, g_screen_h = 480;
 static plat_a32 g_frames_presented; /* copies to the screen completed by all rows */
 
@@ -2717,7 +2728,7 @@ static void filter_sample(const DrawCmd* D, int sx, int sy, int ytop, int ybot, 
     unsigned up = D->cp_f_up, mid = D->cp_f_mid, dn = D->cp_f_dn;
     int k;
     for (k = 0; k < 3; k++) {
-        unsigned v = up * g_efb[ya][sx][k] + mid * g_efb[sy][sx][k] + dn * g_efb[yb][sx][k];
+        unsigned v = up * EFB_C(D)[ya][sx][k] + mid * EFB_C(D)[sy][sx][k] + dn * EFB_C(D)[yb][sx][k];
         v >>= 6;
         o[k] = (uint8_t)(v > 255u ? 255u : v);
     }
@@ -2737,10 +2748,10 @@ static void copy_to_screen(const DrawCmd* D, int x0, int y0, int w, int h)
         if (!my_row(y)) continue;
         for (x = 0; x < w && x < EFB_W; x++) {
             int sx = x0 + x;
-            uint8_t* o = g_screen[y][x];
+            uint8_t* o = D->efb ? g_screen_mid[y][x] : g_screen[y][x]; /* H17a: the in-between image's own */
             if (sx >= 0 && sy >= 0 && sx < EFB_W && sy < EFB_H) {
                 if (filtered) filter_sample(D, sx, sy, ytop, ybot, o);
-                else memcpy(o, g_efb[sy][sx], 3);
+                else memcpy(o, EFB_C(D)[sy][sx], 3);
                 o[3] = 255;
             } else { o[0] = o[1] = o[2] = 0; o[3] = 255; }
         }
@@ -2777,7 +2788,7 @@ static void run_copy_pixels(const DrawCmd* D)
     if (D->cp_v & 0x4000u) copy_to_screen(D, x0, y0, w, h);
     else copy_to_texture(D, D->s, D->cp_dest, D->cp_v, x0, y0, w, h);
     if ((D->cp_v & 0x800u) && !g_backend && !copy_reads_foreign_rows(D))
-        efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+        efb_clear(D, D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
 }
 
 static void run_copy(const DrawCmd* D)
@@ -2791,7 +2802,7 @@ static void run_copy_clear(const DrawCmd* D)
 {
     int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
     int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
-    efb_clear(D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
+    efb_clear(D, D->cp_ar, D->cp_gb, D->cp_z, x0, y0, w, h);
 }
 
 /* A command through the backend, on the producer (run_here) or on the
