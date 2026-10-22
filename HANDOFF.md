@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1743 |
+| Python tests | 1756 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -441,6 +441,10 @@ frame are refused with both lines. In the game a twin of `encounters-off` writin
 `new` patch mod and a `new --dll` mod built by `build` ran in the game unchanged. **Next:** the mod framework track
 (D-38) is done but for T10's owner check, which joins PLAN-NEXT §0 step 3, the owner's sitting. After it, the owner
 chooses among mods (M8, M7, R0, R1), 60 fps (H17a) and widescreen (M10); M16b goes with P1's presets.
+
+**Then P1b, the encounter contrast, the same evening** (FINDINGS "P1b"): `mods/encounter-rate`'s test mode and
+`tools/encounter_check.py`; the 400,000-frame field run in a116a passed at rate 45 (r 26, 51 and 104 at k 0.5, 1
+and 2; no battle in 77 off and 77 hold trials). The sky run waits on map 99's encounter path.
 
 **Before that, 2026-10-14 to 10-17:**
 

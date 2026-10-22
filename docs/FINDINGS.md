@@ -9335,3 +9335,40 @@ here).
   3000 and 3300.
 - **Left:** the owner's check, a small mod built from the guide alone (PLAN-NEXT §0 step 3), and whether the
   player package ships the kit (`tools/package.py` lists the build's tools only).
+
+**P1b: the encounter contrast, passed in the field on this PC.** 2026-10-21. Spec: comfort-pack P1b and 3.4.
+
+- **What was built** [V]: `mods/encounter-rate`'s test mode (`SOA_ENCOUNTERS_TEST=1`): trials of k = 0.5, 1, 2, 0 and
+  hold in turn, each from a step counter of 480, ended by a battle, 600 moving frames or 3000 frames (stuck), a
+  line each with the zone and its table rate at both ends; in a battle the escape override held at 100 and Run
+  chosen. `tools/encounter_check.py LOG --rate N` applies P1b's rules and prints the chance a working mod fails the
+  ordering rule at the run's counts and rate, from the roll's own model (0.1% at rate 20 and 0.2% at 45 for 40
+  trials a k, the spec's 0.2%). 10 tests feed it model logs and each fault the spec names; counting a rate-0 zone
+  fails one.
+- **Q-I5, answered by two short runs** [V, `build/p1b/qi5-a`, `qi5`]: on the part-G card a116a's ground is zone 1
+  at rate 45. The spec's "three `right#4`, then A" was wrong: the wheel opens on Attack and Run is three slots
+  *up* (encounters.md's measured order; right moves toward Focus). Pressed every 2 frames the wheel took nothing
+  and the walk's stick turned it, so the battle was fought; at the lab's menu pace (60 frames of nothing, then a
+  4-frame press and 60 of nothing, the sticks centred) the first A chose Run and the results read 0 Exp and 0 Gold.
+  Holding B still counts moving frames.
+- **Five runs that stopped, each a defect fixed with a test** [V, `build/p1b/long-a` to `long-e`]: the results
+  screen after a flee waits for A, and nothing pressed it once the walk script ended (A every 30 frames outside the
+  party's input); the screen is scene 6 with the field not running, not scene 7 (A there too); the title runs its
+  attract demo as a field on maps 299 and 297, where the test mode's A then broke the Continue (neither trials nor
+  presses there); and a level-1 Vyse fell before Run and the game over went to the title (the lab's `hold-hp`
+  added to the run). Run `long-e` also found a real one: a hold trial that met its battle at 0 moving frames,
+  because B counted from the next controller read, so the trial's first frame rolled at normal odds; a hold trial
+  now counts B from its first frame end (the test fails without it). A player's own B has the same one-frame lag,
+  which does not matter in play.
+- **The field run** [V, `build/p1b/long`, game data kept here]: a copy of `card-partG.raw`, the walk's Continue to
+  frame 2800, then the lab's `wander` on a116a and `hold-hp`, `SOA_SPEED=3`, `SOA_STRICT=1`, `SOA_SETTINGS=0`,
+  400,000 frames, exit 0. 393 trials, 384 counted at rate 45, 0 stuck: r(0.5) = 26.33, r(1) = 51.40, r(2) = 103.86
+  battles per 1000 moving frames (75, 77 and 78 trials, every one a battle), and k = 0 and hold 77 trials each, every
+  one 600 moving frames with no battle. `encounter_check.py --rate 45`: **pass**. Each step of k very nearly
+  doubles r, as the multiplier over 50 says it should.
+- **`soak.py check` on that log** passes every check but two, and those two misread it: the run's output went
+  through PowerShell's `*>`, which wraps lines at the console's width, so the report's `0 unknown bytes` and `0 bad
+  vertex refs` sit on continuation lines the checker does not join (both are there, with 400,000 screen copies).
+  The reach runs' pattern, `Start-Process` with its own redirection, does not wrap.
+- **Left:** the sky run (map 99 takes its zone from `[0x80346CD4]` and its own sub-table, fn_800C1A50, which the
+  test mode does not read), the first thing PLAN-NEXT names to cut.

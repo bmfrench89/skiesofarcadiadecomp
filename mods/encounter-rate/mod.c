@@ -24,6 +24,20 @@
  * party block, so nothing written here reaches a save.
  *
  * soa.ini's `encounters` and `encounters_hold_b` set the same two switches.
+ *
+ * SOA_ENCOUNTERS_TEST=1 is the test mode P1b's check reads (the comfort-pack
+ * spec 3.4; tools/encounter_check.py): trials of the kinds 0.5, 1, 2, 0 and
+ * hold in turn, each started in the running field by writing 480 to the step
+ * counter, and ended by a battle, by 600 moving frames (the counter's own
+ * increments) or, as stuck, by 3000 frames with fewer. A hold trial is k = 1
+ * with B held. Each ends in a line, `trial n kind zone0 rate0 zone1 rate1
+ * moved battle|clear|stuck`, the zone and its table rate read at both ends.
+ * In a battle it flees and presses on: the escape override at 0x8030B7AB
+ * held at 100, A every 30 frames outside the party's input and on the
+ * results screen after, and,
+ * while the party's commands are taken (0x8034733C = 1), up three times and A
+ * at the menu's pace -- the wheel opens on Attack and Run is three slots up
+ * (encounters.md).
  * Built beside its mod.ini by `python tools/recompile.py --link`, or:
  *
  *     cl /LD /O2 /I runtime mods\encounter-rate\mod.c /Fe:mods\encounter-rate\mod.dll
@@ -44,6 +58,18 @@
 #define EFFECTS 24u            /* four {u8 code, u8, s16 value}, in a record */
 #define ENCOUNTER_EFFECT 84
 #define SCENE_FIELD 6u
+#define SCENE_BATTLE 7u
+#define FIELD_RUNNING 8u
+#define STEP_COUNTER 0x80346D28u /* frames moved since the last reset; the roll reads it */
+#define ZONE 0x8034740Eu         /* u16: the ground's zone, 1-8 counted */
+#define TABLE 0x803474BCu        /* the map's .ect: a zone's rate is the u16 at +2 + (zone - 1) * 132 */
+#define ESCAPE 0x8030B7ABu       /* the party's escape override */
+#define PHASE 0x8034733Cu        /* 1 while a battle takes the party's commands */
+#define TRIAL_START 480u
+#define TRIAL_MOVES 600u
+#define TRIAL_FRAMES 3000u
+#define WHEEL_LEAD 60u  /* frames of nothing while the wheel turns into view */
+#define WHEEL_BEAT 70u  /* a press and the 60 frames of nothing after it */
 
 enum { P_NORMAL, P_HALF, P_DOUBLE, P_OFF }; /* not NORMAL/DOUBLE: windows.h has a DOUBLE */
 static const char* const k_preset[] = {"normal", "half", "double", "off"};
@@ -53,6 +79,15 @@ static int g_preset = P_NORMAL, g_hold_b = 1;
 static int g_b;     /* B held at the last controller read in the field */
 static int g_dirty; /* the byte holds a value of this mod's, not the game's */
 static int g_shown_base = -1000, g_shown_who = -2;
+
+/* The test mode's trial: whether one runs, its kind, and what it has seen. */
+enum { K_HALF, K_ONE, K_TWO, K_ZERO, K_HOLD, K_KINDS };
+static const char* const k_kind[K_KINDS] = {"0.5", "1", "2", "0", "hold"};
+static const int k_kind_preset[K_KINDS] = {P_HALF, P_NORMAL, P_DOUBLE, P_OFF, P_NORMAL};
+static int g_test, g_running, g_kind, g_seen_field;
+static unsigned g_trials;
+static uint32_t g_wheel; /* 1 + the frame the party's input began, or 0 */
+static uint32_t g_last_count, g_moved, g_start, g_zone0, g_rate0;
 
 /* The game's own reckoning, from the party: the base (50 when no accessory
  * has the effect), the byte the game would hold (0xFF then), and whose
@@ -81,6 +116,76 @@ static int base_now(int* game, int* who, unsigned* item)
     return base;
 }
 
+/* The zone underfoot and its rate in the map's table; rate 0 outside 1-8. */
+static void zone_rate(uint32_t* zone, uint32_t* rate)
+{
+    uint16_t z = 0, r = 0;
+    uint32_t table = 0;
+    g_api->read16(ZONE, &z);
+    if (z >= 1 && z <= 8 && g_api->read32(TABLE, &table) && table) g_api->read16(table + 2u + (z - 1u) * 132u, &r);
+    *zone = z;
+    *rate = r;
+}
+
+static void trial_end(const char* how)
+{
+    char line[128];
+    uint32_t zone1, rate1;
+    zone_rate(&zone1, &rate1);
+    snprintf(line, sizeof line, "trial %u %s %u %u %u %u %u %s", g_trials, k_kind[g_kind], g_zone0, g_rate0, zone1,
+             rate1, g_moved, how);
+    g_api->log(line);
+    g_trials++;
+    g_running = 0;
+}
+
+/* The title's attract demo, which runs as a field: maps 299 and 297
+ * (tools/soak.py's ATTRACT); 299 also loads at boot, before any Continue. */
+static int attract(void)
+{
+    uint32_t number = g_api->map() >> 8;
+    return number == 299u || number == 297u;
+}
+
+/* Each frame end in the test mode: a trial started in the running field,
+ * its moving frames counted, and ended; in a battle, the escape held. */
+static void trial_frame(void)
+{
+    uint32_t scene = g_api->scene(), now = g_api->frame(), count = 0;
+    if (scene == SCENE_BATTLE) {
+        g_api->write8(ESCAPE, 100);
+        if (g_running) trial_end("battle");
+        return;
+    }
+    if (scene != SCENE_FIELD) return;
+    if (attract()) return; /* the title's own demo: no trial, and the title's presses left alone */
+    g_seen_field = 1;
+    if (!g_running) {
+        if (g_api->field_state() != FIELD_RUNNING) return;
+        g_kind = (int)(g_trials % K_KINDS);
+        g_preset = k_kind_preset[g_kind];
+        if (!g_api->write32(STEP_COUNTER, TRIAL_START)) return;
+        g_last_count = TRIAL_START;
+        g_moved = 0;
+        g_start = now;
+        zone_rate(&g_zone0, &g_rate0);
+        g_running = 1;
+        /* B counts as held from this frame end, not from the next controller
+         * read: otherwise the next frame's roll runs at normal odds before
+         * the hold's 0 lands (run p1b long-e's trial 69, a battle at 0
+         * moving frames) */
+        if (g_kind == K_HOLD) g_b = 1;
+        return;
+    }
+    /* the counter only goes up, but a map load resets it: count the rises */
+    if (g_api->read32(STEP_COUNTER, &count)) {
+        if (count > g_last_count) g_moved += count - g_last_count;
+        g_last_count = count;
+    }
+    if (g_moved >= TRIAL_MOVES) trial_end("clear");
+    else if (now - g_start >= TRIAL_FRAMES) trial_end("stuck");
+}
+
 static void put(int v)
 {
     if (g_api->write8(MULTIPLIER, (uint8_t)v)) g_dirty = 1;
@@ -91,6 +196,7 @@ static void on_frame_end(void* user)
     int game, who, base;
     unsigned item;
     (void)user;
+    if (g_test) trial_frame();
     if (g_api->scene() != SCENE_FIELD) return;
     base = base_now(&game, &who, &item);
     if (base != g_shown_base || who != g_shown_who) {
@@ -118,6 +224,41 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
 {
     (void)user;
     (void)frame;
+    if (g_test && g_seen_field && !attract() &&
+        (g_api->scene() != SCENE_FIELD || g_api->field_state() != FIELD_RUNNING)) {
+        /* Run: from Attack, where the wheel opens, up three times and A, at
+         * the lab's menu pace -- nothing for 60 frames while the wheel turns
+         * into view, then each press held (4 frames for a slot, under the
+         * game's 6-frame repeat; 10 for A) and 60 frames of nothing -- and
+         * again from the top while the party's commands are still taken.
+         * The sticks are held centred: the walk's would turn the wheel. */
+        uint32_t phase = 0;
+        if (g_api->scene() == SCENE_BATTLE && g_api->read32(PHASE, &phase) && phase == 1) {
+            uint32_t into, beat, within;
+            if (!g_wheel) g_wheel = frame + 1;
+            into = frame - (g_wheel - 1);
+            pad->buttons = 0;
+            pad->stick[0] = pad->stick[1] = pad->cstick[0] = pad->cstick[1] = 128;
+            if (into >= WHEEL_LEAD) {
+                beat = (into - WHEEL_LEAD) / WHEEL_BEAT % 4u;
+                within = (into - WHEEL_LEAD) % WHEEL_BEAT;
+                if (beat < 3 && within < 4) pad->buttons = SOA_PAD_UP;
+                if (beat == 3 && within < 10) pad->buttons = SOA_PAD_A;
+            }
+        } else {
+            /* the rest of a battle, and the results screen after it, which
+             * waits for A with the scene back at the field's and the field
+             * not yet running: A every 30 frames, and nothing of the walk's
+             * (its START would pause). Only once the field has been seen,
+             * and never on the title's demo maps, so the title's own presses
+             * are left alone. */
+            g_wheel = 0;
+            pad->buttons = frame % 30u < 4u ? SOA_PAD_A : 0;
+            pad->stick[0] = pad->stick[1] = pad->cstick[0] = pad->cstick[1] = 128;
+        }
+        return;
+    }
+    if (g_test && g_running && g_kind == K_HOLD && g_api->scene() == SCENE_FIELD) pad->buttons |= SOA_PAD_B;
     g_b = (pad->buttons & SOA_PAD_B) && g_api->scene() == SCENE_FIELD;
 }
 
@@ -157,6 +298,12 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
             snprintf(line, sizeof line, "SOA_ENCOUNTERS_HOLD_B=%s is not 0 or 1; holding B keeps battles away", v);
             api->log(line);
         }
+    }
+    if (env("SOA_ENCOUNTERS_TEST", v, sizeof v) && !strcmp(v, "1")) {
+        g_test = 1;
+        g_hold_b = 1; /* the hold trials need it */
+        api->log("test mode: trials of 0.5, 1, 2, 0 and hold in turn, each from a step counter of 480 to a battle, "
+                 "600 moving frames, or stuck at 3000 frames");
     }
     api->on_frame_end(on_frame_end, NULL);
     if (g_hold_b) api->pad_filter(on_pad, NULL); /* without it, the read path is left as it was */

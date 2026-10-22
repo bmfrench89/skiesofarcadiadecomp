@@ -4136,3 +4136,98 @@ def test_m17_each_mod_s_writes_and_callbacks_are_listed(driver, tmp_path):
     dll(tmp_path / "d", "native")
     _, err = play(driver, tmp_path / "d")
     assert "[mod] native registers: frame end, safe point, map load, scene change" in err, err
+
+
+# P1b's test mode (comfort-pack 3.4): trials the check reads.
+TRIAL_FIELD = "set 803475cc 6 set 80311aec 8 set 803474bc 80400000 set 8034740c 3 set 80400108 14 "
+# Controller reads in a battle's phase 1 from frame 100, and the buttons the
+# test mode gives each: 60 frames of nothing, then up (4 frames) at 160, 230
+# and 300, and A (10 frames) at 370, each beat 70 frames.
+WHEEL = (100, 159, 160, 163, 164, 230, 300, 303, 304, 370, 379, 380, 440)
+WHEEL_WANT = (0, 0, 8, 8, 0, 8, 8, 8, 0, 0x100, 0x100, 0, 8)
+
+
+def trials(err: str) -> list[str]:
+    return [
+        ln.split("encounter-rate: ", 1)[1]
+        for ln in err.splitlines()
+        if "encounter-rate: trial " in ln
+    ]
+
+
+@needs_cc
+def test_encounter_rate_test_mode_runs_its_trials(driver, tmp_path):
+    """Each kind in turn from a counter of 480: a clear at 600 moving frames,
+    a battle, a stuck trial at 3000 frames; the multiplier each kind sets; B
+    held in a hold trial; and in a battle the escape held at 100 and Run
+    pressed: up three times, then A."""
+    shipped(tmp_path)
+    moved = "set 80346d28 438 frame "  # 480 + 600
+    script = (
+        TRIAL_FIELD
+        + "frame get 80346d28 "  # trial 0 (0.5) starts: the counter at 480
+        + "frame " + BYTE + moved  # half's byte, then 600 moving frames
+        + "frame set 80346d28 212 frame set 803475cc 7 frame get 8030b7a8 "  # trial 1 (1): 50, then a battle
+        + "set 8034733c 1 " + "".join(f"padall {f} 0 " for f in WHEEL) + "set 8034733c 0 padall 1 0 "
+        + "set 803475cc 6 frame " + "frame " * 3000  # trial 2 (2) starts, and sticks
+        + "frame " + BYTE + moved  # trial 3 (0): off's byte, a clear
+        + "setb 8030b7ad ff frame " + BYTE + "pad 9 0 " + moved  # trial 4 (hold): 0 at once, then B held
+    )  # fmt: skip
+    out, err = play(driver, tmp_path, script, SOA_ENCOUNTERS_TEST="1")
+    assert "test mode: trials of 0.5, 1, 2, 0 and hold" in err, err
+    assert "80346D28=000001E0" in out, out
+    assert trials(err) == [
+        "trial 0 0.5 3 20 3 20 600 clear",
+        "trial 1 1 3 20 3 20 50 battle",
+        "trial 2 2 3 20 3 20 0 stuck",
+        "trial 3 0 3 20 3 20 600 clear",
+        "trial 4 hold 3 20 3 20 600 clear",
+    ], err
+    assert multipliers(out) == [25, 0, 0], out  # half; off; hold from its first frame end
+    assert "8030B7A8=00000064" in out, out  # the escape override, 100
+    pads = [x.split()[1:] for x in out.splitlines() if x.startswith("padall ")]
+    got = [(int(f), int(b1 + b0, 16), sx + sy) for f, b0, b1, sx, sy, *_ in pads]
+    assert got[:-1] == [(f, b, "8080") for f, b in zip(WHEEL, WHEEL_WANT, strict=True)], got
+    # out of phase 1, still in the battle: A every 30 frames, the sticks centred
+    assert got[-1] == (1, 0x100, "8080"), got
+    assert "pad 9 0200" in out, out
+
+
+@needs_cc
+def test_encounter_rate_test_mode_presses_on_through_the_results_and_not_the_title(
+    driver, tmp_path
+):
+    """The results screen after a battle is no field and no battle, and
+    waits for A: once the field has been seen, A every 30 frames there. On
+    the title, before any field, the pad is left as it came. The mutation,
+    the field gate dropped, presses A on the title."""
+    shipped(tmp_path)
+    # the title's attract demo runs as a field on map 299: no trial there,
+    # and its presses left alone
+    attract = TRIAL_FIELD + "set 80311ac0 12b frame set 803475cc 3 padall 1 0 "
+    script = (
+        attract
+        + TRIAL_FIELD
+        + "set 80311ac0 74 frame set 803475cc 9 padall 31 0 padall 35 0"
+        + " set 803475cc 6 set 80311aec 5 padall 61 0 set 80311aec 8 padall 91 0"
+    )
+    out, err = play(driver, tmp_path, script, SOA_ENCOUNTERS_TEST="1")
+    pads = [x.split()[1:] for x in out.splitlines() if x.startswith("padall ")]
+    got = [(int(f), int(b1 + b0, 16), sx + sy) for f, b0, b1, sx, sy, *_ in pads]
+    # the results screen: scene 6 with the field not running, A there too;
+    # the running field gets the pad as it came
+    assert got == [
+        (1, 0, "1122"),
+        (31, 0x100, "8080"),
+        (35, 0, "8080"),
+        (61, 0x100, "8080"),
+        (91, 0, "1122"),
+    ], got
+    assert trials(err) == [], err  # one trial started, on 116, and none ended
+
+
+@needs_cc
+def test_encounter_rate_without_the_test_mode_runs_no_trial(driver, tmp_path):
+    shipped(tmp_path)
+    out, err = play(driver, tmp_path, TRIAL_FIELD + "frame frame get 80346d28")
+    assert not trials(err) and "80346D28=00000000" in out, (out, err)

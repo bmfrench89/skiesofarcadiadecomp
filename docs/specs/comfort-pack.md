@@ -1139,11 +1139,19 @@ in the boxes at 3185, 3805 and 3913 and a002b at 3949, so both mutations fail as
     Mutation: writing the guard as `flags & 0x50 == 0` fails the flags cases.
   - The contract holds.
 
-**P1b. The encounter contrast** — *a day to several days (runs of about 130,000 frames at
+**P1b. The encounter contrast** — *Done 2026-10-21 but for the sky run, the first thing to cut (FINDINGS "P1b"):
+the field run passed at rate 45 in a116a. A day to several days (runs of about 130,000 frames at
 `SOA_SPEED=3`); `--link`; prerequisites P1a, and a card and walk that keep the party in a rate-20 zone
 where the step counter counts. `card-saved`'s a101b spot is not one: it is zone 0, and the counter
 stayed 0 over 1,700 frames of walking (Q-I5). Q-I5's short run on another card, for example the
 part-G card at 116a, comes first.*
+- *As built (2026-10-21):* Q-I5's run answered it on the part-G card: a116a's ground is zone 1 at
+  rate 45, so the check takes `--rate` (45 there; the false-failure figure is computed for it). Run is
+  three slots *up* from Attack, not right (encounters.md's wheel order), pressed at the lab's menu pace
+  with the sticks centred; outside the party's input, and on the results screen after a battle (scene 6,
+  the field not running), A every 30 frames; none of it on the title's demo maps 299 and 297. A hold
+  trial counts B held from its first frame end. The field run walks with the lab's `wander` and
+  `hold-hp`, since the walk script ends near frame 98,000 and a level-1 Vyse can fall before Run.
 - Files: `mods/encounter-rate/mod.c` (test mode), `tools/encounter_check.py`,
   `tools/tests/test_encounter_check.py`.
 - What: 3.4's test mode.
@@ -1599,7 +1607,9 @@ advanced 0.717 frames a retrace at 85 Hz, so windowed turbo reaches about 1.4×,
   builds at 2.
 - **Q-I4. (Answered, ../PLAN-NEXT.md C1.)** gxr.c is free now; P5b sits late in M1, and M11a-skip is
   built only if M11a's measurement asks for it.
-- **Q-I5. (Partly answered, 2026-09-25.)** Before P1b, one short run with the test mode on. It answers
+- **Q-I5. (Answered 2026-10-21, FINDINGS "P1b": a116a's zone 1 at rate 45; up three times and A reach Run;
+  the override escapes; holding B still counts moving frames. Partly answered 2026-09-25.)** Before P1b, one
+  short run with the test mode on. It answers
   four questions:
   - which card and walk keep the party in a rate-20 zone where the step counter counts, read from the
     logged zone and rate. **Partly answered** [V run, the implementation session]: `card-saved`'s spot

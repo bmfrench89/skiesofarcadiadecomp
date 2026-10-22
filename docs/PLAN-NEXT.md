@@ -245,7 +245,8 @@ The owner answered four questions, with the research behind them summarised in t
 
   display and refresh rate (D-2's remainder: 120 Hz on the Ally X; the ultrawide at 85 Hz; VRR is in
   no spec). For the sessions, 60 or 120 Hz, as answered above.
-- **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks.
+- **M1's remainder** (P1b, H20, M11a-skip, specs/display.md) lands as gap fillers when each unblocks. **P1b done
+  2026-10-21** but for its sky run (FINDINGS "P1b"): the contrast passed in a116a at rate 45.
 
 ---
 
@@ -576,7 +577,7 @@ cost least.
 | 4 | **P11** dialogue auto-advance. **Done, 664f005** | hours | none, `--link` for its key | P1a | — |
 | 5 | **T0c** (gap) card images under any name. **Done, 012164a**, wider than specified: saves under any name too, every suffix in a name, and history read for content | hours | none | — | — |
 | 6 | **I2** (gap) one copy on disk: the tools read the image; `--prune-loose`. **Done, 12077d1**, but for the owner's prune | hours to a day | none | — | **Owner** runs the prune in session A |
-| 7 | **P1b** the encounter contrast (long runs at `SOA_SPEED=3`) | a day to several days | `--link` | P1a; a card and walk in a rate-20 zone where the step counter counts (Q-I5: `card-saved`'s a101b spot is zone 0, and the counter stayed 0) | — |
+| 7 | **P1b** the encounter contrast (long runs at `SOA_SPEED=3`). **Done 2026-10-21** but for the sky run (FINDINGS "P1b") | a day to several days | `--link` | P1a; a card and walk in a rate-20 zone where the step counter counts (Q-I5: `card-saved`'s a101b spot is zone 0, and the counter stayed 0) | — |
 | 8 | **M18** rumble. **Done, 3d08479**, but for the owner's check | hours | `--link` | P6 | **Owner** (A) |
 | 9 | **CH1** chords and host buttons (the chord arms log "not built yet"). **Done, d1000af**, but for the owner's check | a day | `--link` | — | **Owner** (A) |
 | 10 | **P11b** hold-to-skip. **Done, 4c698f5** (only while autotext is on) | hours | none | P11, CH1 | — |
