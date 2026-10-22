@@ -168,6 +168,15 @@ static int g_dbg_x = -1, g_dbg_y = -1; /* SOA_GXR_PIXEL=x,y: narrate every fragm
 static int g_debug_lights;
 static unsigned g_draw_limit, g_draw_no;
 static int g_hash; /* SOA_HASH set to anything: hash every frame the port presents */
+/* H17a (docs/specs/interp.md): SOA_INTERP=1 builds every draw a second time,
+ * for the image between the frame before and this one; SOA_INTERP=check also
+ * hashes each real frame before and after its in-between copy. 0 off, 1 on,
+ * 2 check. The stream runs only while the pair machinery records and lerps at
+ * once (interp_on). */
+static int g_interp;
+static unsigned g_pair_flags; /* the pair machinery's mode (H10, "frame pairs" below) */
+static unsigned long long g_interp_images, g_interp_checked, g_interp_same;
+static uint64_t g_interp_ticks;
 
 /* A test knob (PLAN-60FPS-MODS H14): SOA_GXR_STALL=<worker>:<kind>:<us>[,...]
  * makes that worker wait that many microseconds before every command of that
@@ -239,6 +248,14 @@ int gxr_enabled(void)
         g_debug_lights = getenv("SOA_GXR_LIGHTS") ? atoi(getenv("SOA_GXR_LIGHTS")) : 0;
         g_draw_limit = getenv("SOA_GXR_DRAWS") ? (unsigned)atoi(getenv("SOA_GXR_DRAWS")) : 0;
         g_hash = getenv("SOA_HASH") ? 1 : 0;
+        {
+            const char* ip = getenv("SOA_INTERP");
+            g_interp = ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
+            if (g_interp && g_draw_limit) {
+                fprintf(stderr, "[interp] SOA_INTERP is refused with SOA_GXR_DRAWS: a frame cut short has no in-between image; off\n");
+                g_interp = 0;
+            }
+        }
     }
     return g_enabled;
 }
@@ -2124,6 +2141,19 @@ static void workers_start(void)
     if (g_backend)
         fprintf(stderr, "[gxr] the %s backend draws every command, %s\n", g_backend->name,
                 n ? "on a thread of its own" : "on the producer");
+    if (g_interp && g_backend) {
+        fprintf(stderr, "[interp] SOA_INTERP is refused with the %s backend: its second EFB is V12; off\n", g_backend->name);
+        g_interp = 0;
+    }
+    /* A live run: record and lerp from the first frame. A pair replay has
+     * set its own mode already (gx_replay_pair). */
+    if (g_interp && !g_pair_flags && !gxr_pair_mode(GXR_PAIR_RECORD | GXR_PAIR_LERP, 0.5f)) {
+        fprintf(stderr, "[interp] cannot allocate the pair tables; off\n");
+        g_interp = 0;
+    }
+    if (g_interp)
+        fprintf(stderr, "[interp] every draw is built twice: the frame, and the image between it and the frame before%s\n",
+                g_interp == 2 ? "; each frame is hashed before and after its in-between copy" : "");
 }
 
 static int g_pending_n; /* queued copy destinations (defined with the copies below) */
@@ -2233,7 +2263,6 @@ typedef struct {
 
 static PairFrame g_pair[2];
 static int g_pair_cur;
-static unsigned g_pair_flags;
 static float g_pair_t = 0.5f;
 static FILE* g_pair_list;
 static uint32_t g_pair_ndraw; /* keyed draws so far in this frame */
@@ -2407,10 +2436,24 @@ static void pair_rotate(void)
     g_pair_rotations++;
 }
 
+/* The in-between stream runs while both are set, which only SOA_INTERP allows. */
+static int interp_on(void)
+{
+    return g_interp && (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
+}
+
+int gxr_interp(void)
+{
+    gxr_enabled();
+    return g_interp;
+}
+
 int gxr_pair_mode(unsigned flags, float t)
 {
     int i;
-    if ((flags & GXR_PAIR_RECORD) && (flags & GXR_PAIR_LERP)) return 0; /* H17a's second span makes this legal */
+    /* Recording and lerping at once lerps into a second vertex block, the
+     * in-between stream's (H17a); without it the lerp overwrites the draw's. */
+    if ((flags & GXR_PAIR_RECORD) && (flags & GXR_PAIR_LERP) && !gxr_interp()) return 0;
     if (flags && !g_pair[0].rec) {
         for (i = 0; i < 2; i++) {
             g_pair[i].rec = (PairRec*)malloc(sizeof(PairRec) * PAIR_DRAWS);
@@ -2455,9 +2498,11 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     const uint32_t* bp = gx_bp_regs();
     unsigned prim = op & 0xF8, vat = op & 7, i;
     const uint8_t* p = verts;
-    Vertex* v;
+    Vertex *v, *v2 = NULL;
     DrawCmd* D;
     PairClaim pc = {PAIR_NONE, PAIR_NONE};
+    long long tfence;
+    int mid;
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
     ++g_draw_no;
@@ -2466,14 +2511,19 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
      * worth rasterizing; the game then runs at full speed between them. A
      * window (g_draw_every) or a replay (g_png_path) wants every frame it
      * shows, whatever the interval says. */
-    if (g_snap_every && !g_draw_every && !g_png_path[0] && !snap_frame(gx_frame_count())) return;
+    /* With SOA_INTERP the frame before a snapshot is drawn as well: its
+     * positions are what the snapshot's in-between image lerps from. */
+    if (g_snap_every && !g_draw_every && !g_png_path[0] && !snap_frame(gx_frame_count()) &&
+        !(g_interp && snap_frame(gx_frame_count() + 1)))
+        return;
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
+    mid = interp_on();
 
     /* Every drain on this path comes before tev_prepare: the gate (a screen
      * copy was the last frame's end), then the arena and the graveyard. */
     if (g_frame_gate) drain(W_GATE);
-    if (g_arena_used + sizeof(Vertex) * count > ARENA_BYTES) drain(W_ARENA);
+    if (g_arena_used + sizeof(Vertex) * count * (mid ? 2u : 1u) + 16 > ARENA_BYTES) drain(W_ARENA);
     if (tex_graveyard_full()) drain(W_GRAVE);
     draw_tripwire(bp, prim);
     /* Nothing of the queue's is claimed until tev_prepare has returned.
@@ -2490,7 +2540,12 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    D = claim_slot(0, tex_draw_fence(), 0); /* every worker past the copies whose images it samples */
+    if (mid) { /* the in-between command's own block, taken with the draw's: run_here frees the arena */
+        v2 = (Vertex*)(g_arena + g_arena_used);
+        g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
+    }
+    tfence = tex_draw_fence();
+    D = claim_slot(0, tfence, 0); /* every worker past the copies whose images it samples */
     D->tev = g_prep;
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
@@ -2514,12 +2569,44 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         p = decode_vertex(s, p, vat, &in);
         transform(s, &in, &v[i]);
     }
-    if (g_pair_flags) pair_positions(&D->rc, v, count, pc);
+    if (mid) { /* F+1's positions recorded and drawn; the lerp goes to the copy */
+        PairClaim rec = {pc.cur_off, PAIR_NONE}, lerp = {PAIR_NONE, pc.prev_off};
+        pair_positions(&D->rc, v, count, rec);
+        memcpy(v2, v, sizeof(Vertex) * count);
+        pair_positions(&D->rc, v2, count, lerp);
+    } else if (g_pair_flags) {
+        pair_positions(&D->rc, v, count, pc);
+    }
     if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
     if (g_workers > 0) {
         publish(); /* the workers pick it up */
     } else {
         run_here(D);
+    }
+    /* The same draw for the in-between image: the same setup and textures,
+     * so it samples what F+1 samples, and the lerped positions. Only the
+     * producer writes a slot, and D is only read here, so it is copied even
+     * after the workers have it. */
+    if (mid) {
+        uint64_t t0 = gxr_ticks();
+        DrawCmd* M;
+        g_target = 1;
+        M = claim_slot(0, tfence, 0);
+        g_target = 0;
+        M->tev = D->tev;
+        M->px = D->px;
+        M->rc = D->rc;
+        M->ntex = D->ntex;
+        M->nchan = D->nchan;
+        M->miptex = D->miptex;
+        memcpy(M->texmap_of, D->texmap_of, sizeof M->texmap_of);
+        M->prim = prim; M->count = count; M->v = v2;
+        if (g_workers > 0) {
+            publish();
+        } else {
+            run_here(M);
+        }
+        g_interp_ticks += gxr_ticks() - t0;
     }
 }
 
@@ -2794,7 +2881,7 @@ static void run_copy_pixels(const DrawCmd* D)
 static void run_copy(const DrawCmd* D)
 {
     run_copy_pixels(D);
-    if (D->cp_v & 0x4000u) plat_inc32(&g_frames_presented);
+    if ((D->cp_v & 0x4000u) && !D->efb) plat_inc32(&g_frames_presented); /* an in-between image is not a frame */
 }
 
 /* The deferred half of the command above, published after a drain. */
@@ -2819,7 +2906,7 @@ static void run_backend(const DrawCmd* D)
         exit(8);
     }
     g_be_sent[D->kind < 3 ? D->kind : 2]++;
-    if (D->kind == 1 && (D->cp_v & 0x4000u)) plat_inc32(&g_frames_presented);
+    if (D->kind == 1 && (D->cp_v & 0x4000u) && !D->efb) plat_inc32(&g_frames_presented);
 }
 
 /* A command run on the producer, as it is built: through the backend when
@@ -3039,9 +3126,9 @@ static void ensure_frames_dir(void)
     }
 }
 
-static void write_frame_png(const char* path, int w, int h)
+static void write_frame_png(const char* path, const uint8_t* buf, int w, int h)
 {
-    if (!png_write_rgba(path, &g_screen[0][0][0], w, h, EFB_W * 4)) fprintf(stderr, "[gxr] cannot write %s\n", path);
+    if (!png_write_rgba(path, buf, w, h, EFB_W * 4)) fprintf(stderr, "[gxr] cannot write %s\n", path);
     else fprintf(stderr, "[gxr] wrote %s (%dx%d)\n", path, w, h);
 }
 
@@ -3116,7 +3203,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     uint8_t f_up, f_mid, f_dn;
     int filtered, foreign, near_rows;
     uint32_t dest, bytes;
-    int packed = 1;
+    int packed = 1, mid_copy = 0;
     long long want, want_near;
     /* Filtered iff the collapsed kernel is not the exact identity. Asking the
      * weights rather than masking the registers is what makes this right: the
@@ -3148,7 +3235,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     /* H10's in-between pass: a copy to a texture would write what F+1's own
      * frame reads next, so it is skipped -- but its clear is kept, since the
      * draws after it expect the EFB it leaves. The screen copy runs as ever. */
-    if ((g_pair_flags & GXR_PAIR_LERP) && !to_screen) {
+    if ((g_pair_flags & GXR_PAIR_LERP) && !to_screen && !interp_on()) {
         g_pair_skipped++;
         if (v & 0x800u) {
             publish_clear(s, bp, v);
@@ -3255,6 +3342,59 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     } else if (g_backend && (v & 0x800u)) {
         publish_clear(s, bp, v); /* a backend's copy never clears (3.1) */
     }
+    /* H17a: the in-between stream's half of this copy. A copy to texture is
+     * the real frame's alone, as in H10's pass, but its clear is kept: the
+     * in-between draws after it expect the EFB it leaves. No fence: only a
+     * copy reads another worker's rows, and the in-between stream's one copy
+     * is the screen copy, which the frame gate follows. */
+    if (interp_on() && !to_screen) {
+        g_pair_skipped++;
+        if (v & 0x800u) {
+            g_target = 1;
+            publish_clear(s, bp, v);
+            g_target = 0;
+            g_pair_kept++;
+        }
+    }
+    if (interp_on() && to_screen) {
+        uint64_t t0;
+        long long real = D->seq;
+        uint64_t before = 0;
+        if (g_interp == 2) { /* the real frame as its own copy left it */
+            wait_ran(real, W_HASHPNG);
+            before = gxr_screen_hash();
+        }
+        t0 = gxr_ticks();
+        if (g_legacy && foreign) drain(W_COPY_BEFORE);
+        g_target = 1;
+        D = claim_slot(1, g_published, 0); /* own count; after every in-between draw */
+        D->s = s;
+        D->cp_image = NULL;
+        D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
+        D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
+        D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
+        if (g_workers > 0) {
+            publish();
+        } else {
+            run_here(D);
+        }
+        if (foreign) {
+            if (g_legacy) drain(W_COPY_AFTER);
+            else if (near_rows) g_fence_after_near = D->seq + 1;
+            else g_fence_after = D->seq + 1;
+            if (v & 0x800u) publish_clear(s, bp, v);
+        }
+        g_target = 0;
+        g_interp_images++;
+        mid_copy = 1;
+        g_interp_ticks += gxr_ticks() - t0;
+        if (g_interp == 2) {
+            wait_ran(g_published - 1, W_HASHPNG); /* own count */
+            g_interp_checked++;
+            if (gxr_screen_hash() == before) g_interp_same++;
+            else fprintf(stderr, "[interp] frame %u: the in-between copy changed the real frame's picture\n", gx_frame_count());
+        }
+    }
     /* The frame is published: the next frame's first command drains, once.
      * That recycles the arena, the copy list and the graveyard a frame at a
      * time, keeps one frame in flight, and lets the guest's frame end run while
@@ -3272,7 +3412,13 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
          * from the same buffer the PNG is written from and at the same point,
          * so it does not depend on whether a PNG is being written. */
         if (want || g_hash) drain(W_HASHPNG);
-        if (want) TIMED(T_PNG, write_frame_png(path, g_screen_w, g_screen_h));
+        if (want) TIMED(T_PNG, write_frame_png(path, &g_screen[0][0][0], g_screen_w, g_screen_h));
+        if (want && mid_copy) { /* NNNN.mid.png, or B.mid.png beside a replay's B.png */
+            size_t n = strlen(path);
+            if (n >= 4 && !strcmp(path + n - 4, ".png")) path[n - 4] = '\0';
+            strncat(path, ".mid.png", sizeof path - strlen(path) - 1);
+            TIMED(T_PNG, write_frame_png(path, &g_screen_mid[0][0][0], g_screen_w, g_screen_h));
+        }
         /* One line per presented frame, for a tool to diff between runs:
          * "[gxr] frame <n> <w>x<h> hash <16 hex digits>". Note that SOA_SNAP
          * skips rasterizing the frames it is not writing, so in that mode only
@@ -3397,6 +3543,21 @@ void gxr_report(void)
             (unsigned long long)g_copies_tex, (unsigned long long)g_copies_xfb);
     }
     if (g_backend && g_backend->report) g_backend->report();
+    if (g_interp) {
+        double span = gxr_producer_span();
+        long real = gxr_presented();
+        fprintf(stderr,
+                "[interp] %llu in-between images: %llu draws matched, %llu drawn from F+1 (%llu demoted); %.3f ms of the "
+                "producer's time each; %.1f images a second over %.2fs (%ld real, %llu in-between); ",
+                g_interp_images, g_pair_matched, g_pair_unmatched + g_pair_demoted, g_pair_demoted,
+                g_interp_images ? gxr_seconds(g_interp_ticks) * 1e3 / (double)g_interp_images : 0.0,
+                span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
+        if (g_interp == 2)
+            fprintf(stderr, "the real picture unchanged by its in-between copy at %llu of %llu frames\n", g_interp_same,
+                    g_interp_checked);
+        else
+            fprintf(stderr, "the real picture not checked (SOA_INTERP=check checks it)\n");
+    }
     /* Two facts about lifetimes, stated when they happened at all, because
      * between them they say whether a run took the paths the queue's rules are
      * there for. The first is the only moment the renderer's own state moves

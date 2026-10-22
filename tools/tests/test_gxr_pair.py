@@ -313,6 +313,7 @@ RUNS = {
 }
 
 THREAD_COUNTS = ("1", "3")
+INTERP_THREADS = ("1", "4")
 
 REPORT = re.compile(
     r"\[pair\] midpoint at t=[\d.]+: (\d+) of (\d+) draws matched \(\d+ vertices interpolated\), "
@@ -322,6 +323,16 @@ REPORT = re.compile(
 needs_msvc = pytest.mark.skipif(
     toolchain.cl_path() is None, reason="no MSVC: the renderer cannot be built here"
 )
+
+
+def pngs_of(base: Path) -> tuple:
+    return base.with_name(base.name + ".png"), base.with_name(base.name + ".mid.png")
+
+
+def pngs(base: Path) -> tuple:
+    """B.png and B.mid.png as a pair replay left them, read before the next
+    run writes over them."""
+    return tuple(p.read_bytes() if p.exists() else None for p in pngs_of(base))
 
 
 def clean_env() -> dict:
@@ -423,7 +434,29 @@ def world(tmp_path_factory):
                 res["pairs"] = [
                     (int(a), int(b)) for a, b in zip(lines[::2], lines[1::2], strict=True)
                 ]
+                res["png"] = pngs(Path(caps[1]))
             results[(name, threads)] = res
+    # H17a: every pair again with SOA_INTERP=1 -- A recorded, then B once with
+    # both streams -- at 1 and 4 threads.
+    for threads in INTERP_THREADS:
+        for name, (mode, *rest) in RUNS.items():
+            if mode != "pair":
+                continue
+            caps = [str(out / c) for c in rest if "/" in c]
+            t = [c for c in rest if "/" not in c]
+            extra = {"SOA_THREADS": threads, "SOA_HASH": "1", "SOA_INTERP": "1"}
+            if t:
+                extra["SOA_PAIR_T"] = t[0]
+            for stale in pngs_of(Path(caps[1])):
+                stale.unlink(missing_ok=True)
+            r = run(mode, *caps, extra=extra)
+            text = r.stdout + r.stderr
+            assert r.returncode == 0, (
+                f"{name} with SOA_INTERP at SOA_THREADS={threads}: exit {r.returncode}\n{text}"
+            )
+            res = parse(text)
+            res["png"] = pngs(Path(caps[1]))
+            results[(name, "interp" + threads)] = res
     strip = run(
         "pair", str(out / "move" / "strip"), str(out / "move" / "0002"), extra={"SOA_HASH": "1"}
     )
@@ -588,6 +621,27 @@ def test_the_c_pairs_are_fifopair_pairs(world):
         world["runs"][("tex.mut", "1")]["pairs"]
     )
     assert lost == {(1, 1)}, lost
+
+
+@needs_msvc
+def test_the_live_stream_makes_the_three_pass_midpoint(world):
+    """H17a's Done line 2: with SOA_INTERP, B is drawn once with both streams,
+    and its B.png and B.mid.png are byte for byte the three-pass replay's --
+    the real frame untouched by the stream beside it, and the in-between image
+    H10's midpoint. The midpoint is not B itself, or this would prove nothing."""
+    for name, (mode, *_) in RUNS.items():
+        if mode != "pair":
+            continue
+        want = world["runs"][(name, "1")]
+        assert None not in want["png"], f"{name}: the three-pass replay wrote no PNG"
+        for threads in INTERP_THREADS:
+            got = world["runs"][(name, "interp" + threads)]
+            assert got["png"][0] == want["png"][0], f"{name} B.png at {threads} threads"
+            assert got["png"][1] == want["png"][1], f"{name} B.mid.png at {threads} threads"
+            assert got["hashes"] == want["hashes"][:2], f"{name}: the interp run presents A and B"
+            assert got["report"] == want["report"], f"{name}: the matching differs"
+    move = world["runs"][("move.pair", "1")]["png"]
+    assert move[0] != move[1]
 
 
 @needs_msvc

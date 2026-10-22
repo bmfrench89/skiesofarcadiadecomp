@@ -874,13 +874,16 @@ unsigned long long gxr_pair_rotations(void);
 void gxr_pair_list(void* file);
 void gxr_pair_report(void);
 void gxr_set_output(const char* png_path);
+int gxr_interp(void);
 
 /* The image between two consecutive captures (PLAN-60FPS-MODS H10), in three
  * passes: A recorded (to A.png), B as it is (to B.png, the check that the
  * pair machinery changes nothing), then B again with every draw matched in A
  * moved to (1-t)*A + t*B (to B.mid.png). SOA_PAIR_T is t, 0.5 unless set;
  * SOA_PAIR_LIST names a file for the matched pairs, fifopair's numbering.
- * Nothing is captured and no frame hook runs between the passes. */
+ * Nothing is captured and no frame hook runs between the passes. With
+ * SOA_INTERP (H17a) there are two: A recorded, then B once with both streams,
+ * the real one to B.png and the in-between one to B.mid.png. */
 int gx_replay_pair(CpuState* s, const char* a, const char* b)
 {
     uint8_t* fifo;
@@ -892,7 +895,7 @@ int gx_replay_pair(CpuState* s, const char* a, const char* b)
     float t = 0.5f;
     FILE* lf = NULL;
     unsigned long long rot;
-    int pass;
+    int pass, interp = gxr_interp(), passes = interp ? 2 : 3;
     g_dump_checked = 1;
     g_dump_list = NULL;
     g_frame_hook = NULL;
@@ -915,10 +918,12 @@ int gx_replay_pair(CpuState* s, const char* a, const char* b)
         if (!lf) { fprintf(stderr, "[pair] cannot write %s\n", list); return 1; }
         gxr_pair_list(lf);
     }
-    for (pass = 1; pass <= 3; pass++) {
+    for (pass = 1; pass <= passes; pass++) {
         const char* base = pass == 1 ? a : b;
         unsigned flags = pass == 1 ? GXR_PAIR_RECORD : (pass == 3 ? GXR_PAIR_LERP : 0u);
-        fprintf(stderr, "[pair] pass %d: %s %s\n", pass, pass == 1 ? "record" : (pass == 2 ? "as it is" : "between"), base);
+        if (interp && pass == 2) flags = GXR_PAIR_RECORD | GXR_PAIR_LERP;
+        fprintf(stderr, "[pair] pass %d: %s %s\n", pass,
+                pass == 1 ? "record" : (interp ? "as it is, and between" : (pass == 2 ? "as it is" : "between")), base);
         if (!gxr_pair_mode(flags, t)) { fprintf(stderr, "[pair] cannot set pair mode\n"); return 1; }
         snprintf(png, sizeof png, pass == 3 ? "%s.mid.png" : "%s.png", base);
         gxr_set_output(png);

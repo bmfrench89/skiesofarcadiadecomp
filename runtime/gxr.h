@@ -64,6 +64,9 @@ int gxr_pair_mode(unsigned flags, float t);
 unsigned long long gxr_pair_rotations(void);
 void gxr_pair_list(void* file); /* a FILE*: "F-index F+1-index" per match, fifopair's numbering */
 void gxr_pair_report(void);
+/* SOA_INTERP (H17a): 0 off, 1 on, 2 check. While on, RECORD with LERP is
+ * legal and builds each draw a second time, for the in-between image. */
+int gxr_interp(void);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to
