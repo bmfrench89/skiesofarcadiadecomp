@@ -9530,3 +9530,49 @@ plan Turbo, 12 workers).
 - **Not done here:** showing the images (H17b), the cut detector (H17b), the artifact classes (H18), and the GPU
   backend's second EFB (V12). The `[interp]` line's images a second are over the whole run, title and capped stretch
   included; the table's come from `[frametime]`'s window.
+
+**H17b: the in-between images in a window, never at the game's expense; this CPU shows few.** 2026-10-22. Spec:
+`docs/specs/interp-live.md`; the owner's answer D-42 ("H17b, then V12"). Runs in `build/h17b/`, this PC docked to its
+85 Hz display, on AC.
+
+- **The screen ring** [V, `runtime/gxr.c`, `window.c`, `window_sdl.c`; closes PLAN-NEXT B1]: three slots as a triple
+  buffer. The worker finishing a frame's last screen copy copies the real and in-between images in and publishes the
+  slot; the window takes the newest. `test_gxr_pair.py` alternates two frames through it at 1 and 4 threads, worker 2
+  stalled 3 ms on every copy, with a reader holding each slot 16 ms: every read is a whole frame, unchanged across the
+  hold. *Mutations:* published by the first worker to finish (8 of 8 reads torn at 4 threads); one slot for ever (a
+  slot changed under its reader; the first form of the test, which hashed only after the hold, passed this and was
+  tightened). In a window: 2395 presents for 2400 frames, none failed.
+- **The cut detector** [V]: per frame, the 3D draws keyed, matched, and matched with a vertex moved past 16 to 128
+  px, logged by `SOA_INTERP_LOG` for the four H17a scenes. Opened against the opening's images (frames 2090 to 3660
+  snapshotted in the same run as its log): 3552 (a sky to the bridge) and 3648 (the bridge to clouds) are cuts whose
+  in-between images mix two shots, at 62% and 29% of 3D draws matched; 3210 (the moon to open sky), 2% matched. The
+  moon with drifting sparkles at 3150 is not a cut and its in-between image is right, yet 71% of its matched draws
+  moved over 64 px, which a share rule at 50% would have called one. So a cut is under H4's 90% matched, or over 80%
+  of the matched draws past 64 px (above every non-cut seen in the four scenes). `test_gxr_pair.py`: a perspective
+  triangle moved 360 px and a pair with nothing matched are cuts, the 32 px move is not; with `SOA_INTERP_CUT=64:1`
+  the far move is not. *Mutation:* the match rule removed, the pair with nothing matched is not a cut.
+- **The budget, the third design** [V]: the game's own frame time, screen copy to screen copy. Three frames over 35 ms
+  stop the in-between stream; it restarts only after on-time frames, backing off. Two designs before it failed in a
+  window and are recorded so nobody tries them again:
+  - *Worker busy time* never stopped anything: the opening ran at 16.5 real frames a second with interpolation against
+    24.2 and 26.4 without, while every worker's busy time stayed far under a frame. The frame runs long in waits and
+    serial work, not in busy rows.
+  - *The gate's drain as the frame boundary* never ran: a windowed run drains before the next frame's first command,
+    so the gate is skipped. And `gxr_seconds` is 0 until the report has fixed the TSC's rate, so every frame read 0
+    ms; `gxr_clock` reads seconds directly.
+- **The guard holds** [V, windowed at the 30 fps cap, `SOA_INTERP_ANYRATE=1` to show them at 85 Hz]:
+
+  | scene | off: real frames a second | on: real frames a second | in-between images shown |
+  |---|---|---|---|
+  | the opening, from 3600 | 24.2, 26.4 | 25.4 | 884 of 5000 frames |
+  | Part L's `126a`, from 2500 | 29.0, 28.9 | 28.4 | 588 of 3000 |
+
+  In both the budget stopped the stream once, early, and it never restarted: neither scene leaves room for it on this
+  CPU renderer, which is H17a's measurement (32 to 43 images a second) seen live. The images it did show came in
+  lighter stretches (the title, the Continue). Without the knob, at 85 Hz: "in-between images not shown, so none is
+  built", 2 built before the window decided.
+- **Off changes nothing** [V]: replay 23/23 at 1, 2, 3 and 8 threads, `title --check` 4 of 4, the self test; a
+  window with `interp` off presents as before (2395 presents for 2400 frames, the 85 Hz histogram's shape).
+- **Not measured:** the pacing at 60 or 120 Hz, which needs the display there (D-2), and the look: Done lines 4 and 5
+  at the owner's session D. What the owner will see on this machine is mostly repeats, until V12 draws the in-between
+  images on the GPU.

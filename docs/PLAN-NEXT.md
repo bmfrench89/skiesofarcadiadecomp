@@ -221,7 +221,7 @@ The owner answered four questions, with the research behind them summarised in t
     (H17a) and widescreen (M10). **Chosen 2026-10-21 (D-40): M8 first**, built ahead of the sitting:
     M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)), and M8b, the Vulkan
     presenter's overlay, 2026-10-22 (FINDINGS "M8b"). **Then 60 fps (D-41, 2026-10-22):** H17a done the same day
-    (FINDINGS "H17a", [specs/interp.md](specs/interp.md)), headless; H17b, the images in a window, is next, its Done
+    (FINDINGS "H17a", [specs/interp.md](specs/interp.md)), headless; H17b, the images in a window, built the same day (FINDINGS "H17b"), its Done
     at session D, then V12 (D-42).
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
@@ -647,7 +647,7 @@ built only if measured.
 | 1 | **C5b** record display lists into guest memory; `[gx] display lists` report; H10's pair matching re-measured on re-captured pairs, with 99% of 3D area the limit. **Done** (FINDINGS "C5b"): 3D area 100.00% in all five pairs | a day to several days | `--link` (gx.c) | C5a confirmed | — | gpu-backend §6 |
 | 2 | **C5c** re-capture the corpus, open every changed frame, bless: **a first bless**. **Done** 2026-10-01 (FINDINGS "C5c"): frames matched to their old moments from windows of captures, no draw removed, the owner looked at all 16 changed frames | a day | none | C5b | **Owner** look C | gpu-backend §6 |
 | 3 | **H17a** interpolation, headless, off by default. A second EFB routed per command by `DrawCmd.efb`, from `g_target` in `claim_slot`. It measures the images a second each scene reaches, the input to A2 (b) and A3. **Done** 2026-10-22 (FINDINGS "H17a"): the live stream is H10's midpoint byte for byte; 32 to 43 images a second, the workers short, not the guest | several days | `--link` | C5b's re-measure (or C5a refuted); the H17a spec reviewed | — | PLAN-60FPS-MODS H17a + the H17a spec |
-| 4 | **H17b** interpolation, live: H8's presenter, cut detector, repeat when over budget, a `soa.ini` key off by default | several days | `--link` | H17a; D-2 (display at 60 or 120 Hz) | **Owner** session D | PLAN-60FPS-MODS H17b |
+| 4 | **H17b** interpolation, live: H8's presenter, cut detector, repeat when over budget, a `soa.ini` key off by default. **Built** 2026-10-22 (FINDINGS "H17b"): the game keeps its pace with it on; this CPU has room for few in-between images; the pacing and the look wait for session D | several days | `--link` | H17a; D-2 (display at 60 or 120 Hz) | **Owner** session D | PLAN-60FPS-MODS H17b |
 | 5 | **H9** VI locked to vblank, **only** if session A or D shows judder | several days | `--link` | its Done restated (PLAN-GAMEPLAY-MODS F) | **Owner** | PLAN-60FPS-MODS H9 |
 | 6 | **H18a-e**, only the classes on your session D list, most visible first | a day to several days each | `--link` | H17b | — | PLAN-60FPS-MODS H18 |
 
@@ -997,7 +997,7 @@ until you say otherwise.
 | `SOA_DISC_LOG` as D2's default output? | disc impl 6 | open |
 | Which of M5b and I1 lands first | disc impl 7 | M5b, in M1; I1 in M3 reuses its `aram_set_data_dir` |
 | Who owns the on-device ISO importer | disc impl 8 | open |
-| B1: `g_screen`'s single buffer | portability | before L8's windowed TSAN, or with H17b |
+| B1: `g_screen`'s single buffer | portability | **closed** 2026-10-22 by H17b's screen ring (FINDINGS "H17b") |
 | B3: which retranslation L5 rides | portability | the first planned one |
 | B4: the windows-11-arm image | portability | moot: Windows on ARM is outside §0's targets, so L8 has no such leg |
 | B5: CORE-MATH or hand-written | portability | **answered 2026-10-02: CORE-MATH if MSVC builds it cleanly**, else hand-written (§0) |

@@ -382,7 +382,7 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 - **Off:** replay 23/23 and `title --check`, with no `SOA_HASH` comparison.
 - **On, headless:** a same-run contrast. In one `SOA_INTERP=1` run, each real frame's `g_screen` is hashed before and after its in-between pass, and the two must be equal; a mutation that lets the in-between pass write `g_screen` must make them differ. The in-between PNGs from a field, a battle, a ship battle and a cutscene are opened.
 
-**H17b. Interpolation, live** — *several days, `--link`. **Owner:** judges it in a window. Owner session D (PLAN-NEXT); needs the display at 60 or 120 Hz (G4).*
+**H17b. Interpolation, live** — *several days, `--link`. **Owner:** judges it in a window. Owner session D (PLAN-NEXT); needs the display at 60 or 120 Hz (G4). **Built 2026-10-22** to `docs/specs/interp-live.md`, which restates these Done lines for the CPU renderer's measured reach (FINDINGS "H17b"); the pacing and the owner's list wait for session D.*
 - H8's presenter shows the in-between image at the first refresh.
 - A cut detector repeats the frame when the match share falls below H4's threshold.
 - Interpolate only when the previous pair finished in budget; otherwise repeat the frame.

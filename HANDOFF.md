@@ -419,6 +419,16 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-22)
 
+**Latest, 2026-10-22: H17b built** (FINDINGS "H17b", `docs/specs/interp-live.md`; D-42, "H17b, then V12"). The
+window shows each in-between image for one 60 Hz refresh before its frame (`interp = 1` in soa.ini or the menu),
+where the display is at 60 or 120 Hz; a screen ring hands it whole frames (closing B1); a cut detector holds the
+frame before at camera cuts; and a budget on the game's own frame time stops the in-between work before it slows
+the game (opening 25.4 real frames a second on, 24.2 and 26.4 off). On this CPU it stops early in the opening and
+the field, so the owner will mostly see repeats until **V12**, next by D-42: the in-between images drawn on the
+Vulkan backend. The display here is at 85 Hz, so the pacing waits for session D (D-2).
+
+**Before that, the same day:**
+
 **Latest, 2026-10-22: H17a, interpolation headless, done on this PC** (FINDINGS "H17a", `docs/specs/interp.md`;
 the owner chose 60 fps, D-41). `SOA_INTERP=1` builds every draw a second time into a second EFB, the image between
 the frame before and this one; `SOA_SNAP` writes it as `NNNN.mid.png`, and `SOA_INTERP=check` proves the real picture

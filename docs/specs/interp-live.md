@@ -4,6 +4,9 @@ Written 2026-10-22 for the owner's answer that day (PLAN-NEXT D-42: "H17b, then 
 [PLAN-60FPS-MODS.md](../PLAN-60FPS-MODS.md) H17b, H17a's spec and measurement ([interp.md](interp.md), FINDINGS
 "H17a"), and FINDINGS "H8" for the presenter. The code was mapped first, at 399c03f.
 
+**Built 2026-10-22** (FINDINGS "H17b"): Done lines 1 to 3, and 4 on this PC's 85 Hz display with the check's knob;
+line 4's pacing and line 5 wait for the owner's session D at 60 or 120 Hz.
+
 **Why.** H17a makes the image between two frames, headless. H17b shows it: between real frames N-1 and N the
 window shows the in-between image for one refresh at 60 Hz (two at 120 Hz), so the picture changes 60 times a
 second while the game's logic still runs at 30. It must never make the game itself slower, and it must never show
@@ -33,24 +36,28 @@ an image that is wrong in a way a repeat would not be.
   fence), so the copy reads a finished frame. The UI thread takes the newest slot. Headless PNGs and hashes still read
   `g_screen` as they do.
 - **The presenter's two images** (DXGI and SDL): on a new slot with an in-between image, present it with the sync
-  interval of one 60 Hz refresh (`present_interval(hz, 60)`), then the real frame with the same interval. A slot with
-  no in-between image is presented as today. Only where the display runs at a whole multiple of 60 (60, 120, 180, 240
+  interval of one 60 Hz refresh (`present_interp(hz)`: 1 at 60 Hz, 2 at 120), then the real frame with the same
+  interval; with a frame latency of one, the second present waits for the first. A slot with no in-between image is
+  presented as today. Only where the display runs at a whole multiple of 60 (60, 120, 180, 240
   Hz); elsewhere (85 Hz) the window says so once and the producer is told to stop building the in-between stream, so
   nothing is spent on images nobody sees. The GDI presenter has no refresh to pace by and does the same. Showing the
-  in-between image first delays every real frame by one 60 Hz refresh, 16.7 ms.
+  in-between image first delays every real frame by one 60 Hz refresh, 16.7 ms. `SOA_INTERP_ANYRATE=1`, a check's
+  knob, shows them at any rate, one refresh each, so the path can run on a display that cannot pace it.
 - **The budget: the in-between stream is built only when it fits.** At each frame's start the producer decides whether
-  this frame gets an in-between stream, from the frames before it: the render span of the last frame (its first
-  command to the last worker finishing its last screen copy) against the frame time (33.3 ms), with the in-between
-  share of that span measured on the last frame that had one. Over budget, the next frames build none, and the
-  presenter repeats; the pair machinery still records every frame, so the stream resumes on the first frame in budget.
-  The thresholds and hysteresis are set from the four scenes' runs and recorded in FINDINGS. The guard is the game's
-  own frame rate: with interpolation on it may not fall below what it is off.
+  this frame gets an in-between stream, from the game's own frame time, screen copy to screen copy. Three frames in a
+  row over 35 ms (a 30 fps frame is 33.4) stop it; it starts again only after frames are back under 34 ms, waiting 30
+  frames, doubling after each try that failed to 960 (back to 30 once a try holds ten seconds), and never while the
+  game is slow without it. Over budget the presenter repeats; the pair machinery still records every frame, so the
+  stream resumes the frame it is allowed. *As built:* the spec first named the render span with the in-between share
+  predicted from workers' busy time; busy time was tried and is no guide (FINDINGS "H17b": every worker far under a
+  frame of work while the frame ran long), and the gate's drain is no clock (a windowed run drains first). The guard is
+  the game's own frame rate: with interpolation on it may not fall below what it is off.
 - **The cut detector.** At a camera cut, draws match across the pair (same display lists, same textures) and their
   positions jump, so the lerp makes a frame that belongs to neither (H17a's battle at frame 4000). Per frame the
-  producer counts the 3D draws keyed, matched, and matched with a vertex displaced more than D pixels. A frame whose
-  matched share falls below H4's 90%, or whose displaced share is over a threshold set from the same runs (the battle
-  cut and its neighbours among them), is a cut: its in-between image is not shown and the real frame before is held
-  instead.
+  producer counts the 3D draws keyed, matched, and matched with a vertex displaced more than 16, 32, 64 and 128 pixels.
+  A frame whose matched share falls below H4's 90%, or where over 80% of the matched draws moved more than 64 px, is
+  a cut: its in-between image is not shown and the real frame before is held instead. Both from four scenes'
+  `SOA_INTERP_LOG` and the opening's images (FINDINGS "H17b"); `SOA_INTERP_CUT=px:share` changes the second.
 - **The switch:** a `soa.ini` key `interp = 0|1` (env `SOA_INTERP`), off by default, in the menu's Settings page,
   applying at the next start like every key there. `SOA_INTERP=check` stays headless-only.
 - **The report:** one `[interp]` line beside `[present]`: images shown, in-between images shown, frames repeated over

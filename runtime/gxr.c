@@ -193,10 +193,10 @@ static double g_f_worst;
 static int g_cut_idx = 2;        /* which of CUT_PX the detector reads */
 static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D draws moved past it (FINDINGS "H17b") */
 static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
-static unsigned long long g_cuts, g_over_budget;
-static double g_ms_on, g_ms_off, g_ms_last;
-static int g_mid_last = 1;
-static uint64_t g_busy_mark[MAX_THREADS + 1];
+static unsigned long long g_cuts, g_over_budget, g_budget_offs;
+static double g_ms_last;
+static double g_frame_s;                           /* the last screen copy, by gxr_clock */
+static int g_slow_run, g_backoff = 30, g_wait, g_held;
 
 /* A test knob (PLAN-60FPS-MODS H14): SOA_GXR_STALL=<worker>:<kind>:<us>[,...]
  * makes that worker wait that many microseconds before every command of that
@@ -2487,42 +2487,51 @@ void gxr_interp_show(int on)
     plat_cas32(&g_mid_allowed, on ? 0 : 1, on ? 1 : 0);
 }
 
-/* At each frame's start, after the gate's drain has every worker finished
- * with the frame before: does this frame get an in-between stream? Only a
- * window's run asks (the screen ring is on); a headless one builds every
- * image, as H17a does. The frame before's cost is the busiest worker's busy
- * time over it. With an in-between stream, keep it while that fits the frame
- * time; without, predict it from the ratio of frames with one to frames
- * without, and start again only with a tenth to spare. */
+/* At each frame's end, its screen copies published: does the next frame get an
+ * in-between stream? Only a window's run asks (the screen ring is on); a
+ * headless one builds every
+ * image, as H17a does. The test is the game's own frame time, from one screen
+ * copy to the next (the gate's drain is no clock: anything else that drains
+ * first, as a windowed run does, takes it): a 30 fps frame is 33.4 ms, and three in a row over 35 mean
+ * the in-between work is slowing the game, so it stops. It starts again only
+ * after frames are back on time, waiting longer after each try that failed
+ * (30 frames, doubling to 960, back to 30 once a try has held for ten
+ * seconds), and never while the game is slow without it: workers' busy time
+ * was tried first and is no guide -- in the opening every worker averaged far
+ * under a frame of work while the frame ran long (FINDINGS "H17b"). */
 static void interp_frame_begin(void)
 {
-    const double budget = 1000.0 / 30.0 - 2.0;
-    uint64_t most = 0;
-    double ms, ratio;
-    int i, keep;
-    if (!g_interp || !g_ring || g_workers <= 0) return;
-    for (i = 1; i <= g_workers; i++) {
-        uint64_t b = (uint64_t)plat_load64((plat_a64*)&g_ts[i].busy); /* rule 4, and charge()'s store */
-        if (b - g_busy_mark[i] > most) most = b - g_busy_mark[i];
-        g_busy_mark[i] = b;
-    }
-    ms = gxr_seconds(most) * 1e3;
+    const double slow = 35.0, on_time = 34.0;
+    double now, ms;
+    if (!g_interp || !g_ring) return;
+    now = gxr_clock(); /* not gxr_ticks: their rate is known only at the report */
+    ms = g_frame_s > 0.0 ? (now - g_frame_s) * 1e3 : 0.0;
+    g_frame_s = now;
     g_ms_last = ms;
-    if (g_mid_last) g_ms_on = g_ms_on > 0.0 ? 0.8 * g_ms_on + 0.2 * ms : ms;
-    else g_ms_off = g_ms_off > 0.0 ? 0.8 * g_ms_off + 0.2 * ms : ms;
-    ratio = g_ms_on > 0.0 && g_ms_off > 0.0 ? g_ms_on / g_ms_off : 2.0;
-    if (ratio < 1.0) ratio = 1.0;
-    keep = g_mid_last ? ms <= budget : ms * ratio <= budget * 0.9;
-    if (!plat_load32(&g_mid_allowed)) keep = 0;
-    else if (!keep) g_over_budget++;
-    g_mid_on = g_mid_last = keep;
-}
-
-/* The gate (H14): the frame before is over, every worker done with it. */
-static void gate(void)
-{
-    drain(W_GATE);
-    interp_frame_begin();
+    if (!plat_load32(&g_mid_allowed)) {
+        g_mid_on = 0;
+        return;
+    }
+    if (g_mid_on) {
+        g_slow_run = ms > slow ? g_slow_run + 1 : 0;
+        if (g_slow_run >= 3) {
+            g_mid_on = 0;
+            g_slow_run = 0;
+            g_wait = g_backoff;
+            g_backoff = g_backoff * 2 > 960 ? 960 : g_backoff * 2;
+            g_budget_offs++;
+        } else if (++g_held == 300) {
+            g_backoff = 30;
+        }
+    } else {
+        g_over_budget++;
+        if (ms > on_time) g_wait = g_wait > g_backoff ? g_wait : g_backoff;
+        else if (g_wait > 0) g_wait--;
+        else {
+            g_mid_on = 1;
+            g_held = 0;
+        }
+    }
 }
 
 /* The frame's in-between image is a cut's: its 3D draws mostly unmatched
@@ -2616,7 +2625,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
 
     /* Every drain on this path comes before tev_prepare: the gate (a screen
      * copy was the last frame's end), then the arena and the graveyard. */
-    if (g_frame_gate) gate();
+    if (g_frame_gate) drain(W_GATE);
     if (g_arena_used + sizeof(Vertex) * count * (mid ? 2u : 1u) + 16 > ARENA_BYTES) drain(W_ARENA);
     if (tex_graveyard_full()) drain(W_GRAVE);
     draw_tripwire(bp, prim);
@@ -3370,7 +3379,7 @@ static void copy_filter(uint32_t f0, uint32_t f1, uint8_t* up, uint8_t* mid, uin
 static void publish_clear(CpuState* s, const uint32_t* bp, uint32_t v)
 {
     DrawCmd* D;
-    if (g_frame_gate) gate();
+    if (g_frame_gate) drain(W_GATE);
     D = claim_slot(2, 0, 0); /* after a foreign copy this carries its exit fence */
     D->s = s;
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A];
@@ -3439,7 +3448,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
      * neighbouring workers, and workers advance independently. Without this
      * the frame depends on SOA_THREADS. */
     foreign = copy_is_foreign(half, filtered, y0);
-    if (g_frame_gate) gate();
+    if (g_frame_gate) drain(W_GATE);
     if (g_legacy && foreign) {
         static unsigned last_frame = ~0u;
         unsigned frame = gx_frame_count();
@@ -3569,7 +3578,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
             g_cuts++;
         }
         if (g_interp_log)
-            fprintf(g_interp_log, "%u keyed3d %u matched3d %u far16 %u far32 %u far64 %u far128 %u worst %.1f cut %d busy %.2f\n",
+            fprintf(g_interp_log, "%u keyed3d %u matched3d %u far16 %u far32 %u far64 %u far128 %u worst %.1f cut %d frame_ms %.2f\n",
                     gx_frame_count(), g_f_keyed3d, g_f_matched3d, g_f_far[0], g_f_far[1], g_f_far[2], g_f_far[3], g_f_worst,
                     (D->cp_ring & CP_CUT) != 0, g_ms_last);
         if (g_workers > 0) {
@@ -3626,6 +3635,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
             fprintf(stderr, "[gxr] frame %u %dx%d hash %016llx\n", frame, g_screen_w, g_screen_h,
                     (unsigned long long)gxr_screen_hash());
         if (g_pair_flags & GXR_PAIR_RECORD) pair_rotate(); /* H10: this frame becomes the one before */
+        interp_frame_begin(); /* H17b: whether the next frame builds its in-between stream */
     }
 }
 
@@ -3751,7 +3761,8 @@ void gxr_report(void)
                 g_interp_images, g_pair_matched, g_pair_unmatched + g_pair_demoted, g_pair_demoted,
                 g_interp_images ? gxr_seconds(g_interp_ticks) * 1e3 / (double)g_interp_images : 0.0,
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
-        fprintf(stderr, "%llu cuts, %llu frames without one over budget; ", g_cuts, g_over_budget);
+        fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts, g_over_budget,
+                g_budget_offs);
         if (g_interp == 2)
             fprintf(stderr, "the real picture unchanged by its in-between copy at %llu of %llu frames\n", g_interp_same,
                     g_interp_checked);
