@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1764 |
+| Python tests | 1767 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -448,7 +448,9 @@ and 2; no battle in 77 off and 77 hold trials). The sky run waits on map 99's en
 
 **Then H20, a power line in every run report** (FINDINGS "H20"): `[power] AC, battery 79%, plan Turbo, mode best
 performance` on this PC; on battery it adds the mWh the run used and per 1000 frames. A battery run joins the owner's
-sitting. **Next, unblocked:** M16b with P1's presets, or the owner's choice of track after the sitting. P1b's
+sitting. **Then M16b** (FINDINGS "M16b"): the shipped mods' settings as options, `encounter-rate.rate` and
+`hold_b`, `autotext.wait`, `coop.slots`, the old switches still winning. **Next:** the owner's sitting, then their
+choice of track. P1b's
 sky run is attempted and open (FINDINGS "P1b's sky run, attempted"): map 99's encounter path is read, but
 part K's ship sits where no region has a table and did not move under A and the stick.
 

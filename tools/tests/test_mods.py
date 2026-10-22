@@ -4245,3 +4245,53 @@ def test_encounter_rate_without_the_test_mode_runs_no_trial(driver, tmp_path):
     shipped(tmp_path)
     out, err = play(driver, tmp_path, TRIAL_FIELD + "frame frame get 80346d28")
     assert not trials(err) and "80346D28=00000000" in out, (out, err)
+
+
+# M16b: the shipped mods' settings as declared options, the old switches
+# still winning where set.
+
+
+@needs_cc
+def test_m16b_encounter_rate_s_options_set_it_and_its_switch_still_wins(driver, tmp_path):
+    """`encounter-rate.rate=half` halves the base 50 to 25 with no
+    SOA_ENCOUNTERS; with SOA_ENCOUNTERS=double as well, the switch wins
+    (100) and says so. The mutation, the option read and dropped, writes
+    nothing at half."""
+    shipped(tmp_path)
+    script = FIELD + "setb 8030b7ad ff frame " + BYTE
+    out, err = play(driver, tmp_path, script, SOA_MOD_OPT="encounter-rate.rate=half")
+    assert multipliers(out) == [25], (out, err)
+    out, err = play(
+        driver, tmp_path, script, SOA_MOD_OPT="encounter-rate.rate=half", SOA_ENCOUNTERS="double"
+    )
+    assert multipliers(out) == [100], (out, err)
+    assert "SOA_ENCOUNTERS=double is set, and wins over the option rate = half" in err, err
+    out, err = play(driver, tmp_path, "", SOA_MOD_OPT="encounter-rate.hold_b=0")
+    assert "holding B keeps them away off" in err, err
+
+
+@needs_cc
+def test_m16b_autotext_s_option_sets_it_and_its_switch_still_wins(driver, tmp_path):
+    shipped(tmp_path, folder=AUTO)
+    _, err = play(driver, tmp_path, "", SOA_MOD_OPT="autotext.wait=1")
+    assert "a complete page turns itself after 45 frames" in err, err
+    _, err = play(driver, tmp_path, "", SOA_MOD_OPT="autotext.wait=90", SOA_AUTOTEXT="30")
+    assert (
+        "after 30 frames" in err
+        and "SOA_AUTOTEXT=30 is set, and wins over the option wait = 90" in err
+    ), err
+    _, err = play(driver, tmp_path, "")
+    assert "off (SOA_AUTOTEXT unset or 0)" in err, err
+
+
+@needs_cc
+def test_m16b_coop_s_option_sets_it_and_its_switch_still_wins(driver, tmp_path):
+    shipped(tmp_path, folder=COOP)
+    _, err = play(driver, tmp_path, "", SOA_MOD_OPT="coop.slots=1+3")
+    assert "pad 2 chooses the commands of party slot(s) 1 3 in battle" in err, err
+    _, err = play(driver, tmp_path, "", SOA_MOD_OPT="coop.slots=1+3", SOA_COOP="2")
+    assert (
+        "party slot(s) 2 in battle" in err and "SOA_COOP=2 is set, and wins over the option" in err
+    ), err
+    out, err = play(driver, tmp_path, "", SOA_MOD_OPT="coop.slots=1,3")
+    assert "loaded 0" in out and "the value is not one of off|0|1|2|3" in err, err

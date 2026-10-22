@@ -124,7 +124,8 @@ the check run and seen to fail, and the change put back.
 
 - **M8's settings page.** It does not exist yet; when it does it reads the declarations through
   `mod.c`, which keeps them, and draws a page per mod with no code of the mod's.
-- **Moving `mods/`'s three DLL mods onto declared options** (M16b, with P1's presets). Their switches
-  (`SOA_ENCOUNTERS`, `SOA_AUTOTEXT`, `SOA_COOP` and soa.ini's `encounters`, `autotext`, `coop`) are
-  documented, recorded and tested as they are; moving them changes what a player's soa.ini says.
+- **Moving `mods/`'s three DLL mods onto declared options** (M16b). *Done 2026-10-21* (FINDINGS "M16b"):
+  `encounter-rate.rate` and `hold_b`, `autotext.wait` and `coop.slots` (slots joined by `+`), each beside its old
+  switch (`SOA_ENCOUNTERS`, `SOA_AUTOTEXT`, `SOA_COOP` and soa.ini's `encounters`, `autotext`, `coop`), which still
+  wins when set and says so, so no player's soa.ini changes meaning.
 - **A Lua host, hot reload of options mid-run** (M15), and P6's per-map seed, which still needs a DLL.

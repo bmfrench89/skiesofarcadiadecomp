@@ -22,6 +22,10 @@
  *     SOA_AUTOTEXT=on or 1      45 frames, a second and a half
  *     SOA_AUTOTEXT=N            N frames, for N of 2 or more
  *
+ * The mod.ini declares the same as an option (M16b), `wait`, 0 to 3600 read
+ * the same way (1 is 45 frames), set as `autotext.wait = 60` in soa.ini or by
+ * SOA_MOD_OPT; SOA_AUTOTEXT, and soa.ini's `autotext`, still win when set.
+ *
  * Hold-to-skip (P11b): while the host button LB is held (CH1; the
  * keyboard's Tab), it presses A in states 3 and 4 -- text still appearing,
  * and a complete page -- two frames down and two up for as long as LB is
@@ -139,6 +143,13 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     else if (g_phase == RELEASING && !theirs) pad->buttons &= (uint16_t)~SOA_PAD_A;
 }
 
+/* An option the mod.ini declares, or NULL on a port without option calls
+ * (M16b): the value is already checked against its domain at load. */
+static const char* option(const SoaModApi* api, const char* name)
+{
+    return api->size >= SOA_MOD_HAS(option) ? api->option(name) : NULL;
+}
+
 static int env(const char* name, char* out, unsigned cap)
 {
 #ifdef _WIN32
@@ -160,7 +171,16 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     /* pad_filter is the last member this mod calls. */
     if (version < 1 || api->size < SOA_MOD_HAS(pad_filter)) return 1;
     g_api = api;
-    if (!env("SOA_AUTOTEXT", v, sizeof v) || !v[0] || !strcmp(v, "0")) {
+    {
+        const char* wait = option(api, "wait");
+        int set = env("SOA_AUTOTEXT", v, sizeof v) && v[0];
+        if (set && wait && strcmp(wait, "0") != 0) {
+            snprintf(line, sizeof line, "SOA_AUTOTEXT=%s is set, and wins over the option wait = %s", v, wait);
+            api->log(line);
+        }
+        if (!set) snprintf(v, sizeof v, "%s", wait ? wait : "");
+    }
+    if (!v[0] || !strcmp(v, "0")) {
         api->log("off (SOA_AUTOTEXT unset or 0): pages wait for A as they always have");
         return 0;
     }

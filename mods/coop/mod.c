@@ -6,6 +6,11 @@
  *     SOA_COOP=1      pad 2 chooses party slot 1's commands
  *     SOA_COOP=1,3    slots 1 and 3; slots are 0 to 3, 0 the lead
  *
+ * The mod.ini declares the same as an option (M16b), `slots`: off, or the
+ * slots joined by '+' (`coop.slots = 1+3` in soa.ini, or SOA_MOD_OPT), since
+ * a ',' would split the recording's mods= entry; SOA_COOP, and soa.ini's
+ * `coop`, still win when set.
+ *
  * A battle's party input is its phase 1 (the word at 0x8034733C, scene 7),
  * and the member choosing is the word at 0x80347330 (FINDINGS "P10b's
  * spike"). While that member is one of the slots given, the game's port 1
@@ -125,6 +130,13 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     g_last2 = there ? two.buttons : 0;
 }
 
+/* An option the mod.ini declares, or NULL on a port without option calls
+ * (M16b): the value is already checked against its domain at load. */
+static const char* option(const SoaModApi* api, const char* name)
+{
+    return api->size >= SOA_MOD_HAS(option) ? api->option(name) : NULL;
+}
+
 static int env(const char* name, char* out, unsigned cap)
 {
 #ifdef _WIN32
@@ -149,7 +161,7 @@ static unsigned parse_slots(const char* v)
         slots |= 1u << (*p - '0');
         p++;
         if (!*p) return slots;
-        if (*p != ',') return 0;
+        if (*p != ',' && *p != '+') return 0; /* '+' the option's spelling, ',' SOA_COOP's */
         p++;
     }
 }
@@ -164,7 +176,16 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
         return 1;
     }
     g_api = api;
-    if (!env("SOA_COOP", v, sizeof v) || !v[0]) {
+    {
+        const char* slots = option(api, "slots");
+        int set = env("SOA_COOP", v, sizeof v) && v[0];
+        if (set && slots && strcmp(slots, "off") != 0) {
+            snprintf(line, sizeof line, "SOA_COOP=%s is set, and wins over the option slots = %s", v, slots);
+            api->log(line);
+        }
+        if (!set) snprintf(v, sizeof v, "%s", slots && strcmp(slots, "off") != 0 ? slots : "");
+    }
+    if (!v[0]) {
         api->log("off (SOA_COOP unset): port 1 plays every member");
         return 0;
     }

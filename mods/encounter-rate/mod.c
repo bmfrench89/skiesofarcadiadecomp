@@ -24,6 +24,9 @@
  * party block, so nothing written here reaches a save.
  *
  * soa.ini's `encounters` and `encounters_hold_b` set the same two switches.
+ * The mod.ini declares them as options too (M16b), `rate` and `hold_b`, set
+ * as `encounter-rate.rate = half` in soa.ini or by SOA_MOD_OPT; the
+ * switches above, where set, win over them, and say so.
  *
  * SOA_ENCOUNTERS_TEST=1 is the test mode P1b's check reads (the comfort-pack
  * spec 3.4; tools/encounter_check.py): trials of the kinds 0.5, 1, 2, 0 and
@@ -271,6 +274,13 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
     g_b = (pad->buttons & SOA_PAD_B) && g_api->scene() == SCENE_FIELD;
 }
 
+/* An option the mod.ini declares, or NULL on a port without option calls
+ * (M16b): the value is already checked against its domain at load. */
+static const char* option(const SoaModApi* api, const char* name)
+{
+    return api->size >= SOA_MOD_HAS(option) ? api->option(name) : NULL;
+}
+
 /* An environment variable as the mod sees it: 1 with its value, 0 unset. */
 static int env(const char* name, char* out, unsigned cap)
 {
@@ -293,7 +303,17 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
     /* pad_filter is the last member this mod calls. */
     if (version < 1 || api->size < SOA_MOD_HAS(pad_filter)) return 1;
     g_api = api;
+    const char *rate = option(api, "rate"), *hold = option(api, "hold_b");
+    if (rate)
+        for (i = 0; i < 4; i++)
+            if (!strcmp(rate, k_preset[i])) g_preset = i;
+    if (hold) g_hold_b = strcmp(hold, "0") != 0;
     if (env("SOA_ENCOUNTERS", v, sizeof v) && v[0]) {
+        if (rate && strcmp(rate, "normal") != 0) {
+            snprintf(line, sizeof line, "SOA_ENCOUNTERS=%s is set, and wins over the option rate = %s", v, rate);
+            api->log(line);
+        }
+        g_preset = P_NORMAL;
         for (i = 0; i < 4 && strcmp(v, k_preset[i]); i++) {}
         if (i < 4) g_preset = i;
         else {
@@ -302,6 +322,11 @@ SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
         }
     }
     if (env("SOA_ENCOUNTERS_HOLD_B", v, sizeof v) && v[0]) {
+        if (hold && strcmp(hold, "1") != 0) {
+            snprintf(line, sizeof line, "SOA_ENCOUNTERS_HOLD_B=%s is set, and wins over the option hold_b = %s", v, hold);
+            api->log(line);
+        }
+        g_hold_b = 1;
         if (!strcmp(v, "0")) g_hold_b = 0;
         else if (strcmp(v, "1")) {
             snprintf(line, sizeof line, "SOA_ENCOUNTERS_HOLD_B=%s is not 0 or 1; holding B keeps battles away", v);

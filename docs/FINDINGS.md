@@ -9410,3 +9410,19 @@ here).
   region, so no table and no roll.
 - **Left:** flying the ship (its controls are not established here) to a region with a table, from a card that
   starts there. The sky run stays open; PLAN-NEXT names it the first thing to cut.
+
+**M16b: the shipped mods' settings as declared options.** 2026-10-21. Spec: `docs/specs/mod-options.md` section 7.
+
+- **What changed** [V]: `mods/encounter-rate` declares `rate` (off, half, normal, double) and `hold_b`;
+  `mods/autotext` declares `wait` (0 to 3600, read as `SOA_AUTOTEXT` reads numbers: 0 off, 1 the usual 45 frames);
+  `mods/coop` declares `slots`, every set of party slots joined by `+`, or off (a `,` would split the recording's
+  `mods=` entry), sixteen choices. Each reads its option through the API when the port has the call, and its old
+  switch -- `SOA_ENCOUNTERS`, `SOA_ENCOUNTERS_HOLD_B`, `SOA_AUTOTEXT`, `SOA_COOP`, which soa.ini's old keys set --
+  still wins when set, saying so when the option said otherwise. No player's soa.ini changes meaning, and M8's page
+  can now draw all three from their declarations.
+- **The checks** [V]: three tests in `test_mods.py`, one a mod, each failing when its option is read and dropped; the
+  30 tests the three mods had pass unchanged. `tools/mod.py check` loads all three against the real DOL.
+- **In the game** [V, `build/m16b/`]: part G's card, 4,000 frames, `SOA_MOD_OPT='encounter-rate.rate=half
+  autotext.wait=1 coop.slots=1+3'` and no old switch. The log named each option with its default; autotext waits 45
+  frames, co-op gives pad 2 slots 1 and 3, and the multiplier byte at `0x8030B7AD` read `19` (25, half of the base
+  50) at frames 3500 and 3900.

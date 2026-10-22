@@ -359,7 +359,8 @@ in effect. The `encounters` keys, `autotext` and `coop` are read by the mods
 `encounter-rate`, `autotext` and `coop`, not by the port, so they need `mods =
 ...\mods` too; set without it, the port says the key does nothing. A variable set in the environment always wins over the file, and
 the port says so; a key it does not know is reported with its line and ignored.
-A key with a dot is an option a mod declares, `ID.NAME = VALUE` (`encounter-scale.factor = 1`):
+A key with a dot is an option a mod declares, `ID.NAME = VALUE` (`encounter-scale.factor = 1`; the shipped
+mods' `encounter-rate.rate`, `encounter-rate.hold_b`, `autotext.wait` and `coop.slots`, beside their older keys):
 it joins `SOA_MOD_OPT` below, unless that already gives the key, and the mod checks it when it loads.
 The checks -- `scenario.py`'s runs and replays, `perfbench.py` and the self
 test -- run with the file off (`SOA_SETTINGS=0`), so a player's settings never
@@ -481,7 +482,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1764 tests; any that need a dump skip themselves
+python -m pytest                     # 1767 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes
