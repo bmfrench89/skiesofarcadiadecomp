@@ -80,6 +80,14 @@ void si_set_motor_window(int open) { (void)open; }
 void si_motor_stop(void) {}
 int tick_turbo_now(void) { return 0; }
 void clock_pause(int on) { (void)on; }
+/* the menu (M8): closed here, so the window draws only the frame */
+int tick_turbo_toggle(void) { return 0; }
+void clock_pause_for(unsigned reason, int on) { (void)reason; (void)on; }
+int menu_is_open(void) { return 0; }
+void menu_open(void) {}
+void menu_set_state(int fullscreen, int turbo) { (void)fullscreen; (void)turbo; }
+int menu_input(int key) { (void)key; return 0; }
+void menu_draw(uint8_t* bgra, int w, int h, int stride) { (void)bgra; (void)w; (void)h; (void)stride; }
 
 static void frames(int n)
 {
