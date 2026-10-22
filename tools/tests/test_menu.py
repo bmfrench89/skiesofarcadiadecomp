@@ -268,6 +268,7 @@ def test_the_panel_and_its_text(driver, tmp_path):
     mutation, a glyph row shifted, fails the S."""
     w, h = 640, 480
     buf = draw(driver, tmp_path, "open", w, h)
+    (ROOT / "build").mkdir(exist_ok=True)  # a fresh checkout (CI) has none
     png(ROOT / "build" / "menu-main.png", buf, w, h)
     s = 2
     pw, ph = 48 * 6 * s, (6 + 7) * 9 * s  # COLS + 2 cells wide; six rows on the main page
