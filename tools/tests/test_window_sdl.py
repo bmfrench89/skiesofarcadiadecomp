@@ -70,6 +70,18 @@ static uint8_t g_screen[EFB_H * EFB_W * 4];
 static plat_a32 g_frames;
 long gxr_presented(void) { return plat_load32(&g_frames); }
 const uint8_t* gxr_screen(int* w, int* h) { *w = 640; *h = 480; return g_screen; }
+/* H17b's screen ring, which the window takes its frames from: the one frame,
+ * handed out again each time the count moves */
+static long g_taken;
+void gxr_ring_enable(void) {}
+int gxr_ring_take(GxrShown* f)
+{
+    long n = plat_load32(&g_frames);
+    if (n == g_taken) return 0;
+    g_taken = n;
+    f->real = g_screen; f->mid = NULL; f->w = 640; f->h = 480; f->stride = EFB_W * 4;
+    return 1;
+}
 static void (*g_report)(void);
 void hle_on_report(void (*fn)(void)) { g_report = fn; }
 void hle_report(void) { if (g_report) g_report(); audio_report(); }

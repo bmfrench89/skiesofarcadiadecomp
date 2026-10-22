@@ -82,6 +82,8 @@ static volatile int g_open;
 static int g_scale; /* SOA_SCALE, or 0: the largest whole multiple of 640x480 that fits the display */
 static uint8_t* g_bgra; /* the frame converted, BGRA, for P5a and the scaler */
 static int g_shown_w, g_shown_h;
+static int g_ring_on;     /* the frames come from gxr's screen ring (H17b) */
+static GxrShown g_frame;  /* the ring's slot being shown: the UI thread's until its next take */
 static uint8_t* g_scaled; /* the texture's contents, client-sized */
 static int g_bw, g_bh;
 static Uint32 g_wake; /* the event type that wakes this thread: data 1 fullscreen, 2 the motor, 3 the menu */
@@ -454,7 +456,8 @@ static void close_window(void)
 static void filter_on_cpu(uint64_t t0)
 {
     int w, h, x, y;
-    const uint8_t* src = gxr_screen(&w, &h);
+    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
+    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
     if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
     if (!g_bgra) return;
     for (y = 0; y < h; y++) {
@@ -857,7 +860,12 @@ static void ui_thread(void* arg)
             if (g_shown_w) present(0); /* the last frame again, at the new size */
         }
         if (logged_resize) window_line(now);
-        if (now != last) { last = now; present(1); }
+        if (g_ring_on) {
+            if (gxr_ring_take(&g_frame)) present(1);
+        } else if (now != last) {
+            last = now;
+            present(1);
+        }
         SDL_WaitEventTimeout(NULL, 8);
     }
 }
@@ -867,6 +875,10 @@ void window_start(void)
     static PlatThread t;
     const char* env = getenv("SOA_SCALE");
     if (env && atoi(env) > 0) g_scale = atoi(env);
+    /* The renderer's frames through the screen ring (H17b, B1), taken before
+     * the first command. */
+    gxr_ring_enable();
+    g_ring_on = 1;
     if (!plat_thread_start(&t, ui_thread, NULL, 0)) {
         fprintf(stderr, "[window] cannot start the UI thread; the run continues headless\n");
         watchdog_fallback();

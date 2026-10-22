@@ -53,6 +53,8 @@ static volatile int g_open;
 static int g_scale; /* SOA_SCALE, or 0: the largest whole multiple of 640x480 that fits the monitor */
 static uint8_t* g_bgra; /* the frame converted for GDI */
 static int g_shown_w, g_shown_h;
+static int g_ring_on;     /* the frames come from gxr's screen ring (H17b) */
+static GxrShown g_frame;  /* the ring's slot being shown: the UI thread's until its next take */
 
 /* ---- the paced presenter (PLAN-60FPS-MODS H8) ----------------------------
  *
@@ -560,7 +562,8 @@ static double filter_on_cpu(LARGE_INTEGER t0)
 {
     int w, h, x, y;
     double a = 1.0;
-    const uint8_t* src = gxr_screen(&w, &h);
+    const uint8_t* src = g_ring_on ? g_frame.real : gxr_screen(&w, &h);
+    if (g_ring_on) { w = g_frame.w; h = g_frame.h; }
     if (!g_bgra) g_bgra = (uint8_t*)malloc((size_t)EFB_W * EFB_H * 4);
     for (y = 0; y < h; y++) {
         const uint8_t* s = src + (size_t)y * EFB_W * 4;
@@ -1023,7 +1026,12 @@ static unsigned __stdcall ui_thread(void* arg)
             }
         }
         if (logged_resize) window_line(now);
-        if (now != last) { last = now; present(1); }
+        if (g_ring_on) {
+            if (gxr_ring_take(&g_frame)) present(1);
+        } else if (now != last) {
+            last = now;
+            present(1);
+        }
         menu_pad();
         MsgWaitForMultipleObjects(0, NULL, FALSE, 8, QS_ALLINPUT);
     }
@@ -1034,6 +1042,12 @@ void window_start(void)
     const char* env = getenv("SOA_SCALE");
     uintptr_t h;
     if (env && atoi(env) > 0) g_scale = atoi(env);
+    /* The CPU renderer's frames through the screen ring (H17b, B1), taken
+     * before the first command; the GPU's presenter has its own. */
+    if (!gxv_running()) {
+        gxr_ring_enable();
+        g_ring_on = 1;
+    }
     h = _beginthreadex(NULL, 0, ui_thread, NULL, 0, NULL);
     if (!h) {
         /* Same hole as a failed CreateWindow, one step earlier: the watchdog

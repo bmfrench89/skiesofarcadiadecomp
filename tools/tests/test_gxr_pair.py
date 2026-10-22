@@ -51,6 +51,7 @@ DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "gxr.h"
+#include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,6 +262,67 @@ static void report(CpuState* s)
     printf("[pairtest] copy %016llx\n", (unsigned long long)fnv(s->mem + 0x00400000u, 0x40000));
 }
 
+/* H17b's screen ring: a reader that takes each frame as a presenter would,
+ * holds it for a 60 Hz refresh, and hashes it as gxr_screen_hash hashes
+ * g_screen, as it takes it and again after the hold: a slot written under
+ * its reader changes between the two. */
+static plat_a32 g_ring_stop, g_ring_done_reading;
+static unsigned long long g_ring_reads[4096];
+static int g_ring_nread, g_ring_changed;
+
+static uint64_t fnvb(uint64_t h, const uint8_t* p, size_t n)
+{
+    while (n--) { h ^= *p++; h *= 1099511628211ULL; }
+    return h;
+}
+
+static uint64_t slot_hash(const GxrShown* f)
+{
+    uint8_t dim[4];
+    uint64_t h;
+    int y;
+    dim[0] = (uint8_t)(f->w >> 8); dim[1] = (uint8_t)f->w; dim[2] = (uint8_t)(f->h >> 8); dim[3] = (uint8_t)f->h;
+    h = fnvb(14695981039346656037ULL, dim, 4);
+    for (y = 0; y < f->h; y++) h = fnvb(h, f->real + (size_t)y * f->stride, (size_t)f->w * 4);
+    return h;
+}
+
+static void ring_reader(void* arg)
+{
+    (void)arg;
+    while (!plat_load32(&g_ring_stop)) {
+        GxrShown f;
+        if (gxr_ring_take(&f)) {
+            uint64_t h0 = slot_hash(&f), h;
+            plat_sleep_ms(16);
+            h = slot_hash(&f);
+            if (h != h0) g_ring_changed++;
+            if (g_ring_nread < 4096) g_ring_reads[g_ring_nread++] = h;
+        } else {
+            plat_sleep_ms(1);
+        }
+    }
+    plat_inc32(&g_ring_done_reading);
+}
+
+static int ring(CpuState* s, const char* a, const char* b, int n)
+{
+    PlatThread t;
+    int i, rc = 0;
+    gxr_ring_enable();
+    if (!plat_thread_start(&t, ring_reader, NULL, 0)) return 4;
+    plat_thread_detach(&t);
+    for (i = 0; i < n && !rc; i++) rc = gx_replay(s, (i & 1) ? b : a);
+    gxr_flush();
+    plat_sleep_ms(100);
+    plat_inc32(&g_ring_stop);
+    while (!plat_load32(&g_ring_done_reading)) plat_sleep_ms(1);
+    for (i = 0; i < g_ring_nread; i++) printf("[pairtest] ring read %016llx\n", g_ring_reads[i]);
+    printf("[pairtest] ring published %ld missed %ld changed %d\n", gxr_ring_published(), gxr_ring_missed(), g_ring_changed);
+    fflush(stdout);
+    return rc;
+}
+
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -274,6 +336,7 @@ int main(int argc, char** argv)
     if (!gxr_enabled()) return 3;
     if (!strcmp(argv[1], "one")) rc = gx_replay(&s, argv[2]);
     else if (!strcmp(argv[1], "pair") && argc > 3) rc = gx_replay_pair(&s, argv[2], argv[3]);
+    else if (!strcmp(argv[1], "ring") && argc > 4) return ring(&s, argv[2], argv[3], atoi(argv[4]));
     else return 2;
     if (rc) return rc;
     report(&s);
@@ -314,6 +377,7 @@ RUNS = {
 
 THREAD_COUNTS = ("1", "3")
 INTERP_THREADS = ("1", "4")
+RING_THREADS = ("1", "4")
 
 REPORT = re.compile(
     r"\[pair\] midpoint at t=[\d.]+: (\d+) of (\d+) draws matched \(\d+ vertices interpolated\), "
@@ -460,7 +524,20 @@ def world(tmp_path_factory):
     strip = run(
         "pair", str(out / "move" / "strip"), str(out / "move" / "0002"), extra={"SOA_HASH": "1"}
     )
-    yield {"out": out, "runs": results, "strip": strip}
+    # H17b: two frames alternately through the screen ring, worker 2 slowed on
+    # every copy so a slot published before the last worker finished would
+    # hold the frame before's rows.
+    rings = {}
+    for threads in RING_THREADS:
+        r = run(
+            "ring",
+            str(out / "move" / "0001"),
+            str(out / "move" / "0002"),
+            "24",
+            extra={"SOA_THREADS": threads, "SOA_HASH": "1", "SOA_GXR_STALL": "2:1:3000"},
+        )
+        rings[threads] = r
+    yield {"out": out, "runs": results, "strip": strip, "rings": rings}
     # Twenty-odd 24 MB images: pytest keeps the last three temporary trees.
     for ram in out.rglob("*.ram"):
         ram.unlink()
@@ -642,6 +719,27 @@ def test_the_live_stream_makes_the_three_pass_midpoint(world):
             assert got["report"] == want["report"], f"{name}: the matching differs"
     move = world["runs"][("move.pair", "1")]["png"]
     assert move[0] != move[1]
+
+
+@needs_msvc
+def test_the_screen_ring_hands_out_whole_frames(world):
+    """H17b's Done line 2: every frame the ring hands a presenter is a whole
+    frame -- its hash one of the frames' own SOA_HASH values -- though the
+    reader holds each slot for a 60 Hz refresh while the next frames are drawn
+    and one worker is slowed on every copy. Two frames that differ alternate,
+    so a torn or overwritten slot cannot hash as either."""
+    for threads, r in world["rings"].items():
+        text = r.stdout + r.stderr
+        assert r.returncode == 0, f"{threads} threads: exit {r.returncode}\n{text}"
+        frames = set(re.findall(r"\[gxr\] frame \d+ \d+x\d+ hash (\w+)", text))
+        reads = re.findall(r"\[pairtest\] ring read (\w+)", text)
+        pub = re.search(r"\[pairtest\] ring published (\d+) missed (\d+) changed (\d+)", text)
+        assert len(frames) == 2, f"{threads} threads: the two frames should differ, got {frames}"
+        assert int(pub.group(1)) == 24, f"{threads} threads: one slot a frame, got {pub.group(0)}"
+        assert len(reads) >= 4, f"{threads} threads: the reader took too few frames to say anything"
+        assert pub.group(3) == "0", f"{threads} threads: a slot changed while its reader held it"
+        bad = [h for h in reads if h not in frames]
+        assert not bad, f"{threads} threads: {len(bad)} of {len(reads)} reads were not a whole frame"
 
 
 @needs_msvc

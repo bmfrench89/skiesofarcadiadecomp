@@ -67,6 +67,21 @@ void gxr_pair_report(void);
 /* SOA_INTERP (H17a): 0 off, 1 on, 2 check. While on, RECORD with LERP is
  * legal and builds each draw a second time, for the in-between image. */
 int gxr_interp(void);
+/* H17b's screen ring (docs/specs/interp-live.md): what a presenter shows, a
+ * real frame and the in-between image before it. Enabled before the first
+ * command; then the worker that finishes a frame's last screen copy copies
+ * both images into a free slot and publishes it, and gxr_ring_take hands the
+ * newest to the one thread that presents. The slot is the taker's until its
+ * next take. */
+typedef struct {
+    const uint8_t* real; /* RGBA, `stride` bytes a row */
+    const uint8_t* mid;  /* the image between the frame before and this one, or NULL */
+    int w, h, stride;
+} GxrShown;
+void gxr_ring_enable(void);
+int gxr_ring_take(GxrShown* out); /* 1 with the newest frame, if one was published since the last take */
+long gxr_ring_published(void);
+long gxr_ring_missed(void); /* published, then replaced before a take */
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

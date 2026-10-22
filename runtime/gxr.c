@@ -1737,6 +1737,7 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
     D->seq = g_published; /* own count */
     D->kind = kind;
     D->efb = (uint8_t)g_target;
+    D->cp_ring = 0;
     fence = want > g_fence_after ? want : g_fence_after;
     if (fence > n) {
         WARN_ONCE("[gxr] command %lld asked for a fence at %lld, past itself; held to its own number\n", n, fence);
@@ -2775,6 +2776,86 @@ static void copy_to_texture(const DrawCmd* D, CpuState* s, uint32_t dest_reg, ui
 
 static uint8_t g_screen[EFB_H][EFB_W][4]; /* the last frame copied out, RGBA */
 static uint8_t g_screen_mid[EFB_H][EFB_W][4]; /* H17a: the last in-between image copied out, RGBA */
+
+/* H17b's screen ring (closes PLAN-NEXT B1): g_screen is one buffer, which the
+ * next frame's screen copy overwrites while a presenter may still be reading
+ * it -- and with interpolation the presenter holds a frame for a refresh after
+ * its in-between image. Three slots as a triple buffer: the filler's back slot,
+ * the middle one (g_ring_state's low bits, RING_FRESH while not yet taken) and
+ * the taker's front one. Only the worker that finishes a frame's last screen
+ * copy fills, and the next frame's screen copy cannot start before that
+ * command is over (its entry fence), so fillers come one at a time and
+ * g_ring_back needs no atomic: each filler's own increment of g_ring_done
+ * orders it after the last. */
+typedef struct {
+    uint8_t real[EFB_H][EFB_W][4];
+    uint8_t mid[EFB_H][EFB_W][4];
+    int w, h, has_mid;
+} RingSlot;
+#define RING_FRESH 4
+#define CP_LAST 1
+#define CP_MID 2
+static RingSlot* g_ring; /* NULL: no presenter takes frames from it */
+static plat_a32 g_ring_state = 1, g_ring_done, g_ring_pub, g_ring_miss;
+static int g_ring_back, g_ring_front = 2;
+
+static int32_t ring_xchg(plat_a32* p, int32_t v)
+{
+    int32_t o = plat_load32(p), seen;
+    while ((seen = plat_cas32(p, o, v)) != o) o = seen;
+    return o;
+}
+
+/* Run by every worker after its rows of a frame's last screen copy; the last
+ * one to get here copies the frame out and publishes it. */
+static void ring_fill(const DrawCmd* D)
+{
+    int need = g_workers > 0 ? g_workers : 1, y, old;
+    int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
+    RingSlot* S;
+    if (plat_inc32(&g_ring_done) % need) return;
+    if (w > EFB_W) w = EFB_W;
+    if (h > EFB_H) h = EFB_H;
+    S = &g_ring[g_ring_back];
+    for (y = 0; y < h; y++) memcpy(S->real[y], g_screen[y], (size_t)w * 4);
+    S->has_mid = (D->cp_ring & CP_MID) != 0;
+    if (S->has_mid)
+        for (y = 0; y < h; y++) memcpy(S->mid[y], g_screen_mid[y], (size_t)w * 4);
+    S->w = w;
+    S->h = h;
+    old = ring_xchg(&g_ring_state, g_ring_back | RING_FRESH);
+    if (old & RING_FRESH) plat_inc32(&g_ring_miss);
+    plat_inc32(&g_ring_pub);
+    g_ring_back = old & 3;
+}
+
+void gxr_ring_enable(void)
+{
+    if (g_ring) return;
+    if (g_started) {
+        fprintf(stderr, "[gxr] the screen ring was asked for after the first command; the presenter reads the screen as before\n");
+        return;
+    }
+    g_ring = (RingSlot*)calloc(3, sizeof(RingSlot));
+    if (!g_ring) fprintf(stderr, "[gxr] cannot allocate the screen ring; the presenter reads the screen as before\n");
+}
+
+int gxr_ring_take(GxrShown* out)
+{
+    RingSlot* S;
+    if (!g_ring || !(plat_load32(&g_ring_state) & RING_FRESH)) return 0;
+    g_ring_front = ring_xchg(&g_ring_state, g_ring_front) & 3;
+    S = &g_ring[g_ring_front];
+    out->real = &S->real[0][0][0];
+    out->mid = S->has_mid ? &S->mid[0][0][0] : NULL;
+    out->w = S->w;
+    out->h = S->h;
+    out->stride = EFB_W * 4;
+    return 1;
+}
+
+long gxr_ring_published(void) { return plat_load32(&g_ring_pub); }
+long gxr_ring_missed(void) { return plat_load32(&g_ring_miss); }
 static int g_screen_w = EFB_W, g_screen_h = 480;
 static plat_a32 g_frames_presented; /* copies to the screen completed by all rows */
 
@@ -2882,6 +2963,7 @@ static void run_copy(const DrawCmd* D)
 {
     run_copy_pixels(D);
     if ((D->cp_v & 0x4000u) && !D->efb) plat_inc32(&g_frames_presented); /* an in-between image is not a frame */
+    if ((D->cp_ring & CP_LAST) && g_ring) ring_fill(D);
 }
 
 /* The deferred half of the command above, published after a drain. */
@@ -3287,6 +3369,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
     D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
+    if (to_screen && !interp_on()) D->cp_ring = CP_LAST; /* else the in-between copy ends the frame */
     if (to_screen) { g_screen_w = w > EFB_W ? EFB_W : w; g_screen_h = h > EFB_H ? EFB_H : h; g_copies_xfb++; }
     else {
         if (bytes) {
@@ -3374,6 +3457,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         D->cp_v = v; D->cp_tl = bp[0x49]; D->cp_wh = bp[0x4A]; D->cp_dest = bp[0x4B]; D->cp_stride = bp[0x4D];
         D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
         D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
+        D->cp_ring = CP_LAST | CP_MID;
         if (g_workers > 0) {
             publish();
         } else {

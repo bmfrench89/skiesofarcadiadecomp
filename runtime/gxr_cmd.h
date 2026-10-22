@@ -72,6 +72,10 @@ typedef struct {
      * set for the whole run, so that bug would be invisible in every capture we
      * have and would wait for the first stream that reprograms the filter. */
     uint8_t cp_f_up, cp_f_mid, cp_f_dn;
+    /* H17b's screen ring: CP_LAST on the screen copy that ends its frame (the
+     * in-between one when there is one), CP_MID when that frame has an
+     * in-between image. 0 on every other command (claim_slot). */
+    uint8_t cp_ring;
     uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
 } DrawCmd;
