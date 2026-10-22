@@ -5,6 +5,9 @@ Written 2026-10-21 for the owner's choice that day (PLAN-NEXT D-40: M8 first), f
 amendment, and the rule-7 rewrite of its Done) and the M16/M17 specs, which leave each their page for it. The code
 it touches was mapped first (window.c's present path, si.c's pad, the chords, the safe point, settings.c, mod.c).
 
+**Status: M8a built 2026-10-21**, Done lines 1-6 met on this PC and in a Linux container (FINDINGS "M8a"); line 7
+is the owner's, at the next sitting.
+
 **Why.** Every setting the port has is a line in `soa.ini` or an environment variable. On a handheld with no
 keyboard, that means leaving the game to change anything. M8 is the menu a player opens from the pad.
 

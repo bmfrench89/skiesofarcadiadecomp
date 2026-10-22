@@ -9426,3 +9426,35 @@ here).
   autotext.wait=1 coop.slots=1+3'` and no old switch. The log named each option with its default; autotext waits 45
   frames, co-op gives pad 2 slots 1 and 3, and the multiplier byte at `0x8030B7AD` read `19` (25, half of the base
   50) at frames 3500 and 3900.
+
+**M8a: the in-game menu, built and checked on Windows and Linux.** 2026-10-21. Spec: `docs/specs/menu.md`; the
+owner's choice that day, PLAN-NEXT D-40.
+
+- **What it is** [V]: `runtime/menu.c` holds the pages (Resume; Mods, each mod on or off through `mod_order` and its
+  declared options; Settings, every soa.ini key with a closed set of values; Fullscreen and Turbo applied at once;
+  Quit), their input, and their drawing: a dimmed panel and a 5x7 font of the port's own, at a whole-number scale,
+  `g`, `j`, `p`, `q` and `y` a row lower. A change other than fullscreen and turbo is written to soa.ini by
+  `settings_set`, which replaces the key's line (its comment kept) or appends it and moves a new file over the
+  old; the page says the game reads it at its next start. View+LS (the chord CH1 kept for it) or F1 opens it; it
+  holds the game under a pause reason of its own (the pause is now a set of reasons, focus's and the menu's apart),
+  and `si.c` withholds the live pad from the moment it opens, before a recording takes its copy. `window.c` reads
+  the pad for it on the UI thread (the game polls nothing while held) and draws it into the scaled copy only;
+  GDI scales into a client-sized copy when it is open; `window_sdl.c` does the same with SDL's events. The Vulkan
+  presenter has no overlay pass yet (M8b): there it says why and stays closed.
+- **The checks, each shown able to fail** [V]: `test_menu.py` (6: the pages' actions, an option of each type, mods
+  on and off, the settings cycling, a closed menu drawing nothing, the panel and the S glyph pixel by pixel; an
+  enum's left and right swapped and a row of S shifted each fail one); `test_settings.py` (3: a key replaced in
+  place with its comment and line end, appended, the real write; the comment dropped fails it);
+  `test_clock.py` (the menu's hold and focus's apart; one flag for both fails it); `test_padrec.py` (the pad
+  withheld before the recording, so its replay reads what the session read; withholding after the recording fails
+  it). The rendered page, `build/menu-main.png`, was opened: legible, the selected row barred.
+- **In a window** [V, `build/m8/`]: part G's card, DXGI at 85 Hz on this PC's display, `SOA_WINDOW_TEST=menu@2900`:
+  `[menu] open at frame 2900`, and `the game's picture a8a80bedbb456fac before, a8a80bedbb456fac after; the converted
+  frame 35cf1e26 before, 35cf1e26 after`, then `[menu] closed`. The presented buffer, `menu-2900.bmp` at 1280x960,
+  was opened: the menu over the prison corridor, the picture dimmed under the panel. With the menu also drawn into
+  the converted frame (the mutation), it read `35cf1e26 before, 344bee15 after`.
+- **On Linux** [V]: in a `python:3.14-slim` container with SDL3 3.4.18 built by `tools/fetch_sdl.py`,
+  `compile_runtime.py --cc gcc --require-sdl` compiled 41/41 with SDL, and `test_window_sdl.py`, `test_menu.py` and
+  `test_power.py` passed under Xvfb (14), once the SDL test's driver had the menu's stubs.
+- **Left:** the owner's Done (open it in a window with the pad, set an encounter preset and turn a mod off, restart,
+  see both), M8b (the Vulkan presenter's overlay), and warps and saves from the menu (M7a/b).

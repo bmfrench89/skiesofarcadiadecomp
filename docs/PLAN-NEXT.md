@@ -214,10 +214,13 @@ The owner answered four questions, with the research behind them summarised in t
        (C8), the windowed GPU session (V6b, V8, V9a), and R4's Setup run with the Android box ticked, its window
        captured at the Ally X's 150% (R5c's last Done line) and its words blessed (`build/setup-review/index.html`);
        and, since 2026-10-21, T10's: a small mod built from [MODDING.md](MODDING.md) alone, and H20's: a run on battery,
-       its `[power]` line's mWh against `powercfg /batteryreport`.
+       its `[power]` line's mWh against `powercfg /batteryreport`; and M8a's: the menu opened with View+LS in a window, an
+       encounter preset and a mod changed, the game started again, both applied.
 
     Then the owner chooses between mods (gameplay milestone 2's game-facing half: M8, M7, R0 and R1), 60 fps
-    (H17a) and widescreen (M10). **Chosen 2026-10-21 (D-40): M8 first**, built ahead of the sitting.
+    (H17a) and widescreen (M10). **Chosen 2026-10-21 (D-40): M8 first**, built ahead of the sitting:
+    M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)); M8b, the Vulkan
+    presenter's overlay, follows.
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").

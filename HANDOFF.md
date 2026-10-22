@@ -449,8 +449,12 @@ and 2; no battle in 77 off and 77 hold trials). The sky run waits on map 99's en
 **Then H20, a power line in every run report** (FINDINGS "H20"): `[power] AC, battery 79%, plan Turbo, mode best
 performance` on this PC; on battery it adds the mWh the run used and per 1000 frames. A battery run joins the owner's
 sitting. **Then M16b** (FINDINGS "M16b"): the shipped mods' settings as options, `encounter-rate.rate` and
-`hold_b`, `autotext.wait`, `coop.slots`, the old switches still winning. **Next:** the owner's sitting, then their
-choice of track. P1b's
+`hold_b`, `autotext.wait`, `coop.slots`, the old switches still winning. The owner then chose M8 (D-40).
+
+**Then M8a, the in-game menu** (FINDINGS "M8a", `docs/specs/menu.md`): View+LS or F1 opens it over the picture,
+holds the game, withholds the pad before any recording, and writes soa.ini (Mods with their options and on/off,
+Settings); fullscreen and turbo apply at once. Checked in a window here and on Linux in a container. **Next:** M8b
+(the Vulkan presenter's overlay), or the owner's sitting, whose list now includes the menu in a window. P1b's
 sky run is attempted and open (FINDINGS "P1b's sky run, attempted"): map 99's encounter path is read, but
 part K's ship sits where no region has a table and did not move under A and the stick.
 
