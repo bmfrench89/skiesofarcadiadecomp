@@ -977,6 +977,7 @@ until you say otherwise.
 | D-38 | What the cloud session takes on after R5c | owner, 2026-10-14 | the cloud track | **answered 2026-10-14: the mod framework**: the mod tests without MSVC, then M16, M17, M6 and T10, each proven on the owner's PC (§0) |
 | D-39 | Whether hand decompilation goes broader | owner, 2026-10-14 | F4-F7 | **answered 2026-10-14: keep it targeted**: only what a mod must change on the inside |
 | D-40 | What the PC session takes next, with the mod framework done and step 3 waiting on the owner | owner, 2026-10-21 | M8 | **answered 2026-10-21: M8, the in-game menu**, ahead of 60 fps (H17a) and widescreen (M10); built while the owner is away, its windowed Done at the next sitting |
+| D-41 | What follows M8 | owner, 2026-10-22 | H17a | **answered 2026-10-22: 60 fps** ("60fps go"): H17a, interpolation headless, its spec written first; H17b's windowed Done at a sitting with the display at 60 or 120 Hz |
 | — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:
