@@ -217,7 +217,7 @@ def build(tmp_path):
         *(
             runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c", "power.c")
         ),  # power: H20
-        *(runtime / f for f in ("disc.c", "sha1.c")),  # disc-layer I1
+        *(runtime / f for f in ("disc.c", "sha1.c", "vfst.c")),  # disc-layer I1, I6
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",
         tmp_path / "disc_sys.c",

@@ -18,6 +18,10 @@
  *   portdol              "portdol <sha1>": disc_port_dol_sha1
  *   bybuild              "bybuild <0|1>": disc_refused_by_build, of the last open
  *   table                (a split build) "table ok": soa_game_table set, as runtime/game.c sets it
+ *   op ...               (I6) a files.txt line queued: replace|add <mod> <line> <path> <size> <fill>,
+ *                        or alias <mod> <line> <path> <target>
+ *   opsclear             the queue emptied
+ *   build                the open image's table rebuilt with the queue (see the command)
  *
  * A stop mid-run (exit 9) prints "stop words <words>" first: disc_stop_words,
  * what runtime/android.c shows a player before the app closes.
@@ -74,6 +78,28 @@ static int cut(const char* path, long long n)
 #endif
 }
 
+/* I6's overlay ops, queued by `op` and built by `build`. A source's bytes
+ * are (fill + i) & 0xFF, from one shared buffer, so the 256 MiB cap can be
+ * reached without 256 MiB of memory. */
+#define OPS_MAX 64
+static DiscFileOp g_ops[OPS_MAX];
+static int g_nops;
+static char g_mods[OPS_MAX][16];
+static uint8_t* g_src[256];
+static uint8_t* g_base;
+static size_t g_base_n;
+
+static const uint8_t* source(unsigned fill)
+{
+    unsigned i;
+    if (!g_src[fill & 255]) {
+        g_src[fill & 255] = (uint8_t*)malloc(16u << 20);
+        if (!g_src[fill & 255]) exit(2);
+        for (i = 0; i < (16u << 20); i++) g_src[fill & 255][i] = (uint8_t)(fill + i);
+    }
+    return g_src[fill & 255];
+}
+
 int main(void)
 {
     char line[2048], why[1024], hex[41];
@@ -116,6 +142,71 @@ int main(void)
             if (cmd[0] == 's') printf("serve %s\n", hex);
             else printf("peek %u %s\n", got, hex);
             free(buf);
+        } else if (!strcmp(cmd, "op")) {
+            /* op replace|add <mod> <line> <path> <size> <fill>, or op alias <mod> <line> <path> <target> */
+            char verb[16], path[256], third[256];
+            unsigned mod, ln, fill = 0;
+            DiscFileOp* o;
+            if (g_nops == OPS_MAX ||
+                sscanf(line, "%*s %15s %u %u %255s %255s %u", verb, &mod, &ln, path, third, &fill) < 5 ||
+                mod >= OPS_MAX) {
+                printf("bad %s\n", line);
+                continue;
+            }
+            o = &g_ops[g_nops++];
+            memset(o, 0, sizeof *o);
+            o->verb = !strcmp(verb, "replace") ? DISC_REPLACE : !strcmp(verb, "add") ? DISC_ADD : DISC_ALIAS;
+            snprintf(o->path, sizeof o->path, "%s", path);
+            snprintf(g_mods[mod], sizeof g_mods[mod], "mod%u", mod);
+            o->mod = g_mods[mod];
+            o->mod_index = (int)mod;
+            o->line = ln;
+            if (o->verb == DISC_ALIAS) {
+                snprintf(o->target, sizeof o->target, "%s", third);
+            } else {
+                o->size = (uint32_t)strtoul(third, NULL, 10);
+                o->data = source(fill);
+            }
+            printf("op %d\n", g_nops - 1);
+        } else if (!strcmp(cmd, "opsclear")) {
+            g_nops = 0;
+            printf("opsclear ok\n");
+        } else if (!strcmp(cmd, "build")) {
+            /* the open image's table rebuilt with the queued ops: "build <code> <bytes> <sha1>" or
+             * "build <code> <why>", each op's "opresult <i> <refused> <offset>", then on success
+             * "fsthex <hex>", the table installed for serve, peek and name */
+            uint8_t* out = NULL;
+            size_t out_n = 0, i;
+            const uint8_t* f;
+            size_t fn;
+            int r, k;
+            if (!g_base) {
+                f = disc_fst(&fn);
+                if (!f) {
+                    printf("build none\n");
+                    continue;
+                }
+                g_base = (uint8_t*)malloc(fn);
+                if (!g_base) return 2;
+                memcpy(g_base, f, fn);
+                g_base_n = fn;
+            }
+            for (k = 0; k < g_nops; k++) g_ops[k].refused = g_ops[k].warned = 0;
+            why[0] = 0;
+            r = disc_overlay_build(g_base, g_base_n, g_ops, g_nops, &out, &out_n, why, sizeof why);
+            if (r == 1) {
+                sha1_hex(out, out_n, hex);
+                printf("build 1 %zu %s\n", out_n, hex);
+            } else {
+                printf("build %d %s\n", r, why);
+            }
+            for (k = 0; k < g_nops; k++) printf("opresult %d %d %u\n", k, g_ops[k].refused, g_ops[k].offset);
+            if (r == 1) {
+                disc_overlay_install(out, out_n); /* kept for the run, as main.c keeps it */
+                printf("fsthex ");
+                for (i = 0; i < out_n; i++) printf("%02x", out[i]);
+                printf("\n");
+            }
         } else if (!strcmp(cmd, "name")) {
             uint64_t start = 0;
             uint32_t size = 0;

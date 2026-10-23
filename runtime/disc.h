@@ -71,6 +71,45 @@ void disc_set_stop_hook(void (*fn)(void));
  * differs or it is not a store. */
 int disc_check_store(const char* where);
 
+/* ---- T1, the virtual disc (I6, docs/specs/disc-layer.md §3.8; vfst.c) ---- */
+#define DISC_OVERLAY_BASE 0x57060000ull /* the image's end plus 32 KiB */
+#define DISC_OVERLAY_END 0x80000000ull  /* the game's reads may take an offset as signed */
+enum { DISC_REPLACE, DISC_ADD, DISC_ALIAS };
+/* One files.txt line of an accepted-so-far mod, in load order then line order.
+ * The build fills offset, and refused for every line of a mod it refuses. */
+typedef struct {
+    int verb;
+    char path[256];      /* on the disc, as the FST names it (matched case-insensitively) */
+    char target[256];    /* alias: the path it names */
+    const uint8_t* data; /* replace, add: the source's bytes, kept by the caller for the run */
+    uint32_t size;
+    const char* mod;     /* the mod's folder, for messages */
+    unsigned line;       /* the files.txt line */
+    int mod_index;       /* lines of one mod share it, and stand together */
+    int refused, warned;
+    uint32_t offset;     /* where it lies on the disc */
+} DiscFileOp;
+/* The base table rebuilt with ops: 1 with *out (malloc'd) and the virtual
+ * extents set for disc_serve; a mod with a fault is refused whole, said, and
+ * left out. -1 when two mods place one path (said; the caller stops, exit 9);
+ * 0 on an error in `why`, which is a bug. */
+int disc_overlay_build(const uint8_t* fst, size_t fst_n, DiscFileOp* ops, int nops, uint8_t** out, size_t* out_n,
+                       char* why, size_t cap);
+/* The rebuilt table against the base, through a twin of the SDK's walk: every
+ * base file where it was or where its replacement is, every added or aliased
+ * path where the ops put it, the count base + added. 1, or 0 with why. */
+int disc_overlay_check(const uint8_t* base, size_t base_n, const uint8_t* fst, size_t n, const DiscFileOp* ops,
+                       int nops, char* why, size_t cap);
+uint32_t disc_overlay_read(uint64_t offset, uint8_t* dst, uint32_t length); /* virtual bytes; zeros between */
+const char* disc_overlay_name(uint64_t offset, uint64_t* start, uint32_t* size);
+int disc_overlay_extents(void);
+void disc_overlay_count(uint32_t bytes);
+void disc_overlay_report(void);
+void disc_overlay_reset(void);
+/* The rebuilt table as the one the game sees: disc_fst and disc_name_at answer
+ * from it from now on. The bytes are the caller's, kept for the run. */
+int disc_overlay_install(const uint8_t* fst, size_t n);
+
 /* ---- L12d: the disc picked on a phone (specs/android.md L12d) ---- */
 /* Refusals in a phone's words from now on: none names `python tools/...`,
  * `soa.exe` or `recompile.py`, and a split build says "this game library"

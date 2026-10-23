@@ -106,6 +106,10 @@ static uint8_t* g_dol;
 static size_t g_dol_n;
 static uint8_t* g_fst;
 static size_t g_fst_n;
+/* The table mods rebuilt (I6), when there is one: what disc_fst answers. */
+static const uint8_t* g_view;
+static size_t g_view_n;
+
 static Extent* g_ext;
 static uint32_t g_ext_n;
 static char* g_names;
@@ -277,6 +281,9 @@ void disc_close(void)
     g_flip = UINT64_MAX;
     g_past_reads = g_past_bytes = g_hashed = g_hash_ns = 0;
     g_vreads = g_vbytes = g_vdiffer = g_vpast = 0;
+    g_view = NULL;
+    g_view_n = 0;
+    disc_overlay_reset();
     memset(&g_info, 0, sizeof g_info);
 }
 
@@ -934,7 +941,33 @@ uint32_t disc_peek(uint64_t offset, uint8_t* dst, uint32_t length)
         read_or_stop(offset, dst, got); /* zeros only past the image's end, never for a read that failed */
     }
     if (got < length) memset(dst + got, 0, length - got);
+    /* I6: mods' files past the image's end, from host memory; zeros between */
+    if (offset + length > DISC_OVERLAY_BASE && disc_overlay_extents()) {
+        uint64_t from = offset > DISC_OVERLAY_BASE ? offset : DISC_OVERLAY_BASE;
+        uint32_t skip = (uint32_t)(from - offset);
+        got += disc_overlay_read(from, dst + skip, length - skip);
+    }
     return got;
+}
+
+int disc_overlay_install(const uint8_t* fst, size_t n)
+{
+    uint8_t* base = g_fst;
+    size_t base_n = g_fst_n;
+    int ok;
+    free(g_ext);
+    free(g_names);
+    g_ext = NULL;
+    g_names = NULL;
+    g_ext_n = 0;
+    g_fst = (uint8_t*)fst; /* index_fst reads g_fst; the image's comes back after */
+    g_fst_n = n;
+    ok = index_fst();
+    g_fst = base;
+    g_fst_n = base_n;
+    g_view = fst;
+    g_view_n = n;
+    return ok;
 }
 
 const char* disc_name_at(uint64_t offset, uint64_t* start, uint32_t* size)
@@ -1042,9 +1075,12 @@ static void verify_iso(uint64_t offset, const uint8_t* got, uint32_t length)
 void disc_serve(uint64_t offset, uint8_t* dst, uint32_t length)
 {
     uint32_t got;
-    if (g_verify & VERIFY_HASH) verify_blocks(offset, length);
+    int virt = offset >= DISC_OVERLAY_BASE && disc_overlay_extents();
+    if ((g_verify & VERIFY_HASH) && !virt) verify_blocks(offset, length);
     got = disc_peek(offset, dst, length);
-    if (got < length) {
+    if (virt) {
+        disc_overlay_count(length); /* a mod's file (I6), not a read past the image */
+    } else if (got < length) {
         /* A truncated image otherwise has no diagnostic at all: the game
          * just gets zeros where an asset should be. Once is enough. */
         if (g_open && !g_past_reads)
@@ -1054,7 +1090,7 @@ void disc_serve(uint64_t offset, uint8_t* dst, uint32_t length)
         g_past_reads++;
         g_past_bytes += length - got;
     }
-    if (g_verify & VERIFY_ISO) verify_iso(offset, dst, length);
+    if ((g_verify & VERIFY_ISO) && !virt) verify_iso(offset, dst, length);
     if (g_log) {
         uint64_t start = 0;
         uint32_t size = 0;
@@ -1071,6 +1107,10 @@ void disc_serve(uint64_t offset, uint8_t* dst, uint32_t length)
 
 const uint8_t* disc_fst(size_t* n)
 {
+    if (g_view) {
+        *n = g_view_n;
+        return g_view;
+    }
     *n = g_open ? g_fst_n : 0;
     return g_open ? g_fst : NULL;
 }
@@ -1150,4 +1190,5 @@ void disc_report(void)
                 (unsigned long long)g_vdiffer, (unsigned long long)g_vpast);
     if (g_flip != UINT64_MAX && !g_flip_read)
         fprintf(stderr, "[disc] flip armed at 0x%llX (%s), never read\n", (unsigned long long)g_flip, g_flip_said);
+    disc_overlay_report();
 }

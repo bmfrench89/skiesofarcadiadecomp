@@ -118,7 +118,13 @@ def build(
     )
     text = disc_sys if disc_sys is not None else embed.disc_sys_c(system)
     (out / "disc_sys.c").write_text(text, encoding="utf-8")
-    sources = [wrapper, RUNTIME / "sha1.c", HERE / "disc_driver.c", out / "disc_sys.c"]
+    sources = [
+        wrapper,
+        RUNTIME / "sha1.c",
+        RUNTIME / "vfst.c",
+        HERE / "disc_driver.c",
+        out / "disc_sys.c",
+    ]
     extra = ["/DSOA_SPLIT=1"] if split else []
     if split and PROF.style == "gnu":
         # cpu.h, which soa_game.h includes, writes gen/*.c inside its first
@@ -883,6 +889,188 @@ def check_truncated(c: Checks, fx: discfixture.Fixture, out: Path, exe: Path) ->
     )
 
 
+BASE = 0x57060000  # DISC_OVERLAY_BASE: the image's end plus 32 KiB
+
+
+def pattern(fill: int, n: int) -> bytes:
+    """The driver's source bytes for `fill`: (fill + i) & 0xFF."""
+    return bytes((fill + i) & 0xFF for i in range(n))
+
+
+def build_overlay(exe: Path, image: Path, ops: list[str], code: int = 0) -> dict:
+    """The driver's `build` of `ops` on the image's table: its answer line,
+    each op's (refused, offset), the rebuilt table, and stderr."""
+    lines, err = drive(exe, [f"open {image}", *[f"op {o}" for o in ops], "build"], code=code)
+    out = {"build": "", "ops": [], "fst": b"", "err": err}
+    for ln in lines:
+        if ln.startswith("build "):
+            out["build"] = ln
+        elif ln.startswith("opresult "):
+            _, _, refused, off = ln.split()
+            out["ops"].append((int(refused), int(off)))
+        elif ln.startswith("fsthex "):
+            out["fst"] = bytes.fromhex(ln[7:])
+    return out
+
+
+def files_of(fst: bytes) -> list:
+    """The files of a rebuilt table, none when the build gave no table."""
+    from soa.disc import parse_fst
+
+    return parse_fst(fst).files if fst else []
+
+
+def check_overlay(c: Checks, fx: discfixture.Fixture, exe: Path) -> None:
+    """I6 (disc-layer.md §3.8): the virtual disc's rebuilt table and extents,
+    on the fixture, its every path read back through tools/soa/disc.py's own
+    parser -- not the C twin the build checks itself with."""
+    from soa.disc import parse_fst
+
+    base = fx.system["fst.bin"]
+    paths = {f.path: (f.offset, f.size) for f in parse_fst(base).files}
+
+    # an empty overlay: the table back byte for byte
+    r = build_overlay(exe, fx.path, [])
+    c.check(
+        r["build"].startswith("build 1 ") and r["fst"] == base, f"an empty overlay: {r['build']!r}"
+    )
+
+    # a replace: exactly two words change, and the drive serves the source there
+    r = build_overlay(exe, fx.path, ["replace 0 1 battle/b001.dat 100000 7"])
+    diff = [i for i in range(len(base)) if i < len(r["fst"]) and base[i] != r["fst"][i]]
+    c.check(
+        len(r["fst"]) == len(base) and 0 < len(diff) <= 8 and max(diff) - min(diff) < 8,
+        f"a replace changes two words: {len(diff)} bytes differ",
+    )
+    got = {f.path: (f.offset, f.size) for f in files_of(r["fst"])}
+    c.check(
+        got.get("battle/b001.dat") == (BASE, 100000),
+        f"the replaced path: {got.get('battle/b001.dat')}",
+    )
+    c.check(
+        all(got[k] == v for k, v in paths.items() if k != "battle/b001.dat"),
+        "every other path where it was",
+    )
+    lines, err = drive(
+        exe,
+        [
+            f"open {fx.path}",
+            "op replace 0 1 battle/b001.dat 100000 7",
+            "build",
+            f"serve {BASE} 64",
+            f"serve {BASE + 99990} 40",
+            f"name {BASE + 5}",
+            "report",
+        ],
+    )
+    serves = [ln for ln in lines if ln.startswith("serve ")]
+    c.check(
+        serves[:1] == [f"serve {sha1(pattern(7, 64))}"],
+        f"a virtual read serves the source: {serves[:1]}",
+    )
+    c.check(
+        serves[1:2] == [f"serve {sha1(pattern(7, 100000)[99990:] + bytes(30))}"],
+        "a read off a virtual file's end gets zeros past it",
+    )
+    c.check(
+        f"name battle/b001.dat {BASE} 100000" in lines, "the virtual extent is named by its path"
+    )
+    c.check(
+        "2 reads of virtual files" in err and "reads past" in err and "0 reads past" in err,
+        f"virtual reads are counted as such, not as reads past the image: {err[-300:]!r}",
+    )
+
+    # an add and an alias: every other path where it was, each new one where it should be
+    r = build_overlay(
+        exe,
+        fx.path,
+        [
+            "add 0 1 battle/new.dat 5000 3",
+            "alias 0 2 field/alias.dat field/fa00.dat",
+            "alias 1 1 title/t99.dat battle/new.dat",
+        ],
+    )
+    got = {f.path: (f.offset, f.size) for f in files_of(r["fst"])}
+    c.check(r["build"].startswith("build 1 "), f"add and aliases build: {r['build']!r}")
+    c.check(
+        got.get("battle/new.dat") == (BASE, 5000), f"the added path: {got.get('battle/new.dat')}"
+    )
+    c.check(got.get("field/alias.dat") == paths["field/fa00.dat"], "the alias reads its target")
+    c.check(got.get("title/t99.dat") == (BASE, 5000), "an alias of an added file reads it")
+    c.check(
+        all(got.get(k) == v for k, v in paths.items()),
+        "every base path where it was after an add and aliases",
+    )
+    c.check(len(files_of(r["fst"])) == len(paths) + 3, "three more files")
+
+    # two virtual files, and a read across the gap between them
+    r2 = drive(
+        exe,
+        [
+            f"open {fx.path}",
+            "op add 0 1 battle/one.dat 40000 1",
+            "op add 0 2 battle/two.dat 10 2",
+            "build",
+            f"serve {BASE + 39990} 70000",
+        ],
+    )[0]
+    second = BASE + ((40000 + 0x7FFF) // 0x8000) * 0x8000 + 0x8000
+    want = pattern(1, 40000)[39990:] + bytes(second - BASE - 40000) + pattern(2, 10)
+    want += bytes(70000 - len(want))
+    c.check(
+        f"serve {sha1(want)}" in r2,
+        "a read straddling two virtual files and the gap gets both and zeros",
+    )
+
+    # each refusal, in its own words, and the mod refused whole
+    refusals = [
+        (["replace 0 1 battle/missing.dat 10 1"], "no such file on the disc"),
+        (["add 0 1 banner.bnr 10 1"], "it is on the disc already"),
+        (["add 0 1 nodir/x.dat 10 1"], "its directory is not on the disc"),
+        (["alias 0 1 field/x.dat field/missing.dat"], "is not a file on the disc"),
+        (
+            ["alias 0 1 field/x.dat field/fa00.dat", "alias 0 2 field/y.dat field/x.dat"],
+            "is itself an alias",
+        ),
+        (
+            ["add 0 1 battle/x.dat 10 1", "add 0 2 BATTLE/X.DAT 10 1"],
+            "is named twice in this files.txt",
+        ),
+        (
+            [f"add 0 {k} battle/big{k}.dat 16777216 1" for k in range(1, 18)],
+            "past the 256 MiB the overlay holds",
+        ),
+        (["replace 0 1 battle/b001.dat 16777217 1"], "over 16 MiB"),
+        (["add 0 1 ../x.dat 10 1"], "is not a disc path"),
+    ]
+    for ops, words in refusals:
+        r = build_overlay(exe, fx.path, ops + ["add 1 1 battle/kept.dat 10 9"])
+        mine = r["ops"][:-1]
+        c.check(
+            words in r["err"] and all(x[0] == 1 for x in mine) and r["ops"][-1][0] == 0,
+            f"refused, {words!r}: {r['err'][-200:]!r}",
+        )
+        got = {f.path: (f.offset, f.size) for f in files_of(r["fst"])} if r["fst"] else {}
+        # nothing of the refused mod: each path it named absent, or the base's own entry as it was
+        left = [
+            o.split()[3]
+            for o in ops
+            if got.get(o.split()[3], paths.get(o.split()[3])) != paths.get(o.split()[3])
+        ]
+        c.check(
+            "battle/kept.dat" in got and not left and len(got) == len(paths) + 1,
+            f"{words!r}: the refused mod leaves nothing ({left}), the other mod stays",
+        )
+    # a collision between two mods stops the build (-1), naming both lines
+    r = build_overlay(exe, fx.path, ["add 0 4 battle/x.dat 10 1", "add 1 7 battle/x.dat 10 2"])
+    c.check(
+        r["build"].startswith("build -1")
+        and "mod0/files.txt:4" in r["err"]
+        and "mod1/files.txt:7" in r["err"],
+        f"a collision: {r['build']!r} {r['err'][-200:]!r}",
+    )
+
+
 def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     fx = discfixture.build(out / "good" / "disc.iso")
@@ -988,6 +1176,7 @@ def check_fixture(out: Path, cflags: list[str], mutate: str | None) -> int:
     check_descriptors(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
     check_identify(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}", broken)
     check_truncated(c, fx, out, out / "image" / f"disc_driver{PROF.exeext}")
+    check_overlay(c, fx, out / "image" / f"disc_driver{PROF.exeext}")
 
     print(
         f"disc check: {c.passed} passed, {c.failed} failed ({len(fx.offsets)} files, {size} bytes)"
