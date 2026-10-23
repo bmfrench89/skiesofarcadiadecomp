@@ -75,7 +75,7 @@ holds glslang (`tools/fetch_gpu.py`; without it `soa.exe` has no GPU backend).
 - `config/trace.txt` — tracepoints are emitted inline into the translated C (68
   today), so new ones never fire and `SOA_TRACE=1` looks like it worked. The file
   most often edited during a chase, and no build instruction elsewhere names it.
-- `config/hle.txt` — which of the 27 bound functions the runtime answers natively (12
+- `config/hle.txt` — which of the 37 bound functions the runtime answers natively (12
   decompiled). Adding a line and relinking gives LNK2005; *removing* one silently leaves
   the native version in charge. `hooks.txt` and `savepoints.txt` bake in the same way.
 

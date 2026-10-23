@@ -359,3 +359,91 @@ the mod before it, gave, and returns the one the next sees; the last,
 held to 0-9999, is what the game gets. In load order. It runs inside
 the battle's own call on the game's thread: memory reads and writes
 only, as at a frame end.
+
+### `on_heal`
+
+```c
+int (*on_heal)(uint32_t (*fn)(void* user, uint32_t value, int source, int target), void* user);
+```
+
+Appended (R1, docs/specs/battle-events.md): the battle's other events,
+each in load order inside the game's own call, as on_damage. Slots are
+the battle's actor slots, 0-3 the party and 4-11 the enemies; a fault in
+any of these stops the run and names the mod. This one: each Recover-HP
+value (fn_8006AE20), returning the heal, held to 0-9999.
+
+### `on_enemy_spawn`
+
+```c
+int (*on_enemy_spawn)(void (*fn)(void* user, uint32_t actor, uint32_t record), void* user);
+```
+
+each enemy made (fn_800770B8), after the game filled it: scale the actor,
+never the record, which every enemy of the kind shares across battles
+
+### `on_enemy_action`
+
+```c
+int (*on_enemy_action)(uint32_t (*fn)(void* user, uint32_t type, int slot, uint32_t cmd), void* user);
+```
+
+each enemy's choice (fn_8008A424), its command record at cmd (+0 type,
++4 target, +5 selector, +6 id): returns the type
+
+### `on_turn_order`
+
+```c
+int (*on_turn_order)(void (*fn)(void* user, int8_t order[12]), void* user);
+```
+
+the round's order, once it is set: slots, first to act first, ending at
+-1; kept only if it is still distinct slots 0-11 ending at -1
+
+### `on_spirit_gain`
+
+```c
+int (*on_spirit_gain)(int32_t (*fn)(void* user, int32_t amount), void* user);
+```
+
+the round's spirit gain, before the gauge's clamp: returns the gain
+
+### `on_escape`
+
+```c
+int (*on_escape)(int (*fn)(void* user, int success, int slot), void* user);
+```
+
+each Run, the party's or an enemy's (fn_80010340): nonzero escapes
+
+### `on_rewards`
+
+```c
+int (*on_rewards)(void (*fn)(void* user, SoaRewards* rewards), void* user);
+```
+
+once a victory, before the game pays out
+
+### `on_effect`
+
+```c
+int (*on_effect)(int (*fn)(void* user, int target, int16_t* effect, int32_t* value), void* user);
+```
+
+each effect applied (fn_8002BD88), before it is: returns nonzero to
+cancel it; effect and value are written back
+
+### `on_round_end`
+
+```c
+int (*on_round_end)(void (*fn)(void* user, uint32_t round), void* user);
+```
+
+each round's end, once its regen, poison and spirit are applied
+
+### `on_ship_damage`
+
+```c
+int (*on_ship_damage)(uint32_t (*fn)(void* user, uint32_t value), void* user);
+```
+
+each ship battle damage (fn_80146BF4), before the game's x10: returns it

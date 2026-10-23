@@ -9773,3 +9773,71 @@ it.** 2026-10-23. Spec: `docs/specs/battle-harness.md`; D-43, the gameplay core.
   - Off: replay 23/23 and `title --check` after the retranslation; the self test.
 - **Not in R0:** R1's other events (rewards, encounters, phases), X2's save hooks (batch A), a command writer (the lab's
   `turn:` plays turns), forced event battles, and whether one seed gives one battle (K6).
+
+**R1, the battle events: ten more events reach mods, each shown changing a battle, and a mod that crashes in
+one stops the run naming itself.** 2026-10-23. Spec: `docs/specs/battle-events.md`; D-43, the gameplay core.
+(Distribution's R1, 2026-10-04, is the entry called "R1".)
+
+- **What it is** [V]:
+  - Ten more functions are answered natively through `config/hle.txt` (37 entries), each in `runtime/battle.c`.
+    Each stores its pc first and calls its translated original: heal `fn_8006AE20`, enemy spawn `fn_800770B8`,
+    enemy action `fn_8008A424`, phase 2 `fn_80070C18` (the turn order), spirit `fn_8006EF48`, escape
+    `fn_80010340`, phase 7 `fn_8006F4B0` (rewards), effect `fn_8002BD88`, phase 6 `fn_8006FD6C` (round end) and
+    ship damage `fn_80146BF4`. One retranslation.
+  - Ten `SoaModApi` members are appended. Each runs in load order inside the game's call, timed per mod.
+  - `SOA_BATTLE_LOG` gains a line per event. The report gains a line per site: calls, how many a mod changed, and
+    "never called" for a site the run did not reach.
+  - The in-game fault stop (M3d's part) is `plat_fault_hook`: a vectored handler added last on Windows, and
+    elsewhere `SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE` handlers that pass on to the ones before them. While a mod's
+    event callback runs (a per-thread flag), a fault prints `[mod] <dir> faulted in <event>: <what> at <address>;
+    the run stops` and exits 10.
+  - T9 gains two names, `battle.round` (u8) and `battle.tasks` (ptr[12]), both re-found in the code.
+- **Mods off, every site called and none changed** [V, `build/r1/`, `build/reach/r1-*-off*`], on the
+  retranslated build, `SOA_BATTLE_LOG=1`:
+  - the story's first battle (`battle`, 16,000 frames at `SOA_SPEED=3`): damage 7, enemy spawn 2, enemy action
+    4, turn order 3, spirit gain 2, rewards 1, effect 9, round end 2;
+  - part G's card on reach U2's recipe (seed-33 walk, the accelerator, the lab's `turn:3300-9000:1:left/a/a/a/a`):
+    heal 5 (Gilder's Sacri Crystal, 500, and the enemies' 1000s), escape 1 (Gilder's Run, failing);
+  - part L's card on reach U3's recipe (seven pokes into `550a`, the lab's `sturn` for the four crew, an A every
+    150 frames from 3400, which the dialogue before the fight needs): ship damage 4.
+  - Each of those runs gave every site's changed count 0, and the no-mod SP lines agree with the safe-point ones
+    (+2 a round, held at 8).
+  - Replay 23/23, `title --check` 4 of 4, and the self test pass.
+- **Each event's change, shown in the game** [V, the same recipes with a test mod, `build/r1/mods-mut`]:
+  - an enemy's HP up by half (58 → 87);
+  - slot 5's command made Guard, which the game honoured: every hit on it logs `guard 1` at half damage (30 → 14);
+  - the order reversed every round;
+  - the spirit gain 2 → 7 (SP 2 → 8, held to the gauge's 8);
+  - round end, logged by the mod five times;
+  - rewards ×10 (EXP 6 → 60, gold 10 → 100), the party's gold peeked 0 then 100 (`0x8030BB40`);
+  - party damage halved through `on_effect` (45 → 22);
+  - the crystal's heal doubled (500 → 1000);
+  - ship damage doubled on all four calls (177 → 354);
+  - and, through a mod of its own, every escape refused: Gilder's two Runs that succeeded went `1 -> 0`, and the
+    battle fought on to its end.
+  - Two first tries showed nothing. Retargeting every enemy at Vyse changed nothing where both already aimed at
+    him. Halving the enemies' HP ended the story battle in one round, before any round end or spirit gain.
+- **Found on the way: a value changed in the effect message alone hangs the action** [V,
+  `build/reach/r1-heal-mut`]. Halving a blow that would have killed Vyse (423 against his 373 HP) left him at 162,
+  the pop-up showing 423, and the battle stood still from frame 4694 to the run's end (frame 9900 is that
+  picture). `fn_8002DD8C` copies the value from the target's work (`*(*(0x80309700 + 4*t) + 36) + 60`) into the
+  message, and the action's end reads the work again. So the wrapper writes the work as well, where it still holds
+  the message's value (the follow-up messages at `0x8002DE88`/`0x8002DEF0` carry values of their own). The same
+  lethal first blow, 463 halved to 231, then left Vyse at 142, and the battle went on to its end
+  (`build/reach/r1-heal-mut2`). battle-system.md's "the display may disagree" (its open question on the pop-up) is
+  answered: the pop-up does read work+60.
+- **A fault, named** [V]:
+  - in a real battle, a scratch mod reading through a null pointer in `on_damage` gives exit 10 and `[mod]
+    r1-fault faulted in on_damage: an access violation at 0000000000000000; the run stops`, at the first blow
+    (`build/r1/fault.log`);
+  - `scenario.py` now names exit 10.
+- **Budget** [V, the mutation runs' reports, against 50 us p99 fixed in the spec]: every event's p99 is under
+  2 us. The exception is `on_round_end`, under 23 us, where the mod's own `log` call is the cost (max 22.2 us).
+- **Tests** [V]:
+  - `test_mods.py`, five on the fake guest: every event reaching a mod, with the load line naming them (the line
+    printed `(null)` for every battle event, R0's `on_damage` included, until this slice); two mods chaining, and a
+    cancel ending the chain; no mod passing all through; a mod built before the members still loading; a fault in
+    `on_heal` giving exit 10, named.
+  - `test_scenario.py`, one: exit 10's meaning, and `_Exit(10)` still in `mod.c`.
+- **Not in R1:** X2's save hooks and N11's NG+ sites (waiting on gameplay Q2), an exclusive AI replacement (R2), X4's
+  kinds fix, the rest of M3d, K6.

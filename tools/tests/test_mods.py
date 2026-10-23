@@ -4576,3 +4576,190 @@ def test_r0_a_mod_built_before_on_damage_still_loads(driver, tmp_path):
         driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe damage 7 0 0 0 0"
     )
     assert "loaded 1" in out and "damage 7 -> 7" in out, (out, err)
+
+
+# --------------------------------------------------------------------------
+# R1: the battle's other events (docs/specs/battle-events.md), driven through
+# mod.c's dispatchers as runtime/battle.c's wrappers drive them.
+# --------------------------------------------------------------------------
+
+EVERY_EVENT = r"""
+#include "soa_mod.h"
+#include <stdio.h>
+static const SoaModApi* A;
+static uint32_t heal(void* u, uint32_t v, int s, int t) { (void)u; (void)s; (void)t; return v * 2; }
+static void spawn(void* u, uint32_t actor, uint32_t record)
+{ (void)u; (void)record; A->write32(actor + 20, 77); }
+static uint32_t action(void* u, uint32_t type, int slot, uint32_t cmd)
+{ (void)u; (void)type; (void)slot; A->write16(cmd + 6, 5); return 4; }
+static void order(void* u, int8_t o[12])
+{
+    int n = 0, i;
+    (void)u;
+    while (n < 12 && o[n] >= 0) n++;
+    for (i = 0; i < n / 2; i++) { int8_t t = o[i]; o[i] = o[n - 1 - i]; o[n - 1 - i] = t; }
+}
+static int32_t spirit(void* u, int32_t a) { (void)u; return a + 5; }
+static int escape(void* u, int s, int slot) { (void)u; (void)s; (void)slot; return 1; }
+static void rewards(void* u, SoaRewards* r) { (void)u; r->exp *= 10; r->gold *= 10; r->magic_exp += 200; }
+static int effect(void* u, int t, int16_t* e, int32_t* v)
+{ (void)u; (void)t; if (*e == 0) *v = 0; return *e == 99; }
+static void round_end(void* u, uint32_t r) { char line[32]; (void)u; snprintf(line, sizeof line, "round %u", r); A->log(line); }
+static uint32_t ship(void* u, uint32_t v) { (void)u; return v * 2; }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    A = api;
+    if (api->size < SOA_MOD_HAS(on_ship_damage)) return 1;
+    return api->on_heal(heal, 0) && api->on_enemy_spawn(spawn, 0) && api->on_enemy_action(action, 0) &&
+           api->on_turn_order(order, 0) && api->on_spirit_gain(spirit, 0) && api->on_escape(escape, 0) &&
+           api->on_rewards(rewards, 0) && api->on_effect(effect, 0) && api->on_round_end(round_end, 0) &&
+           api->on_ship_damage(ship, 0) ? 0 : 1;
+}
+"""
+
+
+def source_mod(root: Path, name: str, source: str, include: Path = ROOT / "runtime") -> Path:
+    d = mod(root, name, patches=None, ini=ini2(name))
+    (d / "mod_src.c").write_text(source, encoding="utf-8")
+    library(d, d / "mod_src.c", include=include)
+    return d
+
+
+@needs_cc
+def test_r1_every_event_reaches_its_mod(driver, tmp_path):
+    source_mod(tmp_path, "every", EVERY_EVENT)
+    out, err = play(
+        driver,
+        tmp_path,
+        "events heal 30 4 1 heal 6000 4 1 spawn 80309000 80309300 get 80309014 "
+        "action 1 5 803091d4 get 803091d8 order 1 0 4 5 -1 -1 -1 -1 -1 -1 -1 -1 "
+        "spirit 9 escape 0 2 rewards 120 300 3 effect 0 0 45 effect 0 99 45 effect 0 7 45 "
+        "roundend 3 ship 40 report",
+    )
+    assert "loaded 1" in out, err
+    assert "events 0 1 1 1 1 1 1 1 1 1 1" in out, out
+    for want in (
+        "heal 30 -> 60",
+        "heal 6000 -> 9999",  # held, as the damage is
+        "80309014=0000004D",  # the actor's HP, written by the mod
+        "action 1 -> 4",
+        "803091D8=00000005",  # cmd+6 = 5: the low half of the word at +4
+        "order 5 4 0 1 -1 -1 -1 -1 -1 -1 -1 -1",
+        "spirit 9 -> 14",
+        "escape 0 -> 1",
+        "rewards 120 300 3 -> 1200 3000 203",  # battle.c clamps magic EXP, not the dispatcher
+        "effect 0 45 -> 0 0",
+        "effect 99 45 -> 99 45 cancelled",
+        "effect 7 45 -> 7 45",
+        "round 3 ended",
+        "ship 40 -> 80",
+    ):
+        assert want in out, (want, out)
+    assert "[mod] every: round 3" in err, err
+    assert (
+        "[mod] every registers: on_heal, on_enemy_spawn, on_enemy_action, on_turn_order, on_spirit_gain, "
+        "on_escape, on_rewards, on_effect, on_round_end, on_ship_damage\n" in err
+    ), err
+    assert re.search(
+        r"\[mod\] every on_heal: 2 call\(s\), [\d.]+ us in all, max [\d.]+ us, p99 ", err
+    ), err
+    assert re.search(r"\[mod\] every on_effect: 3 call\(s\)", err), err
+
+
+SPIRIT_DOUBLE_AND_EFFECT = r"""
+#include "soa_mod.h"
+static int32_t spirit(void* u, int32_t a) { (void)u; return a * 2; }
+static int effect(void* u, int t, int16_t* e, int32_t* v) { (void)u; (void)t; (void)e; *v = 1234; return 0; }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{ (void)version; return api->on_spirit_gain(spirit, 0) && api->on_effect(effect, 0) ? 0 : 1; }
+"""
+
+
+@needs_cc
+def test_r1_mods_chain_in_load_order_and_a_cancel_ends_the_chain(driver, tmp_path):
+    """a-every adds 5 to the spirit, then b-double doubles it: (10 + 5) x 2.
+    a-every cancels effect 99, so b never sets its value to 1234; on effect 7
+    a passes it on and b does."""
+    source_mod(tmp_path, "a-every", EVERY_EVENT)
+    source_mod(tmp_path, "b-double", SPIRIT_DOUBLE_AND_EFFECT)
+    out, err = play(driver, tmp_path, "spirit 10 effect 0 99 45 effect 0 7 45 report")
+    assert "loaded 2" in out, err
+    assert "spirit 10 -> 30" in out, out
+    assert "effect 99 45 -> 99 45 cancelled" in out and "effect 7 45 -> 7 1234" in out, out
+    assert re.search(r"\[mod\] b-double on_effect: 1 call\(s\)", err), err
+
+
+@needs_cc
+def test_r1_with_no_mod_every_event_passes_through(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, _ = play(
+        driver,
+        empty,
+        "events heal 30 4 1 spirit 9 escape 0 2 effect 0 99 45 ship 40 "
+        "order 1 0 4 5 -1 -1 -1 -1 -1 -1 -1 -1",
+    )
+    assert "events 0 0 0 0 0 0 0 0 0 0 0" in out, out
+    for want in (
+        "heal 30 -> 30",
+        "spirit 9 -> 9",
+        "escape 0 -> 0",
+        "effect 99 45 -> 99 45",
+        "ship 40 -> 40",
+        "order 1 0 4 5 -1",
+    ):
+        assert want in out, (want, out)
+    assert "cancelled" not in out
+
+
+@needs_cc
+def test_r1_a_mod_built_before_the_events_still_loads(driver, tmp_path):
+    header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
+    start = header.index("    /* Appended (R1,")
+    end = header.index("} SoaModApi;", start)
+    old = header[:start] + header[end:]
+    assert "(*on_heal)" not in old and "(*on_damage)" in old
+    inc = tmp_path / "old-include"
+    inc.mkdir()
+    (inc / "soa_mod.h").write_text(old, encoding="utf-8")
+    d = tmp_path / "mods"
+    damage = d / "plus-one"
+    mod(d, "plus-one", patches=None, ini=ini2("plus-one"))
+    (damage / "mod_src.c").write_text(ADD_ONE, encoding="utf-8")
+    library(damage, damage / "mod_src.c", include=inc)
+    out, err = play(driver, d, "events damage 7 0 0 0 0 heal 7 4 1")
+    assert "loaded 1" in out and "damage 7 -> 8" in out and "heal 7 -> 7" in out, (out, err)
+    assert "events 1 0 0 0 0 0 0 0 0 0 0" in out, out
+
+
+FAULT_IN_HEAL = r"""
+#include "soa_mod.h"
+static uint32_t heal(void* u, uint32_t v, int s, int t)
+{ volatile uint32_t* p = (volatile uint32_t*)u; (void)s; (void)t; return *p + v; }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{ (void)version; return api->on_heal(heal, 0) ? 0 : 1; }
+"""
+
+
+@needs_cc
+def test_r1_a_fault_in_an_event_stops_the_run_and_names_its_mod(driver, tmp_path):
+    """The mod reads through its null user pointer inside on_heal: exit 10, the
+    mod and the event named, and nothing after the call runs."""
+    source_mod(tmp_path, "faulty", FAULT_IN_HEAL)
+    exe, dol = driver
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    proc = subprocess.run(
+        [str(exe), str(tmp_path), str(dol)],
+        input="heal 30 4 1 describe",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 10, (proc.returncode, proc.stdout, proc.stderr)
+    assert re.search(r"\[mod\] faulty faulted in on_heal: an access violation at ", proc.stderr), (
+        proc.stderr
+    )
+    assert "heal 30 ->" not in proc.stdout and "describe [" not in proc.stdout, proc.stdout

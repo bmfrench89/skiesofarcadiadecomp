@@ -27,6 +27,7 @@ TEXT_START, TEXT_LEN = 0x80003100, 0x1000
 DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "mod.h"
+#include "soa_mod.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -211,6 +212,79 @@ int main(int argc, char** argv)
             unsigned dv, db, da, dt, de;
             if (scanf("%u %u %x %x %u", &dv, &db, &da, &dt, &de) != 5) break;
             printf("damage %u -> %u\n", dv, mod_damage(dv, db, da, dt, de));
+        }
+        /* R1: the other events, as runtime/battle.c's wrappers call them */
+        else if (!strcmp(cmd, "heal")) {
+            unsigned hv;
+            int hs, ht;
+            if (scanf("%u %d %d", &hv, &hs, &ht) != 3) break;
+            printf("heal %u -> %u\n", hv, mod_heal(hv, hs, ht));
+        }
+        else if (!strcmp(cmd, "spawn")) {
+            unsigned sa, sr;
+            if (scanf("%x %x", &sa, &sr) != 2) break;
+            mod_enemy_spawn(sa, sr);
+            printf("spawned\n");
+        }
+        else if (!strcmp(cmd, "action")) {
+            unsigned at, ac;
+            int as;
+            if (scanf("%u %d %x", &at, &as, &ac) != 3) break;
+            printf("action %u -> %u\n", at, mod_enemy_action(at, as, ac));
+        }
+        else if (!strcmp(cmd, "order")) {
+            int8_t ord[12];
+            int oi, ov;
+            for (oi = 0; oi < 12 && scanf("%d", &ov) == 1; oi++) ord[oi] = (int8_t)ov;
+            if (oi < 12) break;
+            mod_turn_order(ord);
+            printf("order");
+            for (oi = 0; oi < 12; oi++) printf(" %d", ord[oi]);
+            printf("\n");
+        }
+        else if (!strcmp(cmd, "spirit")) {
+            int sv;
+            if (scanf("%d", &sv) != 1) break;
+            printf("spirit %d -> %d\n", sv, (int)mod_spirit_gain(sv));
+        }
+        else if (!strcmp(cmd, "escape")) {
+            int es, esl;
+            if (scanf("%d %d", &es, &esl) != 2) break;
+            printf("escape %d -> %d\n", es, mod_escape(es, esl));
+        }
+        else if (!strcmp(cmd, "rewards")) {
+            SoaRewards rw;
+            int re, rg, rm;
+            if (scanf("%d %d %d", &re, &rg, &rm) != 3) break;
+            rw.exp = re, rw.gold = rg, rw.magic_exp = rm;
+            mod_rewards(&rw);
+            printf("rewards %d %d %d -> %d %d %d\n", re, rg, rm, (int)rw.exp, (int)rw.gold, (int)rw.magic_exp);
+        }
+        else if (!strcmp(cmd, "effect")) {
+            int ft, fe, fv, fc;
+            int16_t e16;
+            int32_t v32;
+            if (scanf("%d %d %d", &ft, &fe, &fv) != 3) break;
+            e16 = (int16_t)fe, v32 = fv;
+            fc = mod_effect(ft, &e16, &v32);
+            printf("effect %d %d -> %d %d%s\n", fe, fv, e16, (int)v32, fc ? " cancelled" : "");
+        }
+        else if (!strcmp(cmd, "roundend")) {
+            unsigned rr;
+            if (scanf("%u", &rr) != 1) break;
+            mod_round_end(rr);
+            printf("round %u ended\n", rr);
+        }
+        else if (!strcmp(cmd, "ship")) {
+            unsigned sv2;
+            if (scanf("%u", &sv2) != 1) break;
+            printf("ship %u -> %u\n", sv2, mod_ship_damage(sv2));
+        }
+        else if (!strcmp(cmd, "events")) {
+            int ev;
+            printf("events");
+            for (ev = 0; ev < MOD_EVENTS; ev++) printf(" %d", mod_event_count(ev));
+            printf("\n");
         }
     }
     return 0;

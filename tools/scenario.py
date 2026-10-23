@@ -152,6 +152,7 @@ EXIT_MEANINGS = {
     7: "SOA_SELFTEST failed (main.c)",
     8: "SOA_STRICT: an MMIO access outside the modelled range (note, hle.c)",
     9: "the disc layer stopped the run (runtime/disc.c)",
+    10: "a mod faulted inside a battle event, named in the log (runtime/mod.c, R1)",
 }
 
 KEYS = ("name", "summary", "frames", "pad", "env", "shows", "evidence", "note")

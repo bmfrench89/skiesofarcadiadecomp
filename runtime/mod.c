@@ -705,8 +705,15 @@ static int next_line(const char** text, char* line)
 
 #define CB_MAX 64
 enum {
-    CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_TEXTURE, CB_DAMAGE,
-    CB_KINDS
+    CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_TEXTURE,
+    CB_EVENT0, /* the battle's events, in mod.h's MOD_EV_* order (R0, R1) */
+    CB_KINDS = CB_EVENT0 + MOD_EVENTS
+};
+#define CB_DAMAGE (CB_EVENT0 + MOD_EV_DAMAGE)
+
+static const char* const k_event[MOD_EVENTS] = {
+    "on_damage", "on_heal", "on_enemy_spawn", "on_enemy_action", "on_turn_order", "on_spirit_gain",
+    "on_escape", "on_rewards", "on_effect", "on_round_end", "on_ship_damage",
 };
 
 typedef struct {
@@ -829,18 +836,241 @@ static int api_on_damage(uint32_t (*fn)(void*, uint32_t, uint32_t, uint32_t, uin
 {
     return api_register(CB_DAMAGE, (void*)fn, user);
 }
+static int api_on_heal(uint32_t (*fn)(void*, uint32_t, int, int), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_HEAL, (void*)fn, user);
+}
+static int api_on_enemy_spawn(void (*fn)(void*, uint32_t, uint32_t), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_ENEMY_SPAWN, (void*)fn, user);
+}
+static int api_on_enemy_action(uint32_t (*fn)(void*, uint32_t, int, uint32_t), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_ENEMY_ACTION, (void*)fn, user);
+}
+static int api_on_turn_order(void (*fn)(void*, int8_t*), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_TURN_ORDER, (void*)fn, user);
+}
+static int api_on_spirit_gain(int32_t (*fn)(void*, int32_t), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_SPIRIT_GAIN, (void*)fn, user);
+}
+static int api_on_escape(int (*fn)(void*, int, int), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_ESCAPE, (void*)fn, user);
+}
+static int api_on_rewards(void (*fn)(void*, SoaRewards*), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_REWARDS, (void*)fn, user);
+}
+static int api_on_effect(int (*fn)(void*, int, int16_t*, int32_t*), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_EFFECT, (void*)fn, user);
+}
+static int api_on_round_end(void (*fn)(void*, uint32_t), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_ROUND_END, (void*)fn, user);
+}
+static int api_on_ship_damage(uint32_t (*fn)(void*, uint32_t), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_SHIP_DAMAGE, (void*)fn, user);
+}
+
+/* ---- the battle's events (R0, R1: docs/specs/battle-events.md) -----------
+ * Each runs inside the game's own call. g_event_now names the event while a
+ * mod's callback runs, so a fault there stops the run naming both (M3d's
+ * in-game part); each callback's time goes into its mod's row of
+ * g_event_time, in whole microseconds for the p99 (the last bucket is 63 us
+ * or more). */
+#define EVENT_BUCKETS 64
+typedef struct {
+    unsigned long long calls, ns, max_ns;
+    uint32_t hist[EVENT_BUCKETS];
+} EventTime;
+static EventTime g_event_time[MOD_EVENTS][MOD_MAX];
+static PLAT_THREAD_LOCAL const char* g_event_now; /* per thread: another's fault is not the mod's */
+static int g_fault_hooked;
+
+int mod_event_count(int ev) { return ev >= 0 && ev < MOD_EVENTS ? g_cb_n[CB_EVENT0 + ev] : 0; }
+
+static void event_fault(const char* what, const void* addr)
+{
+    const char* ev = g_event_now;
+    if (!ev) return; /* not inside an event: passed on, as before R1 */
+    fprintf(stderr, "[mod] %s faulted in %s: %s at %p; the run stops\n",
+            g_cur_mod >= 0 && g_cur_mod < g_mod_n ? g_mods[g_cur_mod].dir : "?", ev, what, addr);
+    fflush(stderr);
+    _Exit(10);
+}
+
+/* Each event's dispatch: every callback in load order, timed, named. The
+ * state is the caller's, since a callback may run guest code that raises
+ * another event (call_guest). */
+typedef struct {
+    uint64_t t0;
+    int was;
+    const char* prev;
+} EventCtx;
+
+#define EVENT_EACH(ev, i, c) \
+    for (i = 0; i < g_cb_n[CB_EVENT0 + (ev)] && event_begin(ev, i, &c); event_end(ev, i, &c), i++)
+
+static int event_begin(int ev, int i, EventCtx* c)
+{
+    c->was = g_cur_mod;
+    c->prev = g_event_now;
+    g_cur_mod = g_cb[CB_EVENT0 + ev][i].mod;
+    g_cb[CB_EVENT0 + ev][i].calls++;
+    g_event_now = k_event[ev];
+    c->t0 = plat_mono_ns();
+    return 1;
+}
+
+static void event_end(int ev, int i, const EventCtx* c)
+{
+    uint64_t ns = plat_mono_ns() - c->t0;
+    int m = g_cb[CB_EVENT0 + ev][i].mod;
+    g_event_now = c->prev;
+    if (m >= 0 && m < MOD_MAX) {
+        EventTime* t = &g_event_time[ev][m];
+        uint64_t us = ns / 1000u;
+        t->calls++;
+        t->ns += ns;
+        if (ns > t->max_ns) t->max_ns = ns;
+        t->hist[us < EVENT_BUCKETS - 1 ? us : EVENT_BUCKETS - 1]++;
+    }
+    g_cur_mod = c->was;
+}
+
+#define EVENT_FN(ev, i, type) ((type)g_cb[CB_EVENT0 + (ev)][i].fn)
+#define EVENT_USER(ev, i) (g_cb[CB_EVENT0 + (ev)][i].user)
 
 uint32_t mod_damage(uint32_t value, uint32_t base, uint32_t attacker, uint32_t target, uint32_t element)
 {
-    int i, was = g_cur_mod;
-    for (i = 0; i < g_cb_n[CB_DAMAGE]; i++) {
-        g_cur_mod = g_cb[CB_DAMAGE][i].mod;
-        g_cb[CB_DAMAGE][i].calls++;
-        value = ((uint32_t(*)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))g_cb[CB_DAMAGE][i].fn)(
-            g_cb[CB_DAMAGE][i].user, value, base, attacker, target, element);
-    }
-    g_cur_mod = was;
+    typedef uint32_t (*Fn)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_DAMAGE, i, c)
+    value = EVENT_FN(MOD_EV_DAMAGE, i, Fn)(EVENT_USER(MOD_EV_DAMAGE, i), value, base, attacker, target, element);
     return (int32_t)value < 0 ? 0 : value > 9999 ? 9999 : value;
+}
+
+uint32_t mod_heal(uint32_t value, int source, int target)
+{
+    typedef uint32_t (*Fn)(void*, uint32_t, int, int);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_HEAL, i, c) value = EVENT_FN(MOD_EV_HEAL, i, Fn)(EVENT_USER(MOD_EV_HEAL, i), value, source, target);
+    return (int32_t)value < 0 ? 0 : value > 9999 ? 9999 : value;
+}
+
+void mod_enemy_spawn(uint32_t actor, uint32_t record)
+{
+    typedef void (*Fn)(void*, uint32_t, uint32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_ENEMY_SPAWN, i, c)
+    EVENT_FN(MOD_EV_ENEMY_SPAWN, i, Fn)(EVENT_USER(MOD_EV_ENEMY_SPAWN, i), actor, record);
+}
+
+uint32_t mod_enemy_action(uint32_t type, int slot, uint32_t cmd)
+{
+    typedef uint32_t (*Fn)(void*, uint32_t, int, uint32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_ENEMY_ACTION, i, c)
+    type = EVENT_FN(MOD_EV_ENEMY_ACTION, i, Fn)(EVENT_USER(MOD_EV_ENEMY_ACTION, i), type, slot, cmd);
+    return type;
+}
+
+void mod_turn_order(int8_t order[12])
+{
+    typedef void (*Fn)(void*, int8_t*);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_TURN_ORDER, i, c) EVENT_FN(MOD_EV_TURN_ORDER, i, Fn)(EVENT_USER(MOD_EV_TURN_ORDER, i), order);
+}
+
+int32_t mod_spirit_gain(int32_t amount)
+{
+    typedef int32_t (*Fn)(void*, int32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_SPIRIT_GAIN, i, c)
+    amount = EVENT_FN(MOD_EV_SPIRIT_GAIN, i, Fn)(EVENT_USER(MOD_EV_SPIRIT_GAIN, i), amount);
+    return amount;
+}
+
+int mod_escape(int success, int slot)
+{
+    typedef int (*Fn)(void*, int, int);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_ESCAPE, i, c) success = EVENT_FN(MOD_EV_ESCAPE, i, Fn)(EVENT_USER(MOD_EV_ESCAPE, i), success, slot);
+    return success != 0;
+}
+
+void mod_rewards(struct SoaRewards* r)
+{
+    typedef void (*Fn)(void*, SoaRewards*);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_REWARDS, i, c) EVENT_FN(MOD_EV_REWARDS, i, Fn)(EVENT_USER(MOD_EV_REWARDS, i), r);
+}
+
+/* A cancel ends the chain: the mods after it never see the effect. */
+int mod_effect(int target, int16_t* effect, int32_t* value)
+{
+    typedef int (*Fn)(void*, int, int16_t*, int32_t*);
+    int i, cancel = 0;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_EFFECT, i, c)
+    {
+        cancel = EVENT_FN(MOD_EV_EFFECT, i, Fn)(EVENT_USER(MOD_EV_EFFECT, i), target, effect, value);
+        if (cancel) {
+            event_end(MOD_EV_EFFECT, i, &c);
+            break;
+        }
+    }
+    return cancel != 0;
+}
+
+void mod_round_end(uint32_t round)
+{
+    typedef void (*Fn)(void*, uint32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_ROUND_END, i, c) EVENT_FN(MOD_EV_ROUND_END, i, Fn)(EVENT_USER(MOD_EV_ROUND_END, i), round);
+}
+
+uint32_t mod_ship_damage(uint32_t value)
+{
+    typedef uint32_t (*Fn)(void*, uint32_t);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_SHIP_DAMAGE, i, c)
+    value = EVENT_FN(MOD_EV_SHIP_DAMAGE, i, Fn)(EVENT_USER(MOD_EV_SHIP_DAMAGE, i), value);
+    return (int32_t)value < 0 ? 0 : value;
+}
+
+/* One line per mod and event it handled: calls and handler time. */
+static void event_report(void)
+{
+    int ev, m;
+    for (ev = 0; ev < MOD_EVENTS; ev++)
+        for (m = 0; m < g_mod_n; m++) {
+            const EventTime* t = &g_event_time[ev][m];
+            unsigned long long seen = 0, want;
+            int b;
+            if (!t->calls) continue;
+            want = t->calls - t->calls / 100; /* the call at the 99th percentile */
+            for (b = 0; b < EVENT_BUCKETS - 1 && (seen += t->hist[b]) < want; b++)
+                ;
+            fprintf(stderr, "[mod] %s %s: %llu call(s), %.1f us in all, max %.1f us, p99 %s%d us\n", g_mods[m].dir,
+                    k_event[ev], t->calls, (double)t->ns / 1000.0, (double)t->max_ns / 1000.0,
+                    b == EVENT_BUCKETS - 1 ? ">= " : "under ", b == EVENT_BUCKETS - 1 ? b : b + 1);
+        }
 }
 
 static int api_pad_filter(void (*fn)(void*, uint32_t, SoaPad*), void* user)
@@ -937,6 +1167,16 @@ static const SoaModApi g_api = {
     api_option,
     api_option_int,
     api_on_damage,
+    api_on_heal,
+    api_on_enemy_spawn,
+    api_on_enemy_action,
+    api_on_turn_order,
+    api_on_spirit_gain,
+    api_on_escape,
+    api_on_rewards,
+    api_on_effect,
+    api_on_round_end,
+    api_on_ship_damage,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
@@ -1616,10 +1856,10 @@ static void describe_patch(const Patch* p, char* buf, size_t cap);
 /* What a loaded mod writes and registers, a line each (M17). */
 static void list_mod(int mi)
 {
-    static const char* const k_kind[CB_KINDS] = {"frame end", "safe point", "map load", "scene change",
-                                                 "controller read", "projection", "texture"};
+    static const char* const k_kind[CB_EVENT0] = {"frame end", "safe point", "map load", "scene change",
+                                                  "controller read", "projection", "texture"};
     const Mod* m = &g_mods[mi];
-    char what[200], when[96], kinds[160];
+    char what[200], when[96], kinds[400];
     unsigned i;
     int k, c;
     size_t used = 0;
@@ -1638,7 +1878,8 @@ static void list_mod(int mi)
     for (k = 0; k < CB_KINDS; k++)
         for (c = 0; c < g_cb_n[k]; c++)
             if (g_cb[k][c].mod == mi) {
-                int n = snprintf(kinds + used, sizeof kinds - used, "%s%s", used ? ", " : "", k_kind[k]);
+                int n = snprintf(kinds + used, sizeof kinds - used, "%s%s", used ? ", " : "",
+                                 k < CB_EVENT0 ? k_kind[k] : k_event[k - CB_EVENT0]);
                 if (n > 0 && (size_t)n < sizeof kinds - used) used += (size_t)n;
                 break;
             }
@@ -2299,6 +2540,8 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     if (g_cb_n[CB_PAD_FILTER]) si_set_pad_filter(mod_pad);
     if (g_cb_n[CB_PROJECTION]) gxr_set_projection_filter(mod_projection);
     if (g_cb_n[CB_TEXTURE]) gxr_set_texture_provider(mod_texture);
+    for (i = 0; i < MOD_EVENTS && !g_fault_hooked; i++)
+        if (g_cb_n[CB_EVENT0 + i]) g_fault_hooked = plat_fault_hook(event_fault);
     fprintf(stderr, "[mod] SOA_MODS=%s: %d mod(s) loaded, %u patch(es)\n", dir, g_mod_n, g_patch_n);
     return g_mod_n;
 }
@@ -2520,6 +2763,7 @@ void mod_report(void)
     int m;
     if (g_cb_n[CB_SAFE_POINT] || g_cb_n[CB_MAP_LOADED] || g_cb_n[CB_SCENE_CHANGE])
         fprintf(stderr, "[mod] the safe point saw %llu map load(s)\n", g_maps_loaded);
+    event_report();
     for (m = 0; m < g_mod_n; m++) {
         unsigned i;
         if (g_mods[m].dll) {

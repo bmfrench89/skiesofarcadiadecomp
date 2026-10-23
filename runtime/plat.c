@@ -193,6 +193,81 @@ void plat_guard_owner(void)
 }
 #endif
 
+/* ---- R1's fault stop -----------------------------------------------------
+ * Told of a fault the guard did not take; when the hook returns, the fault
+ * goes on as before it was installed. */
+static void (*g_fault_fn)(const char* what, const void* addr);
+
+#ifdef _WIN32
+static LONG CALLBACK fault_veh(EXCEPTION_POINTERS* ep)
+{
+    const EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    const char* what;
+    switch (er->ExceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION: what = "an access violation"; break;
+    case EXCEPTION_ILLEGAL_INSTRUCTION: what = "an illegal instruction"; break;
+    case EXCEPTION_PRIV_INSTRUCTION: what = "a privileged instruction"; break;
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: what = "a division by zero"; break;
+    default: return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (g_fault_fn) g_fault_fn(what, er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2
+                                         ? (const void*)er->ExceptionInformation[1]
+                                         : er->ExceptionAddress);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+int plat_fault_hook(void (*fn)(const char* what, const void* addr))
+{
+    if (g_fault_fn) return 0;
+    g_fault_fn = fn;
+    if (AddVectoredExceptionHandler(0, fault_veh)) return 1; /* 0: after the guard's */
+    g_fault_fn = NULL;
+    return 0;
+}
+#else
+static const int k_fault_sig[4] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+static struct sigaction g_fault_prev[4];
+
+static void fault_sig(int sig, siginfo_t* si, void* uc)
+{
+    int i;
+    for (i = 0; i < 4 && k_fault_sig[i] != sig; i++)
+        ;
+    if (i == 4) return;
+    if (g_fault_fn)
+        g_fault_fn(sig == SIGSEGV   ? "an access violation"
+                   : sig == SIGBUS  ? "a bus error"
+                   : sig == SIGILL  ? "an illegal instruction"
+                                    : "an arithmetic fault",
+                   si->si_addr);
+    if ((g_fault_prev[i].sa_flags & SA_SIGINFO) && g_fault_prev[i].sa_sigaction) {
+        g_fault_prev[i].sa_sigaction(sig, si, uc);
+        return;
+    }
+    if (!(g_fault_prev[i].sa_flags & SA_SIGINFO) && g_fault_prev[i].sa_handler != SIG_DFL &&
+        g_fault_prev[i].sa_handler != SIG_IGN) {
+        g_fault_prev[i].sa_handler(sig);
+        return;
+    }
+    signal(sig, SIG_DFL);
+}
+
+int plat_fault_hook(void (*fn)(const char* what, const void* addr))
+{
+    struct sigaction sa;
+    int i;
+    if (g_fault_fn) return 0;
+    g_fault_fn = fn;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = fault_sig;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    for (i = 0; i < 4; i++)
+        if (sigaction(k_fault_sig[i], &sa, &g_fault_prev[i]) != 0) return 0;
+    return 1;
+}
+#endif
+
 /* ---- the guest's stack ---------------------------------------------------
  * The recompiled code recurses as deeply as the game does, on the host stack:
  * the Windows build links with a large /STACK for the main thread, and

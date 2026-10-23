@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1830 |
+| Python tests | 1836 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -418,6 +418,16 @@ a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-23)
+
+**Latest, 2026-10-23: R1, the battle's other ten events, built** (FINDINGS "R1, the battle events",
+`docs/specs/battle-events.md`). Heal, enemy spawn, enemy action, turn order, spirit gain, escape, rewards, effect,
+round end and ship damage are answered natively (`hle.txt`, 37 entries) and reach mods as `SoaModApi` members;
+a mod that faults inside one stops the run, exit 10, naming itself and the event. With mods off every site was
+called and none changed, across the story's first battle, part G's crystal battle and reach U3's ship battle;
+with a test mod each event's change showed in the game. **Next:** X2, the save extension, with the owner's answer
+to gameplay Q2 (D-44, 2026-10-23): the honest wording, so the save-now location fallback and pass-through only.
+
+**Before that, the same day:**
 
 **Latest, 2026-10-23: R0, the battle harness, built** (FINDINGS "R0", `docs/specs/battle-harness.md`). The battle's
 damage function is answered natively (`hle.txt`, one retranslation): mods change every blow through `on_damage`, and

@@ -518,6 +518,13 @@ def test_exit_9_is_the_disc_layers_stop():
     assert scenario.EXIT_MEANINGS[9] == "the disc layer stopped the run (runtime/disc.c)"
 
 
+def test_exit_10_is_a_mod_faulting_in_a_battle_event():
+    """mod.c's event_fault exits 10 (R1); the runtime's source still says so."""
+    assert "battle event" in scenario.EXIT_MEANINGS[10]
+    source = (scenario.ROOT / "runtime" / "mod.c").read_text(encoding="utf-8")
+    assert "_Exit(10);" in source
+
+
 # --------------------------------------------------------------------------
 # the library itself
 # --------------------------------------------------------------------------

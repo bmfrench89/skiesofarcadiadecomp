@@ -15,6 +15,18 @@
 # R0 and R1's first battle event: every damage the battle works out, through mods' on_damage, and
 # SOA_BATTLE_LOG's [battle] lines (runtime/battle.c). No back-edge, so no poll is lost.
 0x800108EC  battle_damage
+# R1, the battle's other events (docs/specs/battle-events.md), each calling the translated original from
+# runtime/battle.c, so its polls are kept.
+0x8006AE20  battle_heal
+0x800770B8  battle_enemy_spawn
+0x8008A424  battle_enemy_action
+0x80070C18  battle_phase2_order
+0x8006EF48  battle_spirit_gain
+0x80010340  battle_escape
+0x8006F4B0  battle_phase7_rewards
+0x8002BD88  battle_effect
+0x8006FD6C  battle_phase6_round_end
+0x80146BF4  ship_battle_damage
 
 # Thread context switching lives on host fibers (runtime/threads.c).
 0x80233544  OSSaveContext         # setjmp-like snapshot; dtk left this one unnamed

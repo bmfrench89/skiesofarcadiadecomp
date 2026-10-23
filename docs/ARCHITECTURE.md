@@ -32,9 +32,9 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(27 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
-`tick.c` answers so the main loop has a safe point; the battle's damage
-function, which `battle.c` answers so mods can change it (R0); the five data-cache
+(37 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
+`tick.c` answers so the main loop has a safe point; eleven of the battle's
+functions, which `battle.c` answers so mods can change them (R0, R1); the five data-cache
 range calls, answered as the no-ops they are with no cache to keep; and
 `__AI_SRC_INIT`, whose calibration never ends where a clock read is slow).
 
@@ -488,6 +488,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `import.c` | host plumbing | The import's portable half (specs/android.md 3.7, L12d), which `android.c` calls. Whether a picked disc may be read in place at every launch -- a regular file that seeks, from one of the phone's own three document providers, not a proxy served from `/mnt/appfuse`, with a permission that outlives the launch -- or must be copied, each answer naming its reason. The copy: named by what the file is, never by the name its provider gives; capped at 2 GiB for a disc and 256 MiB for a library, and never leaving less than 512 MiB free, which with the size known is asked before a byte is written, the space then taken at once (`fallocate`); a stream's first bytes checked before the rest is read; cancellable even while a stream is silent; held to the size the provider gave; then synced, made 0444 and renamed into place, its folder synced; its `.tmp` gone whatever stopped it. Also what a file is from its first bytes, the sweep of the `.tmp` files a killed copy left, `disc.txt` and `soa.ini` written whole or not at all, and a check run's re-open probe. The body is for Linux, Android's kernel (`#ifdef __linux__`); elsewhere the calls that touch files refuse, so every runtime file still compiles everywhere | A provider that dies mid-stream looks like a clean end of file, so a copy not held to its size installs a short file; a copy that fills the device costs the memory card its next write; a copy that stopped and touched the old file costs the player it. `tools/tests/test_import.py` holds each on CI's Linux legs, with real files, pipes and sockets, and skips elsewhere. On the emulator a library's copy was loaded and installed, and a disc's was refused partway, as each should be |
 | `window.c` | host plumbing | The Win32 window on its own thread, presented through a DXGI flip-model swap chain paced to the display's refresh (GDI with `SOA_PRESENTER=gdi`; with `SOA_GPU=vulkan`, gxv's own swap chain, V8), and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
+| `battle.c` | host plumbing | The battle's functions mods see, answered natively through `hle.txt`, each storing its pc first and calling its translated original: R0's damage (`on_damage`) and R1's heal, enemy spawn, enemy action, turn order (phase 2), spirit gain, escape, rewards (phase 7), effect, round end (phase 6) and ship damage (specs/battle-harness.md, battle-events.md); with no mod on an event its wrapper writes nothing. `SOA_BATTLE_LOG=1`'s `[battle]` lines, each site's calls and changes at exit, and `SOA_BATTLE_FORCE`'s battle on demand | A wrapper that reads its arguments after the original has run, or writes back with no mod asking, changes every battle; `tools/battle.py check` holds the damage to its formula, and the mods-off site counts' changes must stay 0 |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
 | `settings.c` | host plumbing | `soa.ini` beside `soa.exe` (M5): the switches a player would set, and the disc, applied where the environment is silent, and the ones that change the game named in a pad recording; off for every check (`SOA_SETTINGS=0`) | A player's file could move a check if a script forgot `SOA_SETTINGS=0`; `test_settings.py` holds that each one sets it |
 | `clock.c` | host plumbing | The guest's clock (M19): the timebase every timer and device deadline counts in, accumulated from the host's monotonic time between reads, with a gap past `SOA_CLOCK_GAP_MS` (250) counted as none, a pause excluded, a speed change continuous, and an epoch dsp.c watches; `hle.c`'s `timebase()` reads it | A host sleep counted as guest time makes every deadline in the gap fire at once and the game's play-time clock jump; `test_clock.py` drives it with synthetic host times |
@@ -530,7 +531,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 27 entries and **none of them is a GX function**: every
+`config/hle.txt` has 37 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 
@@ -680,7 +681,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1830 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1836 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

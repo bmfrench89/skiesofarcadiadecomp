@@ -390,6 +390,13 @@ int plat_commit(void* p, size_t bytes);
 void plat_release(void* p, size_t bytes);
 int plat_guard_install(void* base, size_t lo, size_t hi, PlatFaultFn fn);
 void plat_guard_owner(void);
+/* R1's fault stop (M3d's in-game part): fn hears of every access violation,
+ * illegal instruction and division by zero the guard above did not take,
+ * with what it was and the faulting address, on the faulting thread; when
+ * fn returns, the fault goes on as it would have (a vectored handler added
+ * last on Windows; elsewhere SIGSEGV, SIGBUS, SIGILL and SIGFPE handlers
+ * that pass on to the ones before them). One fn per process; 1 when set. */
+int plat_fault_hook(void (*fn)(const char* what, const void* addr));
 unsigned long plat_last_error(void);
 int plat_run_on_big_stack(int (*fn)(void*), void* arg, size_t bytes);
 void* plat_dl_open(const char* path, char* err, size_t cap);

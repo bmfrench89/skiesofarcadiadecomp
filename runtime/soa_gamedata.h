@@ -56,6 +56,8 @@
 #define SOA_BATTLE_PHASE 0x8034733Cu /* u32 */
 #define SOA_BATTLE_CHOOSING 0x80347330u /* u32 */
 #define SOA_BATTLE_ROUND_STATE 0x80347338u /* u32 */
+#define SOA_BATTLE_ROUND 0x80347340u /* u8 */
+#define SOA_BATTLE_TASKS 0x80309700u /* ptr[12] */
 #define SOA_BATTLE_OVERRIDE_INITIATIVE 0x8030B7AAu /* s8 */
 #define SOA_BATTLE_OVERRIDE_ESCAPE_PARTY 0x8030B7ABu /* s8 */
 #define SOA_BATTLE_OVERRIDE_ESCAPE_ENEMY 0x8030B7ACu /* s8 */
@@ -757,6 +759,22 @@ static inline int soa_battle_round_state_get(const SoaModApi* api, uint32_t* out
 static inline int soa_battle_round_state_set(const SoaModApi* api, uint32_t v)
 {
     return api->write32(0x80347338u, v);
+}
+static inline int soa_battle_round_get(const SoaModApi* api, uint8_t* out)
+{
+    return api->read8(0x80347340u, out);
+}
+static inline int soa_battle_round_set(const SoaModApi* api, uint8_t v)
+{
+    return api->write8(0x80347340u, v);
+}
+static inline int soa_battle_tasks_get(const SoaModApi* api, uint32_t i, uint32_t* out)
+{
+    return api->read32(0x80309700u + i * 4u, out);
+}
+static inline int soa_battle_tasks_set(const SoaModApi* api, uint32_t i, uint32_t v)
+{
+    return api->write32(0x80309700u + i * 4u, v);
 }
 static inline int soa_battle_override_initiative_get(const SoaModApi* api, int8_t* out)
 {

@@ -141,6 +141,22 @@ yourself. The callbacks, and where each runs:
 | `pad_filter` | every controller read, before the game sees it | change the pad |
 | `projection_filter` | each new projection, before a vertex uses it | change the six numbers |
 | `texture_provider` | each texture decode | hand back a replacement image |
+| `on_damage` | each damage the battle works out (R0) | return the damage, 0-9999 |
+| `on_heal` | each Recover-HP value: a heal spell, an item, Blue Rogues' heal (R1) | return the heal, 0-9999 |
+| `on_enemy_spawn` | each enemy made, before the battle starts | scale the actor (never its record: every enemy of the kind shares it) |
+| `on_enemy_action` | each enemy's choice, its command record filled | return the command type; edit the record |
+| `on_turn_order` | once a round, the order just set | reorder it (it must stay distinct slots 0-11, ending at -1) |
+| `on_spirit_gain` | the round's spirit, before the gauge's limit | return the gain |
+| `on_escape` | each Run, the party's or an enemy's | return nonzero to escape |
+| `on_rewards` | once a victory, before the game pays out | change the EXP, gold and magic EXP |
+| `on_effect` | each effect applied (damage, heal, status...), before it is | change the effect or value, or return nonzero to cancel it |
+| `on_round_end` | each round's end, once regen, poison and spirit are applied | anything a frame end may |
+| `on_ship_damage` | each ship battle damage, before the game's x10 | return the damage |
+
+The battle's events run inside the game's own call, so they read and write memory only, as a frame
+end does. `SOA_BATTLE_LOG=1` logs every one, and the run report counts each event's calls, how many a
+mod changed, and each mod's time in it. **A mod that crashes inside one stops the run** (exit 10), and
+the log names the mod and the event; nothing continues half-done (docs/specs/battle-events.md).
 
 **The rules** (each one the port enforces or depends on):
 
@@ -150,7 +166,8 @@ yourself. The callbacks, and where each runs:
 - `call_guest` calls one of the game's functions, from a safe-point, scene or map callback only, never
   inside an interrupt handler; every register comes back as it was.
 - The table only grows at its end. Check `api->size >= SOA_MOD_HAS(member)` before using anything
-  appended after `log` (pad filters, projections, textures, `call_guest`, host buttons, pad 2, options):
+  appended after `log` (pad filters, projections, textures, `call_guest`, host buttons, pad 2, options,
+  the battle's events):
   an older port may not have it, and a newer one always does.
 - Pointer patches belong on load triggers. In a battle `0x803474BC` still names the field's table while
   its memory holds something else, so a write through it every frame lands in the battle's data.

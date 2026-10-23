@@ -56,6 +56,8 @@ a DLL mod includes `runtime/soa_gamedata.h`.
 | `battle.phase` | `0x8034733C` | `u32` | `0x80008DA0` | battle-system.md; 7 victory |
 | `battle.choosing` | `0x80347330` | `u32` | `0x8001D5F8` | battle-system.md, the member choosing |
 | `battle.round_state` | `0x80347338` | `u32` | `0x8000A2B4` | battle-system.md |
+| `battle.round` | `0x80347340` | `u8` | `0x80070294` | battle-system.md s.2.4; 1 at phase 0, +1 at 0x800702AC |
+| `battle.tasks` | `0x80309700` | `ptr[12]` | `0x80010490` | battle-system.md s.3; a slot's task, its +36 the work a heal is written into (+60, R1) |
 | `battle.override.initiative` | `0x8030B7AA` | `s8` | `0x80010D24+726` | battle-system.md s.1.4; -1 uses the formula |
 | `battle.override.escape_party` | `0x8030B7AB` | `s8` | `0x80010D24+727` | battle-system.md s.1.4; -1 uses the formula |
 | `battle.override.escape_enemy` | `0x8030B7AC` | `s8` | `0x80010D24+728` | battle-system.md s.1.4; -1 uses the formula |

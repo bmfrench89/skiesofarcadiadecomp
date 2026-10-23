@@ -833,7 +833,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
   - then ±2.5%, +1 one time in eight, element and Guard;
   - a critical that comes back 0 from `fn_800108EC` is raised to 1 by `fn_80010A40`.
 
-**R1. Battle events** — *several days plus one retranslation* (batch A, with X2). *`on_damage` landed with R0 (2026-10-23, `fn_800108EC` in `hle.txt`); the other events remain.*
+**R1. Battle events** — *several days plus one retranslation* (batch A, with X2). *`on_damage` landed with R0 (2026-10-23, `fn_800108EC` in `hle.txt`). **The other ten done 2026-10-23** to [specs/battle-events.md](specs/battle-events.md) (FINDINGS "R1, the battle events"), alone, ahead of X2 (a retranslation is under three minutes now), with M3d's in-game fault stop: each event changed on a real battle and shown there; `on_effect` writes the target's work as well as the message.*
 - Native wrappers through `hle.txt`, each calling the original (`recomp_fn_X`). Use M13 if it has landed; no migration is planned.
 - **Each event fires once per occurrence:**
 
@@ -1479,7 +1479,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
 Other sections cite these as Q1–Q11. A G with a number (G3–G7) is always a proposed PLAN.md Track G slice from section F.
 
 - **Q1. Which handheld, exactly?** A ROG Ally (120 Hz, variable refresh) and a Legion Go (144/60 Hz, 2560×1600) need different fullscreen and refresh work (H19).
-- **Q2. The save promise.** Build X2's vanilla-safe fallback (mod maps save a vanilla location; placeholder gear swaps to a substitute), or keep the honest wording in section A?
+- **Q2. The save promise.** Build X2's vanilla-safe fallback (mod maps save a vanilla location; placeholder gear swaps to a substitute), or keep the honest wording in section A? **Answered 2026-10-23 (PLAN-NEXT D-44): the honest wording now;** the fallback waits for the first mod map or placeholder gear (N7, N1).
 - **Q3. Distribution.** Stay source-only, or build section F's G4 one-step build with a compiler the project can ship? And is M8's overlay enough, or do you want a separate launcher?
 - **Q4. The community tools' licences.** Re-derive everything from the DOL (feasible; the handler layouts agree on 265 of 266), or ask the ALX and SALSA authors for permission or a dual licence? Asking could also open a collaboration.
 - **Q5. Game-data boundaries.** Does a text table of enemy names (R5) count as game data? Do original Blender sources for new art belong in the repository?

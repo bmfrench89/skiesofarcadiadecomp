@@ -32,6 +32,28 @@ int mod_scan_files(const char* dir, const uint8_t* dol, size_t dol_size, DiscFil
  * order; what the game gets, held to 0-9999 (runtime/battle.c calls it). */
 uint32_t mod_damage(uint32_t value, uint32_t base, uint32_t attacker, uint32_t target, uint32_t element);
 
+/* R1 (docs/specs/battle-events.md): the battle's other events, each through
+ * every mod's callback in load order, from runtime/battle.c's wrappers.
+ * mod_event_count says how many callbacks an event has: with none, a wrapper
+ * reads and writes nothing. A fault inside one stops the run, exit 10,
+ * naming the mod and the event. */
+enum {
+    MOD_EV_DAMAGE, MOD_EV_HEAL, MOD_EV_ENEMY_SPAWN, MOD_EV_ENEMY_ACTION, MOD_EV_TURN_ORDER, MOD_EV_SPIRIT_GAIN,
+    MOD_EV_ESCAPE, MOD_EV_REWARDS, MOD_EV_EFFECT, MOD_EV_ROUND_END, MOD_EV_SHIP_DAMAGE, MOD_EVENTS
+};
+struct SoaRewards;
+int mod_event_count(int ev);
+uint32_t mod_heal(uint32_t value, int source, int target);       /* held to 0-9999 */
+void mod_enemy_spawn(uint32_t actor, uint32_t record);
+uint32_t mod_enemy_action(uint32_t type, int slot, uint32_t cmd);
+void mod_turn_order(int8_t order[12]);
+int32_t mod_spirit_gain(int32_t amount);
+int mod_escape(int success, int slot);                           /* 0 or 1 */
+void mod_rewards(struct SoaRewards* r);
+int mod_effect(int target, int16_t* effect, int32_t* value);     /* 1: cancelled */
+void mod_round_end(uint32_t round);
+uint32_t mod_ship_damage(uint32_t value);                        /* held to 0 or more */
+
 /* Apply the loaded patches; called once a frame from the frame hook, after
  * SOA_PEEK and SOA_POKE. Memory writes only: it runs inside the XFB copy. */
 void mod_frame(CpuState* s, unsigned frame);

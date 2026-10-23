@@ -222,7 +222,7 @@ The owner answered four questions, with the research behind them summarised in t
     M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)), and M8b, the Vulkan
     presenter's overlay, 2026-10-22 (FINDINGS "M8b"). **Then 60 fps (D-41, 2026-10-22):** H17a done the same day
     (FINDINGS "H17a", [specs/interp.md](specs/interp.md)), headless; H17b, the images in a window, built the same day (FINDINGS "H17b"), its Done
-    at session D, then V12 (D-42), built the same day (FINDINGS "V12"). **Then the gameplay core (D-43):** T9 first, built the same day (FINDINGS "T9"); T1's core, I6, 2026-10-23 (FINDINGS "I6"); R0 the same day, with R1's `on_damage` (FINDINGS "R0"); then batch A (R1's other events, X2), with I7 when a mod needs a delta.
+    at session D, then V12 (D-42), built the same day (FINDINGS "V12"). **Then the gameplay core (D-43):** T9 first, built the same day (FINDINGS "T9"); T1's core, I6, 2026-10-23 (FINDINGS "I6"); R0 the same day, with R1's `on_damage` (FINDINGS "R0"); R1's other ten events the same day, alone, with M3d's in-game fault stop (FINDINGS "R1, the battle events"); then X2, batch A's other half, with the honest save promise (D-44: the save-now location fallback and pass-through, no mod-map or gear fallback yet), with I7 when a mod needs a delta.
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").
@@ -982,7 +982,8 @@ until you say otherwise.
 | D-41 | What follows M8 | owner, 2026-10-22 | H17a | **answered 2026-10-22: 60 fps** ("60fps go"): H17a, interpolation headless, its spec written first; H17b's windowed Done at a sitting with the display at 60 or 120 Hz |
 | D-42 | How 60 fps continues, the CPU renderer reaching 32 to 43 images a second with interpolation (FINDINGS "H17a") | owner, 2026-10-22 | H17b, V12 | **answered 2026-10-22: H17b, then V12**: the window side first (presenter, cut detector, repeat when over budget, the `soa.ini` key), which serves any renderer; then V12, the in-between images on the Vulkan backend, for a real 60. H17b's "60 images a second" Done is restated in its spec for the CPU renderer's measured reach |
 | D-43 | What follows 60 fps (H17a, H17b, V12 built) | owner, 2026-10-22 | gameplay milestone 2 | **answered 2026-10-22: the gameplay core** (PLAN-GAMEPLAY-MODS milestone 2's T9, T1, R0, batch A ...), ahead of widescreen (M10, V9b) and M7a/b; T9 first, its spec written first |
-| — | Gameplay Q2, Q4, Q5, Q7-Q11 (save promise, licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
+| D-44 | Gameplay Q2, the save promise: X2's vanilla-safe fallback, or the honest wording | owner, 2026-10-23 | X2 | **answered 2026-10-23: the honest wording now.** Vanilla saves always load anywhere; a mod's save loads in the port with its mods and says which is missing without them. X2 builds the save-now location fallback M7a needs and pass-through; the mod-map and placeholder-gear fallback waits for the first mod that needs it (N7, N1) |
+| — | Gameplay Q4, Q5, Q7-Q11 (licences, game-data boundaries, bounty, name, NG+, companion, "Encore") | gameplay G | gameplay milestone 2 onward | ask when that milestone starts |
 
 **Questions for the implementation session,** collected so they are answered once:
 
