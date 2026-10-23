@@ -31,6 +31,7 @@
  * beside its mod.ini by `python tools/recompile.py --link`.
  */
 #include "soa_mod.h"
+#include "soa_gamedata.h" /* T9: the game's data by name, each proved against its code */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,9 +41,9 @@
 #endif
 
 #define SCENE_BATTLE 7u
-#define PHASE 0x8034733Cu    /* u32: the battle's phase machine; 1 is party input */
-#define MEMBER 0x80347330u   /* u32: the party slot choosing, in phase 1 */
-#define COMMANDS 0x80309174u /* s32 at + 32 * slot: the command type */
+#define PHASE SOA_BATTLE_PHASE    /* u32: the battle's phase machine; 1 is party input */
+#define MEMBER SOA_BATTLE_CHOOSING   /* u32: the party slot choosing, in phase 1 */
+#define COMMANDS SOA_BATTLE_COMMANDS /* s32 at + 32 * slot: the command type */
 #define PHASE_INPUT 1u
 #define PHASE_ORDER 2u
 #define PORT1 1

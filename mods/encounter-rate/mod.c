@@ -46,6 +46,7 @@
  *     cl /LD /O2 /I runtime mods\encounter-rate\mod.c /Fe:mods\encounter-rate\mod.dll
  */
 #include "soa_mod.h"
+#include "soa_gamedata.h" /* T9: the game's data by name, each proved against its code */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,22 +55,22 @@
 #include <windows.h> /* env() */
 #endif
 
-#define MULTIPLIER 0x8030B7ADu /* s8: -1 the normal rate, else the odds x byte/50 */
-#define PARTY 0x8030B7F4u      /* character c's block at PARTY + 92c */
+#define MULTIPLIER SOA_ENCOUNTER_MULTIPLIER /* s8: -1 the normal rate, else the odds x byte/50 */
+#define PARTY SOA_PARTY_CHARACTER      /* character c's block at PARTY + 92c */
 #define ACCESSORY 20u          /* the u16 accessory id, in a block */
-#define ITEMS 0x802C6E10u      /* accessory records, 40 bytes each, id 160 first */
+#define ITEMS SOA_TABLES_ACCESSORIES      /* accessory records, 40 bytes each, id 160 first */
 #define EFFECTS 24u            /* four {u8 code, u8, s16 value}, in a record */
 #define ENCOUNTER_EFFECT 84
 #define SCENE_FIELD 6u
 #define SCENE_BATTLE 7u
 #define FIELD_RUNNING 8u
-#define STEP_COUNTER 0x80346D28u /* frames moved since the last reset; the roll reads it */
-#define ZONE 0x8034740Eu         /* u16: the ground's zone, 1-8 counted */
+#define STEP_COUNTER SOA_ENCOUNTER_STEPS /* frames moved since the last reset; the roll reads it */
+#define ZONE SOA_ENCOUNTER_ZONE         /* u16: the ground's zone, 1-8 counted */
 #define WORLD_MAP 99u
-#define WORLD_ZONE 0x80346CD4u   /* the world map's zone: the low half of this word */
-#define TABLE 0x803474BCu        /* the map's .ect: a zone's rate is the u16 at +2 + (zone - 1) * 132 */
-#define ESCAPE 0x8030B7ABu       /* the party's escape override */
-#define PHASE 0x8034733Cu        /* 1 while a battle takes the party's commands */
+#define WORLD_ZONE SOA_ENCOUNTER_ZONE_SKY   /* the world map's zone: the low half of this word */
+#define TABLE SOA_ENCOUNTER_TABLE        /* the map's .ect: a zone's rate is the u16 at +2 + (zone - 1) * 132 */
+#define ESCAPE SOA_BATTLE_OVERRIDE_ESCAPE_PARTY       /* the party's escape override */
+#define PHASE SOA_BATTLE_PHASE        /* 1 while a battle takes the party's commands */
 #define TRIAL_START 480u
 #define TRIAL_MOVES 600u
 #define TRIAL_FRAMES 3000u

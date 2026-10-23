@@ -48,9 +48,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from soa import aklz, disc  # noqa: E402
+from soa import aklz, disc, gamedata  # noqa: E402
 
-OPCODE_TABLE = 0x802F7940
+OPCODE_TABLE = gamedata.load().by_name()["script.opcodes"].address  # T9, config/gamedata.txt
 OPCODES = 266
 END = 29  # ends an expression
 NAMED = {

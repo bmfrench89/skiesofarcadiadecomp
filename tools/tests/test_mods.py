@@ -386,6 +386,124 @@ def test_m6_scales_each_zones_rate_once_a_load_and_never_compounds(driver, tmp_p
     ), err
 
 
+# T9 (docs/specs/game-names.md): a name wherever an address goes, from
+# config/gamedata.txt. party.character is 92-byte records from 0x8030B7F4, hp
+# the s16 at +24; party.gold the s32 at 0x8030BB40; battle.context a pointer to
+# a record whose gold is the s32 at +52.
+BY_NAME = (
+    "once party.gold = 1234\n"
+    "once party.character[1].hp = 500\n"
+    "once battle.context.gold = 77\n"
+    "on_map_load encounter.table[z].rate *= 0.5 for z=0..7\n"
+)
+BY_ADDRESS = (
+    "once s32 0x8030bb40 = 1234\n"
+    f"once s16 0x{0x8030B7F4 + 92 + 24:08x} = 500\n"
+    "once s32 [0x80347390]+52 = 77\n" + RATES.format(k="0.5")
+)
+CONTEXT = 0x80410000  # where the fake guest's battle context pointer points
+
+
+@needs_cc
+def test_t9_a_name_writes_the_bytes_its_address_does(driver, tmp_path):
+    """The same four patches by name and by address, one run each on the same
+    script, leave the same words: a scalar, a field of an array's record, a
+    field through a pointer, and a run of fields through a pointer. The
+    mutation, k_names' party.gold moved, would have the gold word differ."""
+    script = (
+        table([100, 50, 7, 1, 0, 300, 65535, 2])
+        + f"set 80347390 {CONTEXT:x} "
+        + load(116)
+        + gets()
+        + f"get 8030bb40 get {0x8030B7F4 + 92 + 24:x} get {CONTEXT + 52:x} "
+        + "report"
+    )
+    outs = []
+    for name, patches in (("byname", BY_NAME), ("byaddress", BY_ADDRESS)):
+        root = tmp_path / name
+        mod(root, name, patches=patches)
+        out, err = play(driver, root, script)
+        assert "refused" not in err.lower(), err
+        outs.append(re.findall(r"^[0-9A-F]{8}=[0-9A-F]{8}$", out, re.M))
+    assert outs[0] == outs[1] and len(outs[0]) == 11, outs
+    gold, hp_word, ctx_gold = (int(w.split("=")[1], 16) for w in outs[0][8:])
+    assert gold == 1234 and hp_word >> 16 == 500 and ctx_gold == 77, outs[0]
+
+
+HEADER_SOURCE = r"""
+#include "soa_mod.h"
+#include "soa_gamedata.h"
+#include <stdio.h>
+
+static const SoaModApi* A;
+
+static void sp(void* u)
+{
+    static int once;
+    char b[200];
+    int32_t gold = 0, cgold = 0;
+    int16_t hp = 0;
+    uint16_t rate = 0;
+    uint32_t raw = 0;
+    int g1, g2, g3, g4, s1;
+    (void)u;
+    if (once++) return;
+    g1 = soa_party_gold_get(A, &gold);
+    g2 = soa_battle_context_gold_get(A, &cgold);
+    g3 = soa_party_character_hp_get(A, 1, &hp);
+    g4 = soa_encounter_table_rate_get(A, 2, &rate);
+    s1 = soa_party_gold_set(A, -5);
+    A->read32(SOA_PARTY_GOLD, &raw);
+    snprintf(b, sizeof b, "gold %d %ld ctx %d %ld hp %d %d rate %d %u set %d %08lX", g1, (long)gold, g2,
+             (long)cgold, g3, (int)hp, g4, (unsigned)rate, s1, (unsigned long)raw);
+    A->log(b);
+}
+
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    A = api;
+    api->on_safe_point(sp, NULL);
+    return 0;
+}
+"""
+
+
+@needs_cc
+def test_t9_the_header_s_accessors_read_and_write_what_they_name(driver, tmp_path):
+    """A DLL built against runtime/soa_gamedata.h reads a scalar, a field of
+    an array's record, a field through a pointer and a field of a pointer's
+    array, each what the script put there, and writes the gold big-endian."""
+    d = mod(tmp_path, "header", patches=None)
+    (d / "mod_src.c").write_text(HEADER_SOURCE, encoding="utf-8")
+    library(d, d / "mod_src.c")
+    script = (
+        table([100, 50, 7, 1, 0, 300, 65535, 2])
+        + f"set 80347390 {CONTEXT:x} set {CONTEXT + 52:x} 4d "
+        + "set 8030bb40 4d2 "
+        + f"set {0x8030B7F4 + 92 + 24:x} 1f40000 "
+        + "safe"
+    )
+    out, err = play(driver, tmp_path, script)
+    assert "loaded 1" in out, err
+    assert "[mod] header: gold 1 1234 ctx 1 77 hp 1 500 rate 1 7 set 1 FFFFFFFB" in err, err
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "line",
+    [
+        "once party.goldd = 1",  # no such name
+        "once party.character.hp = 1",  # an array's field without its index
+        "once party.gold[2] = 1",  # an index where none goes
+    ],
+)
+def test_t9_a_name_the_game_s_data_lacks_is_refused_with_its_line(driver, tmp_path, line):
+    mod(tmp_path, "unknown", patches=line + "\n")
+    _, err = play(driver, tmp_path, "frame report")
+    assert "unknown/patches.txt:1:" in err and "is not a name the game's data has" in err, err
+
+
 @needs_cc
 def test_m6_writes_each_width_at_its_own_bytes_big_endian(driver, tmp_path):
     mod(

@@ -102,6 +102,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import scenario  # tools/ is sys.path[0] when this runs as a script
+from soa import gamedata
 
 DIRECTIONS = [
     "sup",
@@ -197,15 +198,19 @@ def _battle(seed: int, first: int, last: int) -> str:
 # pokes: a warp by name, and the encounter accelerator (PLAN S3)
 # --------------------------------------------------------------------------
 
-WARP_NAME = 0x80305CF0  # the destination script's name, "MEnnnX.SCT", three words
-CAME_FROM = 0x8030E420  # sys[15]: 0 takes the map's default entrance
-FIELD_STATE = 0x80311AEC  # 15 is the game's own warp; poked last, after the name
-STEP_COUNTER = 0x80346D28  # frames the player has moved since the last encounter
+# The addresses by name (T9, config/gamedata.txt), each proved against its code.
+_GAME = gamedata.load().by_name()
+WARP_NAME = _GAME["warp.script"].address  # the destination script's name, "MEnnnX.SCT", three words
+CAME_FROM = _GAME["sys15"].address  # sys[15]: 0 takes the map's default entrance
+FIELD_STATE = _GAME["field.state"].address  # 15 is the game's own warp; poked last, after the name
+STEP_COUNTER = _GAME[
+    "encounter.steps"
+].address  # frames the player has moved since the last encounter
 ACCELERATE = 100000  # makes the roll succeed; every gate still runs before the read
 # The six-word battle request's flag. Never poked by a soak: it skips every
 # gate, the story's included, and on a101b it left a black field
 # (docs/research/soak.md 1b). A test holds the generator to this.
-FORCED_BATTLE = 0x803473D4
+FORCED_BATTLE = _GAME["battle.request.forced"].address
 WARP_FRAME = 3300  # the Continue lands at 2650
 WARP_SETTLE = 400  # frames from the warp poke to a map worth soaking
 POKE_MAX = 256  # main.c's POKE_MAX and PEEK_MAX: the rest would be refused
@@ -325,10 +330,16 @@ RE_BEFF = re.compile(r'"/BEFF/(?:"\s*")?([^"/\s]+)"', re.IGNORECASE)
 # The ship battle's results screen (ship-worldmap.md: state 4 loads it).
 RE_SHIP_RESULTS = re.compile(r"HRS_BEND", re.IGNORECASE)
 SHIP_STAGES = range(500, 584)  # the 5xx maps; a ship battle is the field scene on one
-SHIP_RESULTS_FLAG = 0x80347280  # 1: the next load is the results screen (fn_8012A26C)
-SHIP_OUTCOME = 0x80347278  # how it ended: 2 ran (reach U3), 1 or 3 a ship sank
+SHIP_RESULTS_FLAG = _GAME[
+    "ship_battle.results_next"
+].address  # 1: the next load is the results screen
+SHIP_OUTCOME = _GAME[
+    "ship_battle.outcome"
+].address  # how it ended: 2 ran (reach U3), 1 or 3 a ship sank
 SHIP_RAN = 2
-FLAGS = 0x80310B3C  # flag n: bit n % 32, from the least significant, of FLAGS + n // 32 * 4
+FLAGS = _GAME[
+    "story.flags"
+].address  # flag n: bit n % 32, from the least significant, of FLAGS + n // 32 * 4
 
 
 @dataclass

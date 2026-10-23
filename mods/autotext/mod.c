@@ -39,6 +39,7 @@
  * Built beside its mod.ini by `python tools/recompile.py --link`.
  */
 #include "soa_mod.h"
+#include "soa_gamedata.h" /* T9: the game's data by name, each proved against its code */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,8 +48,8 @@
 #include <windows.h> /* env() */
 #endif
 
-#define WINDOW_TASK 0x80346E4Cu  /* u32: the message window's task, 0 when there is none */
-#define WINDOW_STATE 0x80346E64u /* s16: 4 a complete page, 6 a choice */
+#define WINDOW_TASK SOA_MESSAGE_TASK  /* u32: the message window's task, 0 when there is none */
+#define WINDOW_STATE SOA_MESSAGE_STATE /* s16: 4 a complete page, 6 a choice */
 #define TASK_CONTEXT 36u         /* u32 in the task: the window's context */
 #define FLAG_AFTER_CHOICE 0x10u  /* context flags: the game advances these pages itself */
 #define FLAG_AUTO_SCROLL 0x40u

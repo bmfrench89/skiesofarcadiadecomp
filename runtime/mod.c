@@ -376,10 +376,83 @@ static int scan_number(const char** s, uint32_t* out)
 /* The address: `0x80346d28`, or `[0x803474bc]`, the word there taken as a
  * pointer, which may add `+N`; either may end `+z*N`, the step between the
  * targets a `for` runs. */
-static int parse_target(Where* w, Patch* p, const char* t)
+/* T9 (docs/specs/game-names.md): the game's data by name, generated from
+ * config/gamedata.txt, each address proved against the code that reaches it.
+ * A path has [] where an index goes; ptr: the base is a pointer the offset and
+ * index are taken through. */
+typedef struct {
+    const char* path;
+    uint32_t base, stride, off;
+    int width; /* bytes, negative for signed */
+    int ptr;
+} GameName;
+static const GameName k_names[] = {
+#include "gamedata_names.h"
+};
+
+/* A name where an address goes: `party.gold`, `party.character[1].hp`,
+ * `encounter.table[z].rate`, the index a number or the `for`'s z. Its width is
+ * the name's unless the line gave one. 1, or 0 with nothing set. */
+static int parse_name(Patch* p, const char* t, int width_given)
+{
+    char path[96];
+    size_t n = 0;
+    const char* s = t;
+    int has_index = 0, index_z = 0;
+    uint32_t index = 0;
+    unsigned i;
+    while (*s && *s != '[' && n + 1 < sizeof path) path[n++] = *s++;
+    if (*s == '[') {
+        s++;
+        if (s[0] == 'z' && s[1] == ']') {
+            index_z = 1;
+            s += 2;
+        } else {
+            char* end;
+            if (*s < '0' || *s > '9') return 0;
+            index = (uint32_t)strtoul(s, &end, 10);
+            if (*end != ']') return 0;
+            s = end + 1;
+        }
+        has_index = 1;
+        if (n + 2 >= sizeof path) return 0;
+        path[n++] = '[';
+        path[n++] = ']';
+    }
+    while (*s && n + 1 < sizeof path) path[n++] = *s++;
+    if (*s) return 0;
+    path[n] = '\0';
+    for (i = 0; i < sizeof k_names / sizeof k_names[0]; i++) {
+        const GameName* g = &k_names[i];
+        if (strcmp(g->path, path) != 0) continue;
+        if (has_index != (g->stride != 0)) return 0;
+        p->ptr = (uint8_t)g->ptr;
+        p->ea = g->base;
+        if (g->ptr) {
+            p->off = g->off + (index_z ? 0 : index * g->stride);
+        } else {
+            p->ea = g->base + g->off + (index_z ? 0 : index * g->stride);
+        }
+        if (index_z) p->stride = g->stride;
+        if (!width_given) {
+            p->width = (uint8_t)(g->width < 0 ? -g->width : g->width);
+            p->sign = g->width < 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_target(Where* w, Patch* p, const char* t, int width_given)
 {
     const char* s = t;
     int has_off = 0;
+    if (*s >= 'a' && *s <= 'z') {
+        if (parse_name(p, t, width_given)) return 1;
+        refuse(w, "`%s` is not a name the game's data has (docs/MODDING-NAMES.md lists them, an index in brackets "
+                  "where one goes, as in party.character[1].hp)%s", t, "");
+        return 0;
+    }
     if (*s == '[') {
         s++;
         if (!scan_address(&s, &p->ea) || *s++ != ']') goto bad;
@@ -477,7 +550,7 @@ static void parse_patch(Where* w, char* line, const uint8_t* dol, size_t dol_siz
         at = 2;
     }
     if (at == 1 && n > 2 && tok[1][0] != '0' && tok[1][0] != '[' && strcmp(tok[2], "=") != 0 &&
-        strcmp(tok[2], "*=") != 0) {
+        strcmp(tok[2], "*=") != 0) { /* a name is followed by = or *=, so it is not caught here */
         refuse(w, "`%s` is not a width: u8, u16, u32, s8, s16 or s32%s", tok[1], "");
         return;
     }
@@ -488,7 +561,7 @@ static void parse_patch(Where* w, char* line, const uint8_t* dol, size_t dol_siz
     for (i = 0; i < 3 && strcmp(tok[0], k_trigger[i]) != 0; i++) {}
     if (i == 3) { refuse(w, "`%s` is not a trigger: every_frame, once or on_map_load%s", tok[0], ""); return; }
     p.trigger = (uint8_t)i;
-    if (!parse_target(w, &p, tok[at])) return;
+    if (!parse_target(w, &p, tok[at], at == 2)) return;
     snprintf(addr, sizeof addr, "0x%08x", p.ea);
     if (is_mmio(p.ea)) { refuse(w, "%s is in the hardware window, not memory%s", addr, ""); return; }
     if (p.ea < 0x80000000u || p.ea >= 0x80000000u + MEM1_SIZE) {

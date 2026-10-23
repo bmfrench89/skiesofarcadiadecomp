@@ -1,0 +1,133 @@
+# The game's data by name
+
+Generated from `config/gamedata.txt` by `python tools/gamedata.py generate --write`; do not edit. Each name's
+address is proved against the instruction in the game's code that reaches it (`ref`), by
+`tools/tests/test_gamedata.py` (T9, [specs/game-names.md](specs/game-names.md)). A `patches.txt` line may give a
+name wherever it gives an address, a field after a dot and an index in brackets (`party.character[1].hp`);
+a DLL mod includes `runtime/soa_gamedata.h`.
+
+| Name | Address | Type | Ref | Evidence |
+|---|---|---|---|---|
+| `scene` | `0x803475CC` | `u32` | `0x801CBC3C` | ship-worldmap.md:11; 6 the field, 7 a battle |
+| `field.state` | `0x80311AEC` | `u32` | `0x8008F9D4+24` | ship-worldmap.md:11 (0x80311AD4 + 4*6); 3/5 loading, 8 running, 15 a warp; FINDINGS |
+| `map.number` | `0x80311AC0` | `u32` | `0x800964E0` | story-flags.md:25, the committed map; FINDINGS 900-956 |
+| `map.picker` | `0x80311AC4` | `u32` | `0x800964E0+4` | story-flags.md:25, the picker's working copy |
+| `map.letter` | `0x80311AC8` | `u8` | `0x800964E0+8` | story-flags.md:26 |
+| `warp.script` | `0x80305CF0` | `bytes[32]` | `0x800FFA54` | ship-worldmap.md:115, the warp's script name; FINDINGS 1050-1072 |
+| `ship_battle.return_script` | `0x802E5E68` | `bytes[11]` | `0x80147E08` | ship-worldmap.md, written by the sprintf at 80147E58 |
+| `ship_battle.pending` | `0x803472E4` | `u32` | `0x8010147C` | ship-worldmap.md:124; FINDINGS 1419-1486 |
+| `sky.mode` | `0x80347464` | `u32` | `0x800C1F44` | ship-worldmap.md:157 |
+| `message.task` | `0x80346E4C` | `ptr` | `0x801011F4` | FINDINGS 2992-3000; mods/autotext |
+| `message.state` | `0x80346E64` | `s16` | `0x8010CED4` | FINDINGS 2992-3000; mods/autotext |
+| `encounter.table` | `0x803474BC` | `ptr:ect_zone[8]` | `0x800C1A9C` | encounters.md:99-103; FINDINGS 8338-8348 |
+| `encounter.enemies` | `0x803474B8` | `ptr` | `0x800777E8` | encounters.md:99, the map's .enp |
+| `encounter.steps` | `0x80346D28` | `u32` | `0x800C1CE0` | encounters.md:64 |
+| `encounter.zone` | `0x8034740E` | `u16` | `0x8009C9E0` | encounters.md:61 |
+| `encounter.zone_sky` | `0x80346CD4` | `u32` | `0x8009CA00` | encounters.md:61, map 99's zone in the low half; mods/encounter-rate |
+| `encounter.multiplier` | `0x8030B7AD` | `s8` | `0x80010D24+729` | encounters.md:68, set in fn_801EE5A4; -1 none |
+| `battle.request.stage` | `0x803473C8` | `u32` | `0x800C1A44` | encounters.md:37-42; FINDINGS 1324 |
+| `battle.request.id` | `0x803473CC` | `u32` | `0x800C1A40` | encounters.md:37-42 |
+| `battle.request.mode` | `0x803473D0` | `u32` | `0x800C1A38` | encounters.md:37-42 |
+| `battle.request.forced` | `0x803473D4` | `u32` | `0x800C1A3C` | encounters.md:191-207 |
+| `battle.request.transition` | `0x803473D8` | `u32` | `0x800C1A48` | encounters.md:37-42 |
+| `story.flags` | `0x80310B3C` | `u32[854]` | `0x80030168` | story-flags.md:14; flag n is bit n%32 of word n/32 |
+| `story.vars` | `0x80310A1C` | `u8[288]` | `0x80009B34` | story-flags.md s.1 |
+| `party.members` | `0x80310BBC` | `u32` | `0x80030168+128` | story-flags.md:80 |
+| `party.character` | `0x8030B7F4` | `character[6]` | `0x800103B8` | story-flags.md s.6; 0 Vyse .. 5 Gilder |
+| `party.active` | `0x8030BB1C` | `u8[4]` | `0x800103B8+808` | story-flags.md s.6; 0xFF empty |
+| `party.count` | `0x8030B7A8` | `u8` | `0x80010D24+724` | story-flags.md s.6 |
+| `party.gold` | `0x8030BB40` | `s32` | `0x800103B8+844` | story-flags.md s.6; NG+ notes (PLAN-GAMEPLAY-MODS N11) |
+| `inventory.weapons` | `0x8030BB48` | `slot[80]` | `0x800103B8+852` | story-flags.md s.6 |
+| `inventory.armor` | `0x8030BC88` | `slot[80]` | `0x800103B8+1172` | story-flags.md s.6 |
+| `inventory.accessories` | `0x8030BDC8` | `slot[80]` | `0x800103B8+1492` | story-flags.md s.6 |
+| `inventory.items` | `0x8030BF08` | `slot[80]` | `0x800103B8+1812` | story-flags.md s.6 |
+| `inventory.key_items` | `0x8030C048` | `slot[80]` | `0x800103B8+2132` | story-flags.md s.6 |
+| `sys15` | `0x8030E420` | `u32` | `0x8009A048+5504` | story-flags.md; 10000 returns from a battle |
+| `save.variant` | `0x803473B0` | `u32` | `0x80123DB0` | save-load.md:17-19 |
+| `save.request` | `0x803473B4` | `u32` | `0x800D840C` | save-load.md:17-19 |
+| `save.result` | `0x803473C4` | `u32` | `0x80123E0C` | save-load.md:17-19 |
+| `battle.actor_ids` | `0x80309DCC` | `u16[12]` | `0x80029814` | battle-system.md:19 |
+| `battle.actors` | `0x80309DE4` | `ptr[12]` | `0x8000A61C` | battle-system.md:19, 276-byte actors |
+| `battle.context` | `0x80347390` | `ptr:battle_context` | `0x8001039C` | battle-system.md s.1.4; enemy-data.md:181 |
+| `battle.formation` | `0x80347384` | `ptr` | `0x8006F0B4` | battle-system.md s.1.4, 38 bytes |
+| `battle.commands` | `0x80309174` | `bytes[384]` | `0x8001070C` | battle-system.md:100-120, 32 bytes a slot |
+| `battle.results` | `0x80309730` | `bytes[192]` | `0x80010540` | battle-system.md, 16 bytes a slot |
+| `battle.turn_order` | `0x803092F4` | `s8[12]` | `0x8006EDB8` | battle-system.md, slots ending at -1 |
+| `battle.phase` | `0x8034733C` | `u32` | `0x80008DA0` | battle-system.md; 7 victory |
+| `battle.choosing` | `0x80347330` | `u32` | `0x8001D5F8` | battle-system.md, the member choosing |
+| `battle.round_state` | `0x80347338` | `u32` | `0x8000A2B4` | battle-system.md |
+| `battle.override.initiative` | `0x8030B7AA` | `s8` | `0x80010D24+726` | battle-system.md s.1.4; -1 uses the formula |
+| `battle.override.escape_party` | `0x8030B7AB` | `s8` | `0x80010D24+727` | battle-system.md s.1.4; -1 uses the formula |
+| `battle.override.escape_enemy` | `0x8030B7AC` | `s8` | `0x80010D24+728` | battle-system.md s.1.4; -1 uses the formula |
+| `battle.sp_max` | `0x8030B7A4` | `s16` | `0x80010D24+720` | battle-system.md |
+| `battle.sp_start` | `0x8030B7A6` | `s16` | `0x80010D24+722` | battle-system.md |
+| `rng.seed` | `0x803469A8` | `u32` | `0x8025ECBC` | battle-system.md:212; seed*0x41C64E6D+12345 |
+| `ship_battle.state` | `0x8034727C` | `u32` | `0x8012A360` | FINDINGS 8461-8480 |
+| `ship_battle.outcome` | `0x80347278` | `u32` | `0x80143AB4` | FINDINGS 9019 |
+| `ship_battle.results_next` | `0x80347280` | `u32` | `0x8012A2AC` | FINDINGS 8461-8480; 1: the next load is the results screen (fn_8012A26C) |
+| `frame.start_fields` | `0x8034768C` | `u32` | `0x801DC49C` | frame-pacing.md:15 |
+| `frame.game` | `0x803475C0` | `u32` | `0x800DF43C` | frame-pacing.md:53; PLAN-GAMEPLAY-MODS N10 |
+| `vi.retrace_count` | `0x80347A64` | `u32` | `0x8023DB08` | frame-pacing.md:53 |
+| `script.opcodes` | `0x802F7940` | `opcode[266]` | `0x80210A24` | ship-worldmap.md:111, handler at +8 |
+| `tables.weapons` | `0x802C5790` | `bytes[2560]` | `0x800105D0` | beyond-gamecube.md:293, 80 x 32 |
+| `tables.armor` | `0x802C6190` | `bytes[3200]` | `0x80077F08` | beyond-gamecube.md:293, 80 x 40 |
+| `tables.accessories` | `0x802C6E10` | `bytes[3200]` | `0x80078028` | beyond-gamecube.md:293, 80 x 40 |
+| `tables.items` | `0x802C7C34` | `bytes[2880]` | `0x80028C5C` | beyond-gamecube.md:293, 80 x 36 |
+| `tables.key_items` | `0x802C8774` | `bytes[1760]` | `0x801F4700` | beyond-gamecube.md:293, 80 x 22 |
+| `tables.ships` | `0x802D6934` | `bytes[5400]` | `0x80134A78` | 45 x 120 |
+| `tables.character_templates` | `0x802C4860` | `bytes[912]` | `0x800765D8` | story-flags.md s.6, 6 x 152 |
+
+**`ect_zone`**, 132 bytes:
+
+| Field | Offset | Type |
+|---|---|---|
+| `rate` | 2 | `u16` |
+
+**`character`**, 92 bytes:
+
+| Field | Offset | Type |
+|---|---|---|
+| `name` | 0 | `bytes[11]` |
+| `level` | 11 | `u8` |
+| `mp` | 13 | `u8` |
+| `mp_max` | 14 | `u8` |
+| `weapon` | 16 | `s16` |
+| `armor` | 18 | `s16` |
+| `accessory` | 20 | `s16` |
+| `hp` | 24 | `s16` |
+| `hp_max` | 26 | `s16` |
+| `exp` | 36 | `s32` |
+| `stats` | 58 | `bytes[10]` |
+| `magic_exp` | 68 | `s32[6]` |
+
+**`slot`**, 4 bytes:
+
+| Field | Offset | Type |
+|---|---|---|
+| `id` | 0 | `s16` |
+| `count` | 2 | `u8` |
+
+**`battle_context`**, 376 bytes:
+
+| Field | Offset | Type |
+|---|---|---|
+| `initiative` | 0 | `u8` |
+| `magic_exp` | 1 | `u8` |
+| `escape_party` | 2 | `s8` |
+| `escape_enemy` | 3 | `s8` |
+| `defeat` | 4 | `u8` |
+| `escape` | 5 | `u8` |
+| `sp_max` | 6 | `s16` |
+| `sp` | 8 | `s16` |
+| `sp_free` | 10 | `s16` |
+| `kills` | 12 | `s16` |
+| `drops` | 14 | `bytes[32]` |
+| `exp` | 48 | `s32` |
+| `gold` | 52 | `s32` |
+| `inventory` | 56 | `slot[80]` |
+
+**`opcode`**, 12 bytes:
+
+| Field | Offset | Type |
+|---|---|---|
+| `handler` | 8 | `ptr` |
