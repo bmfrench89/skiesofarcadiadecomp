@@ -32,6 +32,12 @@ DRIVER = r"""
 #include <stdlib.h>
 #include <string.h>
 
+/* runtime/savext.c's (X2), which the game's hooks call */
+void savext_snapshot(CpuState* s, uint32_t block);
+void savext_image(CpuState* s, uint32_t image);
+void savext_load(CpuState* s, uint32_t block);
+void savext_new_game(void);
+
 /* What cpu.h's accessors can reach: none of it is, since every address a
  * patch may name is memory. */
 uint32_t g_watch_addr, g_watch_len;
@@ -280,10 +286,37 @@ int main(int argc, char** argv)
             if (scanf("%u", &sv2) != 1) break;
             printf("ship %u -> %u\n", sv2, mod_ship_damage(sv2));
         }
+        /* X2: the save's four sites, as runtime/savext.c's hooks call them */
+        else if (!strcmp(cmd, "snapshot") && scanf("%x", &a) == 1) { savext_snapshot(&s, a); printf("snapshot\n"); }
+        else if (!strcmp(cmd, "image") && scanf("%x", &a) == 1) { savext_image(&s, a); printf("image\n"); }
+        else if (!strcmp(cmd, "loadsave") && scanf("%x", &a) == 1) { savext_load(&s, a); printf("loaded\n"); }
+        else if (!strcmp(cmd, "newgame")) { savext_new_game(); printf("new game\n"); }
+        else if (!strcmp(cmd, "hex")) {
+            /* n bytes at an address, as hex on one line */
+            unsigned ha, hn, hi;
+            if (scanf("%x %x", &ha, &hn) != 2) break;
+            printf("hex %08X ", ha);
+            for (hi = 0; hi < hn; hi++) printf("%02X", mem_r8(&s, ha + hi));
+            printf("\n");
+        }
+        else if (!strcmp(cmd, "puthex")) {
+            /* bytes from hex at an address: "puthex ADDR N HEX" */
+            unsigned pa, pn, pi, pb;
+            if (scanf("%x %x", &pa, &pn) != 2) break;
+            for (pi = 0; pi < pn && scanf("%2x", &pb) == 1; pi++) mem_w8(&s, pa + pi, (uint8_t)pb);
+            printf("put %u\n", pi);
+        }
+        else if (!strcmp(cmd, "copy")) {
+            /* the card's round trip: n bytes from one address to another */
+            unsigned from, to, cn;
+            if (scanf("%x %x %x", &from, &to, &cn) != 3) break;
+            memmove(mem_ptr(&s, to), mem_ptr(&s, from), cn);
+            printf("copied\n");
+        }
         else if (!strcmp(cmd, "events")) {
             int ev;
             printf("events");
-            for (ev = 0; ev < MOD_EVENTS; ev++) printf(" %d", mod_event_count(ev));
+            for (ev = 0; ev < MOD_BATTLE_EVENTS; ev++) printf(" %d", mod_event_count(ev));
             printf("\n");
         }
     }
@@ -328,6 +361,23 @@ def cc(args: list[str], cwd: Path, profile: toolchain.Profile) -> None:
         raise BuildError((proc.stdout or "") + (proc.stderr or ""))
 
 
+DRIVER_DEFINES = ["/DSOA_FAKE_GUEST"]  # savext.c without the game's sites (X2)
+
+
+def driver_sources(out: Path) -> list[Path]:
+    """What the fake guest is built from, DRIVER written to out/driver.c: one
+    list, so a runtime file mod.c comes to need is added once for every build
+    of it (test_mod_library.py builds its own)."""
+    return [
+        RUNTIME / "mod.c",
+        RUNTIME / "sha1.c",  # disc-layer I1
+        RUNTIME / "tick.c",
+        RUNTIME / "savext.c",  # X2, its sites left out (SOA_FAKE_GUEST)
+        *toolchain.runtime_support_sources(),  # plat.c (portability L9)
+        out / "driver.c",
+    ]
+
+
 def build_driver(out: Path, profile: toolchain.Profile, *defines: str) -> tuple[Path, Path]:
     """The fake guest in `out`: mod.c and what it needs, with DRIVER as the
     game; returns the program and the fake DOL. Compiled, then linked, since
@@ -335,14 +385,8 @@ def build_driver(out: Path, profile: toolchain.Profile, *defines: str) -> tuple[
     if toolchain.compiler_path(profile) is None:
         raise BuildError(f"no {profile.name} compiler here")
     (out / "driver.c").write_text(DRIVER, encoding="utf-8")
-    sources = [
-        RUNTIME / "mod.c",
-        RUNTIME / "sha1.c",  # disc-layer I1
-        RUNTIME / "tick.c",
-        *toolchain.runtime_support_sources(),  # plat.c (portability L9)
-        out / "driver.c",
-    ]
-    flags = [*profile.cflags, *(f"/D{d}" for d in defines), "/I", str(RUNTIME)]
+    sources = driver_sources(out)
+    flags = [*profile.cflags, *DRIVER_DEFINES, *(f"/D{d}" for d in defines), "/I", str(RUNTIME)]
     cc([*flags, "/c", *map(str, sources), "/Fo" + str(out) + os.sep], out, profile)
     exe = out / ("mods" + profile.exeext)
     objs = [str(out / (s.stem + profile.objext)) for s in sources]

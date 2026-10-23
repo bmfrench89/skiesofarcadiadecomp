@@ -32,9 +32,10 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(37 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
+(39 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
 `tick.c` answers so the main loop has a safe point; eleven of the battle's
-functions, which `battle.c` answers so mods can change them (R0, R1); the five data-cache
+functions, which `battle.c` answers so mods can change them (R0, R1); the save's
+load and the new-game reset, which `savext.c` answers for mods' save chunks (X2); the five data-cache
 range calls, answered as the no-ops they are with no cache to keep; and
 `__AI_SRC_INIT`, whose calibration never ends where a clock read is slow).
 
@@ -489,6 +490,7 @@ not. **Diagnostic** is there to explain a run, not to run it.
 | `window.c` | host plumbing | The Win32 window on its own thread, presented through a DXGI flip-model swap chain paced to the display's refresh (GDI with `SOA_PRESENTER=gdi`; with `SOA_GPU=vulkan`, gxv's own swap chain, V8), and live keyboard and XInput input for port 1 | No picture, or input the guest never sees. Closing the window is also how a recording session ends cleanly — the `WM_QUIT` path is what flushes the last of what the player did |
 | `mod.c` | host plumbing | `SOA_MODS`: data-patch mods checked against the DOL's SHA-1 and applied from the frame hook after the pokes, and native `mod.dll` mods on `soa_mod.h`'s `SoaModApi`, whose callbacks run from the frame hook and the main loop's safe point; a mod with any fault is refused whole, with its file and line | With mods unset nothing: it is not reached. With them, a patch lands at the wrong frame or not at all, and the end-of-run lines say how often each applied |
 | `battle.c` | host plumbing | The battle's functions mods see, answered natively through `hle.txt`, each storing its pc first and calling its translated original: R0's damage (`on_damage`) and R1's heal, enemy spawn, enemy action, turn order (phase 2), spirit gain, escape, rewards (phase 7), effect, round end (phase 6) and ship damage (specs/battle-harness.md, battle-events.md); with no mod on an event its wrapper writes nothing. `SOA_BATTLE_LOG=1`'s `[battle]` lines, each site's calls and changes at exit, and `SOA_BATTLE_FORCE`'s battle on demand | A wrapper that reads its arguments after the original has run, or writes back with no mod asking, changes every battle; `tools/battle.py check` holds the damage to its formula, and the mods-off site counts' changes must stay 0 |
+| `savext.c` | host plumbing | X2's save extension (specs/save-extension.md): mods' chunks in the game's save file, the block's gap at the snapshot (`hooks.txt` `0x801A4670`, inside the game's XOR) and the file's tail at the image (`0x801A4334`), read back at the load (`hle.txt` `fn_801A4354`, after the original), the chunks of mods not loaded kept and written back, New Game and boot told (`fn_801CAF30`); `SOA_SAVE_LOG=1` | A container written anywhere the game reads, or after its XOR, damages the save; a vanilla save or a mods-off run must see nothing written, which the site report's byte counts show and `tools/savext.py show` reads back off the card |
 | `tick.c` | host plumbing | `VIGetRetraceCount`, native (M2): the original everywhere but the main loop's two call sites, told apart by `lr` -- the top of the loop runs the safe-point callbacks, and the frame end's spin is let go after one field once `SOA_UNCAP` unlocks it | The game's frame pacing: a wrong answer at the spin is a game at the wrong speed, which self-test case 74 and `test_tick.py` hold |
 | `settings.c` | host plumbing | `soa.ini` beside `soa.exe` (M5): the switches a player would set, and the disc, applied where the environment is silent, and the ones that change the game named in a pad recording; off for every check (`SOA_SETTINGS=0`) | A player's file could move a check if a script forgot `SOA_SETTINGS=0`; `test_settings.py` holds that each one sets it |
 | `clock.c` | host plumbing | The guest's clock (M19): the timebase every timer and device deadline counts in, accumulated from the host's monotonic time between reads, with a gap past `SOA_CLOCK_GAP_MS` (250) counted as none, a pause excluded, a speed change continuous, and an epoch dsp.c watches; `hle.c`'s `timebase()` reads it | A host sleep counted as guest time makes every deadline in the gap fire at once and the game's play-time clock jump; `test_clock.py` drives it with synthetic host times |
@@ -531,7 +533,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 37 entries and **none of them is a GX function**: every
+`config/hle.txt` has 39 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 
@@ -681,7 +683,7 @@ Correcting `SPEC.md` itself is PLAN item G2 and belongs in that file.
 
 ## Where to look next
 
-- `tools/tests/` — 1836 tests, none of which needs a disc (anything that
+- `tools/tests/` — 1850 tests, none of which needs a disc (anything that
   would synthesises its fixtures or skips), and `runtime/selftest.c` under
   `SOA_SELFTEST=1`, which does. `docs/TESTING.md` says how to run all of
   it.

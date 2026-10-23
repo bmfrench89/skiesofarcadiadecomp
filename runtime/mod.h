@@ -39,7 +39,11 @@ uint32_t mod_damage(uint32_t value, uint32_t base, uint32_t attacker, uint32_t t
  * naming the mod and the event. */
 enum {
     MOD_EV_DAMAGE, MOD_EV_HEAL, MOD_EV_ENEMY_SPAWN, MOD_EV_ENEMY_ACTION, MOD_EV_TURN_ORDER, MOD_EV_SPIRIT_GAIN,
-    MOD_EV_ESCAPE, MOD_EV_REWARDS, MOD_EV_EFFECT, MOD_EV_ROUND_END, MOD_EV_SHIP_DAMAGE, MOD_EVENTS
+    MOD_EV_ESCAPE, MOD_EV_REWARDS, MOD_EV_EFFECT, MOD_EV_ROUND_END, MOD_EV_SHIP_DAMAGE,
+    MOD_BATTLE_EVENTS,
+    /* X2 (docs/specs/save-extension.md): the save's, from runtime/savext.c */
+    MOD_EV_SAVE = MOD_BATTLE_EVENTS, MOD_EV_LOAD, MOD_EV_NEW_GAME,
+    MOD_EVENTS
 };
 struct SoaRewards;
 int mod_event_count(int ev);
@@ -53,6 +57,15 @@ void mod_rewards(struct SoaRewards* r);
 int mod_effect(int target, int16_t* effect, int32_t* value);     /* 1: cancelled */
 void mod_round_end(uint32_t round);
 uint32_t mod_ship_damage(uint32_t value);                        /* held to 0 or more */
+
+/* X2: the save's callbacks, one of each a mod at most, every one a mod with a
+ * manifest 2 id. ev is MOD_EV_SAVE or MOD_EV_LOAD and i below
+ * mod_event_count(ev): the mod's id; its chunk written into buf (bytes, or -1
+ * for none); its chunk handed over (data NULL and size 0 for none). */
+const char* mod_save_id(int ev, int i);
+int32_t mod_save_call(int i, uint8_t* buf, uint32_t cap);
+void mod_load_call(int i, const uint8_t* data, uint32_t size);
+void mod_new_game(void);
 
 /* Apply the loaded patches; called once a frame from the frame hook, after
  * SOA_PEEK and SOA_POKE. Memory writes only: it runs inside the XFB copy. */

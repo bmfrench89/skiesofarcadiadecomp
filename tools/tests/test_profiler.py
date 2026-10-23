@@ -108,6 +108,7 @@ void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }
 void battle_init(void) {} /* battle.c (R0): no battle here */
+void savext_init(void) {} /* savext.c (X2): no save here */
 /* disc.c (disc-layer I1): an image that opens, and three buffers of zeroes --
  * enough shape for the boot path to reach the guest, and nothing of the game. */
 static const uint8_t zero_dol[0x100], zero_boot[0x440], zero_fst[0x40];

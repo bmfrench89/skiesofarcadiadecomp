@@ -2,3 +2,7 @@
 # instruction there. See tools/soa/hle.py and runtime/irq.c.
 
 0x80237BA8  SelectThread.idle   # the scheduler's idle spin: deliver interrupts here
+# X2, the save extension (docs/specs/save-extension.md, runtime/savext.c): neither function has a loop that
+# waits on an interrupt, so the polls these strip cost nothing.
+0x801A4670  save.snapshot      # fn_801A456C's end, r31 the block: mods' chunks into its gap, before the XOR
+0x801A4334  save.image         # fn_801A41EC, the image at *(r31 + 0) built: the rest into the file's tail

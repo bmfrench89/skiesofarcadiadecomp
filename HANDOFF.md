@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1836 |
+| Python tests | 1850 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -418,6 +418,16 @@ a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-23)
+
+**Latest, 2026-10-23: X2, the save extension, built; batch A is done** (FINDINGS "X2",
+`docs/specs/save-extension.md`). A mod keeps a chunk of its own inside the game's save file (`on_save`,
+`on_load`, `on_new_game`), in the block's checksummed gap and the file's tail; the chunks of mods not loaded
+ride through every save; loading names the mods a save holds data for that are missing. A save made by the
+new build loads in the build before it (`build/x2/before/soa.exe`, 2ac1b7c), and `tools/savext.py show <card>`
+reads a card's chunks. Owner's Q2 answer (D-44): the honest promise, so no mod-map or gear fallback yet.
+**Next:** milestone 2's remaining core, T2, K1, K6 and K12 (PLAN-GAMEPLAY-MODS), or what the owner picks.
+
+**Before that, the same day:**
 
 **Latest, 2026-10-23: R1, the battle's other ten events, built** (FINDINGS "R1, the battle events",
 `docs/specs/battle-events.md`). Heal, enemy spawn, enemy action, turn order, spirit gain, escape, rewards, effect,

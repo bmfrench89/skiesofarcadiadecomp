@@ -9841,3 +9841,55 @@ one stops the run naming itself.** 2026-10-23. Spec: `docs/specs/battle-events.m
   - `test_scenario.py`, one: exit 10's meaning, and `_Exit(10)` still in `mod.c`.
 - **Not in R1:** X2's save hooks and N11's NG+ sites (waiting on gameplay Q2), an exclusive AI replacement (R2), X4's
   kinds fix, the rest of M3d, K6.
+
+**X2, the save extension: a mod keeps a chunk of its own inside the game's save file, the chunks of mods not
+loaded ride through every save, and the saves still load in the build before.** 2026-10-23. Spec:
+`docs/specs/save-extension.md`; D-43 (batch A's other half) and D-44 (gameplay Q2: the honest save promise).
+
+- **What it is** [V]:
+  - Two `hooks.txt` sites. The snapshot (`0x801A4670`, r31 the block) asks each mod for its chunk and writes the
+    container into the block's gap, +5916..+9071, before the game's XOR covers it. The image (`0x801A4334`, the
+    image at `*(r31 + 0)`) puts what did not fit into the file's tail, +17,984..+24,575.
+  - Two `hle.txt` sites (39 entries). The load (`fn_801A4354`, the original first) hands each mod its chunk, keeps
+    the chunks no loaded mod saves, and names the ones whose mod is missing. New Game and boot (`fn_801CAF30`) tell
+    each mod and drop the kept chunks.
+  - Three appended `SoaModApi` members, `on_save`, `on_load` and `on_new_game`. They are filed under a manifest 2
+    id, one of each per mod, and run with R1's fault stop.
+  - `SOA_SAVE_LOG=1`, the four sites in the run report, and `tools/savext.py show <card>`, which reads a card's
+    saves: the game's XOR checked, the block's SHA-1, the chunks.
+  - `examples/mods/battle-tally`: the victories since New Game (`on_rewards`), kept in the save.
+- **The room is the game's own** [V, `savext.py` over 46 saves on this PC's cards, parts A to L]: in every one the
+  gap and the tail are zero, and so are the other two spans research named free (+5813..+5863, +12784..+12785).
+  The game's check passes on all 46, which the reader also confirms it reads as the game does.
+- **Mods off, one run of the new build** [V, `build/reach/x2-off`]: part G's card, the Continue, the lab's `save`
+  at `a116a`'s save point (Slot A, file #01, Yes). Each of the four sites was called once and wrote 0 bytes. The
+  block's SHA-1 at the image hook, `5b36d142…`, is the one `savext.py show` reads off the card afterwards, and the
+  game's check passes. Replay 23/23, `title --check` 4 of 4, the self test.
+- **That save in the build from before X2** [V, `build/x2/before/soa.exe` at 2ac1b7c, `build/x2/old/run.log`]: the
+  Continue lands on map 0x74 letter `a` with the field running (state 8).
+- **A counter across a save** [V, `build/reach/x2-count-*`]: a scratch mod's counter, raised every safe point, saved
+  at 3306 and still rising. A fresh process's Continue from that card loaded 3306, where its own count had reached
+  2649. On the card: 1 chunk in the gap, `counter: 4 bytes`.
+- **Pass-through** [V, `build/reach/x2-pass`]: that card, Continued with the counter mod not loaded and another on.
+  The load said `this save holds data for counter, which is not loaded: kept, and written back at the next save`.
+  Saved again, the card holds `other: 3 bytes` and `counter: 4 bytes` with the same SHA-1 (`74110f08…`) as before.
+- **A fault in `on_save`** [V, `build/reach/x2-fault`]: exit 10, `[mod] faulty faulted in on_save: an access
+  violation at 0000000000000000; the run stops`. The run's card is byte-identical to the card it started from
+  (`8d40afa3…` both): the snapshot comes before the writer.
+- **Each check fails when its rule breaks** [V, `build/reach/x2m-*`]. Three switches were built into `savext.c`,
+  relinked once, run, and reverted:
+  - with the chunk never written, the fresh Continue reports `this save holds no counter`;
+  - with pass-through off, the re-saved card holds `other` alone;
+  - with the gap's copy in the image changed after the XOR, `savext.py` says the game's check FAILS, and the
+    Continue never reaches the load site (0 calls). The game's own menu says `The file is corrupted` and `The file
+    is corrupt and must be deleted` (frames 2500 and 3300). That is why the chunks go in at the snapshot, before
+    the XOR, and why only the tail is written at the image.
+- **Tests** [V]:
+  - `test_mods.py`, nine on the fake guest through `runtime/savext.c`, whose four sites become driver commands, and
+    `tools/savext.py` building and reading from the other side: a counter's round trip; overflow into the tail and a
+    chunk too large refused; pass-through, and New Game dropping it; a damaged container and a vanilla save giving
+    none; nothing written with no mod; a mod with no id refused; a mod built before the members loading; a fault in
+    `on_save` exiting 10; the example's tally across a save.
+  - `test_savext.py`, five on synthetic files.
+- **Not in X2:** save-now's location fallback (with M7a), the mod-map and placeholder-gear fallback (D-44, with N7
+  and N1), host blobs, N11's NG+ sites, owned-flag records (with N3).

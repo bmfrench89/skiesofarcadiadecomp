@@ -44,6 +44,7 @@ void hle_dump(CpuState* s, uint32_t pc);
 void threads_init(CpuState* s);
 int selftest(CpuState* s);
 void battle_init(void); /* battle.c, R0 */
+void savext_init(void); /* savext.c, X2 */
 int gx_replay(CpuState* s, const char* base);
 int gx_replay_pair(CpuState* s, const char* a, const char* b); /* H10: A, B and B.mid.png */
 void gxr_enable(int on);
@@ -1383,6 +1384,7 @@ int main(int argc, char** argv)
         const char* mods = getenv("SOA_MODS");
         int modded = mods && *mods && mod_load(&s, mods, dol, dol_size);
         battle_init(); /* R0: SOA_BATTLE_LOG and SOA_BATTLE_FORCE (runtime/battle.c) */
+        savext_init(); /* X2: SOA_SAVE_LOG and the save's report (runtime/savext.c) */
         size_t n;
         char seed[16];
         const char* rumble = getenv("SOA_RUMBLE");

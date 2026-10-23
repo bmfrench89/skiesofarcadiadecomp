@@ -1112,7 +1112,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - A log-and-forward thunk on a used op's entry logs each call, and the op still takes effect in the same run (its write is peeked). A thunk that skips the forward (the mutation) leaves the write undone.
 - An unregistered address still traps.
 
-**X2. The save extension** — *several days plus one retranslation* (batch A).
+**X2. The save extension** — *several days plus one retranslation* (batch A). **Done 2026-10-23** to [specs/save-extension.md](specs/save-extension.md) (FINDINGS "X2") with Q2's honest wording (PLAN-NEXT D-44): the container, pass-through, `on_save`/`on_load`/`on_new_game` and the missing-mod report, a save loading in the build before; the save-now location half waits for M7a, the mod-map and gear fallback for N7 and N1, and N11's NG+ sites for N11.
 - **Hook sites:**
   - the snapshot at `0x801A4670`;
   - the image build at `0x801A4334`;

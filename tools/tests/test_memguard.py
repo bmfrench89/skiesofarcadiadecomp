@@ -76,6 +76,7 @@ void hle_dump(CpuState* s, uint32_t pc) { (void)s; (void)pc; }
 void threads_init(CpuState* s) { (void)s; }
 void dvd_init(const char* p) { (void)p; }
 void battle_init(void) {} /* battle.c (R0): no battle here */
+void savext_init(void) {} /* savext.c (X2): no save here */
 int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
 int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }

@@ -25,6 +25,9 @@ from pathlib import Path
 import pytest
 
 import test_memguard  # noqa: F401  (it puts tools/ on the path)
+
+# isort: split
+import savext  # noqa: E402  (X2's container, read and built from Python)
 from soa import modkit, toolchain  # noqa: E402
 from soa.modkit import DRIVER, TEXT_LEN, TEXT_START, fake_dol  # noqa: E402,F401
 
@@ -2936,6 +2939,7 @@ def test_the_shipped_mods_are_manifest_2():
         "examples/mods/map-log",
         "examples/mods/map-alias",  # T1 (disc-layer I6)
         "examples/mods/damage-double",  # R0
+        "examples/mods/battle-tally",  # X2
     ):
         keys = {}
         for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
@@ -4763,3 +4767,259 @@ def test_r1_a_fault_in_an_event_stops_the_run_and_names_its_mod(driver, tmp_path
         proc.stderr
     )
     assert "heal 30 ->" not in proc.stdout and "describe [" not in proc.stdout, proc.stdout
+
+
+# --------------------------------------------------------------------------
+# X2: the save extension (docs/specs/save-extension.md), driven through
+# runtime/savext.c as its hooks drive it. The block sits at 0x80400000 in its
+# image at 0x803FEBC0; a "card" copy of the image goes to 0x80500000, its
+# block at 0x80501440. tools/savext.py reads what the C wrote, and builds what
+# the C reads, so the format is held from both sides.
+# --------------------------------------------------------------------------
+
+BLOCK, IMAGE, CARD, CARD_BLOCK = 0x80400000, 0x803FEBC0, 0x80500000, 0x80501440
+SAVE_THEN_CARD = f"snapshot {BLOCK:x} image {IMAGE:x} copy {IMAGE:x} {CARD:x} 6000 "
+
+COUNTER = r"""
+#include "soa_mod.h"
+static const SoaModApi* A;
+static int32_t save(void* u, uint8_t* buf, uint32_t cap)
+{
+    uint32_t v = 0;
+    (void)u;
+    if (cap < 4 || !A->read32(0x80300000u, &v)) return -1;
+    buf[0] = (uint8_t)(v >> 24), buf[1] = (uint8_t)(v >> 16), buf[2] = (uint8_t)(v >> 8), buf[3] = (uint8_t)v;
+    return 4;
+}
+static void load(void* u, const uint8_t* d, uint32_t n)
+{
+    (void)u;
+    A->write32(0x80300004u, d && n == 4 ? (uint32_t)d[0] << 24 | (uint32_t)d[1] << 16 | (uint32_t)d[2] << 8 | d[3]
+                                        : 0xFFFFFFFFu);
+}
+static void fresh(void* u)
+{
+    uint32_t v = 0;
+    (void)u;
+    A->read32(0x80300008u, &v);
+    A->write32(0x80300008u, v + 1);
+}
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    A = api;
+    if (api->size < SOA_MOD_HAS(on_new_game)) return 1;
+    return api->on_save(save, 0) && api->on_load(load, 0) && api->on_new_game(fresh, 0) ? 0 : 1;
+}
+"""
+
+BIG = r"""
+#include "soa_mod.h"
+static const SoaModApi* A;
+static int32_t save(void* u, uint8_t* buf, uint32_t cap)
+{
+    uint32_t n = 0, i;
+    (void)u;
+    A->read32(0x80300010u, &n);
+    if (n > cap) return (int32_t)n; /* more than the room: the port says so */
+    for (i = 0; i < n; i++) buf[i] = (uint8_t)i;
+    return (int32_t)n;
+}
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{ (void)version; A = api; return api->on_save(save, 0) ? 0 : 1; }
+"""
+
+
+def block_and_tail(out: str, block_at: int = BLOCK) -> tuple[bytes, bytes]:
+    """The hex dumps of a block and of its image's tail, from `out`."""
+    dumps = dict(re.findall(r"^hex ([0-9A-F]{8}) ([0-9A-F]*)$", out, re.M))
+    block = bytes.fromhex(dumps[f"{block_at:08X}"])
+    tail = bytes.fromhex(dumps.get(f"{block_at + savext.BLOCK_LEN:08X}", ""))
+    return block, tail
+
+
+DUMP = f"hex {BLOCK:x} 3200 hex {BLOCK + savext.BLOCK_LEN:x} 19c0 "
+
+
+def put(at: int, data: bytes) -> str:
+    return f"puthex {at:x} {len(data):x} {data.hex()} "
+
+
+@needs_cc
+def test_x2_a_counter_survives_a_save_and_a_load(driver, tmp_path):
+    """The counter is 7 at the save and 9 afterwards; the load of the card's copy
+    hands the mod 7. New Game tells it, once."""
+    source_mod(tmp_path, "counter", COUNTER)
+    out, err = play(
+        driver,
+        tmp_path,
+        "set 80300000 7 "
+        + SAVE_THEN_CARD
+        + DUMP
+        + f"set 80300000 9 loadsave {CARD_BLOCK:x} get 80300004 "
+        "newgame get 80300008 report",
+    )
+    assert "loaded 1" in out, err
+    block, tail = block_and_tail(out)
+    c = savext.parse(block, tail)
+    assert c.present and not c.problems and c.chunks == [("counter", b"\x00\x00\x00\x07")], c
+    assert c.in_gap == 1 and c.in_tail == 0 and not any(tail), c
+    assert "80300004=00000007" in out and "80300008=00000001" in out, out
+    assert "[mod] counter registers: on_save, on_load, on_new_game" in err, err
+
+
+@needs_cc
+def test_x2_chunks_overflow_into_the_tail_and_one_too_big_is_refused(driver, tmp_path):
+    source_mod(tmp_path, "a-counter", COUNTER)
+    source_mod(tmp_path, "b-big", BIG)
+    out, err = play(driver, tmp_path, "set 80300000 7 set 80300010 fa0 " + SAVE_THEN_CARD + DUMP)
+    block, tail = block_and_tail(out)
+    c = savext.parse(block, tail)
+    assert not c.problems and c.in_gap == 1 and c.in_tail == 1, c
+    assert c.chunks == [
+        ("a-counter", b"\x00\x00\x00\x07"),
+        ("b-big", bytes(i & 0xFF for i in range(4000))),
+    ]
+    out, err = play(driver, tmp_path, "set 80300000 7 set 80300010 4e20 " + SAVE_THEN_CARD + DUMP)
+    assert "[mod] b-big: its save chunk does not fit" in err, err
+    c = savext.parse(*block_and_tail(out))
+    assert [name for name, _ in c.chunks] == ["a-counter"], c
+
+
+@needs_cc
+def test_x2_an_unloaded_mods_chunk_is_carried_through_a_save(driver, tmp_path):
+    """A save holding counter's chunk, loaded with only big-ish other mod on,
+    then saved again: counter's chunk is in the new save, byte for byte."""
+    source_mod(tmp_path, "other", BIG)
+    gap, _ = savext.build([("counter", b"\x00\x00\x00\x2a")], save_id=bytes(range(16)))
+    out, err = play(
+        driver,
+        tmp_path,
+        put(CARD_BLOCK + savext.GAP_OFF, gap)
+        + f"loadsave {CARD_BLOCK:x} set 80300010 3 snapshot {BLOCK:x} "
+        + DUMP,
+    )
+    assert "this save holds data for counter, which is not loaded: kept" in err, err
+    c = savext.parse(*block_and_tail(out))
+    assert ("counter", b"\x00\x00\x00\x2a") in c.chunks and (
+        "other",
+        b"\x00\x01\x02",
+    ) in c.chunks, c
+    # a New Game drops it: the next save carries nothing of counter's
+    out, _ = play(
+        driver,
+        tmp_path,
+        put(CARD_BLOCK + savext.GAP_OFF, gap)
+        + f"loadsave {CARD_BLOCK:x} newgame set 80300010 3 snapshot {BLOCK:x} "
+        + DUMP,
+    )
+    assert [n for n, _ in savext.parse(*block_and_tail(out)).chunks] == ["other"]
+
+
+@needs_cc
+def test_x2_a_damaged_container_or_a_vanilla_save_gives_the_mod_none(driver, tmp_path):
+    source_mod(tmp_path, "counter", COUNTER)
+    gap, _ = savext.build([("counter", b"\x00\x00\x00\x07")])
+    bad = gap[:-1] + bytes([gap[-1] ^ 1])
+    out, err = play(
+        driver,
+        tmp_path,
+        put(CARD_BLOCK + savext.GAP_OFF, bad)
+        + f"loadsave {CARD_BLOCK:x} get 80300004 loadsave 80600000 get 80300004",
+    )
+    assert "mod container is damaged" in err, err
+    assert out.count("80300004=FFFFFFFF") == 2, out
+
+
+@needs_cc
+def test_x2_with_no_mod_that_saves_nothing_is_written(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, _ = play(driver, empty, SAVE_THEN_CARD + DUMP + f"loadsave {CARD_BLOCK:x}")
+    block, tail = block_and_tail(out)
+    assert not any(block) and not any(tail)
+
+
+@needs_cc
+def test_x2_a_mod_without_an_id_keeps_no_chunk(driver, tmp_path):
+    d = mod(tmp_path, "anon", patches=None)  # manifest 1: no id
+    (d / "mod_src.c").write_text(BIG, encoding="utf-8")
+    library(d, d / "mod_src.c")
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 0" in out, (out, err)  # its init's on_save returned 0, so it refused itself
+
+
+@needs_cc
+def test_x2_a_mod_built_before_the_save_members_still_loads(driver, tmp_path):
+    header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
+    start = header.index("    /* Appended (X2,")
+    end = header.index("} SoaModApi;", start)
+    old = header[:start] + header[end:]
+    assert "(*on_save)" not in old and "(*on_ship_damage)" in old
+    inc = tmp_path / "old-include"
+    inc.mkdir()
+    (inc / "soa_mod.h").write_text(old, encoding="utf-8")
+    source_mod(tmp_path / "mods", "every", EVERY_EVENT, include=inc)
+    out, err = play(driver, tmp_path / "mods", "heal 30 4 1 " + SAVE_THEN_CARD + DUMP)
+    assert "loaded 1" in out and "heal 30 -> 60" in out, (out, err)
+    assert not any(block_and_tail(out)[0])
+
+
+FAULT_IN_SAVE = r"""
+#include "soa_mod.h"
+static int32_t save(void* u, uint8_t* buf, uint32_t cap)
+{ volatile uint8_t* p = (volatile uint8_t*)u; (void)buf; (void)cap; return *p; }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{ (void)version; return api->on_save(save, 0) ? 0 : 1; }
+"""
+
+
+@needs_cc
+def test_x2_a_fault_in_on_save_stops_the_run_and_names_its_mod(driver, tmp_path):
+    source_mod(tmp_path, "faulty", FAULT_IN_SAVE)
+    exe, dol = driver
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
+    proc = subprocess.run(
+        [str(exe), str(tmp_path), str(dol)],
+        input=f"snapshot {BLOCK:x} describe",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 10, (proc.returncode, proc.stdout, proc.stderr)
+    assert "[mod] faulty faulted in on_save: an access violation" in proc.stderr, proc.stderr
+    assert "snapshot\n" not in proc.stdout, proc.stdout
+
+
+@needs_cc
+def test_x2_the_example_keeps_its_tally_in_the_save(driver, tmp_path):
+    """examples/mods/battle-tally: two victories, saved; a third, then the card's
+    copy loaded brings back two; New Game, none."""
+    d = tmp_path / "battle-tally"
+    d.mkdir()
+    ini = (ROOT / "examples" / "mods" / "battle-tally" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "examples" / "mods" / "battle-tally" / "mod.c")
+    out, err = play(
+        driver,
+        tmp_path,
+        "rewards 6 10 2 rewards 6 10 2 "
+        + SAVE_THEN_CARD
+        + DUMP
+        + f"rewards 6 10 2 loadsave {CARD_BLOCK:x} newgame rewards 6 10 2",
+    )
+    assert "loaded 1" in out, err
+    assert savext.parse(*block_and_tail(out)).chunks == [("battle-tally", b"\x00\x00\x00\x02")]
+    said = re.findall(r"\[mod\] battle-tally: (.*)", err)
+    assert said == [
+        "a victory: 1 battle(s) won in this save",
+        "a victory: 2 battle(s) won in this save",
+        "a victory: 3 battle(s) won in this save",
+        "loaded: 2 battle(s) won in this save",
+        "a victory: 1 battle(s) won in this save",
+    ], err
+    assert "rewards 6 10 2 -> 6 10 2" in out  # it reads the rewards, never changes them

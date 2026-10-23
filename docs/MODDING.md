@@ -152,11 +152,22 @@ yourself. The callbacks, and where each runs:
 | `on_effect` | each effect applied (damage, heal, status...), before it is | change the effect or value, or return nonzero to cancel it |
 | `on_round_end` | each round's end, once regen, poison and spirit are applied | anything a frame end may |
 | `on_ship_damage` | each ship battle damage, before the game's x10 | return the damage |
+| `on_save` | when the save menu opens (X2) | write your chunk for the save file; return its length, or -1 for none |
+| `on_load` | when a save is loaded, after the game has restored it | read your chunk, or learn the save holds none |
+| `on_new_game` | at New Game, and once at boot | start your state afresh |
 
 The battle's events run inside the game's own call, so they read and write memory only, as a frame
 end does. `SOA_BATTLE_LOG=1` logs every one, and the run report counts each event's calls, how many a
 mod changed, and each mod's time in it. **A mod that crashes inside one stops the run** (exit 10), and
 the log names the mod and the event; nothing continues half-done (docs/specs/battle-events.md).
+
+**Keeping state in the save** (X2, docs/specs/save-extension.md): `on_save`, `on_load` and
+`on_new_game` give your mod a chunk of its own inside the game's save file, filed under your manifest 2
+`id` (a mod without one cannot keep a chunk). About 9.7 KB is shared by every mod. A save made with
+mods still loads in the unmodded game and in Dolphin, which ignore the chunks; the chunks of a mod
+that is not loaded are kept and written back at the next save, and loading a save says which mods it
+holds data for that are missing. `python tools/savext.py show <card>` lists a card's chunks, and
+`SOA_SAVE_LOG=1` logs each save and load.
 
 **The rules** (each one the port enforces or depends on):
 
@@ -194,6 +205,8 @@ port's own tests.
 
 - `examples/mods/encounters-off`: one patch, no options.
 - `examples/mods/encounter-scale`: a pointer, a `for` run, `*=`, and an option.
+- `examples/mods/battle-tally`: the battles won since New Game, counted through `on_rewards` (R1) and
+  kept in the save file through `on_save` and `on_load` (X2).
 - `examples/mods/damage-double`: every blow doubled through `on_damage` (R0); `SOA_BATTLE_LOG=1` and
   `python tools/battle.py check <log> --double` prove it.
 - `examples/mods/map-alias`: two aliases in a `files.txt`, map 045 given map 002's room and script.

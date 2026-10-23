@@ -714,6 +714,7 @@ enum {
 static const char* const k_event[MOD_EVENTS] = {
     "on_damage", "on_heal", "on_enemy_spawn", "on_enemy_action", "on_turn_order", "on_spirit_gain",
     "on_escape", "on_rewards", "on_effect", "on_round_end", "on_ship_damage",
+    "on_save", "on_load", "on_new_game",
 };
 
 typedef struct {
@@ -875,6 +876,32 @@ static int api_on_round_end(void (*fn)(void*, uint32_t), void* user)
 static int api_on_ship_damage(uint32_t (*fn)(void*, uint32_t), void* user)
 {
     return api_register(CB_EVENT0 + MOD_EV_SHIP_DAMAGE, (void*)fn, user);
+}
+
+/* X2: a chunk is filed under the mod's manifest 2 id, so a mod without one
+ * cannot keep one, and one of each per mod. The mod in its init is not in
+ * g_mods yet: load_dll names its id here. */
+static const char* g_init_id = "";
+
+static int save_register(int ev, void* fn, void* user)
+{
+    int i;
+    if (!g_in_init || g_cur_mod < 0 || g_cur_mod >= MOD_MAX || !g_init_id[0]) return 0;
+    for (i = 0; i < g_cb_n[CB_EVENT0 + ev]; i++)
+        if (g_cb[CB_EVENT0 + ev][i].mod == g_cur_mod) return 0;
+    return api_register(CB_EVENT0 + ev, fn, user);
+}
+static int api_on_save(int32_t (*fn)(void*, uint8_t*, uint32_t), void* user)
+{
+    return save_register(MOD_EV_SAVE, (void*)fn, user);
+}
+static int api_on_load(void (*fn)(void*, const uint8_t*, uint32_t), void* user)
+{
+    return save_register(MOD_EV_LOAD, (void*)fn, user);
+}
+static int api_on_new_game(void (*fn)(void*), void* user)
+{
+    return api_register(CB_EVENT0 + MOD_EV_NEW_GAME, (void*)fn, user);
 }
 
 /* ---- the battle's events (R0, R1: docs/specs/battle-events.md) -----------
@@ -1054,6 +1081,43 @@ uint32_t mod_ship_damage(uint32_t value)
     return (int32_t)value < 0 ? 0 : value;
 }
 
+/* X2's: runtime/savext.c walks the callbacks by index. */
+const char* mod_save_id(int ev, int i)
+{
+    int m;
+    if ((ev != MOD_EV_SAVE && ev != MOD_EV_LOAD) || i < 0 || i >= g_cb_n[CB_EVENT0 + ev]) return "";
+    m = g_cb[CB_EVENT0 + ev][i].mod;
+    return m >= 0 && m < g_mod_n ? g_mods[m].id : "";
+}
+
+int32_t mod_save_call(int i, uint8_t* buf, uint32_t cap)
+{
+    typedef int32_t (*Fn)(void*, uint8_t*, uint32_t);
+    int32_t n = -1;
+    EventCtx c;
+    if (i < 0 || i >= g_cb_n[CB_EVENT0 + MOD_EV_SAVE] || !event_begin(MOD_EV_SAVE, i, &c)) return -1;
+    n = EVENT_FN(MOD_EV_SAVE, i, Fn)(EVENT_USER(MOD_EV_SAVE, i), buf, cap);
+    event_end(MOD_EV_SAVE, i, &c);
+    return n;
+}
+
+void mod_load_call(int i, const uint8_t* data, uint32_t size)
+{
+    typedef void (*Fn)(void*, const uint8_t*, uint32_t);
+    EventCtx c;
+    if (i < 0 || i >= g_cb_n[CB_EVENT0 + MOD_EV_LOAD] || !event_begin(MOD_EV_LOAD, i, &c)) return;
+    EVENT_FN(MOD_EV_LOAD, i, Fn)(EVENT_USER(MOD_EV_LOAD, i), data, size);
+    event_end(MOD_EV_LOAD, i, &c);
+}
+
+void mod_new_game(void)
+{
+    typedef void (*Fn)(void*);
+    int i;
+    EventCtx c;
+    EVENT_EACH(MOD_EV_NEW_GAME, i, c) EVENT_FN(MOD_EV_NEW_GAME, i, Fn)(EVENT_USER(MOD_EV_NEW_GAME, i));
+}
+
 /* One line per mod and event it handled: calls and handler time. */
 static void event_report(void)
 {
@@ -1177,6 +1241,9 @@ static const SoaModApi g_api = {
     api_on_effect,
     api_on_round_end,
     api_on_ship_damage,
+    api_on_save,
+    api_on_load,
+    api_on_new_game,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
@@ -1410,7 +1477,9 @@ static int load_dll(Where* w, const char* path, Mod* m, unsigned* dll_hash)
     g_cur_mod = g_mod_n;
     snprintf(g_cur_dir, sizeof g_cur_dir, "%s", m->dir);
     g_in_init = 1;
+    g_init_id = m->id;
     rc = init(&g_api, SOA_MOD_API_VERSION);
+    g_init_id = "";
     g_in_init = 0;
     g_cur_mod = -1;
     if (rc != 0) {

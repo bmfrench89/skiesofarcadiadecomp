@@ -60,8 +60,8 @@ static struct {
 /* Each event site's calls, and how many of them a mod changed (R1's report:
  * with mods off every change count is 0, and a site never called did not
  * test what it says). */
-static unsigned long long g_site_calls[MOD_EVENTS], g_site_changed[MOD_EVENTS];
-static const char* const k_site[MOD_EVENTS] = {
+static unsigned long long g_site_calls[MOD_BATTLE_EVENTS], g_site_changed[MOD_BATTLE_EVENTS];
+static const char* const k_site[MOD_BATTLE_EVENTS] = {
     "damage", "heal", "enemy spawn", "enemy action", "turn order", "spirit gain",
     "escape", "rewards", "effect", "round end", "ship damage",
 };
@@ -460,7 +460,7 @@ static void battle_report(void)
         fprintf(stderr, "[battle] %llu battle(s), %llu damage calls (%llu nonzero), %llu actor changes logged%s\n",
                 g_battles, g_calls, g_nonzero, g_changed, g_force ? (g_forced ? "; the request was written" : "; the request was never written") : "");
     if (!g_log && !g_any_event) return;
-    for (ev = 0; ev < MOD_EVENTS; ev++)
+    for (ev = 0; ev < MOD_BATTLE_EVENTS; ev++)
         fprintf(stderr, "[battle] site %s: %llu call(s), %llu changed by a mod%s\n", k_site[ev], g_site_calls[ev],
                 g_site_changed[ev], g_site_calls[ev] ? "" : " -- never called: this run did not test it");
 }
@@ -479,7 +479,7 @@ void battle_init(void)
                     force);
         }
     }
-    for (int ev = 0; ev < MOD_EVENTS; ev++)
+    for (int ev = 0; ev < MOD_BATTLE_EVENTS; ev++)
         if (mod_event_count(ev)) g_any_event = 1;
     if (g_log || g_force) tick_on_safe_point(battle_safe_point);
     if (g_log || g_force || g_any_event) hle_on_report(battle_report);

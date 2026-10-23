@@ -447,3 +447,32 @@ int (*on_ship_damage)(uint32_t (*fn)(void* user, uint32_t value), void* user);
 ```
 
 each ship battle damage (fn_80146BF4), before the game's x10: returns it
+
+### `on_save`
+
+```c
+int (*on_save)(int32_t (*fn)(void* user, uint8_t* buf, uint32_t cap), void* user);
+```
+
+Appended (X2, docs/specs/save-extension.md): a chunk of the mod's own in
+the game's save file, filed under its manifest 2 id; one of each per mod,
+and 0 for a mod with no id. This one: when the save menu opens, write the
+chunk into buf (cap bytes at most, the room left) and return its length,
+or -1 for none. Inside the game's call, as the battle's events.
+
+### `on_load`
+
+```c
+int (*on_load)(void (*fn)(void* user, const uint8_t* data, uint32_t size), void* user);
+```
+
+when a save is loaded: the chunk it holds for this mod, or data NULL and
+size 0 when it holds none (a vanilla save, or one made without the mod)
+
+### `on_new_game`
+
+```c
+int (*on_new_game)(void (*fn)(void* user), void* user);
+```
+
+at New Game, and once at boot

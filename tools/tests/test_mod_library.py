@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from soa import toolchain  # noqa: E402
-from soa.modkit import DRIVER, fake_dol  # noqa: E402
+from soa.modkit import DRIVER, DRIVER_DEFINES, driver_sources, fake_dol  # noqa: E402
 from soa.modkit import FAKE_SHA as SHA  # noqa: E402
 
 PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
@@ -42,15 +42,17 @@ def driver(tmp_path_factory):
     out = tmp_path_factory.mktemp("loader")
     (out / "driver.c").write_text(DRIVER, encoding="utf-8")
     runtime = ROOT / "runtime"
-    sources = [
-        runtime / "mod.c",
-        runtime / "sha1.c",
-        runtime / "tick.c",
-        *toolchain.runtime_support_sources(),
-        out / "driver.c",
-    ]
+    sources = driver_sources(out)
     cc(
-        [*PROFILE.cflags, "/c", "/I", str(runtime), *map(str, sources), "/Fo" + str(out) + os.sep],
+        [
+            *PROFILE.cflags,
+            *DRIVER_DEFINES,
+            "/c",
+            "/I",
+            str(runtime),
+            *map(str, sources),
+            "/Fo" + str(out) + os.sep,
+        ],
         out,
     )
     exe = out / ("mods" + PROFILE.exeext)

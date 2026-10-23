@@ -27,6 +27,9 @@
 0x8002BD88  battle_effect
 0x8006FD6C  battle_phase6_round_end
 0x80146BF4  ship_battle_damage
+# X2, the save extension (docs/specs/save-extension.md, runtime/savext.c): the original first, then the mods.
+0x801A4354  save_load          # a save loaded, r3 the block in its image: each mod's chunk
+0x801CAF30  new_game_flags     # New Game and boot: each mod told, the kept chunks dropped
 
 # Thread context switching lives on host fibers (runtime/threads.c).
 0x80233544  OSSaveContext         # setjmp-like snapshot; dtk left this one unnamed
