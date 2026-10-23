@@ -53,6 +53,9 @@ int gxv_present_open(void* hinstance, void* native_window, int w, int h, char* w
 /* `blend` is the flash limiter's answer for a new frame (1 for none),
  * which P5a's filters on the GPU apply to it (V8b). */
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h);
+/* V12b: in-between images shown, each held `refreshes` (0: none shown), and the counts of what was. */
+void gxv_present_interp(unsigned refreshes);
+void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut, unsigned long long* none);
 void gxv_present_resize(int w, int h);
 /* P5a's filters on the GPU (V8b): picture.c's tables for the state in use,
  * each new frame through them before it is presented; NULL turns them off.

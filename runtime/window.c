@@ -247,7 +247,12 @@ static void present_report_locked(void)
                     100.0 * most);
     }
     fprintf(stderr, "[present] %u failed present(s), %u failed resize(s)\n", g_present_failed, g_resize_failed);
-    if (gxr_interp())
+    if (gxr_interp() && g_vk) {
+        unsigned long long m, c, z;
+        gxv_present_interp_counts(&m, &c, &z);
+        fprintf(stderr, "[interp] shown by the GPU's presenter: %llu in-between images; %llu frames held at a cut, %llu "
+                        "with none (over budget, or not built)\n", m, c, z);
+    } else if (gxr_interp())
         fprintf(stderr, "[interp] shown: %ld in-between images; %ld frames held at a cut, %ld with none (over budget, or "
                         "not built); %ld frames replaced in the ring before they were shown\n",
                 (long)plat_load32(&g_shown_mid), (long)plat_load32(&g_shown_cut), (long)plat_load32(&g_shown_none),
@@ -611,10 +616,11 @@ static void interp_pace(double hz)
     /* a check's knob: shown at any rate, one refresh an image, so the path runs on a display that
      * cannot pace it evenly (85 Hz); never for play */
     if (!n && getenv("SOA_INTERP_ANYRATE") && atoi(getenv("SOA_INTERP_ANYRATE"))) n = 1;
-    if (!g_ring_on || !g_dxgi) why = "the presenter is not DXGI's flip model";
+    if (!g_vk && (!g_ring_on || !g_dxgi)) why = "the presenter is neither DXGI's flip model nor the GPU's";
     else if (!n) why = "the display is not at a whole multiple of 60 Hz";
     else if (g_turbo_shown) why = "turbo is on, which shows 60 real frames a second instead";
     g_mid_ivl = why ? 0 : n;
+    if (g_vk) gxv_present_interp(g_mid_ivl); /* V12b: the GPU's presenter shows them */
     gxr_interp_show(g_mid_ivl != 0);
     if (g_mid_ivl) g_interval = g_mid_ivl;
     if (said != (int)g_mid_ivl) {

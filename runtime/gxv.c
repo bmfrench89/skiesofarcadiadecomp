@@ -1903,14 +1903,28 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
  * so neither ever writes or reads a slot the other holds. A slot's size --
  * the picture's, native -- and the scale it is drawn at are written before
  * it is published. */
-#define SCREEN_SLOTS 6
+#define SCREEN_SLOTS 9
 #define SCREEN_SCRATCH 3
 #define SCREEN_NATIVE 4
 #define SCREEN_SHOWN 5
+#define SCREEN_MID0 6 /* V12b: slot i's in-between image, with two halves only */
 #define SCREEN_FRESH 4
 static unsigned g_scr_back = 0, g_scr_front = 2, g_scr_last;
 static plat_a64 g_scr_middle = 1;
 static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS], g_scr_k[SCREEN_SLOTS];
+static int g_scr_mid[3], g_scr_cut[3]; /* the triple buffer's slot holds an in-between image too; a cut's */
+static unsigned g_mid_ivl;             /* the window's: refreshes an image while it shows them, 0 when not */
+static unsigned long long g_n_shown_mid, g_n_shown_cut, g_n_shown_none;
+
+/* The back slot to the presenter, the slot it gives back the next to fill. */
+static void publish_screen(int sw, int sh)
+{
+    g_scr_w[g_scr_back] = sw;
+    g_scr_h[g_scr_back] = sh;
+    g_scr_k[g_scr_back] = g_scale;
+    g_scr_last = g_scr_back;
+    g_scr_back = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)(g_scr_back | SCREEN_FRESH)) & 3);
+}
 
 /* A copy to the screen, as copy_to_screen makes it: min(w, 640) by
  * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. At
@@ -1920,18 +1934,20 @@ static int copy_screen(const DrawCmd* D)
 {
     CopyPush p;
     int sw, sh;
-    unsigned native = HALF(D) ? SCREEN_SCRATCH : (g_scale > 1 ? SCREEN_NATIVE : g_scr_back);
+    /* V12b: an in-between copy into its slot's partner, beside the real one */
+    unsigned shown = HALF(D) ? SCREEN_MID0 + g_scr_back : g_scr_back;
+    unsigned native = g_scale > 1 ? (HALF(D) ? SCREEN_SCRATCH : SCREEN_NATIVE) : shown;
     copy_rect(D, &p);
     if (g_mut_nofilter) p.flags &= ~4u;
     sw = p.w > EFB_W ? EFB_W : p.w;
     sh = p.h > EFB_H ? EFB_H : p.h;
     if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, HALF(D))) return 0;
     p.mode = 2;
-    if (g_scale > 1 && !HALF(D)) {
+    if (g_scale > 1) {
         CopyPush q = p;
         q.flags |= 16u;
         q.count = (uint32_t)(sw * sh * g_scale * g_scale);
-        q.screen_at = (uint32_t)(g_scr_back * (READBACK_BYTES / 4));
+        q.screen_at = (uint32_t)(shown * (READBACK_BYTES / 4));
         run_compute(&g_copy_cs, &q, sizeof q, q.count);
     }
     p.count = (uint32_t)(sw * sh);
@@ -1939,18 +1955,29 @@ static int copy_screen(const DrawCmd* D)
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
     if (!submit_wait()) return 0;
-    if (HALF(D)) { /* V12a: the in-between image to g_screen_mid; the presenter shows real frames (V12b) */
+    if (HALF(D)) {
+        /* V12: the in-between image to g_screen_mid, and the slot, real frame
+         * and all, to the presenter */
         gxr_backend_screen_mid(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
+        g_scr_w[shown] = sw;
+        g_scr_h[shown] = sh;
+        g_scr_k[shown] = g_scale;
+        g_scr_mid[g_scr_back] = 1;
+        g_scr_cut[g_scr_back] = (D->cp_ring & CP_CUT) != 0;
         g_n_mid_copies++;
+        publish_screen(sw, sh);
         return 1;
     }
     gxr_backend_screen(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
-    g_scr_w[g_scr_back] = sw;
-    g_scr_h[g_scr_back] = sh;
-    g_scr_k[g_scr_back] = g_scale;
-    g_scr_last = g_scr_back;
-    g_scr_back = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)(g_scr_back | SCREEN_FRESH)) & 3);
+    g_scr_mid[g_scr_back] = g_scr_cut[g_scr_back] = 0;
     g_n_copies++;
+    /* With an in-between copy to follow, the slot waits for it (V12b). */
+    if (g_halves > 1 && !(D->cp_ring & CP_LAST)) {
+        g_scr_w[g_scr_back] = sw; /* its size now, for a reader of g_scr_last */
+        g_scr_h[g_scr_back] = sh;
+        return 1;
+    }
+    publish_screen(sw, sh);
     return 1;
 }
 
@@ -3131,7 +3158,8 @@ int gxv_init(char* why, size_t cap)
                      0, &g_readback, &g_readback_map) ||
         !make_buffer(DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) ||
         !make_buffer(IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
-        !make_buffer((VkDeviceSize)READBACK_BYTES * SCREEN_SLOTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1,
+        !make_buffer((VkDeviceSize)READBACK_BYTES * (g_halves > 1 ? SCREEN_SLOTS : SCREEN_MID0),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1,
                      &g_screenbuf, &g_screen_map) ||
         !make_buffer(DRAWREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_drawbuf, &g_draw_map) ||
         !make_buffer(pool_bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_poolbuf, &g_pool_map) ||
@@ -3965,7 +3993,7 @@ static int blend_k(double a)
 
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {
-    int ok;
+    int ok = 1, took = 0;
     unsigned slot;
     plat_lock(&g_present_lock);
     if (g_present_dead || !g_swap) {
@@ -3973,6 +4001,7 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
         return 0;
     }
     if (fresh && (plat_load64(&g_scr_middle) & SCREEN_FRESH)) {
+        took = 1;
         /* What the last present read of the slot it gives back is done. */
         vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
         g_scr_front = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)g_scr_front) & 3);
@@ -3998,11 +4027,51 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
         }
         slot = SCREEN_SHOWN;
     }
-    ok = present_slot(slot, interval, mode);
+    if (took && g_mid_ivl) {
+        /* V12b: the image between the frame before and this one for one 60 Hz
+         * refresh, unless the frame is a cut or had none; then the frame. */
+        unsigned f = g_scr_front;
+        if (g_scr_mid[f] && !g_scr_cut[f]) {
+            if (g_filt_on) {
+                unsigned src = g_filt_src;
+                g_filt_src = SCREEN_MID0 + f;
+                g_filt_pending = 1;
+                ok = present_slot(SCREEN_SHOWN, g_mid_ivl, mode);
+                g_filt_src = src;
+                g_filt_pending = 1;
+            } else {
+                ok = present_slot(SCREEN_MID0 + f, g_mid_ivl, mode);
+            }
+            g_n_shown_mid++;
+        } else if (g_scr_mid[f]) {
+            g_n_shown_cut++;
+        } else {
+            g_n_shown_none++;
+        }
+    }
+    ok = ok && present_slot(slot, interval, mode);
     if (shown_w) *shown_w = g_scr_w[g_scr_front];
     if (shown_h) *shown_h = g_scr_h[g_scr_front];
     plat_unlock(&g_present_lock);
     return ok;
+}
+
+/* V12b: the window's refreshes an in-between image is held for, 0 while it
+ * shows none (H17b's rules, interp_pace), and what was shown. */
+void gxv_present_interp(unsigned refreshes)
+{
+    plat_lock(&g_present_lock);
+    g_mid_ivl = g_halves > 1 ? refreshes : 0;
+    plat_unlock(&g_present_lock);
+}
+
+void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut, unsigned long long* none)
+{
+    plat_lock(&g_present_lock);
+    *mid = g_n_shown_mid;
+    *cut = g_n_shown_cut;
+    *none = g_n_shown_none;
+    plat_unlock(&g_present_lock);
 }
 
 /* The presenter's check (test_gxv_present.py): bgra (w x h), as window.c
@@ -4191,6 +4260,13 @@ int gxv_present_filters(const PicTables* t)
 {
     (void)t;
     return 0;
+}
+
+void gxv_present_interp(unsigned refreshes) { (void)refreshes; }
+
+void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut, unsigned long long* none)
+{
+    *mid = *cut = *none = 0;
 }
 
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)

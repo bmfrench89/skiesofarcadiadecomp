@@ -76,6 +76,9 @@ typedef struct {
      * in-between one when there is one), CP_MID when that frame has an
      * in-between image. 0 on every other command (claim_slot). */
     uint8_t cp_ring;
+#define CP_LAST 1 /* the screen copy that ends its frame */
+#define CP_MID 2  /* ...and its frame has an in-between image */
+#define CP_CUT 4  /* ...which is a camera cut's, not to be shown */
     uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
 } DrawCmd;

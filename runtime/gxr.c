@@ -187,6 +187,7 @@ typedef struct RingSlot RingSlot; /* H17b's screen ring, with the screen buffers
 static RingSlot* g_ring;          /* NULL: no presenter takes frames from it */
 static int g_mid_on = 1;
 static plat_a32 g_mid_allowed = 1;
+static plat_a32 g_mid_window; /* a window decided whether it shows them (gxr_interp_show): the budget runs */
 static const double CUT_PX[4] = {16.0, 32.0, 64.0, 128.0};
 static unsigned g_f_keyed3d, g_f_matched3d, g_f_far[4];
 static double g_f_worst;
@@ -2485,25 +2486,30 @@ static int interp_on(void)
 void gxr_interp_show(int on)
 {
     plat_cas32(&g_mid_allowed, on ? 0 : 1, on ? 1 : 0);
+    plat_cas32(&g_mid_window, 0, 1);
 }
 
 /* At each frame's end, its screen copies published: does the next frame get an
- * in-between stream? Only a window's run asks (the screen ring is on); a
- * headless one builds every
- * image, as H17a does. The test is the game's own frame time, from one screen
- * copy to the next (the gate's drain is no clock: anything else that drains
- * first, as a windowed run does, takes it): a 30 fps frame is 33.4 ms, and three in a row over 35 mean
- * the in-between work is slowing the game, so it stops. It starts again only
- * after frames are back on time, waiting longer after each try that failed
- * (30 frames, doubling to 960, back to 30 once a try has held for ten
- * seconds), and never while the game is slow without it: workers' busy time
- * was tried first and is no guide -- in the opening every worker averaged far
- * under a frame of work while the frame ran long (FINDINGS "H17b"). */
+ * in-between stream? Only once a window has said whether it shows them
+ * (gxr_interp_show); a headless run builds every image, as H17a does.
+ *
+ * The test is the game's own frame time, from one screen copy to the next (the
+ * gate's drain is no clock: anything else that drains first, as a windowed run
+ * does, takes it). A 30 fps frame is 33.4 ms, and three in a row over 35 mean
+ * the in-between work is slowing the game, so it stops. It starts again once
+ * frames are back on time: a count of 30 frames, doubling after each try that
+ * failed up to 960 (back to 30 once a try has held ten seconds), down one an
+ * on-time frame and up two a slow one, so never while the game is slow without
+ * it. A slow frame used to start the count again, and the opening, which runs
+ * one in ten even without interpolation, never started again (FINDINGS "V12").
+ * Workers' busy time was tried before any of this and is no guide: in the
+ * opening every worker averaged far under a frame of work while the frame ran
+ * long (FINDINGS "H17b"). */
 static void interp_frame_begin(void)
 {
     const double slow = 35.0, on_time = 34.0;
     double now, ms;
-    if (!g_interp || !g_ring) return;
+    if (!g_interp || !plat_load32(&g_mid_window)) return;
     now = gxr_clock(); /* not gxr_ticks: their rate is known only at the report */
     ms = g_frame_s > 0.0 ? (now - g_frame_s) * 1e3 : 0.0;
     g_frame_s = now;
@@ -2525,7 +2531,7 @@ static void interp_frame_begin(void)
         }
     } else {
         g_over_budget++;
-        if (ms > on_time) g_wait = g_wait > g_backoff ? g_wait : g_backoff;
+        if (ms > on_time) g_wait = g_wait + 2 > 2 * g_backoff ? 2 * g_backoff : g_wait + 2;
         else if (g_wait > 0) g_wait--;
         else {
             g_mid_on = 1;
@@ -2912,9 +2918,6 @@ struct RingSlot {
     int w, h, has_mid, cut;
 };
 #define RING_FRESH 4
-#define CP_LAST 1
-#define CP_MID 2
-#define CP_CUT 4
 static plat_a32 g_ring_state = 1, g_ring_done, g_ring_pub, g_ring_miss;
 static int g_ring_back, g_ring_front = 2;
 

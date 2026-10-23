@@ -84,7 +84,8 @@ int gxr_ring_take(GxrShown* out); /* 1 with the newest frame, if one was publish
 long gxr_ring_published(void);
 long gxr_ring_missed(void); /* published, then replaced before a take */
 /* The window says whether in-between images can be shown at all (a display at
- * a whole multiple of 60 Hz): 0 stops the producer building them. */
+ * a whole multiple of 60 Hz): 0 stops the producer building them. Once it has
+ * said, the budget runs (H17b), whichever presenter it has. */
 void gxr_interp_show(int on);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
