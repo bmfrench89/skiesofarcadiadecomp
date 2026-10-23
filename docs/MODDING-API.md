@@ -345,3 +345,17 @@ its soa_mod_init and its callbacks (docs/specs/mod-options.md).
 ```c
 int (*option_int)(const char* name, int64_t* out);
 ```
+
+### `on_damage`
+
+```c
+int (*on_damage)(uint32_t (*fn)(void* user, uint32_t value, uint32_t base, uint32_t attacker, uint32_t target, uint32_t element), void* user);
+```
+
+Appended (R0, docs/specs/battle-harness.md). Every damage the battle
+works out, at fn_800108EC (the base, the element, and the attacker and
+target actors as the game passes them): fn gets the value the game, or
+the mod before it, gave, and returns the one the next sees; the last,
+held to 0-9999, is what the game gets. In load order. It runs inside
+the battle's own call on the game's thread: memory reads and writes
+only, as at a frame end.

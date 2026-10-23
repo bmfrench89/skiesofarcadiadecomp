@@ -705,7 +705,8 @@ static int next_line(const char** text, char* line)
 
 #define CB_MAX 64
 enum {
-    CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_TEXTURE, CB_KINDS
+    CB_FRAME_END, CB_SAFE_POINT, CB_MAP_LOADED, CB_SCENE_CHANGE, CB_PAD_FILTER, CB_PROJECTION, CB_TEXTURE, CB_DAMAGE,
+    CB_KINDS
 };
 
 typedef struct {
@@ -824,6 +825,24 @@ static int api_on_scene_change(void (*fn)(void*, uint32_t, uint32_t), void* user
     return api_register(CB_SCENE_CHANGE, (void*)fn, user);
 }
 
+static int api_on_damage(uint32_t (*fn)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t), void* user)
+{
+    return api_register(CB_DAMAGE, (void*)fn, user);
+}
+
+uint32_t mod_damage(uint32_t value, uint32_t base, uint32_t attacker, uint32_t target, uint32_t element)
+{
+    int i, was = g_cur_mod;
+    for (i = 0; i < g_cb_n[CB_DAMAGE]; i++) {
+        g_cur_mod = g_cb[CB_DAMAGE][i].mod;
+        g_cb[CB_DAMAGE][i].calls++;
+        value = ((uint32_t(*)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))g_cb[CB_DAMAGE][i].fn)(
+            g_cb[CB_DAMAGE][i].user, value, base, attacker, target, element);
+    }
+    g_cur_mod = was;
+    return (int32_t)value < 0 ? 0 : value > 9999 ? 9999 : value;
+}
+
 static int api_pad_filter(void (*fn)(void*, uint32_t, SoaPad*), void* user)
 {
     return api_register(CB_PAD_FILTER, (void*)fn, user);
@@ -917,6 +936,7 @@ static const SoaModApi g_api = {
     api_read_pad,
     api_option,
     api_option_int,
+    api_on_damage,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */

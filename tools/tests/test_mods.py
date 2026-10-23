@@ -2935,6 +2935,7 @@ def test_the_shipped_mods_are_manifest_2():
         "examples/mods/encounters-off",
         "examples/mods/map-log",
         "examples/mods/map-alias",  # T1 (disc-layer I6)
+        "examples/mods/damage-double",  # R0
     ):
         keys = {}
         for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
@@ -4496,3 +4497,82 @@ def test_i6_a_faulty_files_txt_refuses_the_mod_with_its_line(driver, tmp_path, f
     files_mod(tmp_path, files=files)
     out, err = play(driver, tmp_path, "describe")
     assert "loaded 0" in out and "placer/files.txt:1:" in err and words in err, err
+
+
+# --------------------------------------------------------------------------
+# R0: on_damage (docs/specs/battle-harness.md), driven through mod_damage as
+# runtime/battle.c drives it from the game's damage call.
+# --------------------------------------------------------------------------
+
+ADD_ONE = r"""
+#include "soa_mod.h"
+static uint32_t f(void* u, uint32_t v, uint32_t b, uint32_t a, uint32_t t, uint32_t e)
+{ (void)u; (void)b; (void)a; (void)t; (void)e; return v + 1; }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{ (void)version; return api->on_damage(f, 0) ? 0 : 1; }
+"""
+
+
+def damage_double(root: Path, name: str = "damage-double") -> Path:
+    d = root / name
+    d.mkdir(parents=True)
+    ini = (ROOT / "examples" / "mods" / "damage-double" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "examples" / "mods" / "damage-double" / "mod.c")
+    return d
+
+
+@needs_cc
+def test_r0_the_example_doubles_each_damage_and_holds_9999(driver, tmp_path):
+    damage_double(tmp_path)
+    out, err = play(
+        driver, tmp_path, "damage 100 90 80309000 80309100 0 damage 6000 0 0 0 0 damage 0 0 0 0 0"
+    )
+    assert "loaded 1" in out, err
+    assert re.findall(r"^damage \d+ -> \d+$", out, re.M) == [
+        "damage 100 -> 200",
+        "damage 6000 -> 9999",
+        "damage 0 -> 0",
+    ]
+
+
+@needs_cc
+def test_r0_mods_chain_in_load_order(driver, tmp_path):
+    """a-plus-one loads before b-double: each sees what the one before
+    returned, so 10 becomes (10 + 1) x 2, not 10 x 2 + 1. With no mod the
+    value passes through."""
+    d = mod(tmp_path, "a-plus-one", patches=None, ini=ini2("a-plus-one"))
+    (d / "mod_src.c").write_text(ADD_ONE, encoding="utf-8")
+    library(d, d / "mod_src.c")
+    damage_double(tmp_path, "b-double")
+    out, err = play(driver, tmp_path, "damage 10 0 0 0 0")
+    assert "loaded 2" in out and "damage 10 -> 22" in out, (out, err)
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, _ = play(driver, empty, "damage 10 0 0 0 0")
+    assert "damage 10 -> 10" in out, out
+
+
+@needs_cc
+def test_r0_a_mod_built_before_on_damage_still_loads(driver, tmp_path):
+    header = (ROOT / "runtime" / "soa_mod.h").read_text(encoding="utf-8")
+    start = header.index("    /* Appended (R0,")
+    end = header.index("} SoaModApi;", start)
+    old = header[:start] + header[end:]
+    assert "(*on_damage)" not in old and "(*option_int)" in old
+    inc = tmp_path / "old-include"
+    inc.mkdir()
+    (inc / "soa_mod.h").write_text(old, encoding="utf-8")
+    d = tmp_path / "mods" / "map-log"
+    d.mkdir(parents=True)
+    ini = (ROOT / "examples" / "mods" / "map-log" / "mod.ini").read_text(encoding="utf-8")
+    (d / "mod.ini").write_text(
+        ini.replace(ini.split("dol_sha1 = ")[1].split()[0], SHA), encoding="utf-8"
+    )
+    library(d, ROOT / "examples" / "mods" / "map-log" / "mod.c", include=inc)
+    out, err = play(
+        driver, tmp_path / "mods", "set 803475cc 6 set 80311aec 3 safe damage 7 0 0 0 0"
+    )
+    assert "loaded 1" in out and "damage 7 -> 7" in out, (out, err)

@@ -177,6 +177,8 @@ port's own tests.
 
 - `examples/mods/encounters-off`: one patch, no options.
 - `examples/mods/encounter-scale`: a pointer, a `for` run, `*=`, and an option.
+- `examples/mods/damage-double`: every blow doubled through `on_damage` (R0); `SOA_BATTLE_LOG=1` and
+  `python tools/battle.py check <log> --double` prove it.
 - `examples/mods/map-alias`: two aliases in a `files.txt`, map 045 given map 002's room and script.
 - `examples/mods/map-log`: the native template, with an option.
 - `mods/encounter-rate`, `mods/autotext`, `mods/coop`: the native mods the port ships.

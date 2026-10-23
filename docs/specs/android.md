@@ -82,7 +82,7 @@ the phone share (§3.8).
   - No function pointer crosses the boundary: `dispatch` is a switch.
   - No `long double` appears anywhere, and the translated objects call no compiler builtin, so the game library
     needs no compiler-rt.
-- **The bindings depend on the build mode.** `hle.txt` binds 26 functions. `decomp_swap.c` answers 12 of them
+- **The bindings depend on the build mode.** `hle.txt` binds 27 functions (26 when this was written; R0 added the damage function). `decomp_swap.c` answers 12 of them
   with decompiled code, and a build with no `src/` (`--no-decomp`, the player's build, distribution §3.1)
   leaves those 12 to translated twins inside the game. 14 then cross the seam, and the self test's 22 twins become
   7 `recomp_fn_` and 15 `fn_` (`selftest.c:1504-1518`).

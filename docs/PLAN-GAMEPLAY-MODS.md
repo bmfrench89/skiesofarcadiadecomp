@@ -818,7 +818,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 
 **Goal.** Combat mods through one event surface, tested by a battle harness.
 
-**R0. The battle harness** — *several days, after P6 and T9.*
+**R0. The battle harness** — *several days, after P6 and T9. **Done 2026-10-23** to [specs/battle-harness.md](specs/battle-harness.md) (FINDINGS "R0"), with R1's `on_damage` pulled forward: the doubling mod held to its own log, 25 hits.*
 - From a card save:
   1. force a chosen formation or event battle (`0x803473D4`);
   2. write commands when phase 1 begins;
@@ -833,7 +833,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
   - then ±2.5%, +1 one time in eight, element and Guard;
   - a critical that comes back 0 from `fn_800108EC` is raised to 1 by `fn_80010A40`.
 
-**R1. Battle events** — *several days plus one retranslation* (batch A, with X2).
+**R1. Battle events** — *several days plus one retranslation* (batch A, with X2). *`on_damage` landed with R0 (2026-10-23, `fn_800108EC` in `hle.txt`); the other events remain.*
 - Native wrappers through `hle.txt`, each calling the original (`recomp_fn_X`). Use M13 if it has landed; no migration is planned.
 - **Each event fires once per occurrence:**
 

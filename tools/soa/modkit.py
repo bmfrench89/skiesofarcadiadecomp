@@ -206,6 +206,12 @@ int main(int argc, char** argv)
         else if (!strcmp(cmd, "get") && scanf("%x", &a) == 1) printf("%08X=%08X\n", a, mem_r32(&s, a));
         else if (!strcmp(cmd, "report")) { fflush(stdout); mod_report(); fflush(stderr); }
         else if (!strcmp(cmd, "describe")) printf("describe [%s]\n", mod_describe());
+        else if (!strcmp(cmd, "damage")) {
+            /* R0: the game's damage call, as runtime/battle.c makes it: value base attacker target element */
+            unsigned dv, db, da, dt, de;
+            if (scanf("%u %u %x %x %u", &dv, &db, &da, &dt, &de) != 5) break;
+            printf("damage %u -> %u\n", dv, mod_damage(dv, db, da, dt, de));
+        }
     }
     return 0;
 }

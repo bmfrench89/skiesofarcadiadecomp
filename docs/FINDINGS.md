@@ -9724,3 +9724,52 @@ references mapped again at baffbc8). D-43, the gameplay core.
 - **Not in I6:** text deltas (I7, with its own owner check), per-map swaps (I8, when N2 needs one), and a
   replacement `.mld` or `.sct` built from the player's files (T4, T5, T7). The owner's look at 045a's room is the
   spec's last line; the pixel identity with 002a stands in for it here.
+
+**R0: the battle harness, with R1's damage event pulled forward: a mod changes every blow, and the log proves
+it.** 2026-10-23. Spec: `docs/specs/battle-harness.md`; D-43, the gameplay core.
+
+- **What it is** [V]:
+  - `fn_800108EC`, the function that works out every damage, is answered natively through `config/hle.txt`
+    (`runtime/battle.c`). This took one retranslation, 147 s. It calls the translated original, then each mod's new
+    `on_damage` (an appended `SoaModApi` member) in load order; what the last returns, held to 0-9999, is what the game
+    gets.
+  - `SOA_BATTLE_LOG=1` prints a `[battle]` line for each damage call: base, original and returned, the attacker's
+    and target's slots, the element, and the target's multiplier and Guard bit as the function reads them
+    (battle-system.md 3.3). At each safe point in a battle it prints whatever changed (HP, MP, status, SP, turn
+    order), plus the battle's start and end.
+  - `SOA_BATTLE_FORCE=mode:id:stage@F` writes the six-word request once the field runs.
+  - `tools/battle.py check` holds every logged call to the rule asked for and to its formula's range.
+  - `examples/mods/damage-double` is the doubling mod.
+- **On the story's first battle** [V, `build/r0/`]: the `battle` scenario, 16,000 frames at `SOA_SPEED=3`, fought
+  from frame 9811 on `a101b` (map 0xC9). The battle is short: 6 hits in two rounds with no mod, 2 doubled, because
+  a doubled blow out-hits early soldiers' max HP. So the evidence runs add a scratch test mod. Through `on_damage`,
+  loaded after `damage-double` and returning the value it is given, it puts each target up to 9999 HP just before
+  the blow lands, so no one falls. Damage is worked out from the base, never from HP, so the values are untouched.
+  - *No mod* (with the scratch mod): 25 calls, every returned equal to its original, every original inside its
+    formula's range for its base, multiplier and guard.
+  - *`damage-double`:* 25 calls, every returned `== min(2 x original, 9999)` and every original in range; "every
+    call kept every rule". The first, `30 -> 29 -> 58`.
+  - *Mutations, each on a real run:* `damage-double` changed to triple gives 23 of 23 calls failing ("returned 90
+    from 30, not 60"). The wrapper adding one to the returned value gives 23 of 23 failing ("returned 31 from 30,
+    not 30").
+  - *The rest of the log:* in the unmodded short battle every HP drop is a damage line's value, or the target's
+    remaining HP when the blow exceeded it (29 -> 0 from a 43). The order reads `1 0 4 5`, then `1 5 0`; start and
+    end are logged.
+- **Forced** [V]: part L's Continue, a warp to `a101b`, `SOA_BATTLE_FORCE=0:0:2@4000`. The request was written at
+  4000 and the battle started at 4048 (`soak.py check` sees one battle). It ended at phase 9 with no damage, the
+  run's random presses fleeing; the force is proved, not the damage path, which the story battle covered.
+- **Three things learned on the way:**
+  - The element argument is an index from 0 to 5, its multiplier in the target at +40 + 2*element (10 neutral). The
+    checker's first draft assumed 10 meant neutral.
+  - Drawing every frame moved the opening's first battle past frame 12,000 in one run, against about 4000 in a
+    snapshot run that day: the opening's timing follows the disc's wall clock.
+  - The soak recipe from part G (the accelerator every 600 frames) fought nothing in 20,000 frames at `SOA_SPEED=3`;
+    the step counter was never consumed.
+- **Tests** [V]:
+  - `test_mods.py`, on the fake guest through `mod_damage`: the example doubles and holds 9999; two mods chain in
+    load order (10 becomes 22, not 21); a mod built before `on_damage` still loads.
+  - `test_battle.py`, on synthetic logs: each rule passes and fails, a Guard halving, a resisted element, an element
+    past 5.
+  - Off: replay 23/23 and `title --check` after the retranslation; the self test.
+- **Not in R0:** R1's other events (rewards, encounters, phases), X2's save hooks (batch A), a command writer (the lab's
+  `turn:` plays turns), forced event battles, and whether one seed gives one battle (K6).

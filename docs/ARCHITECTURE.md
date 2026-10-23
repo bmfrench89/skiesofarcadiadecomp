@@ -32,8 +32,9 @@ run legible.
 Metrowerks compiler, so `tools/matchcheck.py` can compare it word for word
 with the executable; once with MSVC, renamed `dc_*`, so it can actually run
 in the port. `config/hle.txt` decides which functions the running port uses
-(26 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
-`tick.c` answers so the main loop has a safe point; the five data-cache
+(27 entries today: 12 decompiled routines; `VIGetRetraceCount`, which
+`tick.c` answers so the main loop has a safe point; the battle's damage
+function, which `battle.c` answers so mods can change it (R0); the five data-cache
 range calls, answered as the no-ops they are with no cache to keep; and
 `__AI_SRC_INIT`, whose calibration never ends where a clock read is slow).
 
@@ -529,7 +530,7 @@ intervention in the scheduler is delivering interrupts at the idle loop.
 
 The obvious design is to intercept `GXBegin`, `GXSetVtxDesc` and the rest,
 and reconstruct draws from the API. This port does not do that.
-`config/hle.txt` has 26 entries and **none of them is a GX function**: every
+`config/hle.txt` has 27 entries and **none of them is a GX function**: every
 graphics call in the game runs as translated PowerPC, right down to the
 individual `stfs` of a vertex component into `0xCC008000`.
 

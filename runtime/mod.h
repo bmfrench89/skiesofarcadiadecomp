@@ -28,6 +28,10 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size);
  * `refused`). The lines, in *ops; how many. */
 int mod_scan_files(const char* dir, const uint8_t* dol, size_t dol_size, DiscFileOp** ops);
 
+/* R0: a damage the battle worked out, through every mod's on_damage in load
+ * order; what the game gets, held to 0-9999 (runtime/battle.c calls it). */
+uint32_t mod_damage(uint32_t value, uint32_t base, uint32_t attacker, uint32_t target, uint32_t element);
+
 /* Apply the loaded patches; called once a frame from the frame hook, after
  * SOA_PEEK and SOA_POKE. Memory writes only: it runs inside the XFB copy. */
 void mod_frame(CpuState* s, unsigned frame);

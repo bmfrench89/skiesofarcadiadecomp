@@ -4,6 +4,11 @@ Written 2026-10-23 for the owner's answer of 2026-10-22 (PLAN-NEXT D-43: the gam
 from [PLAN-GAMEPLAY-MODS.md](../PLAN-GAMEPLAY-MODS.md) R0 and R1, docs/research/battle-system.md and encounters.md,
 FINDINGS "1324" (the forced battle) and the lab's battle items. The code was mapped first, at 1c9a3b2.
 
+**Built 2026-10-23** (FINDINGS "R0"): Done lines 1 to 5. *As built:* the battles the evidence runs fight are
+the story's first, lengthened by a scratch mod that puts each target up to 9999 HP through `on_damage` before the blow
+lands (a doubled blow out-hits early soldiers' max HP); the log also carries each target's element multiplier and
+Guard bit, so every hit, not only the first, is held to its formula's range.
+
 **Why.** Every combat mod in the plan (R1-R9, N2, N10) needs a battle on demand and a record of what happened in it.
 R0 is that: from a card save, start a chosen battle, play its turns, and log what the battle did -- each damage call's
 value before and after mods, and the actors' HP, SP and order as they change. Its Done is a damage-doubling mod

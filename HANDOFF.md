@@ -419,6 +419,14 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-23)
 
+**Latest, 2026-10-23: R0, the battle harness, built** (FINDINGS "R0", `docs/specs/battle-harness.md`). The battle's
+damage function is answered natively (`hle.txt`, one retranslation): mods change every blow through `on_damage`, and
+`SOA_BATTLE_LOG=1` logs each call with base, original and returned, and what changed each frame. `examples/mods/damage-double`
+holds to `min(2 x original, 9999)` on 25 hits of the story's first battle, with every original inside its formula's range;
+`SOA_BATTLE_FORCE` starts a battle on demand. **Next:** batch A (R1's other events and X2's save hooks).
+
+**Before that, the same day:**
+
 **Latest, 2026-10-23: T1's core, I6, built** (FINDINGS "I6", `docs/specs/disc-layer.md` §3.8). A mod's `files.txt`
 replaces, adds and aliases disc files: the table is rebuilt at boot, the files served past the image's end, and the
 game's own lookup finds all 5,552 vanilla paths where they were (self test). `examples/mods/map-alias` sends a warp to
