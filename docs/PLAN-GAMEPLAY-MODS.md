@@ -637,7 +637,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 *Done:* `test_guard` refuses each suffix and directory, and a mutation test proves the content check fails on a dump.
 
-**T1. The virtual disc** — *several days, `--link`* (beyond-gamecube.md §4, content-systems.md §8). *Specified in [specs/disc-layer.md](specs/disc-layer.md) 3.8 as I6 (replace, add, alias), I7 (deltas) and I8 (per-map swaps), on I1's seam.*
+**T1. The virtual disc** — *several days, `--link`* (beyond-gamecube.md §4, content-systems.md §8). *Specified in [specs/disc-layer.md](specs/disc-layer.md) 3.8 as I6 (replace, add, alias), I7 (deltas) and I8 (per-map swaps), on I1's seam. **I6 done 2026-10-23** (FINDINGS "I6"); I7 and I8 to come.*
 - **Where:** in `main.c`, as a pass of its own after `sys/fst.bin` is read (`:1143-1149`) and before its size bound (`:1163`). Read the enabled mods' file lists from `SOA_MODS` without running any mod's init, parse `sys/fst.bin`, and rebuild it.
   - The rebuilt size goes through the existing bound: the FST copy is the one boot write into the image that carries its own bound (`:1153-1158`).
   - `fst_addr` (`:1169`), and with it arena hi and `0x80000038`, then follow the new size. Set `fst_max` to the new size rather than `boot+0x42C` (`:1168`; content-systems.md §8 step 5), so `0x8000003C` agrees. Nothing in the game reads it.

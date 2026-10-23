@@ -1626,7 +1626,7 @@ static void list_mod(int mi)
 }
 
 static void load_one(CpuState* s, const char* root, const char* dir, const char* dol_sha1,
-                     const uint8_t* dol, size_t dol_size)
+                     const uint8_t* dol, size_t dol_size, int has_files, unsigned files_hash)
 {
     char path[600], ppath[600], dpath[600], line[LINE_MAX_LEN], *tok[8];
     char *ini, *patches;
@@ -1765,25 +1765,26 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
         w.path = dpath;
         w.line = 0;
         dll = load_dll(&w, dpath, &m, &dll_hash);
-        if (dll < 0 && !patches) {
+        if (dll < 0 && !patches && !has_files) {
             w.path = path;
-            refuse(&w, "no patches.txt and no " MOD_LIB " beside it, so it would do nothing%s%s", "", "");
+            refuse(&w, "no patches.txt, no " MOD_LIB " and no files.txt beside it, so it would do nothing%s%s", "", "");
         }
     }
     if (w.failed) {
         g_patch_n = before; /* refused whole */
         g_slot_n = slots_before;
     } else {
-        m.hash = fnv1a(fnv1a(2166136261u, ini, ini_n), patches ? patches : "", patches_n) ^ dll_hash;
+        /* files.txt and every source it places count too (I6): what a mod puts on the disc is in its hash */
+        m.hash = fnv1a(fnv1a(2166136261u, ini, ini_n), patches ? patches : "", patches_n) ^ dll_hash ^ files_hash;
         m.first = before;
         m.count = g_patch_n - before;
         g_mods[g_mod_n++] = m;
         if (m.id[0])
-            fprintf(stderr, "[mod] loaded %s (%s/%s, %s@%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
-                    m.id, m.version, m.count, m.dll ? " and " MOD_LIB : "", MOD_API);
+            fprintf(stderr, "[mod] loaded %s (%s/%s, %s@%s): %u patch(es)%s%s, api %d, the DOL it names\n", m.name, root, dir,
+                    m.id, m.version, m.count, m.dll ? " and " MOD_LIB : "", has_files ? " and files.txt" : "", MOD_API);
         else
-            fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s, api %d, the DOL it names\n", m.name, root, dir,
-                    m.count, m.dll ? " and " MOD_LIB : "", MOD_API);
+            fprintf(stderr, "[mod] loaded %s (%s/%s): %u patch(es)%s%s, api %d, the DOL it names\n", m.name, root, dir,
+                    m.count, m.dll ? " and " MOD_LIB : "", has_files ? " and files.txt" : "", MOD_API);
         for (i = 0; i < *opt_n; i++)
             if (opts[i].set)
                 fprintf(stderr, "[mod] %s: option %s = %s, from SOA_MOD_OPT (its default %s)\n", dir, opts[i].name,
@@ -1962,43 +1963,279 @@ static void note_folder(char (*names)[64], int* n, const char* dir, const char* 
         snprintf(names[(*n)++], 64, "%s", name);
 }
 
-int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
+/* The folders under SOA_MODS and their order (M17), worked out once: the
+ * files pass (I6) and mod_load share it, so what it says is said once. */
+static struct {
+    int done, n, k;
+    char dir[600];
+    char names[MOD_MAX * 2][64];
+    Planned plan[MOD_MAX * 2];
+    int order[MOD_MAX * 2];
+} g_plan;
+
+static int plan_mods(const char* dir)
 {
-    static char names[MOD_MAX * 2][64];
-    int n = 0, i;
-    char sha[41];
-    size_t used = 0;
+    int i;
     Folders folders;
-    folders.names = names;
-    folders.n = &n;
+    if (g_plan.done && !strcmp(g_plan.dir, dir)) return 1;
+    memset(&g_plan, 0, sizeof g_plan);
+    snprintf(g_plan.dir, sizeof g_plan.dir, "%s", dir);
+    folders.names = g_plan.names;
+    folders.n = &g_plan.n;
     folders.dir = dir;
     if (plat_list_dirs(dir, each_folder, &folders) < 0) {
         fprintf(stderr, "[mod] SOA_MODS=%s is not a folder this port can read; no mods\n", dir);
         return 0;
     }
-    qsort(names, (size_t)n, sizeof names[0], cmp_name);
+    qsort(g_plan.names, (size_t)g_plan.n, sizeof g_plan.names[0], cmp_name);
+    for (i = 0; i < g_plan.n; i++) {
+        char path[600];
+        snprintf(path, sizeof path, "%s/%s/mod.ini", dir, g_plan.names[i]);
+        peek_ini(path, g_plan.names[i], &g_plan.plan[i]);
+        g_plan.plan[i].rank = -1;
+        g_plan.plan[i].off = g_plan.plan[i].bad = 0;
+    }
+    read_order(dir, g_plan.plan, g_plan.n);
+    g_plan.k = plan_order(dir, g_plan.names, g_plan.plan, g_plan.n, g_plan.order);
+    g_plan.done = 1;
+    return 1;
+}
+
+/* ---- I6: files.txt, before the file table is parked --------------------- */
+
+typedef struct {
+    int refused;      /* the scan refused it (said); mod_load passes it over */
+    int has_files;    /* it has a files.txt the scan accepted */
+    unsigned hash;    /* over files.txt and every source */
+    int first, count; /* its lines in g_ops */
+} FilesMod;
+static FilesMod g_files[MOD_MAX * 2]; /* by place in g_plan.names */
+static DiscFileOp* g_ops;
+static int g_ops_n, g_ops_cap;
+
+/* A source path in a mod's folder: relative, forward slashes, nothing that
+ * climbs out. */
+static int source_ok(const char* p)
+{
+    const char* s = p;
+    if (!*p || p[0] == '/' || p[0] == '\\' || strchr(p, ':') || strchr(p, '\\')) return 0;
+    while (*s) {
+        const char* slash = strchr(s, '/');
+        size_t len = slash ? (size_t)(slash - s) : strlen(s);
+        if (len == 0 || (len == 2 && s[0] == '.' && s[1] == '.')) return 0;
+        if (!slash) break;
+        s = slash + 1;
+    }
+    return 1;
+}
+
+/* A source's bytes, up to one past 16 MiB (vfst.c refuses what is over). */
+static uint8_t* read_source(const char* path, uint32_t* n)
+{
+    FILE* f = fopen(path, "rb");
+    uint8_t *buf, *more;
+    size_t cap = 1u << 16, used = 0, got;
+    if (!f) return NULL;
+    buf = (uint8_t*)malloc(cap);
+    while (buf && (got = fread(buf + used, 1, cap - used, f)) > 0) {
+        used += got;
+        if (used > (16u << 20)) break;
+        if (used == cap) {
+            more = (uint8_t*)realloc(buf, cap * 2);
+            if (!more) {
+                free(buf);
+                buf = NULL;
+                break;
+            }
+            buf = more;
+            cap *= 2;
+        }
+    }
+    fclose(f);
+    *n = (uint32_t)used;
+    return buf;
+}
+
+static DiscFileOp* new_op(void)
+{
+    if (g_ops_n == g_ops_cap) {
+        int cap = g_ops_cap ? g_ops_cap * 2 : 64;
+        DiscFileOp* more = (DiscFileOp*)realloc(g_ops, (size_t)cap * sizeof *more);
+        if (!more) return NULL;
+        g_ops = more;
+        g_ops_cap = cap;
+    }
+    memset(&g_ops[g_ops_n], 0, sizeof g_ops[0]);
+    return &g_ops[g_ops_n++];
+}
+
+/* One folder's files.txt: its lines as ops, its hash; 0 refused (said). */
+static int scan_one(const char* dir, int at, const char* sha)
+{
+    static char folders[MOD_MAX * 2][700]; /* each op's `mod`, kept for the run */
+    const char* name = g_plan.names[at];
+    char path[700], ipath[700], line[LINE_MAX_LEN], *tok[8];
+    char *text, *ini;
+    const char* t;
+    size_t text_n = 0, ini_n = 0;
+    int got, i;
+    Where w;
+    FilesMod* fm = &g_files[at];
+    snprintf(path, sizeof path, "%s/%s/files.txt", dir, name);
+    text = slurp_text(path, &text_n);
+    if (!text) return 1; /* no files.txt: nothing for this pass */
+    snprintf(folders[at], sizeof folders[at], "%s/%s", dir, name);
+    fm->first = g_ops_n;
+    fm->hash = fnv1a(2166136261u, text, text_n);
+    /* the mod.ini's DOL hash and id, which no line may be placed without */
+    snprintf(ipath, sizeof ipath, "%s/%s/mod.ini", dir, name);
+    ini = slurp_text(ipath, &ini_n);
+    w.path = ipath;
+    w.failed = 0;
+    w.line = 0;
+    if (!ini) {
+        refuse(&w, "a files.txt and no mod.ini beside it%s%s", "", "");
+    } else {
+        int sha_ok = 0;
+        for (t = ini; !w.failed && (got = next_line(&t, line)) != 0;) {
+            char* eq;
+            w.line++;
+            if (got == 2 || !(eq = strchr(line, '='))) continue;
+            *eq = '\0';
+            if (split(line, tok, 2) == 1 && !strcmp(tok[0], "dol_sha1")) {
+                char lower[48];
+                size_t k;
+                char* val = eq + 1;
+                while (*val == ' ' || *val == '\t') val++;
+                for (k = strlen(val); k && strchr(" \t\r\n", val[k - 1]); k--) val[k - 1] = '\0';
+                snprintf(lower, sizeof lower, "%s", val);
+                for (k = 0; lower[k]; k++) lower[k] = (char)tolower((unsigned char)lower[k]);
+                if (strcmp(lower, sha) != 0) refuse(&w, "made for the DOL with SHA-1 %s, and this is %s", val, sha);
+                else sha_ok = 1;
+            }
+        }
+        if (!w.failed && !sha_ok) {
+            w.line = 0;
+            refuse(&w, "no `dol_sha1 = ` naming the DOL it was made for%s%s", "", "");
+        }
+        for (i = 0; !w.failed && i < at; i++) /* the same id earlier in the order (load_one says it for the rest) */
+            if (g_files[i].has_files && !g_files[i].refused && !strcmp(g_plan.plan[i].key, g_plan.plan[at].key) &&
+                strcmp(g_plan.plan[at].key, name) != 0)
+                refuse(&w, "its id, %s, is already the mod's in folder %s", g_plan.plan[at].key, g_plan.names[i]);
+    }
+    free(ini);
+    w.path = path;
+    w.line = 0;
+    for (t = text; !w.failed && (got = next_line(&t, line)) != 0;) {
+        int n;
+        DiscFileOp* op;
+        w.line++;
+        if (got == 2) {
+            refuse(&w, "a line longer than %s characters%s", "511", "");
+            break;
+        }
+        n = split(line, tok, 8);
+        if (n == 0) continue;
+        if (!strcmp(tok[0], "delta") || !strcmp(tok[0], "swap")) {
+            refuse(&w, "`%s` is not built yet (%s); replace, add and alias are", tok[0], tok[0][0] == 'd' ? "I7" : "I8");
+            break;
+        }
+        if (strcmp(tok[0], "replace") && strcmp(tok[0], "add") && strcmp(tok[0], "alias")) {
+            refuse(&w, "`%s` is not a verb: replace, add or alias%s", tok[0], "");
+            break;
+        }
+        if (n != 3) {
+            refuse(&w, "a line is `%s <path on the disc> %s`", tok[0], tok[0][1] == 'l' ? "<path on the disc>" : "<file in this folder>");
+            break;
+        }
+        op = new_op();
+        if (!op) {
+            refuse(&w, "out of memory%s%s", "", "");
+            break;
+        }
+        op->verb = tok[0][0] == 'r' ? DISC_REPLACE : tok[0][0] == 'a' && tok[0][1] == 'd' ? DISC_ADD : DISC_ALIAS;
+        snprintf(op->path, sizeof op->path, "%s", tok[1]);
+        op->mod = folders[at];
+        op->line = (unsigned)w.line;
+        op->mod_index = at;
+        if (op->verb == DISC_ALIAS) {
+            snprintf(op->target, sizeof op->target, "%s", tok[2]);
+            fm->hash = fnv1a(fm->hash, tok[2], strlen(tok[2]));
+        } else {
+            char spath[1000];
+            uint8_t* data;
+            if (!source_ok(tok[2])) {
+                refuse(&w, "`%s` is not a file in this folder: a relative path, forward slashes, no ..%s", tok[2], "");
+                break;
+            }
+            snprintf(spath, sizeof spath, "%s/%s/%s", dir, name, tok[2]);
+            data = read_source(spath, &op->size);
+            if (!data) {
+                refuse(&w, "cannot read %s%s", spath, "");
+                break;
+            }
+            op->data = data; /* kept for the run: the drive serves it */
+            fm->hash = fnv1a(fm->hash, (const char*)data, op->size);
+        }
+    }
+    free(text);
+    if (w.failed) {
+        for (i = fm->first; i < g_ops_n; i++)
+            if (g_ops[i].verb != DISC_ALIAS) free((void*)g_ops[i].data);
+        g_ops_n = fm->first;
+        fm->refused = 1;
+        return 0;
+    }
+    fm->count = g_ops_n - fm->first;
+    fm->has_files = 1;
+    return 1;
+}
+
+int mod_scan_files(const char* dir, const uint8_t* dol, size_t dol_size, DiscFileOp** ops)
+{
+    char sha[41];
+    int i;
+    *ops = NULL;
+    if (!plan_mods(dir)) return 0;
+    sha1_hex(dol, dol_size, sha);
+    for (i = 0; i < g_plan.k; i++) {
+        int at = g_plan.order[i];
+        if (!g_plan.plan[at].off && !g_plan.plan[at].bad) scan_one(dir, at, sha);
+    }
+    *ops = g_ops;
+    return g_ops_n;
+}
+
+int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
+{
+    int i;
+    char sha[41];
+    size_t used = 0;
+    if (!plan_mods(dir)) return 0;
     sha1_hex(dol, dol_size, sha);
     g_s = s;
     mod_note_dol(dol, dol_size);
     {
-        static Planned plan[MOD_MAX * 2];
-        int order[MOD_MAX * 2], k;
-        for (i = 0; i < n; i++) {
-            char path[600];
-            snprintf(path, sizeof path, "%s/%s/mod.ini", dir, names[i]);
-            peek_ini(path, names[i], &plan[i]);
-            plan[i].rank = -1;
-            plan[i].off = plan[i].bad = 0;
-        }
-        read_order(dir, plan, n);
-        k = plan_order(dir, names, plan, n, order);
+        char (*names)[64] = g_plan.names;
+        Planned* plan = g_plan.plan;
+        int* order = g_plan.order;
+        int k = g_plan.k;
         for (i = 0; i < k; i++) {
-            if (plan[order[i]].off) {
-                fprintf(stderr, "[mod] %s/%s is turned off by SOA_MOD_ORDER; not loaded\n", dir, names[order[i]]);
-                if (g_off_n < MOD_MAX * 2) snprintf(g_off[g_off_n++], sizeof g_off[0], "%s", plan[order[i]].key);
+            int at = order[i];
+            FilesMod* fm = &g_files[at];
+            if (plan[at].off) {
+                fprintf(stderr, "[mod] %s/%s is turned off by SOA_MOD_ORDER; not loaded\n", dir, names[at]);
+                if (g_off_n < MOD_MAX * 2) snprintf(g_off[g_off_n++], sizeof g_off[0], "%s", plan[at].key);
+            } else if (!plan[at].bad && !fm->refused && !(fm->has_files && fm->count && g_ops[fm->first].refused)) {
+                int before = g_mod_n;
+                load_one(s, dir, names[at], sha, dol, dol_size, fm->has_files, fm->hash);
+                /* never half a mod: its files are on the disc now, the table parked */
+                if (fm->has_files && fm->count && g_mod_n == before) {
+                    fprintf(stderr, "[mod] %s/%s was refused after its files were placed on the disc; fix it or "
+                                    "remove it\n", dir, names[at]);
+                    exit(9);
+                }
             }
-            else if (!plan[order[i]].bad)
-                load_one(s, dir, names[order[i]], sha, dol, dol_size);
         }
     }
     check_option_entries();

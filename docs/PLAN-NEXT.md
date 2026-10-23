@@ -222,7 +222,7 @@ The owner answered four questions, with the research behind them summarised in t
     M8a done but for the owner's windowed check (FINDINGS "M8a", [specs/menu.md](specs/menu.md)), and M8b, the Vulkan
     presenter's overlay, 2026-10-22 (FINDINGS "M8b"). **Then 60 fps (D-41, 2026-10-22):** H17a done the same day
     (FINDINGS "H17a", [specs/interp.md](specs/interp.md)), headless; H17b, the images in a window, built the same day (FINDINGS "H17b"), its Done
-    at session D, then V12 (D-42), built the same day (FINDINGS "V12"). **Then the gameplay core (D-43):** T9 first, built the same day (FINDINGS "T9"); T1 next.
+    at session D, then V12 (D-42), built the same day (FINDINGS "V12"). **Then the gameplay core (D-43):** T9 first, built the same day (FINDINGS "T9"); T1's core, I6, 2026-10-23 (FINDINGS "I6"); then R0, with I7 when a mod needs a delta.
   - **The cloud session, after R5c: the mod framework** (D-38).
     1. The mod tests' driver building without MSVC, so they run in CI and in the cloud: 67 of `test_mods.py`'s 73
        were `@needs_msvc`. **Done 2026-10-14** (FINDINGS "The mod tests without MSVC").

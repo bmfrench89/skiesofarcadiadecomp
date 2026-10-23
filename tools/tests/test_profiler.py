@@ -43,6 +43,7 @@ from soa import toolchain  # noqa: E402
 STUBS = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
+#include "disc.h"
 #include <windows.h>
 #include <stdio.h>
 
@@ -121,6 +122,11 @@ int disc_system(const uint8_t** dol, size_t* dol_n, const uint8_t** boot, const 
     *fst_n = sizeof zero_fst;
     return 0;
 }
+/* vfst.c (disc-layer I6): no mods place files here */
+int disc_overlay_build(const uint8_t* f, size_t n, DiscFileOp* o, int k, uint8_t** out, size_t* out_n, char* why,
+                       size_t cap)
+{ (void)f; (void)n; (void)o; (void)k; (void)why; (void)cap; *out = NULL; *out_n = 0; return 0; }
+int disc_overlay_install(const uint8_t* f, size_t n) { (void)f; (void)n; return 1; }
 int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
 int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }

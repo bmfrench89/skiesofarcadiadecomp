@@ -9666,3 +9666,61 @@ plan Turbo, 12 workers).
   load.
 - **Not in T9:** the DOL tables' record layouts (T3 reads their bases here), names the research marks [I] until a
   ref proves them, and `examples/mods/lab`'s many raw addresses, a sample of the old way kept as it is.
+
+**I6 (T1's core): the virtual disc -- mods replace, add and alias the game's files, and the game finds them through
+its own disc code.** 2026-10-23. Spec: `docs/specs/disc-layer.md` §3.8 and slice I6 (written 2026-09-25; its line
+references mapped again at baffbc8). D-43, the gameplay core.
+
+- **What it is** [V, `runtime/vfst.c`, `disc.c`, `main.c`, `mod.c`, `aram.c`]:
+  - A mod's `files.txt` holds `replace`, `add` and `alias` lines. `mod_scan_files` reads them, in M17's load order,
+    before the file table is parked, with each source read into memory kept for the run.
+  - `disc_overlay_build` rebuilds the table, walking the base's own tree in its own order. Each directory's added
+    files go after its own entries and its end index is renumbered; the string table is kept verbatim and new names
+    appended. The result is checked against the base through a twin of the SDK's linear walk before it is parked.
+  - Virtual files lie from 0x57060000, 32 KiB apart, and `disc_peek` serves them from host memory.
+  - A mod with a fault is refused whole, and the build runs again without it. Two mods placing one path stop the
+    run (exit 9), naming both lines. A mod refused after its files were placed also stops the run.
+  - `files.txt` counts as content, and its hash and every source's bytes join the recorded `mods=` hash.
+  - The census indexes an alias once and names its upload `target (= alias)`.
+- **As built, where it differs from the spec:**
+  - `mod.c` never calls `vfst.c`: it hands `main.c` the lines, `main.c` builds the table, and the build's refusals
+    come back through the lines' `refused` flags. So the mod kit's fake guest and the mod-library tests build
+    `mod.c` without the disc layer.
+  - The 2 GiB end is checked but unreachable: the 256 MiB cap on all sources comes first. Only the cap is tested.
+  - `delta` and `swap` are refused by name until I7 and I8.
+- **The rebuild, on the fixture** [V, `disc_check.py`, 194 of 194; each path read back by `tools/soa/disc.py`'s own
+  parser]:
+  - an empty overlay gives the table byte for byte, and a replace changes two words;
+  - after an add and two aliases, every base path keeps its offset and length;
+  - a read straddling two virtual files gets both and the zeros between, and a read off a virtual file's end gets
+    zeros;
+  - nine refusals each leave nothing of their mod, while the other mod stays; a collision gives -1 with both lines.
+  - *Mutation:* without renumbering, "directory 17's range is broken".
+- **The game's own lookup** [V, the self test]: the real table rebuilt with nothing gives the disc's bytes. With one
+  add and one alias it is parked in scratch memory, and the game's own `__DVDFSInit` (0x8023A478) and
+  `DVDConvertPathToEntrynum` (0x8023A4B0) answer "5552 of 5552 vanilla paths; the add at 57060000+64; the alias at
+  its target; a missing path -1". *Mutation:* renumbering skipped, with the C check switched off so the game sees
+  the broken table. The game's lookup finds 5548 of 5552, the first wrong `sound/tone.info` (after the insertion
+  point), and the add and alias are not found.
+- **No mods:** `[boot] DOL 3166656 bytes, FST 134426 bytes at 816DF2E0`, as before.
+- **Live** [V, `build/t9/`]:
+  - *A replacement read by the game:* a byte-identical copy of `field/me299a.sct` in a scratch mod. The title run
+    read it at 0x57060000 and 0x57060010 (frame 370); the report says "2 reads of virtual files, 14368 bytes";
+    `title --check` holds 4 of 4.
+  - *The alias:* `examples/mods/map-alias` and a warp to 045a from part L's Continue. The game loaded
+    `/field/a045a.mld`, and the drive served `field/a002a.mld`'s extent. The peeks read map `0000002D` and letter
+    `61` at frame 3700; `soak.py check --expect-reach 045a` passes; the census reads "5552 disc files indexed, 2
+    aliases". **Frame 3700 is pixel-identical to the same recipe warping to 002a with no mod** (0 of 307,200
+    pixels apart). Before the census change it read 5554 indexed, the aliases hashed twice.
+  - *The collision:* two copies of the example with different ids exit 9, naming both `files.txt:6` lines and
+    `field/a045a.mld`. Two copies with one id: the second is refused as a duplicate, the table grows by two
+    entries (134,471 bytes), and the run reaches frame 1 with exit 0.
+- **Tests** [V]: `test_mods.py` covers a `mod.ini` and `files.txt` mod loading and recorded, a `mod.ini` alone
+  refused in the new words, and the recorded hash moving with one byte of `files.txt` or of a source. It also covers
+  six faulty `files.txt` lines refused with their line, and `map-alias` as manifest 2. *Mutation:* `load_one`'s old
+  condition refuses the files-only mod.
+- **A defect found on the way:** the scan's DOL-hash comparison kept the line's end, so every mod with a
+  `files.txt` was refused as made for another DOL. The first test run caught it.
+- **Not in I6:** text deltas (I7, with its own owner check), per-map swaps (I8, when N2 needs one), and a
+  replacement `.mld` or `.sct` built from the player's files (T4, T5, T7). The owner's look at 045a's room is the
+  spec's last line; the pixel identity with 002a stands in for it here.

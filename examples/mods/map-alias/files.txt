@@ -1,0 +1,7 @@
+# verb  path on the disc        the path it names
+#
+# Two new names for files the disc already has: each reads the same bytes as
+# its target, and the file table grows by two entries. A mod that replaces
+# field/a002a.mld changes what these read too, and the boot log says so.
+alias   field/a045a.mld         field/a002a.mld
+alias   field/me045a.sct        field/me002a.sct

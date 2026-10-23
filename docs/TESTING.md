@@ -1514,7 +1514,7 @@ filesystem.
 
 | Check | Reads | Fails when |
 |---|---|---|
-| the run exits 0 | the process status | the run did not reach its frame budget. The runtime documents its codes: 1 the disc did not load, 2 something unimplemented, 3 a guest trap, 4 a spin on a register answered with zero, 5 the watchdog, 6 the thread model gave up, 7 the self test, 8 `SOA_STRICT` |
+| the run exits 0 | the process status | the run did not reach its frame budget. The runtime documents its codes: 1 the disc did not load, 2 something unimplemented, 3 a guest trap, 4 a spin on a register answered with zero, 5 the watchdog, 6 the thread model gave up, 7 the self test, 8 `SOA_STRICT`, 9 the disc layer stopped the run (a read that failed inside the image, or mods that place one path on the disc twice, I6) |
 | no MMIO outside the modelled range | `[mmio!]` lines | the guest touched hardware the runtime does not model — almost always a garbage pointer |
 | no unknown FIFO bytes | the `[gx]` report line | the graphics front end met a command byte it could not parse. **Also fails at zero with nothing behind it**: a run that pushed nothing to the GP has checked nothing |
 | no bad vertex references | the `[gxr]` report line | a draw referenced a vertex outside its array. Also fails at a zero with no triangles behind it |

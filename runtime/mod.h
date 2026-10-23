@@ -4,6 +4,7 @@
 
 #include "cpu.h"
 #include "soa_mod.h"
+#include "disc.h"
 #include <stddef.h>
 
 /* The mod API this port speaks: soa_mod.h's version, one constant, so the
@@ -18,6 +19,14 @@
  * the DOL the port booted. A mod with any fault is refused whole, out loud.
  * Returns how many loaded. */
 int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size);
+
+/* T1's pass before the file table is parked (I6, docs/specs/disc-layer.md
+ * §3.8.2): each mod's files.txt under `dir`, in load order, its sources read
+ * into memory kept for the run. No mod code runs. A mod with a fault in its
+ * mod.ini's DOL hash, its id or its files.txt is refused whole, said once,
+ * and mod_load passes it over; so does one the build refuses (the ops'
+ * `refused`). The lines, in *ops; how many. */
+int mod_scan_files(const char* dir, const uint8_t* dol, size_t dol_size, DiscFileOp** ops);
 
 /* Apply the loaded patches; called once a frame from the frame hook, after
  * SOA_PEEK and SOA_POKE. Memory writes only: it runs inside the XFB copy. */

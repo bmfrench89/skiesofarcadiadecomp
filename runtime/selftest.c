@@ -2240,6 +2240,163 @@ static int call_guest_selftest(CpuState* s, char* got, size_t cap)
  * system files, the record's abi and mode, and every twin the checks above
  * run (config/seam.txt's). In a split build those names are the table's own
  * forwarders, so it asks only that a table is loaded and is this runtime's. */
+/* ---- T1, the virtual disc (disc-layer I6) ---------------------------------
+ *
+ * The real file table rebuilt -- with nothing, and with one added file and
+ * one alias -- parked in scratch memory, and the game's own SDK asked where
+ * every path is: __DVDFSInit (0x8023A478) reads the table from 0x80000038,
+ * and DVDConvertPathToEntrynum (0x8023A4B0), with the long-name flag OSInit
+ * sets (0x803479F4), answers each path's entry. Every vanilla file at its old
+ * offset and length, the added one at its virtual offset, the alias at its
+ * target's, and a missing path -1. The real table is put back after. */
+#include "disc.h"
+
+#define VFST_PARK 0x81100000u   /* the rebuilt table, well clear of the scratch above */
+#define VFST_PATH 0x81160000u   /* the path asked */
+
+/* Every file of a table as its full path, offset and length: the callback's
+ * answer, or how many were walked. */
+static int vfst_files(const uint8_t* fst, size_t n, CpuState* s, int (*each)(CpuState*, const char*, uint32_t,
+                                                                              uint32_t, void*),
+                      void* u)
+{
+    uint32_t count = (uint32_t)fst[8] << 24 | (uint32_t)fst[9] << 16 | (uint32_t)fst[10] << 8 | fst[11];
+    uint32_t i, next[32], depth = 0, files = 0;
+    size_t prefix[33] = {0};
+    char path[512];
+    for (i = 1; i < count && (size_t)i * 12 + 12 <= n; i++) {
+        const uint8_t* e = fst + (size_t)i * 12;
+        uint32_t noff = (uint32_t)e[1] << 16 | (uint32_t)e[2] << 8 | e[3];
+        uint32_t a = (uint32_t)e[4] << 24 | (uint32_t)e[5] << 16 | (uint32_t)e[6] << 8 | e[7];
+        uint32_t b = (uint32_t)e[8] << 24 | (uint32_t)e[9] << 16 | (uint32_t)e[10] << 8 | e[11];
+        const char* name = (const char*)fst + (size_t)count * 12 + noff;
+        size_t len = strlen(name);
+        while (depth && i >= next[depth - 1]) depth--;
+        if (prefix[depth] + len + 2 >= sizeof path) return -1;
+        memcpy(path + prefix[depth], name, len + 1);
+        if (e[0]) {
+            if (depth == 32) return -1;
+            next[depth] = b;
+            path[prefix[depth] + len] = '/';
+            prefix[depth + 1] = prefix[depth] + len + 1;
+            depth++;
+            continue;
+        }
+        files++;
+        if (each && !each(s, path, a, b, u)) return -1;
+    }
+    return (int)files;
+}
+
+/* The entry the game's own lookup gives `path`, through the parked table. */
+static int32_t vfst_lookup(CpuState* s, const char* path)
+{
+    put_string(s, VFST_PATH, path);
+    s->gpr[3] = VFST_PATH;
+    call(s, 0x8023A4B0);
+    return (int32_t)s->gpr[3];
+}
+
+static int vfst_where(CpuState* s, const char* path, uint32_t* off, uint32_t* len)
+{
+    int32_t ent = vfst_lookup(s, path);
+    if (ent < 0) return 0;
+    *off = mem_r32(s, VFST_PARK + (uint32_t)ent * 12 + 4);
+    *len = mem_r32(s, VFST_PARK + (uint32_t)ent * 12 + 8);
+    return 1;
+}
+
+typedef struct {
+    int found, wrong;
+    char first_wrong[200];
+} VfstTally;
+
+static int vfst_one(CpuState* s, const char* path, uint32_t off, uint32_t len, void* u)
+{
+    VfstTally* t = (VfstTally*)u;
+    uint32_t o = 0, l = 0;
+    if (vfst_where(s, path, &o, &l) && o == off && l == len) {
+        t->found++;
+    } else {
+        if (!t->wrong++) snprintf(t->first_wrong, sizeof t->first_wrong, "%s", path);
+    }
+    return 1;
+}
+
+static int vfst_selftest(CpuState* s, char* got, size_t cap)
+{
+    const uint8_t *dol, *boot, *fst;
+    size_t dol_n, fst_n, out_n = 0;
+    uint8_t* out = NULL;
+    char why[300];
+    static const uint8_t probe[64] = {0x54, 0x31}; /* "T1" */
+    DiscFileOp ops[2];
+    uint32_t real = mem_r32(s, 0x80000038u), flag = mem_r32(s, 0x803479F4u), add_off = 0, add_len = 0;
+    uint32_t alias_off = 0, alias_len = 0, base_off = 0, base_len = 0;
+    int failures = 0, r, files;
+    VfstTally t;
+    if (disc_system(&dol, &dol_n, &boot, &fst, &fst_n, why, sizeof why) != 0) {
+        snprintf(got, cap, "no file table: %s", why);
+        return check("I6 virtual disc", got, "a file table");
+    }
+    r = disc_overlay_build(fst, fst_n, ops, 0, &out, &out_n, why, sizeof why);
+    snprintf(got, cap, "%s", r == 1 && out_n == fst_n && !memcmp(out, fst, fst_n) ? "the disc's bytes" : why);
+    failures += check("I6 an empty overlay", got, "the disc's bytes");
+    free(out);
+    out = NULL;
+    memset(ops, 0, sizeof ops);
+    ops[0].verb = DISC_ADD;
+    snprintf(ops[0].path, sizeof ops[0].path, "field/zz_t1.dat");
+    ops[0].data = probe;
+    ops[0].size = sizeof probe;
+    ops[1].verb = DISC_ALIAS;
+    snprintf(ops[1].path, sizeof ops[1].path, "field/a045a.mld");
+    snprintf(ops[1].target, sizeof ops[1].target, "field/a002a.mld");
+    ops[0].mod = ops[1].mod = "selftest";
+    ops[0].line = 1;
+    ops[1].line = 2;
+    r = disc_overlay_build(fst, fst_n, ops, 2, &out, &out_n, why, sizeof why);
+    if (r != 1) {
+        snprintf(got, cap, "the build: %s", why);
+        failures += check("I6 the game's own lookup", got, "built");
+        disc_overlay_reset();
+        return failures;
+    }
+    memcpy(mem_ptr(s, VFST_PARK), out, out_n);
+    mem_w32(s, 0x80000038u, VFST_PARK);
+    mem_w32(s, 0x803479F4u, 1);
+    call(s, 0x8023A478u); /* __DVDFSInit, on the rebuilt table */
+    memset(&t, 0, sizeof t);
+    files = vfst_files(fst, fst_n, s, vfst_one, &t);
+    vfst_where(s, "field/zz_t1.dat", &add_off, &add_len);
+    vfst_where(s, "field/a045a.mld", &alias_off, &alias_len);
+    {
+        /* the alias's target, by the same lookup */
+        uint32_t o, l;
+        if (vfst_where(s, "field/a002a.mld", &o, &l)) {
+            base_off = o;
+            base_len = l;
+        }
+    }
+    snprintf(got, cap, "%d of %d vanilla paths%s%s; the add at %08X+%u; the alias %s; a missing path %d", t.found, files,
+             t.wrong ? ", first wrong " : "", t.wrong ? t.first_wrong : "", add_off, add_len,
+             alias_off == base_off && alias_len == base_len && base_len ? "at its target" : "elsewhere",
+             (int)vfst_lookup(s, "field/zz_nope.dat"));
+    {
+        char want[300];
+        snprintf(want, sizeof want, "%d of %d vanilla paths; the add at 57060000+64; the alias at its target; a missing "
+                                    "path -1", files, files);
+        failures += check("I6 the game's own lookup", got, want);
+    }
+    /* the real table back, and the SDK's view of it */
+    mem_w32(s, 0x80000038u, real);
+    mem_w32(s, 0x803479F4u, flag);
+    call(s, 0x8023A478u);
+    disc_overlay_reset();
+    free(out);
+    return failures;
+}
+
 #include "soa_game.h"
 void fn_80003140(CpuState* s);
 int dispatch_known(uint32_t addr);
@@ -2425,6 +2582,7 @@ int selftest(CpuState* s)
     failures += call_guest_selftest(s, got, sizeof got);
     failures += fused_selftest(s, got, sizeof got);
     failures += game_table_selftest(s, got, sizeof got);
+    failures += vfst_selftest(s, got, sizeof got);
 
     fprintf(stderr, "[selftest] %d failure(s)\n", failures);
     return failures;

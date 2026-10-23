@@ -83,10 +83,10 @@ static uint64_t g_dmas, g_dma_bytes;
 
 static struct {
     char name[28];
-    uint32_t size;
+    uint32_t size, off;
     int stream; /* a .dsp: read a piece at a time, so its buffer is one piece */
 } g_src_file[SRC_FILES];
-static int g_src_files;
+static int g_src_files, g_src_aliases; /* I6: names a mod gave a file already indexed */
 static struct { uint64_t key; int file; } g_src_hash[SRC_HASH];
 static struct { uint32_t m0, m1, ar_next; int file; uint32_t serial; } g_src_ext[SRC_EXTENTS];
 static int g_src_exts;
@@ -208,9 +208,28 @@ static void src_build(void)
         name = (const char*)tbl + strtab + noff;
         if (memchr(name, 0, size - (strtab + noff)) == NULL) continue;
         dsp = src_suffix(name, ".dsp");
+        {
+            /* An alias a mod placed (I6) is the same extent under another
+             * name: indexed once, or the shared head would mark both ambiguous
+             * and name neither. The upload is then named `target (= alias)`. */
+            int k, same = -1;
+            for (k = 0; k < g_src_files; k++)
+                if (g_src_file[k].off == off && g_src_file[k].size == len) {
+                    same = k;
+                    break;
+                }
+            if (same >= 0) {
+                size_t used = strlen(g_src_file[same].name);
+                if (!strchr(g_src_file[same].name, '='))
+                    snprintf(g_src_file[same].name + used, sizeof g_src_file[0].name - used, " (= %s)", name);
+                g_src_aliases++;
+                continue;
+            }
+        }
         if (len < sizeof head || disc_peek(off, head, sizeof head) != sizeof head) continue;
         snprintf(g_src_file[g_src_files].name, sizeof g_src_file[0].name, "%s", name);
         g_src_file[g_src_files].size = len;
+        g_src_file[g_src_files].off = off;
         g_src_file[g_src_files].stream = dsp;
         src_hash_put(src_hash32(head), g_src_files);
         /* a stream's first refill may begin past the .dsp header */
@@ -524,10 +543,12 @@ void aram_report(void)
         int i, named = 0;
         for (i = 0; i < g_src_ivls; i++)
             if (src_ivl_name(i)[0] != '(') named++;
+        char aliases[32] = "";
+        if (g_src_aliases) snprintf(aliases, sizeof aliases, ", %d aliases", g_src_aliases);
         fprintf(stderr,
-                "[aram] census sources: %d disc files indexed; %llu transfers named at the "
+                "[aram] census sources: %d disc files indexed%s; %llu transfers named at the "
                 "transfer, %llu not, in %d ARAM upload runs of which %d are named\n",
-                g_src_files, (unsigned long long)g_src_named, (unsigned long long)g_src_unnamed,
+                g_src_files, aliases, (unsigned long long)g_src_named, (unsigned long long)g_src_unnamed,
                 g_src_ivls, named);
     }
     {

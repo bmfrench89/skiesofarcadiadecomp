@@ -71,6 +71,30 @@ once          u8       0x80310b40           =   0x10                        when
   inside the game's code; a value the width cannot hold; an unknown trigger or condition. A mod with any
   fault is not loaded at all: half a mod is worse than none.
 
+## files.txt: the game's files
+
+A mod may also change which files the game reads from its disc, without touching your disc image: a
+`files.txt` beside `mod.ini`, one line a file (docs/specs/disc-layer.md §3.8, T1):
+
+```
+# verb   path on the disc       a file in this folder, or (alias) a path on the disc
+replace  title/t00.dat          build/t00.dat
+add      field/me099z.sct       build/me099z.sct
+alias    field/a045a.mld        field/a002a.mld
+```
+
+- `replace` serves your file where the disc's was; `add` puts a new file in a directory the disc already has;
+  `alias` gives a disc file a second name, which reads the same bytes. Paths match case-insensitively.
+- The port rebuilds the game's file table at boot and serves your files past the disc's end; the game finds
+  them through its own disc code. Every other file stays exactly where it was, which the self test checks
+  with the game's own lookup.
+- A mistake -- a path that is not there, an `add` of a name that is, an alias of an alias -- refuses the mod
+  with its line. Two mods placing the same path stop the run (exit 9) naming both: remove one.
+- A replacement `.mld` or `.sct` is a game file, built on your own machine from your own disc; mods in this
+  repository carry only aliases, so they hold none of the game's bytes. `examples/mods/map-alias` gives the
+  missing map 045 map 002's room and script: a warp to 045a lands in 002a's room.
+- Text deltas (`delta`) and per-map swaps (`swap`) are planned (I7, I8) and refused for now.
+
 ## Options a player sets
 
 A manifest 2 `mod.ini` may declare up to 16 options (docs/specs/mod-options.md):
@@ -153,5 +177,6 @@ port's own tests.
 
 - `examples/mods/encounters-off`: one patch, no options.
 - `examples/mods/encounter-scale`: a pointer, a `for` run, `*=`, and an option.
+- `examples/mods/map-alias`: two aliases in a `files.txt`, map 045 given map 002's room and script.
 - `examples/mods/map-log`: the native template, with an option.
 - `mods/encounter-rate`, `mods/autotext`, `mods/coop`: the native mods the port ships.

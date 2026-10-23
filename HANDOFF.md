@@ -417,7 +417,15 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-22)
+## Where the last session stopped (2026-10-23)
+
+**Latest, 2026-10-23: T1's core, I6, built** (FINDINGS "I6", `docs/specs/disc-layer.md` §3.8). A mod's `files.txt`
+replaces, adds and aliases disc files: the table is rebuilt at boot, the files served past the image's end, and the
+game's own lookup finds all 5,552 vanilla paths where they were (self test). `examples/mods/map-alias` sends a warp to
+the missing map 045a into 002a's room, pixel-identical to a direct warp there. **Next in the gameplay core:** R0, the
+battle harness; I7 (text deltas) when a mod needs one, I8 (per-map swaps) with N2.
+
+**Before that, 2026-10-22:**
 
 **Latest, 2026-10-22: T9 built** (FINDINGS "T9", `docs/specs/game-names.md`; D-43, the gameplay core). The
 game's data by name: 68 addresses in `config/gamedata.txt`, each held to the instruction in the DOL that reaches it

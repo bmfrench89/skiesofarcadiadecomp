@@ -140,6 +140,13 @@ int main(int argc, char** argv)
     s.mem = (uint8_t*)calloc(1, MEM_IMAGE_SIZE);
     mod_set_host_buttons(host_stub);
     mod_set_pad_reader(pad_stub);
+    {
+        /* T1's pass first, as main.c makes it (I6): the files.txt lines, which
+         * no disc here places, then the mods */
+        DiscFileOp* ops;
+        int nops = mod_scan_files(argv[1], dol, n, &ops);
+        if (nops) printf("files %d\n", nops);
+    }
     printf("loaded %d\n", mod_load(&s, argv[1], dol, n));
     while (scanf("%63s", cmd) == 1) {
         if (!strcmp(cmd, "set") && scanf("%x %x", &a, &v) == 2) mem_w32(&s, a, v);

@@ -1317,6 +1317,41 @@ int main(int argc, char** argv)
 
     if (!load_dol(s.mem, dol, dol_size)) return 1;
 
+    /* T1 (I6, docs/specs/disc-layer.md §3.8): mods' files.txt, read before
+     * the file table is parked -- the table rebuilt with their replace, add
+     * and alias lines, and the drive serving their files past the image's
+     * end. No mod code runs here; mod_load later passes over the mods this
+     * refused. With no files.txt the table is the disc's, byte for byte. */
+    {
+        const char* mods = getenv("SOA_MODS");
+        DiscFileOp* ops = NULL;
+        int nops = mods && *mods ? mod_scan_files(mods, dol, dol_size, &ops) : 0;
+        if (nops > 0) {
+            uint8_t* rebuilt = NULL; /* kept for the run: the game's table, and disc.c's */
+            size_t rebuilt_n = 0;
+            char vwhy[600];
+            int placed = 0, k, r = disc_overlay_build(fst, fst_size, ops, nops, &rebuilt, &rebuilt_n, vwhy, sizeof vwhy);
+            if (r < 0) {
+                fprintf(stderr, "[mod] %s; stopping (exit 9)\n", vwhy);
+                return 9;
+            }
+            if (r == 0) {
+                fprintf(stderr, "[disc] the mods' file table could not be built: %s; stopping (exit 9)\n", vwhy);
+                return 9;
+            }
+            for (k = 0; k < nops; k++) placed += !ops[k].refused;
+            if (placed) {
+                fprintf(stderr, "[disc] overlay: %d file(s) placed by mods; the file table is %zu bytes (the disc's %zu)\n",
+                        placed, rebuilt_n, fst_size);
+                fst = rebuilt;
+                fst_size = rebuilt_n;
+                disc_overlay_install(rebuilt, rebuilt_n);
+            } else {
+                free(rebuilt);
+            }
+        }
+    }
+
     /* The apploader parks the FST at the top of memory, 32-byte aligned, and
      * ends the arena where it starts. Both files are bounded before they are
      * believed: disc.c hands back the whole 0x440-byte header, and an FST

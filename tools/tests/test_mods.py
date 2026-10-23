@@ -2934,6 +2934,7 @@ def test_the_shipped_mods_are_manifest_2():
         "mods/encounter-rate",
         "examples/mods/encounters-off",
         "examples/mods/map-log",
+        "examples/mods/map-alias",  # T1 (disc-layer I6)
     ):
         keys = {}
         for line in (ROOT / folder / "mod.ini").read_text(encoding="utf-8").splitlines():
@@ -4413,3 +4414,85 @@ def test_m16b_coop_s_option_sets_it_and_its_switch_still_wins(driver, tmp_path):
     ), err
     out, err = play(driver, tmp_path, "", SOA_MOD_OPT="coop.slots=1,3")
     assert "loaded 0" in out and "the value is not one of off|0|1|2|3" in err, err
+
+
+# --------------------------------------------------------------------------
+# T1, the virtual disc (disc-layer I6): a mod's files.txt, read before the
+# file table is parked (mod_scan_files, which the fake guest calls before
+# mod_load as main.c does). The rebuild itself is disc_check.py's.
+# --------------------------------------------------------------------------
+
+
+def files_mod(
+    root: Path, name: str = "placer", files: str = "", sources: dict | None = None
+) -> Path:
+    d = mod(root, name, patches=None, ini=ini2(name))
+    (d / "files.txt").write_text(files, encoding="utf-8")
+    for rel, data in (sources or {}).items():
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_bytes(data)
+    return d
+
+
+@needs_cc
+def test_i6_a_mod_of_files_txt_alone_loads_and_is_recorded(driver, tmp_path):
+    """mod.ini and files.txt, nothing else: it loads, its lines are read, and
+    the recording names it. The mutation, load_one's old condition put back,
+    refuses it as one that would do nothing."""
+    files_mod(
+        tmp_path,
+        files="replace title/t00.dat build/t00.dat\nalias field/a045a.mld field/a002a.mld\n",
+        sources={"build/t00.dat": b"\x01\x02\x03"},
+    )
+    out, err = play(driver, tmp_path, "describe")
+    assert "files 2" in out and "loaded 1" in out, err
+    assert "loaded placer (" in err and "and files.txt" in err, err
+    assert re.search(r"describe \[mods=placer@1\.0:[0-9a-f]{8}\]", out), out
+
+
+@needs_cc
+def test_i6_a_mod_of_mod_ini_alone_is_still_refused_in_the_new_words(driver, tmp_path):
+    mod(tmp_path, "empty", patches=None, ini=ini2("empty"))
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 0" in out, err
+    assert (
+        "no patches.txt, no mod.dll and no files.txt beside it, so it would do nothing"
+        in err.replace("mod.so", "mod.dll")
+    ), err
+
+
+@needs_cc
+def test_i6_the_recorded_hash_follows_files_txt_and_every_source(driver, tmp_path):
+    """One byte of files.txt, or one of a source, changes the mod's recorded
+    hash: what it places on the disc is part of what a recording depends on."""
+
+    def recorded(files: str, source: bytes) -> str:
+        root = tmp_path / str(len(list(tmp_path.iterdir())))
+        files_mod(root, files=files, sources={"build/x.dat": source})
+        out, err = play(driver, root, "describe")
+        m = re.search(r"describe \[mods=placer@1\.0:([0-9a-f]{8})\]", out)
+        assert m, out + err
+        return m.group(1)
+
+    base = recorded("replace title/t00.dat build/x.dat\n", b"abc")
+    assert recorded("replace title/t00.dat build/x.dat\n", b"abc") == base
+    assert recorded("replace title/t01.dat build/x.dat\n", b"abc") != base
+    assert recorded("replace title/t00.dat build/x.dat\n", b"abd") != base
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "files, words",
+    [
+        ("delta field/x.sct d.delta\n", "`delta` is not built yet (I7)"),
+        ("swap battle/x.dat x.dat when map=101b\n", "`swap` is not built yet (I8)"),
+        ("move field/x.dat y.dat\n", "`move` is not a verb"),
+        ("replace field/x.dat\n", "a line is `replace <path on the disc> <file in this folder>`"),
+        ("replace field/x.dat ../outside.dat\n", "is not a file in this folder"),
+        ("replace field/x.dat missing.dat\n", "cannot read"),
+    ],
+)
+def test_i6_a_faulty_files_txt_refuses_the_mod_with_its_line(driver, tmp_path, files, words):
+    files_mod(tmp_path, files=files)
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 0" in out and "placer/files.txt:1:" in err and words in err, err
