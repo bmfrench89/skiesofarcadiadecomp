@@ -45,7 +45,9 @@ def stale(data: G.GameData) -> list[Path]:
     """The made files that differ from what the file makes now."""
     out = []
     for path, text in made(data).items():
-        if not path.exists() or path.read_bytes().decode("utf-8") != text:
+        # A Windows checkout may give the file CRLF (MODDING-API.md's check does the same).
+        have = path.read_bytes().decode("utf-8").replace("\r\n", "\n") if path.exists() else None
+        if have != text:
             out.append(path)
     return out
 
