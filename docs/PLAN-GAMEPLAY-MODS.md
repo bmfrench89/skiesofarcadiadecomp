@@ -1084,6 +1084,16 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - An NG+ start shows the carried levels in the status screen (frame opened), and a peek shows the carried gold at `0x8030BB40`.
 - A "no items" run cannot select Item in a harness battle.
 
+**N12. A world editor** — *XL, months; after T1, T4, T6 and M8, with N3, N5 and N7 as the content it would edit.* **Owner.** *The owner's idea, 2026-10-22, from the Wind Waker HD port's v0.4.0 editor.*
+- **What that one does** (its README and CHANGELOG, read 2026-10-22): `--editor` opens a free camera with docked panels (toolbar, outliner, inspector, problems and export, log); villagers, enemies, chests, switches, doors and imported `.glb` models are placed with move and turn handles, snapping, undo and redo; rooms, entries, exits, locked doors and warps make mod levels; scenes have steps, camera keys and choices; quests are a visual graph with "start at this step"; saving writes only the mod's own package; a test mode never touches the real save; a check lists unreachable rooms, keys behind their own doors and the like; and an optional, off-by-default MCP access lets an AI assistant drive nearly every step, with removals and exports approved in the game.
+- **Here it is a tool over slices this plan already has,** not a new capability: placing and moving a map's objects is T1's per-map swaps (I8) written by a UI; quests and scenes are T4's assembled scripts with N3's flags claimed by name; new rooms are T8's geometry (N7); the check is T6's walker; the panels are M8's overlay. Nothing of it can come before those.
+- **In stages, each useful alone:**
+  - **a. The inspector** (L): a free camera and an outliner of the loaded map's objects, NPCs, chests, warps and encounter zones, read from the structures content-systems.md maps, with each one's script and flags shown. Read-only; it needs T9's names and the overlay.
+  - **b. Moving and placing the game's own objects** (L), saved as a T1 per-map mod and tested in a mode with its own card copy.
+  - **c. Quests and scenes** (XL), on T4, with N3 as the first thing built in it.
+  - **d. New rooms and islands** (XL), on T8, N7 and N8.
+  - **e. MCP access** (M), off by default, local only, a fresh token a session, removals and exports approved in the game: the same rules that one keeps.
+
 ### Track X — Beyond the GameCube
 
 **Goal.** Mods hold more than the disc, the RAM and the save allow. Everything is off by default.
