@@ -105,10 +105,15 @@ typedef struct GxrBackend {
      * it sleeps: where a backend that lands late lands what it holds, since a
      * producer waiting for a landing publishes nothing more. May be NULL. */
     void (*idle)(void);
+    /* Draws a command with efb 1 into an EFB of its own (V12), so H17's
+     * in-between stream can run on it; SOA_INTERP is refused with any other. */
+    int two_efbs;
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */
 void gxr_backend_screen(const uint8_t* rgba, int w, int h); /* a screen copy's pixels, exactly g_screen's size */
+void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h); /* an in-between screen copy's, into g_screen_mid (V12) */
+int gxr_interp(void); /* SOA_INTERP: a backend sizes its EFB for two at start (V12) */
 /* lands_late: every command below `through` has its guest RAM writes in
  * place. Raised only, by whichever thread runs the backend. */
 void gxr_backend_landed(long long through);

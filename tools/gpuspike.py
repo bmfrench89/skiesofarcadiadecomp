@@ -1486,6 +1486,93 @@ def contrast(
     return 0 if ok else 1
 
 
+# V12: the in-between half rasterizes where the real one would within one
+# level, its attributes interpolated at another row; H10's five pairs differ
+# at 6 to 54 pixels of 307,200 (FINDINGS "V12"). Twice the most, or so.
+MID_MOVED = 0.0005
+
+
+def pairs(prof: toolchain.Profile, mutate: str | None, exe: Path | None) -> int:
+    """V12 (docs/specs/interp-gpu.md): H10's five pairs in build/perfset, each
+    replayed three ways by soa.exe -- the CPU's three passes, the GPU's three
+    passes, and the GPU's two with SOA_INTERP=1, where B is drawn once with both
+    streams, the in-between one into the EFB's second half. The GPU's two runs
+    must give the same B.png and B.mid.png byte for byte, and the GPU's
+    in-between image must pass V0 against the CPU's. A mutation goes to the
+    interpolated run alone, and must fail it."""
+    import midpoint
+    import perfbench
+
+    code = ready(prof)
+    if code is not None:
+        return code
+    exe = (exe if exe is not None else ROOT / "gen" / f"soa{prof.exeext}").resolve()
+    if not exe.exists():
+        print(f"skip: no {exe} (python tools/recompile.py --link)")
+        return SKIP
+    rows = perfbench.read_manifest()
+    out = build_dir(prof) / "pairs"
+    failures = 0
+    for scene, pair in midpoint.PAIRS.items():
+        if any(n not in rows or perfbench.verify(n, rows[n][1]) for n in (pair.f, pair.f1)):
+            print(f"skip: {scene}'s captures are missing or differ from the perfset manifest")
+            return SKIP
+        got = {}
+        for run, extra in (
+            ("cpu", {}),
+            ("gpu", {"SOA_GPU": "vulkan"}),
+            ("interp", {"SOA_GPU": "vulkan", "SOA_INTERP": "1"}),
+        ):
+            d = out / scene / run
+            shutil.rmtree(d, ignore_errors=True)
+            d.mkdir(parents=True)
+            bases = [d / Path(n).name for n in (pair.f, pair.f1)]
+            for name, base in zip((pair.f, pair.f1), bases, strict=True):
+                for part in perfbench.PARTS:
+                    shutil.copyfile(midpoint.SET / f"{name}{part}", f"{base}{part}")
+            env = {**clean_env(), **extra}
+            if mutate and run == "interp":
+                env["SOA_GPU_MUTATE"] = mutate
+            proc = subprocess.run(
+                [str(exe), "--replay", *map(str, bases)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+            real, mid = Path(f"{bases[1]}.png"), Path(f"{bases[1]}.mid.png")
+            if proc.returncode != 0 or not real.exists() or not mid.exists():
+                print(f"FAIL {scene} {run}: exit {proc.returncode}, the pictures not both written")
+                print((proc.stdout or "")[-600:] + (proc.stderr or "")[-600:])
+                failures += 1
+                break
+            got[run] = (real, mid)
+        if len(got) < 3:
+            continue
+        real_same = png.read_rgba(got["gpu"][0])[2] == png.read_rgba(got["interp"][0])[2]
+        a, b = png.read_rgba(got["gpu"][1])[2], png.read_rgba(got["interp"][1])[2]
+        off = [max(abs(a[i + k] - b[i + k]) for k in range(3)) for i in range(0, len(a), 4)]
+        moved = sum(1 for d in off if d)
+        mid_near = len(a) == len(b) and max(off, default=0) <= 1 and moved <= MID_MOVED * len(off)
+        metrics = imgdiff.compare(got["cpu"][1], got["interp"][1], out / scene / "mid_heat.png")
+        bad = metrics.failures()
+        listed = bool(bad) and f"{Path(pair.f1).parent.name}_{Path(pair.f1).name}" in BY_DESIGN
+        ok = real_same and mid_near and (not bad or listed)
+        failures += not ok
+        print(
+            f"{'pass' if ok else 'FAIL'} {scene:9} the GPU's two runs: B.png "
+            f"{'the same' if real_same else 'DIFFERS'}, B.mid.png {moved} pixels apart by up to "
+            f"{max(off, default=0)}; the in-between image against the CPU's"
+            f"{' (by design, as its frame)' if listed else ''}: {metrics.line()}"
+        )
+        for line in bad:
+            print(f"     {line}")
+    print(f"[gpuspike] pairs {'passes' if not failures else 'FAILS'}")
+    return 1 if failures else 0
+
+
 def reproduced(a: Path, b: Path) -> set[str]:
     """The snapshots two runs made byte for byte alike, by name."""
     theirs = {p.name for p in b.glob("*.png")}
@@ -2218,6 +2305,7 @@ def main(argv: list[str] | None = None) -> int:
             "copyimage",
             "present",
             "logictest",
+            "pairs",
         ),
     )
     ap.add_argument(
@@ -2319,6 +2407,8 @@ def main(argv: list[str] | None = None) -> int:
         return present(prof, args.mutate, args.filters, args.overlay)
     if args.command == "logictest":
         return logictest(prof)
+    if args.command == "pairs":
+        return pairs(prof, args.mutate, args.exe)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)
     return selftest(prof, args.mutate, args.logicop)

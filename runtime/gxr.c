@@ -2177,8 +2177,8 @@ static void workers_start(void)
     if (g_backend)
         fprintf(stderr, "[gxr] the %s backend draws every command, %s\n", g_backend->name,
                 n ? "on a thread of its own" : "on the producer");
-    if (g_interp && g_backend) {
-        fprintf(stderr, "[interp] SOA_INTERP is refused with the %s backend: its second EFB is V12; off\n", g_backend->name);
+    if (g_interp && g_backend && !g_backend->two_efbs) {
+        fprintf(stderr, "[interp] SOA_INTERP is refused with the %s backend, which has one EFB; off\n", g_backend->name);
         g_interp = 0;
     }
     /* A live run: record and lerp from the first frame. A pair replay has
@@ -2545,10 +2545,16 @@ static int frame_is_cut(void)
     return (double)g_f_far[g_cut_idx] > g_cut_share * (double)g_f_matched3d;
 }
 
+/* SOA_INTERP as gxr_enabled reads it, or will: before that first read it is
+ * read here without making it, since gxr_enabled reads every switch once and
+ * keeps them, and a backend sizing its EFB at start (V12) asks before a
+ * caller such as the spike's driver has set SOA_RENDER. */
 int gxr_interp(void)
 {
-    gxr_enabled();
-    return g_interp;
+    const char* ip;
+    if (g_enabled >= 0) return g_interp;
+    ip = getenv("SOA_INTERP");
+    return ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
 }
 
 int gxr_pair_mode(unsigned flags, float t)
@@ -2986,6 +2992,19 @@ void gxr_backend_screen(const uint8_t* rgba, int w, int h)
         exit(8);
     }
     for (y = 0; y < h; y++) memcpy(g_screen[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
+}
+
+/* V12: an in-between screen copy's pixels, into the buffer H17a's PNG and
+ * check read; nothing of the real frame's. */
+void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h)
+{
+    int y;
+    if (w != g_screen_w || h != g_screen_h) {
+        fprintf(stderr, "[gxr] a backend's screen copy is %dx%d where the copy is %dx%d; stopping the run\n", w, h,
+                g_screen_w, g_screen_h);
+        exit(8);
+    }
+    for (y = 0; y < h; y++) memcpy(g_screen_mid[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
 }
 
 /* One filtered EFB sample: the three rows the copy filter reads, weighted and
@@ -3591,6 +3610,8 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
             else if (near_rows) g_fence_after_near = D->seq + 1;
             else g_fence_after = D->seq + 1;
             if (v & 0x800u) publish_clear(s, bp, v);
+        } else if (g_backend && (v & 0x800u)) {
+            publish_clear(s, bp, v); /* a backend's copy never clears (3.1), the in-between one no more than the real */
         }
         g_target = 0;
         g_interp_images++;
