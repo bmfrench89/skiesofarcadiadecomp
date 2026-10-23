@@ -63,6 +63,7 @@ static int slot_of(CpuState* s, uint32_t actor)
 
 void fn_800108EC(CpuState* s)
 {
+    s->pc = 0x800108ECu; /* first, as the translation's block head does: a sample in here names it (test_hle_pc) */
     uint32_t base = s->gpr[3], element = s->gpr[4], attacker = s->gpr[5], target = s->gpr[6];
     uint32_t original, returned;
     recomp_fn_800108EC(s);
