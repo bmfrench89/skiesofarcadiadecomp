@@ -50,6 +50,14 @@
  * alignment or in the game's code is passed over and said once. An M6
  * patch applied on a map load logs each target as `address: was -> now`.
  *
+ * T9 (docs/specs/game-names.md): a name wherever an address goes, from
+ * config/gamedata.txt (docs/MODDING-NAMES.md), its width the name's unless
+ * the line gives one, an index in brackets or the `for`'s z:
+ *
+ *       on_map_load  encounter.table[z].rate  *= 0.5  for z=0..7
+ *
+ * is the patch above.
+ *
  * A mod with any fault is refused whole and says why, with the file and
  * line: a mod half-applied is worse than one that is not there. Refused are
  * a badly spelled address (a lowercase 0x and exactly eight hex digits, the

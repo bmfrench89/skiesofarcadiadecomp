@@ -29,16 +29,14 @@ Python.
 
 ## Finding an address
 
-The game keeps its state in fixed words, which a mod reads and writes. Some the port already names:
-
-| Address | What it is |
-|---|---|
-| `0x803475CC` | the scene: 6 is the field, 7 a battle |
-| `0x80311AEC` | the field's state: 3 and 5 loading, 8 running |
-| `0x80311AC0`, byte `0x80311AC8` | the map the field has committed to, number and letter (`116`, `'a'`) |
-| `0x80310B3C` | the story flags: flag n is bit n % 32 of the word at `+ n / 32 * 4` |
-| `0x80346D28` | the step counter the random-battle roll reads |
-| `0x803474BC` | a pointer to the map's encounter table: eight zones of 132 bytes, each one's rate the u16 at +2 |
+The game keeps its state in fixed words, which a mod reads and writes. About seventy have names, each
+proved against the instruction in the game's code that reaches it: [MODDING-NAMES.md](MODDING-NAMES.md)
+lists them, from `scene` (6 the field, 7 a battle) and `field.state` to the party's records, gold and
+inventory, the battle's context and the encounter table. A `patches.txt` line may give a name wherever
+it gives an address -- `once party.gold = 50000`, `once party.character[1].hp = 999`, and
+`on_map_load encounter.table[z].rate *= 0.5 for z=0..7` -- with the name's own width unless the line
+gives one. A DLL mod includes `soa_gamedata.h` after `soa_mod.h` and calls
+`soa_party_gold_get(api, &gold)` and the like, which follow pointers themselves.
 
 The research behind them is in `docs/research/` (`encounters.md` for the battle words) and
 `docs/FINDINGS.md`. To find your own, watch a word while you play: `SOA_PEEK=0x80346D28@1000-1100`

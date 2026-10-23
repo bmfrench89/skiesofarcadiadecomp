@@ -9622,3 +9622,47 @@ plan Turbo, 12 workers).
   With the CPU renderer the same runs showed 884 and 588 (FINDINGS "H17b"). On this PC the GPU is what makes 60
   real. The `[present]` histogram times one present a frame; the in-between present inside `gxv_present` is not timed.
 - **Not measured:** the pacing at 60 or 120 Hz and the look, both at the owner's session D with H17b's.
+
+**T9: the game's data by name, each address held to the instruction that reaches it.** 2026-10-22. Spec:
+`docs/specs/game-names.md`; the owner's answer D-43 (the gameplay core, T9 first).
+
+- **What it is** [V]:
+  - `config/gamedata.txt` names 68 addresses and five records (`ect_zone`, `character`, `slot`, `battle_context`,
+    `opcode`). Each line carries `ref`: an instruction in the DOL that reaches the address. That is a `d(r13)` or
+    `d(r2)` access, from the bases `__init_registers` sets (r13 `0x8034E720`, r2 `0x80350000`), or one off a
+    register a `lis` set just before. It may instead be `REF+OFF`, an instruction reaching the block the address
+    sits OFF bytes into.
+  - `tools/gamedata.py`:
+    - `find` lists the instructions reaching an address, and chose every ref;
+    - `check` decodes them all, and finds 68 of 68;
+    - `generate` writes `runtime/soa_gamedata.h` (accessors over the mod API that follow pointers themselves),
+      the runtime's name table, and `docs/MODDING-NAMES.md`.
+  - `patches.txt` takes a name wherever it takes an address: an index in brackets or the `for`'s `[z]`, a field
+    through a pointer, the name's width unless the line gives one.
+  - The three shipped mods, `examples/mods/encounter-scale`, `soak.py` and `sct.py` use the names now. `mod.c`'s
+    and `tick.c`'s own `#define`s are held to them by a test.
+- **How the refs were found:** `find` re-found every instruction the research quotes, for example `800C25D8 stw
+  -29284(r13)` for the encounter table, `800C1FE8` for the step counter and `80147E88` for the ship battle's flag.
+  Some words the code reaches only through their block's base, and nothing reaches them directly: gold, the field
+  state (the state table's slot 6), the inventory lists, and the encounter multiplier and battle overrides. Those
+  lines are `REF+OFF`.
+- **Three defects found while building it**, each caught before anything used it:
+  - `type_size` gave every scalar four bytes. A record's bounds check failed on its first use (`slot.count`).
+  - The generated accessor for a pointer to an array applied the index before following the pointer
+    (`read32(0x803474BC + i*132)`). Reading the generated code caught it; the index now follows the pointer.
+  - An `soa.exe` not relinked after the change refused the first in-game name with the old message.
+- **The checks, each shown able to fail** [V]:
+  - `test_gamedata.py`, needing the disc's DOL: every ref re-found. *Mutations:* `encounter.steps` moved by four,
+    and `ect_zone.rate`'s offset moved by two ("not 4 (modulo 132)"), each caught with its line.
+  - Disc-free: the grammar refuses eight faults with their lines, the made files are current, and the runtime's
+    eleven copies agree.
+  - `test_mods.py` on the fake guest: four patches by name and by address leave the same eleven words. *Mutation:*
+    `party.gold` moved in the runtime's table, and the words differ. Three bad names are refused with their line.
+    A DLL built against the header reads a scalar (1234), an array record's field (hp 500), a field through a
+    pointer (77) and a pointer array's field (rate 7), and writes the gold big-endian (`FFFFFFFB`).
+- **In the game** [V, `build/t9/`]: part G's card, the Continue, 4500 frames. `encounter-scale` by name
+  (`encounter.table[z].rate *= 0.5`) and by address halved the same eight rate words at `a116a`'s load, at the same
+  frame (2736): zones 0 to 3 from `002D` to `0016`, zones 4 to 7 left at 0. The three mods built against the header
+  load.
+- **Not in T9:** the DOL tables' record layouts (T3 reads their bases here), names the research marks [I] until a
+  ref proves them, and `examples/mods/lab`'s many raw addresses, a sample of the old way kept as it is.

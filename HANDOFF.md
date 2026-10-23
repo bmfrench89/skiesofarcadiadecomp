@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1783 |
+| Python tests | 1814 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -418,6 +418,14 @@ a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-22)
+
+**Latest, 2026-10-22: T9 built** (FINDINGS "T9", `docs/specs/game-names.md`; D-43, the gameplay core). The
+game's data by name: 68 addresses in `config/gamedata.txt`, each held to the instruction in the DOL that reaches it
+(`python tools/gamedata.py check`), a generated header for DLL mods, and names in `patches.txt`
+(`once party.gold = 50000`). The owner also asked for a world editor like the Wind Waker port's: planned as
+PLAN-GAMEPLAY-MODS N12, after T1, T4, T6 and T8. **Next in the gameplay core:** T1 (the virtual disc), then R0.
+
+**Before that, the same day:**
 
 **Latest, 2026-10-22: V12 built** (FINDINGS "V12", `docs/specs/interp-gpu.md`; D-42). With `gpu = vulkan` and
 `interp = 1`, the GPU draws the in-between stream into the lower half of a double-height EFB and its presenter shows

@@ -4,6 +4,12 @@ Written 2026-10-22 for the owner's answer that day (PLAN-NEXT D-43: the gameplay
 [PLAN-GAMEPLAY-MODS.md](../PLAN-GAMEPLAY-MODS.md) T9 (its "until M6 lands" is past: M6 landed 2026-10-14), the
 research documents' address tables, and the mod API. The code was mapped first, at 7976cf6.
 
+**Built 2026-10-22** (FINDINGS "T9"): Done lines 1 to 5. *As built:* 68 names, not about a hundred -- each went in
+only with an instruction `find` turned up, and the DOL tables whose counts the research does not give wait for T3;
+a line's `ref` may be `REF+OFF`, an instruction reaching the block the name sits OFF bytes into, since the code
+reaches gold, the field state and the inventory lists only through their blocks' bases; and
+`tools/soa/gamedata.py` reads the file rather than being generated from it.
+
 **Why.** Every mod so far names game memory by raw hex: `0x803474BC` in `mods/encounter-rate`, `0x80346E4C` in
 `mods/autotext`, a dozen in `examples/mods/lab`, and copies in `mod.c`, `tick.c`, `soak.py` and `sct.py`. The
 research found about a hundred such addresses, each with the instruction that reaches it, but nothing holds a name

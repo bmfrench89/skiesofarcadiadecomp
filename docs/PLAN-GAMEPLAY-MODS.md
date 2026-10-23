@@ -762,7 +762,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 *Done:* an existing map's MLD round-trips semantically, then a room with one wall moved draws and collides.
 
-**T9. Named game addresses and a generated header** — *several days, before T3 and R0.*
+**T9. Named game addresses and a generated header** — *several days, before T3 and R0. **Done 2026-10-22** to [specs/game-names.md](specs/game-names.md) (FINDINGS "T9"): 68 names in `config/gamedata.txt`, each held to the instruction that reaches it; the M6 notes below are past, since M6 landed 2026-10-14.*
 - Name the data the research found, extending `config/names.txt` and `tools/inventory.py` to data symbols (`symbols.txt` already lists them with sizes), plus one file of struct offsets shared with T3 and T5.
 - Generate a C header beside `runtime/soa_mod.h` whose accessors call `SoaModApi`'s big-endian reads and writes, never host structs, plus a Python module.
 - `patches.txt` and T3 accept names.
