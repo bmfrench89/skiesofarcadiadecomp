@@ -4,6 +4,10 @@ Written 2026-10-22 for the owner's answer that day (PLAN-NEXT D-42: "H17b, then 
 [gpu-backend.md](gpu-backend.md) V12 and 3.1, [interp.md](interp.md) (H17a), [interp-live.md](interp-live.md) (H17b)
 and FINDINGS "H17a" and "H17b". The code was mapped first, at 7c4d896.
 
+**Built 2026-10-22** (FINDINGS "V12"): Done lines 1 to 5, and 6 on this PC's 85 Hz display with H17b's check knob;
+the pacing and the look wait for the owner's session D with H17b's. Line 2 is restated below: the two halves agree
+within one level, not byte for byte.
+
 **Why.** The CPU renderer reaches 32 to 43 images a second with interpolation on the Ally X, so H17b's budget keeps
 the in-between images off in the opening and the field. The Vulkan backend draws a frame for 1.1 cores against the CPU
 renderer's 4.8 (FINDINGS "V6a"); drawing the in-between stream there is what can make 60 real. Today `SOA_INTERP` is
@@ -57,14 +61,17 @@ output.
 ## 4. Done
 
 1. **Off changes nothing:** `gpuspike.py selftest`; `contrast --set corpus,perfset,gpuset`, all 67 the same pixels,
-   spike and `soa.exe`; replay 23/23 and `title --check` (the CPU's). *Mutation:* the real half drawn with the moved
-   viewport fails `contrast`.
+   spike and `soa.exe`; replay 23/23 and `title --check` (the CPU's). With one half nothing reads `efb` and no state
+   changes; the real half under interpolation is line 2's `B.png`.
 2. **The live stream is the GPU's own midpoint, byte for byte:** `gpuspike.py pairs` runs H10's five pairs
    (`build/perfset`) on the GPU twice, `--replay A B` with `SOA_INTERP=1` (two passes, both streams) and without
-   (three passes), and both `B.png` and `B.mid.png` are byte-identical between them. *Mutation:* the in-between
-   command drawn in the real half differs.
+   (three passes): `B.png` byte-identical between them, and `B.mid.png` within one level at no more than 0.05% of
+   its pixels. *As built:* the lower half's attributes are interpolated at another row, and 0 to 54 pixels of 307,200
+   differ by one level in the five pairs; the real half, at the viewport it always had, is byte for byte. *Mutation:*
+   `--mutate midhalf`, the in-between command drawn in the real half, fails all five.
 3. **The GPU's in-between images pass V0 against the CPU's:** the same five, `B.mid.png` on the GPU against the CPU's,
-   under `imgdiff`'s V0 thresholds, as `oracle` holds single frames.
+   under `imgdiff`'s V0 thresholds, as `oracle` holds single frames. The field's fails exactly as its frame does,
+   which `oracle` lists by design (coplanar decals' depth), and is judged so.
 4. **The real frame untouched:** `SOA_INTERP=check SOA_GPU=vulkan`, one live run, every frame's real picture the same
    before and after its in-between copy.
 5. **The cost:** `partl`, 3000 frames, every frame drawn, `SOA_GPU=vulkan`, with and without `SOA_INTERP=1`: the

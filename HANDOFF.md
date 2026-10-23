@@ -419,6 +419,15 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-22)
 
+**Latest, 2026-10-22: V12 built** (FINDINGS "V12", `docs/specs/interp-gpu.md`; D-42). With `gpu = vulkan` and
+`interp = 1`, the GPU draws the in-between stream into the lower half of a double-height EFB and its presenter shows
+each in-between image for one 60 Hz refresh before its frame. Windowed at the cap the game kept full speed (field
+29.2, opening 29.9) with 2773 of 3000 and 3781 of 5000 frames given one; the in-between image costs about 1.35 ms
+of GPU time. **Next:** the owner's session D at 60 or 120 Hz judges H17b and V12 together (the display here is 85
+Hz); then H18 for whatever that list holds.
+
+**Before that, the same day:**
+
 **Latest, 2026-10-22: H17b built** (FINDINGS "H17b", `docs/specs/interp-live.md`; D-42, "H17b, then V12"). The
 window shows each in-between image for one 60 Hz refresh before its frame (`interp = 1` in soa.ini or the menu),
 where the display is at 60 or 120 Hz; a screen ring hands it whole frames (closing B1); a cut detector holds the

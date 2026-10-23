@@ -1829,6 +1829,7 @@ python tools/gpuspike.py live title --range 1290-1400   # a running game on CPU 
 python tools/gpuspike.py queue       # V6a's queue frame: the CPU's hash on the thread, inline and stalled; 10 s
 python tools/gpuspike.py overlap     # V6b: the copy hazards with the GPU as consumer, held to its synchronous run; 15 s
 python tools/gpuspike.py specdiff --set corpus,perfset,gpuset   # V7: specialised and interpreted, the same bytes; 40 s
+python tools/gpuspike.py pairs                                  # V12: H10's five pairs on the GPU, the live in-between stream against three passes and the CPU; --mutate midhalf must fail it
 python tools/gpuspike.py copyimage   # V7: a copy sampled in its own frame, from the GPU's pool; 2 s
 python tools/gpuspike.py present     # V8: the GPU's presenter against picture_scale, 32 layouts; 2 s
 python tools/gpuspike.py oracle      # corpus and benchmark set, CPU against GPU, V0's verdict; 40 s

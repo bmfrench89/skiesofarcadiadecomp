@@ -9576,3 +9576,49 @@ plan Turbo, 12 workers).
 - **Not measured:** the pacing at 60 or 120 Hz, which needs the display there (D-2), and the look: Done lines 4 and 5
   at the owner's session D. What the owner will see on this machine is mostly repeats, until V12 draws the in-between
   images on the GPU.
+
+**V12: the in-between images on the GPU, and on this PC the game keeps full speed with them.** 2026-10-22. Spec:
+`docs/specs/interp-gpu.md`; the owner's answer D-42. Runs in `build/v12/`, this PC on AC, the display at 85 Hz.
+
+- **What it is** [V, `runtime/gxv.c`, `gxr.c`, `window.c`]: under `SOA_INTERP` the Vulkan backend's colour and depth
+  images are twice as tall. A command with `efb` 1 draws in the lower half through a dynamic viewport and scissor
+  moved down by EFB_SH; its clears and screen copy use that half, and the copy reads back into `g_screen_mid`. Real
+  and in-between draws arrive interleaved, and two framebuffers would have ended the render pass at every draw. The
+  interlock route reads the storage image at the fragment's own coordinate, already in its half. The snapshot route
+  copies both halves, since its shader indexes by the fragment's row, so no shader changed. With one half nothing
+  reads `efb`.
+- **The presenter** (V12b): each of the three slots has a partner for its in-between image. A real copy with an
+  in-between copy to follow waits, and the in-between copy publishes both. `gxv_present` shows the partner for one
+  60 Hz refresh, through P5a's filters when they are on, then the frame. H17b's budget now runs once any window has
+  said whether it shows them.
+- **Three defects found on the way**, each fixed:
+  - H17a's in-between screen copy published its clear only when the copy was foreign. A backend's copy never clears,
+    so EFB 1 would never have been cleared. The mapping found this.
+  - `gxr_interp` called `gxr_enabled`, which reads every switch once. The GPU now asks at start, before the spike's
+    driver sets `SOA_RENDER`, so the renderer was cached as disabled: the spike's self test drew nothing.
+  - H17b's restart count began again at any frame over 34 ms. The opening runs one in ten such frames even without
+    interpolation, so the stream stopped once and never came back (2072 of 5000 frames without an image). Now a slow
+    frame adds two to the count, and the opening shows 3781 of 5000.
+- **Off changes nothing** [V]: `gpuspike.py selftest`; `contrast --set corpus,perfset,gpuset` 67 of 67; replay 23/23 at
+  1, 2, 3 and 8 threads; `title --check` 4 of 4; the self test.
+- **The live stream against three passes, and the CPU** [V, `gpuspike.py pairs`]: on H10's five pairs, `B.png` is
+  byte-identical between the GPU's three passes and its two with both streams. `B.mid.png` differs at 0 to 54 of
+  307,200 pixels, by at most one level: the lower half's attributes are interpolated at another row. The CPU's own
+  two methods agree byte for byte on the same field pair. Against the CPU's in-between images, four pass V0; the
+  field's fails exactly as its real frame does (blob 170, largest 59), which `oracle` lists by design. Opened: the
+  battle's in-between image sits between frames 4000 and 4001. *Mutation:* `--mutate midhalf` (in-between draws in the
+  real half) fails all five, `B.png` included.
+- **The real frame untouched** [V]: `SOA_INTERP=check SOA_GPU=vulkan`, `partl`, unchanged at 3000 of 3000 frames.
+- **The cost** [V, `partl`, every frame drawn, uncapped from 2500]: real frames a second 56.6 with interpolation and
+  56.5 without; GPU ms a frame p50 2.27 and p99 5.86 against 0.92 and 2.70; consumer p50 1.47 against 1.02. The
+  in-between image's GPU cost is about 1.35 ms, under the spec's 4.
+- **In a window at the cap** [V, `SOA_INTERP_ANYRATE=1` at 85 Hz]:
+
+  | scene | off: real frames a second | on: real frames a second | in-between images shown |
+  |---|---|---|---|
+  | the opening, from 3600 | 29.7 | 29.9 | 3781 of 5000 frames (108 held at a cut) |
+  | Part L's `126a`, from 2500 | 29.2 | 29.2 | 2773 of 3000 (93 held at a cut, none over budget) |
+
+  With the CPU renderer the same runs showed 884 and 588 (FINDINGS "H17b"). On this PC the GPU is what makes 60
+  real. The `[present]` histogram times one present a frame; the in-between present inside `gxv_present` is not timed.
+- **Not measured:** the pacing at 60 or 120 Hz and the look, both at the owner's session D with H17b's.

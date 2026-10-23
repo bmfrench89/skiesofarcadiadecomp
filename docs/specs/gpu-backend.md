@@ -1806,7 +1806,8 @@ protection after a copy lands), `runtime/hostprof.c` or wherever `SOA_HOSTPROF` 
 
 *Several days. `--link`. Prerequisites: H17a (its per-command EFB routing through `DrawCmd.efb`), V7.
 Files: `runtime/gxv.c`, `runtime/gxv/*.glsl`, `tools/tests/test_gxv_interp.py` (new), FINDINGS
-entry "V12".*
+entry "V12". **Built 2026-10-22** to `docs/specs/interp-gpu.md`, which restates these Done lines (FINDINGS "V12"): the
+in-between EFB as the lower half of one image, `gpuspike.py pairs` in place of `oracle --pairs`, no shader change.*
 
 - The GPU backend selects the second render target for commands with `efb == 1`.
 
