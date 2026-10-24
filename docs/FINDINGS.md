@@ -9960,3 +9960,26 @@ number travels in the game's own save.** 2026-10-24. Spec: `docs/specs/content-i
   - an id beginning `soa.` is refused.
   - `test_flagmap.py`, four more, including the pool held to the tool's.
 - **Not in T2's core:** the remap on load, and the other pools (maps, items, ship stages, opcode stubs, thunk slots).
+
+**K6, deterministic battles: with `SOA_SEED` pinned, two runs of R0's harness fought the same battle, blow for blow.**
+2026-10-24. PLAN-GAMEPLAY-MODS K6; D-43, milestone 2.
+
+- **The runs** [V, `build/k6/seed-*.log`]: the `battle` scenario, 16,000 frames at `SOA_SPEED=3`, `SOA_BATTLE_LOG=1`
+  (R0 and R1's lines), `SOA_SEED=4242` twice. Both battles started at frame 9811 on `a101b` (map 0xC9).
+- **Same seed, same battle:**
+  - The 20 logged lines with their frame numbers taken out are identical: the two spawns, both enemies' choices
+    (Attack on slot 0), all five blows (`30 -> 30`, `44 -> 43`, `47 -> 46`, `44 -> 44`, `30 -> 29`), each effect,
+    the spirit (2 → 4), the round end, and the rewards (6 EXP, 10 gold, 2 magic EXP).
+  - Two things differ, and neither touches the game's choices. The actors' heap addresses differ: the allocator's
+    layout follows the run, not the seed. The battle ran 2,017 frames in one run and 2,019 in the other. That two
+    frames' difference changed no draw: nothing consumed `rand()` a different number of times in those frames.
+- **A different seed, a different battle** (the comparison can fail) [V, `seed-c.log`, `SOA_SEED=4243`]: slot 5
+  chose Guard (`type 3 -> 4`) and slot 4 aimed at slot 1, four blows landed, not five, and the battle ran 2,039
+  frames.
+- **What it covers, and what it does not.** This is one short battle (two rounds, five blows), with the scenario's
+  presses and no command writer, so it is evidence about this battle, not about every battle. It says the battle
+  start's two reseeds (P6) decide everything that follows here, with no per-frame random consumer visible inside
+  it; it does not say a long battle, one with spells or summons, or a battle entered at a different frame of a
+  random walk repeats. The plan's "name the per-frame random consumer" did not arise: there was no difference to
+  trace. R0's harness can compare two mods' logs on this battle; a longer battle repeats only if the commands reach
+  it at the same phase, which needs R0's command writer (not built).

@@ -424,8 +424,9 @@ flag by name (`claim = flag <name>`, `api->claim`); the loader numbers it in `mo
 saves carry the table so a mismatched install is named on load. In the game a claimed flag set after
 `on_load` came back through the game's own save. **K1 the same day** (FINDINGS "K1"): the plan's "8,192 and up
 are free" was wrong, since the area maps' exploration grids own flags up to 24,255 (`tools/flagmap.py` reads
-all 71 off the disc and accounts for every high flag in 46 saves), so T2 numbers from 24,576. **Next:** K6
-(do two runs fight the same battle?), then K12.
+all 71 off the disc and accounts for every high flag in 46 saves), so T2 numbers from 24,576. **K6** (FINDINGS
+"K6"): with `SOA_SEED` pinned, two runs of R0's story battle fought the same battle blow for blow; a different
+seed fought another. **Next:** K12 (which battle status bits are free), the last of milestone 2's core list.
 
 **Before that, 2026-10-23:**
 

@@ -555,7 +555,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 
 *Done:* layout and addresses, each [V] from the disassembly or confirmed by one peek in a ship battle (the part-L sky-encounter recipe in FINDINGS).
 
-**K6. Deterministic battles.**
+**K6. Deterministic battles.** **Done 2026-10-24** (FINDINGS "K6"): two runs of R0's story battle at `SOA_SEED=4242` fought the same battle blow for blow, the frame count differing by 2 and changing no draw; a different seed fought a different one. One short battle, so a long one, or one entered from a random walk, is not yet shown to repeat.
 - With P6 pinning all three reseeds, and commands written when phase 1 begins (`0x8034733C == 1`), do two runs give identical damage logs?
 - If not, name the per-frame random consumer: there are 481 `rand()` call sites.
 - The D4 fallback stays, because disc completions still follow the wall clock.
