@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1850 |
+| Python tests | 1861 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,7 +417,17 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-23)
+## Where the last session stopped (2026-10-24)
+
+**Latest, 2026-10-24: T2's core built** (FINDINGS "T2", `docs/specs/content-ids.md`). A mod claims a story
+flag by name (`claim = flag <name>`, `api->claim`); the loader numbers it in `mods.lock`, never twice, and
+saves carry the table so a mismatched install is named on load. In the game a claimed flag set after
+`on_load` came back through the game's own save. **K1 the same day** (FINDINGS "K1"): the plan's "8,192 and up
+are free" was wrong, since the area maps' exploration grids own flags up to 24,255 (`tools/flagmap.py` reads
+all 71 off the disc and accounts for every high flag in 46 saves), so T2 numbers from 24,576. **Next:** K6
+(do two runs fight the same battle?), then K12.
+
+**Before that, 2026-10-23:**
 
 **Latest, 2026-10-23: X2, the save extension, built; batch A is done** (FINDINGS "X2",
 `docs/specs/save-extension.md`). A mod keeps a chunk of its own inside the game's save file (`on_save`,

@@ -18,6 +18,7 @@ a mod's library is mod.so), so they run wherever runtime/mod.c does. That the pa
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -5023,3 +5024,132 @@ def test_x2_the_example_keeps_its_tally_in_the_save(driver, tmp_path):
         "a victory: 1 battle(s) won in this save",
     ], err
     assert "rewards 6 10 2 -> 6 10 2" in out  # it reads the rewards, never changes them
+
+
+# --------------------------------------------------------------------------
+# T2: content ids claimed by name (docs/specs/content-ids.md). mods.lock is
+# written beside the mods, which in these tests is tmp_path itself.
+# --------------------------------------------------------------------------
+
+
+def claimer(root: Path, name: str, *flags: str) -> Path:
+    """A mod claiming `flags`, saying each number `claim` gives it."""
+    d = mod(
+        root, name, patches=None, ini=ini2(name) + "".join(f"claim = flag {f}\n" for f in flags)
+    )
+    asks = "".join(
+        f'    if (!api->claim("flag", "{f}", &n)) return 1;\n'
+        f'    snprintf(line, sizeof line, "my flag {f} is %u", n);\n'
+        "    api->log(line);\n"
+        for f in flags
+    )
+    (d / "mod_src.c").write_text(
+        '#include "soa_mod.h"\n#include <stdio.h>\n'
+        "SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)\n{\n"
+        "    uint32_t n = 0;\n    char line[96];\n    (void)version;\n"
+        "    if (api->size < SOA_MOD_HAS(claim)) return 1;\n"
+        f'{asks}    return api->claim("flag", "not-mine", &n) ? 1 : 0;\n}}\n',
+        encoding="utf-8",
+    )
+    library(d, d / "mod_src.c")
+    return d
+
+
+def lock_lines(root: Path) -> list[str]:
+    return [
+        line
+        for line in (root / "mods.lock").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+
+
+@needs_cc
+def test_t2_two_mods_claiming_a_flag_get_different_numbers_and_keep_them(driver, tmp_path):
+    """Two mods ask for the same name: each gets its own number, the same every
+    run. With the first removed, a third's new claim takes neither number."""
+    claimer(tmp_path, "a-quest", "bounty.accepted")
+    claimer(tmp_path, "b-quest", "bounty.accepted", "bounty.done")
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 2" in out, err
+    assert "[mod] a-quest: my flag bounty.accepted is 24576" in err, err
+    assert "[mod] b-quest: my flag bounty.accepted is 24577" in err
+    assert "[mod] b-quest: my flag bounty.done is 24578" in err
+    assert "[mod] a-quest: flag bounty.accepted is 24576 (new)" in err
+    assert lock_lines(tmp_path) == [
+        "next flag 24579",
+        "flag a-quest bounty.accepted 24576",
+        "flag b-quest bounty.accepted 24577",
+        "flag b-quest bounty.done 24578",
+    ]
+    out, err = play(driver, tmp_path, "describe")
+    assert "[mod] b-quest: my flag bounty.done is 24578" in err and "(new)" not in err, err
+    shutil.rmtree(tmp_path / "a-quest")
+    claimer(tmp_path, "c-new", "x")
+    out, err = play(driver, tmp_path, "describe")
+    assert (
+        "[mod] c-new: my flag x is 24579" in err
+        and "[mod] b-quest: my flag bounty.accepted is 24577" in err
+    ), err
+    assert "flag a-quest bounty.accepted 24576" in lock_lines(tmp_path)  # never handed out again
+
+
+@needs_cc
+def test_t2_a_save_from_an_install_that_numbered_a_claim_differently_says_so(driver, tmp_path):
+    claimer(tmp_path, "b-quest", "bounty.accepted")
+    out, err = play(driver, tmp_path, SAVE_THEN_CARD + DUMP)
+    c = savext.parse(*block_and_tail(out))
+    assert ("soa.claims", b"flag b-quest bounty.accepted 24576\n") in c.chunks, c
+    gap = savext.build(c.chunks)[0]
+    # the same lock: nothing to say (the mutation)
+    out, err = play(
+        driver, tmp_path, put(CARD_BLOCK + savext.GAP_OFF, gap) + f"loadsave {CARD_BLOCK:x}"
+    )
+    assert "in this save and" not in err and "holds data for soa.claims" not in err, err
+    # another install, where the claim came out 25000
+    (tmp_path / "mods.lock").write_text(
+        "next flag 25001\nflag b-quest bounty.accepted 25000\n", encoding="utf-8"
+    )
+    out, err = play(
+        driver, tmp_path, put(CARD_BLOCK + savext.GAP_OFF, gap) + f"loadsave {CARD_BLOCK:x}"
+    )
+    assert (
+        "[mod] b-quest's flag bounty.accepted is 24576 in this save and 25000 on this install (mods.lock)"
+        in err
+    ), err
+    # a vanilla save names none
+    out, err = play(driver, tmp_path, "loadsave 80600000")
+    assert "this save names no claims" in err, err
+
+
+@needs_cc
+def test_t2_a_damaged_lock_refuses_only_the_mods_that_claim(driver, tmp_path):
+    claimer(tmp_path, "b-quest", "bounty.accepted")
+    mod(tmp_path, "plain")  # a patch, no claim
+    (tmp_path / "mods.lock").write_text(
+        "next flag 24577\nflag b-quest bounty.accepted lots\n", encoding="utf-8"
+    )
+    out, err = play(driver, tmp_path, "describe")
+    assert "mods.lock:2: not `flag <mod id> <name> <number>`" in err, err
+    assert "loaded 1" in out and "b-quest/mod.ini" in err and "it claims numbers" in err, (out, err)
+
+
+@pytest.mark.parametrize(
+    ("line", "words"),
+    [
+        ("claim = map sky_rift", "gives out flags only"),
+        ("claim = flag Bad.Name", "a name is lowercase"),
+        ("claim = flag", "gives out flags only"),
+    ],
+)
+@needs_cc
+def test_t2_a_claim_this_port_cannot_give_refuses_the_mod(driver, tmp_path, line, words):
+    mod(tmp_path, "asker", ini=ini2("asker") + line + "\n")
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 0" in out and "asker/mod.ini:" in err and words in err, err
+
+
+@needs_cc
+def test_t2_ids_beginning_soa_are_the_ports(driver, tmp_path):
+    mod(tmp_path, "imposter", ini=ini2("soa.claims"))
+    out, err = play(driver, tmp_path, "describe")
+    assert "loaded 0" in out and "the port's own" in err, err

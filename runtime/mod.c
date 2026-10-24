@@ -883,6 +883,200 @@ static int api_on_ship_damage(uint32_t (*fn)(void*, uint32_t), void* user)
  * g_mods yet: load_dll names its id here. */
 static const char* g_init_id = "";
 
+/* ---- T2: content ids claimed by name (docs/specs/content-ids.md) ----------
+ * `claim = flag <name>` in mod.ini; the number comes from mods.lock beside the
+ * mods, or is the lock's next, which only rises: a flag number is never
+ * handed out twice, even after its mod is gone. g_claims holds every line of
+ * the lock, loaded mods' or not, since a save carries them all. */
+#define CLAIM_MAX 512
+#define CLAIM_NAME 48
+#define CLAIMS_PER_MOD 32
+#define FLAG_FIRST 24576u /* K1: 24256 up is no minimap grid's, no script's and no save's */
+#define FLAG_LAST 27327u
+typedef struct {
+    char mod[64];
+    char name[CLAIM_NAME];
+    uint32_t number;
+} Claim;
+static int good_id(const char* s);
+static Claim g_claims[CLAIM_MAX];
+static int g_claim_n, g_lock_dirty, g_lock_bad;
+static uint32_t g_next_flag = FLAG_FIRST;
+static char g_lock_path[700];
+
+static int good_claim_name(const char* s)
+{
+    size_t i, n = strlen(s);
+    if (!n || n >= CLAIM_NAME) return 0;
+    for (i = 0; i < n; i++)
+        if (!(islower((unsigned char)s[i]) || isdigit((unsigned char)s[i]) || s[i] == '.' || s[i] == '_' || s[i] == '-'))
+            return 0;
+    return 1;
+}
+
+static const Claim* find_claim(const char* mod, const char* name)
+{
+    int i;
+    for (i = 0; i < g_claim_n; i++)
+        if (!strcmp(g_claims[i].mod, mod) && !strcmp(g_claims[i].name, name)) return &g_claims[i];
+    return NULL;
+}
+
+/* mods.lock read before any mod: 0, said with its line, if it cannot be. */
+static int lock_read(const char* dir)
+{
+    size_t n = 0;
+    char* text;
+    const char* t;
+    char line[LINE_MAX_LEN], *tok[8];
+    unsigned at = 0;
+    int got;
+    snprintf(g_lock_path, sizeof g_lock_path, "%s/mods.lock", dir);
+    g_claim_n = 0;
+    g_next_flag = FLAG_FIRST;
+    g_lock_dirty = g_lock_bad = 0;
+    if (!(text = slurp_text(g_lock_path, &n))) return 1; /* none yet */
+    for (t = text; (got = next_line(&t, line)) != 0;) {
+        char* hash;
+        char* end = NULL;
+        unsigned long v;
+        int k;
+        at++;
+        if ((hash = strchr(line, '#')) != NULL) *hash = '\0';
+        k = got == 2 ? -1 : split(line, tok, 8);
+        if (k == 0) continue;
+        if (k == 3 && !strcmp(tok[0], "next") && !strcmp(tok[1], "flag")) {
+            v = strtoul(tok[2], &end, 10);
+            if (*end || v < FLAG_FIRST || v > FLAG_LAST + 1) k = -1;
+            else if (v > g_next_flag) g_next_flag = (uint32_t)v;
+        } else if (k == 4 && !strcmp(tok[0], "flag") && good_id(tok[1]) && good_claim_name(tok[2]) &&
+                   g_claim_n < CLAIM_MAX && !find_claim(tok[1], tok[2])) {
+            v = strtoul(tok[3], &end, 10);
+            if (*end || v < FLAG_FIRST || v > FLAG_LAST) k = -1;
+            else {
+                Claim* c = &g_claims[g_claim_n++];
+                snprintf(c->mod, sizeof c->mod, "%s", tok[1]);
+                snprintf(c->name, sizeof c->name, "%s", tok[2]);
+                c->number = (uint32_t)v;
+                if (v + 1 > g_next_flag) g_next_flag = (uint32_t)v + 1;
+            }
+        } else {
+            k = -1;
+        }
+        if (k < 0) {
+            fprintf(stderr, "[mod] %s:%u: not `flag <mod id> <name> <number>` or `next flag <number>`, a number from "
+                            "%u to %u, each claim once: no mod that claims a number is loaded, since a number guessed "
+                            "here could be one a save already uses; mend or delete the line\n",
+                    g_lock_path, at, FLAG_FIRST, FLAG_LAST);
+            g_lock_bad = 1;
+            free(text);
+            return 0;
+        }
+    }
+    free(text);
+    return 1;
+}
+
+static void lock_write(void)
+{
+    char tmp[720];
+    FILE* f;
+    int i;
+    if (!g_lock_dirty) return;
+    snprintf(tmp, sizeof tmp, "%s.tmp", g_lock_path);
+    if (!(f = fopen(tmp, "w"))) {
+        fprintf(stderr, "[mod] cannot write %s: the claims made this run keep their numbers only until it ends\n", tmp);
+        return;
+    }
+    fprintf(f, "# The numbers this install gave mods' claims (T2, docs/specs/content-ids.md).\n"
+               "# Never change a number: saves depend on it. A number is never handed out twice.\n");
+    fprintf(f, "next flag %u\n", g_next_flag);
+    for (i = 0; i < g_claim_n; i++) fprintf(f, "flag %s %s %u\n", g_claims[i].mod, g_claims[i].name, g_claims[i].number);
+    if (fclose(f) != 0) return;
+    remove(g_lock_path);
+    if (rename(tmp, g_lock_path) != 0) fprintf(stderr, "[mod] cannot replace %s with %s\n", g_lock_path, tmp);
+    g_lock_dirty = 0;
+}
+
+/* A mod's claims, numbered before its library's init runs. */
+static void claim_assign(Where* w, const char* mod, char names[][CLAIM_NAME], int n)
+{
+    int i;
+    if (g_lock_bad) {
+        refuse(w, "it claims numbers, and %s has a line this port cannot read (said above)%s", g_lock_path, "");
+        return;
+    }
+    for (i = 0; i < n && !w->failed; i++) {
+        const Claim* c = find_claim(mod, names[i]);
+        int fresh = !c;
+        if (fresh) {
+            Claim* nc;
+            if (g_claim_n == CLAIM_MAX || g_next_flag > FLAG_LAST) {
+                refuse(w, "claim = flag %s: no flag number is left to give%s", names[i], "");
+                return;
+            }
+            nc = &g_claims[g_claim_n++];
+            snprintf(nc->mod, sizeof nc->mod, "%s", mod);
+            snprintf(nc->name, sizeof nc->name, "%s", names[i]);
+            nc->number = g_next_flag++;
+            g_lock_dirty = 1;
+            c = nc;
+        }
+        fprintf(stderr, "[mod] %s: flag %s is %u%s\n", mod, c->name, c->number, fresh ? " (new)" : "");
+    }
+}
+
+static int api_claim(const char* kind, const char* name, uint32_t* out)
+{
+    const char* mod = g_in_init ? g_init_id : g_cur_mod >= 0 && g_cur_mod < g_mod_n ? g_mods[g_cur_mod].id : "";
+    const Claim* c;
+    if (!kind || !name || !out || strcmp(kind, "flag") || !mod[0] || !(c = find_claim(mod, name))) return 0;
+    *out = c->number;
+    return 1;
+}
+
+/* X2's soa.claims chunk: the lock's lines, and their check at a load. */
+uint32_t mod_claims_text(char* buf, uint32_t cap)
+{
+    uint32_t used = 0;
+    int i;
+    for (i = 0; i < g_claim_n; i++) {
+        int k = snprintf(buf + used, cap - used, "flag %s %s %u\n", g_claims[i].mod, g_claims[i].name, g_claims[i].number);
+        if (k < 0 || (uint32_t)k >= cap - used) break;
+        used += (uint32_t)k;
+    }
+    return used;
+}
+
+int mod_claims_check(const uint8_t* text, uint32_t n)
+{
+    char line[160], *tok[8];
+    uint32_t at = 0;
+    int bad = 0;
+    while (at < n) {
+        uint32_t e = at;
+        size_t len;
+        while (e < n && text[e] != '\n') e++;
+        len = e - at < sizeof line - 1 ? e - at : sizeof line - 1;
+        memcpy(line, text + at, len);
+        line[len] = '\0';
+        at = e + 1;
+        if (split(line, tok, 8) == 4 && !strcmp(tok[0], "flag")) {
+            const Claim* c = find_claim(tok[1], tok[2]);
+            unsigned long was = strtoul(tok[3], NULL, 10);
+            if (c && c->number != was) {
+                fprintf(stderr, "[mod] %s's flag %s is %lu in this save and %u on this install (mods.lock): the "
+                                "save's flag is not moved\n",
+                        tok[1], tok[2], was, c->number);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
+int mod_claims_count(void) { return g_claim_n; }
+
 static int save_register(int ev, void* fn, void* user)
 {
     int i;
@@ -1244,6 +1438,7 @@ static const SoaModApi g_api = {
     api_on_save,
     api_on_load,
     api_on_new_game,
+    api_claim,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
@@ -1970,6 +2165,8 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
     Mod m;
     Option* opts;
     int* opt_n;
+    char claims[CLAIMS_PER_MOD][CLAIM_NAME];
+    int claim_n = 0;
     unsigned before = g_patch_n, slots_before = g_slot_n;
     (void)s;
     memset(&m, 0, sizeof m);
@@ -2022,6 +2219,8 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
                 if (!v2_key) v2_key = "id";
                 if (!good_id(val))
                     refuse(&w, "id = %s: an id is lowercase letters, digits, '.', '_' and '-', a letter or digit first, under 64 characters%s", val, "");
+                else if (!strncmp(val, "soa.", 4))
+                    refuse(&w, "id = %s: ids beginning `soa.` are the port's own (its save chunks)%s", val, "");
                 else snprintf(m.id, sizeof m.id, "%s", val);
             } else if (!strcmp(key, "version")) {
                 if (!v2_key) v2_key = "version";
@@ -2053,11 +2252,23 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
             } else if (!strcmp(key, "option")) {
                 if (!v2_key) v2_key = "option";
                 parse_option(&w, opts, opt_n, val);
+            } else if (!strcmp(key, "claim")) {
+                /* T2: `claim = flag <name>`; the number is the loader's to give */
+                char* ct[4];
+                if (!v2_key) v2_key = "claim";
+                if (split(val, ct, 4) != 2 || strcmp(ct[0], "flag"))
+                    refuse(&w, "claim = %s: this port gives out flags only, as `claim = flag <name>`%s", val, "");
+                else if (!good_claim_name(ct[1]))
+                    refuse(&w, "claim = flag %s: a name is lowercase letters, digits, '.', '_' and '-', under 48 characters%s", ct[1], "");
+                else if (claim_n == CLAIMS_PER_MOD)
+                    refuse(&w, "more than %s claims%s", "32", "");
+                else
+                    snprintf(claims[claim_n++], CLAIM_NAME, "%s", ct[1]);
             } else if (!strncmp(key, "x_", 2)) {
                 fprintf(stderr, "[mod] %s:%u: `%s` is not a key this port knows; a key beginning x_ is kept for later ports, so the mod loads without it\n",
                         path, w.line, key);
             } else {
-                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api, dol_sha1, option or overrides%s", key, "");
+                refuse(&w, "`%s` is not a mod.ini key: manifest, id, version, name, authors, api, dol_sha1, option, claim or overrides%s", key, "");
             }
         }
     }
@@ -2089,6 +2300,11 @@ static void load_one(CpuState* s, const char* root, const char* dir, const char*
             refuse(&w, "no patches in it%s%s", "", "");
         }
         if (!w.failed) check_conflicts(&w, before, &m);
+    }
+    if (!w.failed && claim_n) {
+        w.path = path;
+        w.line = 0;
+        claim_assign(&w, m.id, claims, claim_n);
     }
     dll = -1;
     if (!w.failed) {
@@ -2545,6 +2761,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     sha1_hex(dol, dol_size, sha);
     g_s = s;
     mod_note_dol(dol, dol_size);
+    lock_read(dir); /* T2: before any mod claims a number */
     {
         char (*names)[64] = g_plan.names;
         Planned* plan = g_plan.plan;
@@ -2609,6 +2826,7 @@ int mod_load(CpuState* s, const char* dir, const uint8_t* dol, size_t dol_size)
     if (g_cb_n[CB_PAD_FILTER]) si_set_pad_filter(mod_pad);
     if (g_cb_n[CB_PROJECTION]) gxr_set_projection_filter(mod_projection);
     if (g_cb_n[CB_TEXTURE]) gxr_set_texture_provider(mod_texture);
+    lock_write();
     for (i = 0; i < MOD_EVENTS && !g_fault_hooked; i++)
         if (g_cb_n[CB_EVENT0 + i]) g_fault_hooked = plat_fault_hook(event_fault);
     fprintf(stderr, "[mod] SOA_MODS=%s: %d mod(s) loaded, %u patch(es)\n", dir, g_mod_n, g_patch_n);

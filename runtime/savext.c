@@ -46,6 +46,7 @@
 #define VERSION 1u
 #define ID_MAX 31u
 #define KEPT_MAX (GAP_LEN + TAIL_LEN)
+#define CLAIMS_ID "soa.claims" /* T2's table; no mod's id begins soa. */
 
 int mod_loaded(const char* id); /* mod.c */
 
@@ -157,7 +158,7 @@ void savext_snapshot(CpuState* s, uint32_t block)
     g_calls[0]++;
     g_tail_armed = 0;
     g_tail_len = g_tail_chunks = 0;
-    if (!n && !g_kept_len) return;
+    if (!n && !g_kept_len && !mod_claims_count()) return;
     for (i = 0; i < GAP_LEN; i++)
         if (gap[i]) {
             fprintf(stderr, "[save] the block's gap holds a byte the game wrote (+%u): nothing written, so this save "
@@ -166,6 +167,12 @@ void savext_snapshot(CpuState* s, uint32_t block)
             return;
         }
     new_id();
+    /* T2's table first: the numbers this install gave each claim */
+    if (mod_claims_count()) {
+        static char text[KEPT_MAX];
+        uint32_t tn = mod_claims_text(text, KEPT_MAX - (1u + sizeof CLAIMS_ID - 1u + 4u));
+        used += chunk_put(all, CLAIMS_ID, (const uint8_t*)text, tn);
+    }
     /* each loaded mod's own, then the kept ones it does not replace */
     for (k = 0; k < n; k++) {
         const char* mid = mod_save_id(MOD_EV_SAVE, k);
@@ -253,6 +260,7 @@ void savext_load(CpuState* s, uint32_t block)
     const uint8_t* gap = mem_ptr(s, block + GAP_OFF);
     const uint8_t* tail = mem_ptr(s, block - BLOCK_IN_IMAGE + TAIL_OFF);
     uint32_t len = 0, gap_len, tail_len, kept = 0;
+    int claims_seen = 0;
     const uint8_t *p, *end, *next, *data;
     char id[ID_MAX + 1];
     uint32_t size;
@@ -293,10 +301,13 @@ void savext_load(CpuState* s, uint32_t block)
         }
         mod_load_call(i, mine, mine_n);
     }
-    /* the rest kept, and the ones whose mod is not loaded said */
+    /* T2's table checked, the rest kept, and the ones whose mod is not loaded said */
     p = got, end = got + len;
     while (chunk_at(p, end, id, &data, &size, &next)) {
-        if (!saves_for_itself(id)) {
+        if (!strcmp(id, CLAIMS_ID)) {
+            claims_seen = 1;
+            mod_claims_check(data, size);
+        } else if (!saves_for_itself(id)) {
             memcpy(g_kept + g_kept_len, p, (size_t)(next - p));
             g_kept_len += (uint32_t)(next - p);
             kept++;
@@ -307,6 +318,9 @@ void savext_load(CpuState* s, uint32_t block)
         }
         p = next;
     }
+    if (!claims_seen && mod_claims_count())
+        fprintf(stderr, "[mod] this save names no claims (made without mods that claim numbers, or saved again by the "
+                        "game alone): this install's mods.lock stands\n");
     if (g_log)
         fprintf(stderr, "[save] load of the block at %08X: %u bytes of chunks, %u kept for the next save\n", block, len,
                 kept);

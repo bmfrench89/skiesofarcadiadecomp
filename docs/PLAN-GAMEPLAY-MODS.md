@@ -194,7 +194,7 @@ Five reports, one per question, each in `docs/research/` with its evidence. What
 | No way for game code to call native code | A thunk registry in `guest_trap` | a day | `--link` |
 | 80 items per category | Fill the 82 placeholder records | hours | none (data) |
 | 4 enemy kinds per battle; 8 KB of records per map | For the kinds, one fix in R1's `on_enemy_spawn` wrapper (X4); for the 8 KB, a buffer redirect [I] | hours; several days | `--link` for the kinds (R1's wrapper, after batch A); one retranslation for the redirect (batch B) |
-| 27,328 flags, scripts use up to 4,505 | Flags claimed by name from 8,192 up (T2); beyond that, the sidecar | hours | none |
+| 27,328 flags, scripts use up to 4,505 | Flags claimed by name from 24,576 up (T2; K1 found the area maps' grids own flags to 24,255); beyond that, the sidecar | hours | none |
 | The save has no room for mod state | A container in the save's gap (3,156 B, checksummed by the game) and tail (6,592 B), plus immutable host blobs by GUID | several days | one retranslation |
 | 7 saves per card | Slot B's card, or card pages | a day each | `--link` |
 | A fixed disc | Rebuild the FST at boot; overlay host files | several days | `--link` |
@@ -520,7 +520,7 @@ The first idea list was comfort and community features, the second gameplay and 
 
 Each is **hours to a day, no rebuild**, written up in FINDINGS or a research note with [V]/[I].
 
-**K1. Confirm the free flags.**
+**K1. Confirm the free flags.** **Done 2026-10-24** (FINDINGS "K1"), not by watch but by reading every area map's exploration grid off the disc (`tools/flagmap.py`): 8,192 up is **not** free; the grids own flags to 24,255, and every high flag in 46 saves falls in one. T2's pool is 24,576–27,327. The detector and watch below found the writer; the plan's soaks were not needed once the grids accounted for every save.
 - Watch the range T2 hands out: `SOA_WATCH=0x80310F3C,0x958`, flags 8,192–27,327, with `SOA_WATCH_FROM` past the New Game clear and a save restore. Each of those spends the watch's 201 lines in one frame.
 - A mod that diffs the flag block at each safe point is the stronger detector, because native `memcpy`/`memset` never reach the watch.
 - Scan saved blocks too, including late-game saves.
@@ -656,8 +656,8 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 - An alias `a045a.mld` onto `a002a.mld` plus a new `me045a.sct` is warpable by name and draws.
 - A path collision between two mods is refused, naming both.
 
-**T2. Content ids claimed by name** — *hours for the core; several days for the remap.*
-- A mod names what it needs (`flag bounty.accepted`, `map sky_rift_1`), and the loader assigns numbers into a local `mods.lock`: flags from 8,192, map numbers from the free list (400–499 first), placeholder item ids, ship stages 584–599, script opcode stubs and thunk slots.
+**T2. Content ids claimed by name** — *hours for the core; several days for the remap.* **Core done 2026-10-24** to [specs/content-ids.md](specs/content-ids.md) (FINDINGS "T2"): flags only, the table in X2's `soa.claims` chunk, a mismatch named on load; the remap and the other pools remain.
+- A mod names what it needs (`flag bounty.accepted`, `map sky_rift_1`), and the loader assigns numbers into a local `mods.lock`: flags from 24,576 (K1), map numbers from the free list (400–499 first), placeholder item ids, ship stages 584–599, script opcode stubs and thunk slots.
 - Each mod's name → number table goes into its X2 chunk from the first release; remapping on load comes later.
 - Until the remap lands, the loader compares a save's table with the local lock and reports each name whose number differs, naming the mod and both numbers. It does not guess.
 - **Rules:**

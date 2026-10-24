@@ -476,3 +476,14 @@ int (*on_new_game)(void (*fn)(void* user), void* user);
 ```
 
 at New Game, and once at boot
+
+### `claim`
+
+```c
+int (*claim)(const char* kind, const char* name, uint32_t* number);
+```
+
+Appended (T2, docs/specs/content-ids.md): the number this install gave
+one of the mod's own claims (`claim = flag <name>` in its mod.ini), in
+its init or any callback; kind "flag" for now. 0 for a name it did not
+claim. The number is the same every run here, and never another mod's.

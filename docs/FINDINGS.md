@@ -9893,3 +9893,70 @@ loaded ride through every save, and the saves still load in the build before.** 
   - `test_savext.py`, five on synthetic files.
 - **Not in X2:** save-now's location fallback (with M7a), the mod-map and placeholder-gear fallback (D-44, with N7
   and N1), host blobs, N11's NG+ sites, owned-flag records (with N3).
+
+**K1, the free flags: the plan's "8,192 and up" was wrong. Flags up to 24,255 belong to the area maps'
+exploration grids, and 24,256 to 27,327 are touched by nothing.** 2026-10-24. Spec: `docs/specs/content-ids.md`
+(T2's pool); D-43, milestone 2.
+
+- **The plan's claim, measured** [V, `tools/savext.py` over the 46 saves on this PC's cards, parts A to L]:
+  - 1,202 distinct flags are set across them, the highest 22,966, and 509 are at 8,192 or above.
+  - They come in pairs and clusters (9269/9270, 9285/9286 …), and in every save from part C on.
+  - PLAN-GAMEPLAY-MODS T2 and research had reserved 8,192 up for mods, "K1 confirms it by watch"; K1 refutes it.
+- **No script names them** [V, a raw scan of all 258 field scripts]: the highest flag any script sets by number is
+  4,505 (`FLAGSET`'s [17, 0x04000000, n, 29]). Every "flag operand" above 8,192 the scan met was ASCII inside a
+  file name.
+- **The game's code sets them: the area map** [V, `build/reach/k1-g*`].
+  - A detector mod diffing flags 4,096 and up at every safe point saw part G's `a116a` set 7670 on arrival, then
+    7669, 7653/7654 and 7685/7686.
+  - Its positive control, a poke at frame 14000, was reported: as flag 6820, where my miscomputed address put it.
+  - A watch on that word named the writer, `fn_800E1E9C`, called every frame from the `kmap` object's handler
+    `fn_800E23B0` (content-systems.md §5's "area map").
+  - It clamps the player's position to a 16 × 16 cell and sets flag `base + x + 16·z`. The base is `+64` of the
+    object's parameter block when the block's version (word 0) is past 15, else 0: the exploration fog.
+- **Every grid, read off the disc** [V, `tools/flagmap.py`]:
+  - In an MLD an entry's parameter block is the offset 20 bytes before its 16-byte name. `a116a.mld`'s first `kmap`
+    block is at `0x27D0`, version 17, base 7616, which is how 7653 = 7616 + 5 + 16·2 and 7685 = 7616 + 5 + 16·4.
+  - Across every MLD on the disc there are 71 grids. 70 are version 16 or 17, with bases 3,520 to 24,000. One is
+    version 13 (`a398a`, base 0).
+  - **All 641 flags past 4,505 set in any save fall inside one of them.**
+  - *Mutation:* reading the base 4 bytes early leaves 641 of 641 outside every grid.
+  - The free runs of 256 or more are 256–3519, 6336–7103, 19392–19903, 20672–20927, 21952–22207, 22976–23999 and
+    24256–27327. Only the last is above every grid with nothing else known there.
+- **So T2 numbers claims from 24,576 to 27,327** (2,752 flags), a round number above the last grid with margin.
+  `test_flagmap.py` holds `mod.c`'s `FLAG_FIRST`/`FLAG_LAST` to `flagmap.py`'s pool, and `flagmap.py` checks that
+  pool against the disc's grids; exit 1 on any overlap or any save flag it cannot account for.
+- **Not settled:** the flags below 4,506 that no script sets by number (the DOL's own: party 1026+, Discoveries
+  2900+, …); T2 stays out of them.
+
+**T2, content ids claimed by name: a mod asks for a story flag by name, gets a number no other mod has, and the
+number travels in the game's own save.** 2026-10-24. Spec: `docs/specs/content-ids.md`; D-43, milestone 2.
+
+- **What it is** [V]:
+  - `claim = flag <name>` in a manifest 2 mod.ini. The loader numbers claims from 24,576 (K1, above) in `mods.lock`
+    beside the mods, where a number is never handed out twice, even after its mod is removed.
+  - `claim(kind, name, &number)` is appended to `SoaModApi`.
+  - At each save X2 writes a `soa.claims` chunk, the lock's lines. At a load, each claim whose number differs from
+    this install's is named with both numbers. Ids beginning `soa.` are refused to mods.
+  - A lock line that cannot be read refuses the mods that claim, with the file and line, and loads the rest.
+  - No retranslation: mod.c and savext.c only.
+- **In the game** [V, `build/reach/t2-save3`, `t2-load4`, `t2-control4`]:
+  - A scratch mod claimed `t2.proof`: `flag t2.proof is 24576 (new)`, and the lock read `next flag 24577`.
+  - It set the flag once the Continue had loaded (`8031173C now 00000001`).
+  - The save holds `soa.claims: 28 bytes`, and the game's check passes.
+  - A fresh Continue from that card **with no mods at all** peeks `8031173C = 00000001`; from the card it started
+    from, `00000000`.
+- **Set it after the load** [V, `build/reach/t2-save`, `t2-watch`, `t2-save2`]:
+  - The first try set its flag (then 8,192) at the first frame the field ran. The Continue's load put it back to 0:
+    `fn_801A4354`'s `memcpy` from `0x801A451C`, at frame 2648, was the only other store a watch saw before the save.
+  - Set after `on_load` instead, it was in the save, and read back set.
+  - A mod that writes saved game state does it after `on_load`.
+- **Tests** [V], `test_mods.py`, seven on the fake guest:
+  - two mods claiming the same name get 24,576 and 24,577, the same next run;
+  - with the first removed, a third mod's claim takes 24,579, and 24,576 stays in the lock;
+  - a save's table differing from the lock is named, and the same lock (the mutation) says nothing;
+  - a vanilla save names no claims;
+  - a damaged lock refuses only the mod that claims;
+  - three claims the port cannot give refuse their mod;
+  - an id beginning `soa.` is refused.
+  - `test_flagmap.py`, four more, including the pool held to the tool's.
+- **Not in T2's core:** the remap on load, and the other pools (maps, items, ship stages, opcode stubs, thunk slots).

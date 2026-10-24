@@ -67,6 +67,14 @@ int32_t mod_save_call(int i, uint8_t* buf, uint32_t cap);
 void mod_load_call(int i, const uint8_t* data, uint32_t size);
 void mod_new_game(void);
 
+/* T2 (docs/specs/content-ids.md): mods.lock's claims, for X2's soa.claims
+ * chunk -- its lines into buf (bytes written), how many there are, and a
+ * save's lines checked against them (each number that differs said; how
+ * many). */
+uint32_t mod_claims_text(char* buf, uint32_t cap);
+int mod_claims_count(void);
+int mod_claims_check(const uint8_t* text, uint32_t n);
+
 /* Apply the loaded patches; called once a frame from the frame hook, after
  * SOA_PEEK and SOA_POKE. Memory writes only: it runs inside the XFB copy. */
 void mod_frame(CpuState* s, unsigned frame);

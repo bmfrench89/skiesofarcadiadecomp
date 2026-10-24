@@ -169,6 +169,13 @@ that is not loaded are kept and written back at the next save, and loading a sav
 holds data for that are missing. `python tools/savext.py show <card>` lists a card's chunks, and
 `SOA_SAVE_LOG=1` logs each save and load.
 
+**A flag of your own** (T2, docs/specs/content-ids.md): never pick a story-flag number by hand, since
+another mod may pick the same one. Declare `claim = flag <name>` in your manifest 2 `mod.ini` (a name is
+lowercase letters, digits, `.`, `_` and `-`), and ask for the number with `api->claim("flag", "<name>",
+&number)`. The port numbers claims from 24576 (lower flags are the game's own), records them in `mods.lock` beside the mods, gives the
+same number every run, and never hands a number out twice, even after its mod is removed. Saves carry
+the table, so a save loaded on an install that numbered a claim differently says so.
+
 **The rules** (each one the port enforces or depends on):
 
 - Everything runs on the game's CPU thread. Never call the API from a thread of your own.
