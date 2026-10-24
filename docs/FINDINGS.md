@@ -9983,3 +9983,38 @@ number travels in the game's own save.** 2026-10-24. Spec: `docs/specs/content-i
   random walk repeats. The plan's "name the per-frame random consumer" did not arise: there was no difference to
   trace. R0's harness can compare two mods' logs on this battle; a longer battle repeats only if the commands reach
   it at the same phase, which needs R0's command writer (not built).
+
+**K12, free status bits: six bits of the battle actor's status word are touched by nothing, and the four the plan
+could not name are all in use.** 2026-10-24. PLAN-GAMEPLAY-MODS K12; D-43, milestone 2. R2 points here.
+
+- **How** [V, `tools/statusbits.py`]:
+  - The tool follows every `lwz rV, 28(rB)` in the executable for 24 instructions. Its tests are `andi.`, `andis.`
+    and narrow `rlwinm` on the value; its sets and clears are what is stored back to `28(rB)`: `ori`, `oris`, `or`
+    with a constant; `and`, `andc`, `rlwinm`.
+  - +28 is a field of other structures too, so only tests inside battle code (0x80008000–0x800B0000) count. A bit
+    is free with no set anywhere and no test there.
+  - The masks battle code tests are listed with every site (37 masks, e.g. 0x6500 at six sites, 0x3100 at
+    `0x8006EF90` and `0x80085B8C`, 0x2100 at eighteen).
+  - *Mutation:* blinding it to `oris` fails two of `test_statusbits.py`'s three tests.
+- **The four the plan asked about:**
+  - **0x2:** set by two effect appliers (`0x8002C86C`, `0x8002C9B8`), tested at `0x80081B58` and in the round end
+    (`0x8006FFB0`), cleared there and by the KO handler. A round-long status from an effect.
+  - **0x800000:** set by an applier (`0x8002C858`), tested at `0x80081B60`, `0x80081CF0` and in the round end,
+    cleared there. Another round-long status.
+  - **0x01000000:** set at `0x8002C1CC` and `0x80068FE0`, tested and then cleared by seven appliers
+    (`fn_8002C2B0` …). A one-shot: the next applicable effect consumes it.
+  - **0x20000:** set in phase 2 (`0x80070EC0`) and at `0x80076FFC`, and **never tested**: written, never read.
+  - None of the four is free.
+- **Free: 0x20, 0x04000000, 0x08000000, 0x10000000, 0x40000000, 0x80000000.** No instruction sets any of them, and
+  no battle code tests them. Their only clears are whole-mask wipes: the KO handler `fn_8002BC4C`, the appliers
+  that keep a few bits, and `fn_8008CDA8`. So a mod's status set in one is lost at KO, as the game's own are.
+  - 0x20000000 has no setter but is tested once in battle code (`0x80050FA4`), so it is left out.
+- **Whole-word stores, read by hand** [V]:
+  - The enemy spawn writes +28 = 0 (`0x8007720C`, r0 zeroed at `0x800771E8`).
+  - A party member's word is copied from `0x8030B4D4 + 120·member` +20 (`fn_80077228`, `0x800773C8`). Only the
+    battle's end (`fn_8006F020`, `fn_8006F4B0`) and the clears in `fn_801EE5A4` write that word.
+  - `fn_8005D614` ORs a halfword shifted by 8 into a +28, which can reach bits 0x100–0x800000 but none of the six.
+  - The other stores to a +28 in battle code are other structures' (counters, timers, copies of pairs).
+- **What it does not cover:** a bit set through a computed mask (a table of masks, a shift by a variable) would hide
+  from this scan, as would code outside the executable; none was seen. The answer is static; no run was needed,
+  since the plan's Done forbids a watch for this ("which sees only one run").

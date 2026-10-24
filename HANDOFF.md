@@ -426,7 +426,10 @@ saves carry the table so a mismatched install is named on load. In the game a cl
 are free" was wrong, since the area maps' exploration grids own flags up to 24,255 (`tools/flagmap.py` reads
 all 71 off the disc and accounts for every high flag in 46 saves), so T2 numbers from 24,576. **K6** (FINDINGS
 "K6"): with `SOA_SEED` pinned, two runs of R0's story battle fought the same battle blow for blow; a different
-seed fought another. **Next:** K12 (which battle status bits are free), the last of milestone 2's core list.
+seed fought another. **K12** (FINDINGS "K12", `tools/statusbits.py`): six status bits are free (0x20 and
+0x04000000 up but 0x20000000), and the four the plan could not name are in use. Milestone 2's core list
+(T9, T1, R0, batch A, T2, K1, K6, K12) is done. **Next:** the owner's pick (PLAN-GAMEPLAY-MODS milestone 2's
+rest -- M8, M7a/b, the event track -- or milestone 3).
 
 **Before that, 2026-10-23:**
 

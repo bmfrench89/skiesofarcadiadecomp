@@ -618,7 +618,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 - P7b's key chosen;
 - one peek of `0x80310A1C`/`0x80310A20` on `card-saved` that matches the table's row for its highest flag.
 
-**K12. Free status bits.**
+**K12. Free status bits.** **Done 2026-10-24** (FINDINGS "K12", `tools/statusbits.py`): free are 0x20, 0x04000000, 0x08000000, 0x10000000, 0x40000000 and 0x80000000 (no setter, no battle-code test); 0x2 and 0x800000 are round-long statuses from effects, 0x01000000 a one-shot the appliers consume, 0x20000 set and never read.
 - List every mask the battle code tests on actor+28, and name the unidentified bits 0x2, 0x20000, 0x800000 and 0x01000000.
 - The end-of-battle write-back never copies actor+28, so the save question is closed.
 - R2 points here.
