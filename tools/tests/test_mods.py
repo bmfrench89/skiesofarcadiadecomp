@@ -5153,3 +5153,87 @@ def test_t2_ids_beginning_soa_are_the_ports(driver, tmp_path):
     mod(tmp_path, "imposter", ini=ini2("soa.claims"))
     out, err = play(driver, tmp_path, "describe")
     assert "loaded 0" in out and "the port's own" in err, err
+
+
+# --------------------------------------------------------------------------
+# M7a: save now (docs/specs/save-now.md), through runtime/savenow.c as the
+# safe point and X2's sites drive it. 116a has a save point; 116c has none.
+# --------------------------------------------------------------------------
+
+FIELD = "set 803475cc 6 set 80311aec 8 set 80311ac0 74 "  # scene 6, the field running, map 116
+
+
+def at(letter: str) -> str:
+    return f"set 80311ac8 {ord(letter):02x}000000 "
+
+
+def block_map(letter: str) -> str:
+    return f"set {BLOCK + 5808:x} 74 set {BLOCK + 5812:x} {ord(letter):02x}000000 "
+
+
+@needs_cc
+def test_m7a_a_save_now_off_a_save_point_carries_the_last_one_and_comes_back(driver, tmp_path):
+    """On 116a, then 116c: the request is written, the save's map letter is a
+    (the fallback) and its soa.savenow chunk names c; the card's copy, loaded,
+    is put back to c before the game copies it, and sys15 is 0 after."""
+    empty = tmp_path / "none"
+    empty.mkdir()
+    script = (
+        FIELD
+        + at("a")
+        + "savenow_tick "
+        + at("c")
+        + "savenow_req savenow_tick get 803473b4 "
+        + block_map("c")
+        + SAVE_THEN_CARD
+        + DUMP
+        + f"set 8030e420 4e20 loadsave {CARD_BLOCK:x} get {CARD_BLOCK + 5812:x} get 8030e420"
+    )
+    out, err = play(driver, empty, script)
+    assert "803473B4=00000001" in out, (out, err)  # the save menu asked for
+    assert "[savenow] frame" in err and "off a save point" in err, err
+    block, tail = block_and_tail(out)
+    assert block[5808:5812] == b"\x00\x00\x00\x74" and block[5812:5813] == b"a", block[5808:5816]
+    c = savext.parse(block, tail)
+    assert c.chunks == [("soa.savenow", b"SN1\x00" + b"\x00\x00\x74c" + b"\x00\x00\x74a")], c
+    assert f"{CARD_BLOCK + 5812:08X}=63000000" in out, out  # c again, before the game reads it
+    assert "8030E420=00000000" in out, out  # the player lands where the save was made
+    assert "holds data for soa.savenow" not in err
+
+
+@needs_cc
+def test_m7a_on_a_save_point_the_save_keeps_its_map(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        FIELD + at("a") + "savenow_req savenow_tick " + block_map("a") + SAVE_THEN_CARD + DUMP,
+    )
+    block, tail = block_and_tail(out)
+    assert block[5812:5813] == b"a"
+    assert savext.parse(block, tail).chunks == [
+        ("soa.savenow", b"SN1\x00" + b"\x00\x00\x74a" + bytes(4))
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "words"),
+    [
+        ("set 803475cc 7 ", "in a battle"),
+        ("set 80311aec 3 ", "while the field loads"),
+        ("set 8030e714 1 ", "during an event"),
+        ("set 80310bc0 80000000 ", "during an event"),  # flag 1087: bit 31 of word 33
+    ],
+)
+@needs_cc
+def test_m7a_a_save_now_when_the_field_is_not_quiet_is_refused(driver, tmp_path, state, words):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        FIELD + at("a") + state + "savenow_req savenow_tick get 803473b4 " + SAVE_THEN_CARD + DUMP,
+    )
+    assert "803473B4=00000000" in out and f"save now refused, {words}" in err, (out, err)
+    assert not any(block_and_tail(out)[0])  # nothing for the snapshot to write

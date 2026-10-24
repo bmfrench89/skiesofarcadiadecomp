@@ -47,8 +47,14 @@
 #define ID_MAX 31u
 #define KEPT_MAX (GAP_LEN + TAIL_LEN)
 #define CLAIMS_ID "soa.claims" /* T2's table; no mod's id begins soa. */
+#define SAVENOW_ID "soa.savenow" /* M7a's: where a save-now save was made */
 
 int mod_loaded(const char* id); /* mod.c */
+/* savenow.c (M7a) */
+int savenow_opened(void);
+uint32_t savenow_snapshot(CpuState* s, uint32_t block, uint8_t* buf, uint32_t cap);
+void savenow_load_pre(CpuState* s, uint32_t block, const uint8_t* chunk, uint32_t n);
+void savenow_load_post(CpuState* s);
 
 static int g_log;
 static unsigned long long g_calls[4], g_written[4]; /* snapshot, image, load, new game */
@@ -158,7 +164,7 @@ void savext_snapshot(CpuState* s, uint32_t block)
     g_calls[0]++;
     g_tail_armed = 0;
     g_tail_len = g_tail_chunks = 0;
-    if (!n && !g_kept_len && !mod_claims_count()) return;
+    if (!n && !g_kept_len && !mod_claims_count() && !savenow_opened()) return;
     for (i = 0; i < GAP_LEN; i++)
         if (gap[i]) {
             fprintf(stderr, "[save] the block's gap holds a byte the game wrote (+%u): nothing written, so this save "
@@ -167,11 +173,17 @@ void savext_snapshot(CpuState* s, uint32_t block)
             return;
         }
     new_id();
-    /* T2's table first: the numbers this install gave each claim */
+    /* M7a's first: a save this port opened, and off a save point its fallback in the block */
+    {
+        uint8_t sn[16];
+        uint32_t sl = savenow_snapshot(s, block, sn, sizeof sn);
+        if (sl) used += chunk_put(all + used, SAVENOW_ID, sn, sl);
+    }
+    /* T2's table: the numbers this install gave each claim */
     if (mod_claims_count()) {
         static char text[KEPT_MAX];
         uint32_t tn = mod_claims_text(text, KEPT_MAX - (1u + sizeof CLAIMS_ID - 1u + 4u));
-        used += chunk_put(all, CLAIMS_ID, (const uint8_t*)text, tn);
+        used += chunk_put(all + used, CLAIMS_ID, (const uint8_t*)text, tn);
     }
     /* each loaded mod's own, then the kept ones it does not replace */
     for (k = 0; k < n; k++) {
@@ -254,19 +266,20 @@ void savext_image(CpuState* s, uint32_t image)
 }
 
 /* A save loaded, the game's half done: each mod's chunk, the rest kept. */
-void savext_load(CpuState* s, uint32_t block)
+/* The container a loaded save holds, read before the game copies the block
+ * (M7a puts a save-now's map back into it) and handed out after. */
+static uint8_t g_got[KEPT_MAX];
+static uint32_t g_got_len, g_parsed;
+
+void savext_load_pre(CpuState* s, uint32_t block)
 {
-    static uint8_t got[KEPT_MAX];
+    uint8_t* got = g_got;
     const uint8_t* gap = mem_ptr(s, block + GAP_OFF);
     const uint8_t* tail = mem_ptr(s, block - BLOCK_IN_IMAGE + TAIL_OFF);
-    uint32_t len = 0, gap_len, tail_len, kept = 0;
-    int claims_seen = 0;
-    const uint8_t *p, *end, *next, *data;
+    uint32_t len = 0, gap_len, tail_len, size;
+    const uint8_t *p, *end, *next, *data, *sn = NULL;
+    uint32_t sn_n = 0;
     char id[ID_MAX + 1];
-    uint32_t size;
-    int i, n = mod_event_count(MOD_EV_LOAD);
-    g_calls[2]++;
-    g_kept_len = 0;
     if (!memcmp(gap, "SOAX", 4)) {
         gap_len = get32(gap + 32);
         if (get16(gap + 4) != VERSION || gap_len > GAP_LEN - GAP_HEAD || crc32(gap + GAP_HEAD, gap_len) != get32(gap + 28)) {
@@ -289,6 +302,29 @@ void savext_load(CpuState* s, uint32_t block)
             }
         }
     }
+    g_got_len = len;
+    g_parsed = block;
+    p = got, end = got + len;
+    while (chunk_at(p, end, id, &data, &size, &next)) {
+        if (!strcmp(id, SAVENOW_ID)) sn = data, sn_n = size;
+        p = next;
+    }
+    savenow_load_pre(s, block, sn, sn_n);
+}
+
+void savext_load(CpuState* s, uint32_t block)
+{
+    const uint8_t* got = g_got;
+    uint32_t len, kept = 0, size;
+    int claims_seen = 0;
+    const uint8_t *p, *end, *next, *data;
+    char id[ID_MAX + 1];
+    int i, n = mod_event_count(MOD_EV_LOAD);
+    g_calls[2]++;
+    g_kept_len = 0;
+    if (g_parsed != block) savext_load_pre(s, block);
+    g_parsed = 0;
+    len = g_got_len;
     /* each loaded mod with on_load gets its chunk, or none */
     for (i = 0; i < n; i++) {
         const char* mid = mod_save_id(MOD_EV_LOAD, i);
@@ -307,6 +343,8 @@ void savext_load(CpuState* s, uint32_t block)
         if (!strcmp(id, CLAIMS_ID)) {
             claims_seen = 1;
             mod_claims_check(data, size);
+        } else if (!strncmp(id, "soa.", 4)) {
+            /* the port's own (soa.savenow): read above, never carried to another save */
         } else if (!saves_for_itself(id)) {
             memcpy(g_kept + g_kept_len, p, (size_t)(next - p));
             g_kept_len += (uint32_t)(next - p);
@@ -324,6 +362,7 @@ void savext_load(CpuState* s, uint32_t block)
     if (g_log)
         fprintf(stderr, "[save] load of the block at %08X: %u bytes of chunks, %u kept for the next save\n", block, len,
                 kept);
+    savenow_load_post(s);
 }
 
 void savext_new_game(void)
@@ -347,6 +386,7 @@ void fn_801A4354(CpuState* s)
 {
     s->pc = 0x801A4354u; /* first, as the translation's block head does: a sample in here names it (test_hle_pc) */
     uint32_t block = s->gpr[3];
+    savext_load_pre(s, block); /* before the game copies the block (M7a) */
     recomp_fn_801A4354(s);
     savext_load(s, block);
 }

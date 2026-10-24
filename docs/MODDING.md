@@ -161,6 +161,10 @@ end does. `SOA_BATTLE_LOG=1` logs every one, and the run report counts each even
 mod changed, and each mod's time in it. **A mod that crashes inside one stops the run** (exit 10), and
 the log names the mod and the event; nothing continues half-done (docs/specs/battle-events.md).
 
+**Save now** (M7a): the menu's "Save now" opens the game's own save menu wherever the field is quiet, and a
+Continue lands where the save was made. A mod that writes saved game state should do it after `on_load`,
+which a Continue from such a save calls too.
+
 **Keeping state in the save** (X2, docs/specs/save-extension.md): `on_save`, `on_load` and
 `on_new_game` give your mod a chunk of its own inside the game's save file, filed under your manifest 2
 `id` (a mod without one cannot keep a chunk). About 9.7 KB is shared by every mod. A save made with

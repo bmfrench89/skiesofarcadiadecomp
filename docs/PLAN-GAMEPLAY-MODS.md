@@ -1367,7 +1367,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Chords on buttons the game never sees (LB, View, the stick clicks), detected in `window.c`/`si.c`, because `pad_filter` gets only the 12 GameCube buttons. The chords land in milestone 1, ahead of M8.
   - Once M8's overlay exists: while it is open, withhold the d-pad, A and B from the game before they are recorded.
   - Use the first connected XInput slot, not always slot 0. Remapping and presets go in M5.
-- **M7a amendment: a save-now that leaves the port** — *hours for the refusal; the fallback comes with X2.*
+- **M7a amendment: a save-now that leaves the port** — *hours for the refusal; the fallback comes with X2.* **Done 2026-10-24 with M7a** (FINDINGS "M7a"): the fallback built, and the pre-X2 build loads such a save at the fallback; Dolphin is the owner's check.
   - A Continue always ends by setting `sys[15]` (0x8030E420) to 20000: `fn_801F7B04(20000)` at the end of `fn_801A4354` (checked here). On a map whose script has no op 138 (no save point), that branch was never reachable in retail. At `a116c` it asks for kmap 9001, which the map lacks, and traps (FINDINGS census 3; B6).
   - M7a's fix, writing 0x8030E420 = 0 before the map's script runs, lives in the runtime, not in the save. A save-now on such a map would still take that branch after a P3 export, in Dolphin or on a console [I, not run].
   - Until X2 exists: allow a save-now only on maps whose script contains op 138, and refuse elsewhere with a message.

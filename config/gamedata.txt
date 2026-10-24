@@ -42,7 +42,8 @@ inventory.armor              0x8030BC88  slot[80]             0x800103B8+1172   
 inventory.accessories        0x8030BDC8  slot[80]             0x800103B8+1492   story-flags.md s.6
 inventory.items              0x8030BF08  slot[80]             0x800103B8+1812   story-flags.md s.6
 inventory.key_items          0x8030C048  slot[80]             0x800103B8+2132   story-flags.md s.6
-sys15                        0x8030E420  u32                  0x8009A048+5504   story-flags.md; 10000 returns from a battle
+sys15                        0x8030E420  u32                  0x8009A048+5504   story-flags.md; 10000 returns from a battle, 20000 from a save point (a Continue)
+script.entry_busy            0x8030E714  u32                  0x80212170+6260   the lab's quiet field (examples/mods/lab); 1 while a script entry runs
 save.variant                 0x803473B0  u32                  0x80123DB0        save-load.md:17-19
 save.request                 0x803473B4  u32                  0x800D840C        save-load.md:17-19
 save.result                  0x803473C4  u32                  0x80123E0C        save-load.md:17-19

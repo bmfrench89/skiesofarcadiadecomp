@@ -3,7 +3,8 @@
  * through with the pad or the keyboard, and the drawing of them over the
  * presented picture.
  *
- * Main: Resume, Mods, Settings, Fullscreen and Turbo (applied now), Quit.
+ * Main: Resume, Mods, Settings, Fullscreen and Turbo (applied now), Save now
+ * (M7a: the game's save menu, wherever the field is quiet), Quit.
  * Mods: each mod, on or off (soa.ini's mod_order, `-ID` off); entered, its
  * declared options (M16). Settings: every soa.ini key with a closed set of
  * values. A change other than fullscreen and turbo is written to soa.ini at
@@ -140,7 +141,7 @@ static const char* const k_font[95][7] = {
 /* ---- the model ----------------------------------------------------------- */
 
 enum { PAGE_MAIN, PAGE_MODS, PAGE_MOD, PAGE_SETTINGS };
-enum { K_RESUME, K_PAGE_MODS, K_PAGE_SETTINGS, K_FULLSCREEN, K_TURBO, K_QUIT, K_MOD, K_MOD_OFF, K_OPTION, K_SETTING };
+enum { K_RESUME, K_PAGE_MODS, K_PAGE_SETTINGS, K_FULLSCREEN, K_TURBO, K_SAVE_NOW, K_QUIT, K_MOD, K_MOD_OFF, K_OPTION, K_SETTING };
 
 typedef struct {
     int kind, ref;
@@ -275,6 +276,7 @@ static int items(Item* it, int max)
         ADD(K_PAGE_SETTINGS, 0, "Settings", ">");
         ADD(K_FULLSCREEN, 0, "Fullscreen", g_fullscreen ? "on" : "off");
         ADD(K_TURBO, 0, "Turbo", g_turbo ? "on" : "off");
+        ADD(K_SAVE_NOW, 0, "Save now", "");
         ADD(K_QUIT, 0, "Quit", "");
         break;
     case PAGE_MODS:
@@ -432,6 +434,9 @@ int menu_input(int key)
             g_page = PAGE_SETTINGS;
             g_status[0] = '\0';
             return MENU_ACT_REDRAW;
+        case K_SAVE_NOW:
+            menu_close();
+            return MENU_ACT_SAVE_NOW | MENU_ACT_CLOSE | MENU_ACT_REDRAW;
         case K_QUIT:
             menu_close();
             return MENU_ACT_QUIT | MENU_ACT_CLOSE;

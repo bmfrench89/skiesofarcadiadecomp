@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1864 |
+| Python tests | 1874 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -418,6 +418,14 @@ a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-24)
+
+**Latest, 2026-10-24: M7a, save now, built** (FINDINGS "M7a", `docs/specs/save-now.md`). "Save now" on the
+menu (and `SOA_SAVE_NOW=F`) opens the game's own save menu wherever the field is quiet; a Continue from it
+lands where the save was made, `a116c` included, whose Continue used to stop. Off a save point the save
+carries the last save point's map for the game alone, which the pre-X2 build loads. **Next:** M7b (warp by
+name, part select and the other debug actions) or the owner's pick; **owner:** Dolphin loading such a save.
+
+**Before that, the same day:**
 
 **Latest, 2026-10-24: T2's core built** (FINDINGS "T2", `docs/specs/content-ids.md`). A mod claims a story
 flag by name (`claim = flag <name>`, `api->claim`); the loader numbers it in `mods.lock`, never twice, and

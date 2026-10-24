@@ -43,6 +43,7 @@
 #define SOA_INVENTORY_ITEMS 0x8030BF08u /* slot[80] */
 #define SOA_INVENTORY_KEY_ITEMS 0x8030C048u /* slot[80] */
 #define SOA_SYS15 0x8030E420u /* u32 */
+#define SOA_SCRIPT_ENTRY_BUSY 0x8030E714u /* u32 */
 #define SOA_SAVE_VARIANT 0x803473B0u /* u32 */
 #define SOA_SAVE_REQUEST 0x803473B4u /* u32 */
 #define SOA_SAVE_RESULT 0x803473C4u /* u32 */
@@ -500,6 +501,14 @@ static inline int soa_sys15_get(const SoaModApi* api, uint32_t* out)
 static inline int soa_sys15_set(const SoaModApi* api, uint32_t v)
 {
     return api->write32(0x8030E420u, v);
+}
+static inline int soa_script_entry_busy_get(const SoaModApi* api, uint32_t* out)
+{
+    return api->read32(0x8030E714u, out);
+}
+static inline int soa_script_entry_busy_set(const SoaModApi* api, uint32_t v)
+{
+    return api->write32(0x8030E714u, v);
 }
 static inline int soa_save_variant_get(const SoaModApi* api, uint32_t* out)
 {

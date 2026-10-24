@@ -646,6 +646,7 @@ static void menu_act(int act)
         fprintf(stderr, "[menu] closed\n");
     }
     if (act & MENU_ACT_QUIT) close_window();
+    if (act & MENU_ACT_SAVE_NOW) savenow_request(); /* M7a: the next safe point decides */
     if ((act & (MENU_ACT_REDRAW | MENU_ACT_CLOSE | MENU_ACT_FULLSCREEN)) && g_shown_w) present(0);
 }
 

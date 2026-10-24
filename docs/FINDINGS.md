@@ -10018,3 +10018,50 @@ could not name are all in use.** 2026-10-24. PLAN-GAMEPLAY-MODS K12; D-43, miles
 - **What it does not cover:** a bit set through a computed mask (a table of masks, a shift by a variable) would hide
   from this scan, as would code outside the executable; none was seen. The answer is static; no run was needed,
   since the plan's Done forbids a watch for this ("which sees only one run").
+
+**M7a, save now: the game's own save menu, opened anywhere on a quiet field, and a Continue that lands where the
+save was made, even on a map with no save point.** 2026-10-24. Spec: `docs/specs/save-now.md`; milestone 2.
+
+- **Measured first** [V, `build/reach/m7-116c-*`]:
+  - The save-point task every field has opens the save menu on the one-word request (`save.request` = 1, the
+    variant 0), on `a116c` too, a map with no save point. The save held map 0x74, letter `c`.
+  - A Continue from that save stopped at the strict check at `0x800E1B2C`, under op 235's area-map lookup
+    (`fn_800E2924`): every Continue sets `sys15` (`0x8030E420`) to 20000, "back from my save point", and `a116c`'s
+    branch for that asks for area map 9001, which the map lacks.
+  - `sys15` poked to 0 after the load (frame 2660), and the Continue landed on `a116c` with the field running, Vyse
+    where he had stood when the save was made (frame 3700 of the load against frame 4400 of the save).
+  - 57 of the 257 field scripts have op 138 (SAVEPOINT); `116c`'s has none.
+- **What it is** [V]:
+  - `runtime/savenow.c`: "Save now" on the menu's main page, and `SOA_SAVE_NOW=F` for tests.
+  - At the next safe point, on a quiet field (the lab's test: scene 6, field state 8, flag 1087 clear,
+    `script.entry_busy` not 1), the request is written; elsewhere it is refused, with the reason, in the log.
+  - `runtime/save_point_maps.h` is generated from the disc by `tools/savenow.py`: map names and a fact about each
+    script, no game data.
+  - The last save-point map entered is remembered.
+  - X2 carries a `soa.savenow` chunk for every save the port opened. Off a save point, the block's map word and
+    letter take the last save-point map.
+  - At the load, the chunk's own map goes back into the block before the game copies it, and `sys15` is set to 0
+    after, so the player lands where the save was made.
+  - T9 gains `script.entry_busy`.
+- **On a save point's map** [V, `build/reach/m7-a-*`]: on `a116a` at frame 3300, the menu was asked for and the save
+  written ("the save holds a116a", `soa.savenow: 12 bytes`, the game's check passing, `cardformat.py verify`
+  accepting the image). A fresh Continue: `sys15 0`, map 0x74 `a`, the field running.
+- **Off one** [V, `build/reach/m7-c-*`, `build/m7/old`]:
+  - On `a116c` at frame 4480, after a warp from `a116a`: "off a save point", the fallback `a116a`. On the card the map
+    word is 116, letter `a`, and the chunk is `SN1`, `0x7463` (`116c`), `0x7461` (the fallback).
+  - The port's Continue: "a116c put back over its fallback a116a", map 0x74 `c`, the field running, and frame 3700
+    shows Vyse on `a116c` where the save was made.
+  - *Mutation:* `SOA_SAVENOW_NO_RESTORE=1` lands on `a116a`, Vyse on its save point in the save point's glow
+    (frame 3700).
+  - The build from before X2 (2ac1b7c), standing in for the game alone, also lands on map 0x74 `a`, the field
+    running: a save made off a save point loads there without the port, where before it would have stopped.
+- **Refused** [V, `build/m7/battle.log`, `event.log`]: at frame 10600 of the story's first battle, `save now refused,
+  in a battle`; at frame 5000 of the opening, `save now refused, during an event`. Neither wrote the request.
+- **Tests** [V]:
+  - `test_mods.py`, six on the fake guest through `savenow.c` and X2's sites: off a save point, the fallback and
+    the chunk, the card's copy put back, and `sys15` 0; on one, the map kept; four refusals.
+  - `test_savenow.py`, four: the header, a dropped map showing, and where the disc is, the header against it.
+  - `test_menu.py`: Save now closes the menu and asks for the save. The main page's PNG was opened: "Save now"
+    between Turbo and Quit.
+- **Not in M7a:** a refusal shown on screen (the menu has closed by the time the safe point decides), save-now on the
+  world map or in a ship battle, M7b's other actions, and Dolphin itself (an owner check).

@@ -141,9 +141,13 @@ def run(driver, script: str, cwd: Path | None = None) -> list[str]:
 
 
 def test_the_main_page_s_rows_act(driver):
-    """Down to Fullscreen and Turbo, each asks the window to toggle it; Quit
-    closes and quits; B on the main page closes."""
-    out = run(driver, "open down down down right down left down ok")
+    """Down to Fullscreen and Turbo, each asks the window to toggle it; Save
+    now closes and asks for the save (M7a); Quit closes and quits; B on the
+    main page closes."""
+    assert (
+        run(driver, "open down down down down down ok")[-1] == "ok -> 35 open 0"
+    )  # save now, close, redraw
+    out = run(driver, "open down down down right down left down down ok")
     assert out[0] == "open 1"
     assert "right -> 5 open 1" in out and "left -> 9 open 1" in out, out  # fullscreen, turbo
     assert out[-1] == "ok -> 18 open 0", out  # quit and close
@@ -271,7 +275,7 @@ def test_the_panel_and_its_text(driver, tmp_path):
     (ROOT / "build").mkdir(exist_ok=True)  # a fresh checkout (CI) has none
     png(ROOT / "build" / "menu-main.png", buf, w, h)
     s = 2
-    pw, ph = 48 * 6 * s, (6 + 7) * 9 * s  # COLS + 2 cells wide; six rows on the main page
+    pw, ph = 48 * 6 * s, (7 + 7) * 9 * s  # COLS + 2 cells wide; seven rows on the main page
     x0, y0 = (w - pw) // 2, (h - ph) // 2
     for x, y in ((0, 0), (x0 - 1, y0), (x0, y0 - 1), (639, 479)):
         assert px(buf, w, x, y) == background(x, y), (x, y)

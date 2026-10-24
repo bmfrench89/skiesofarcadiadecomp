@@ -547,7 +547,7 @@ Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only,
 - On part G at `116a` with S3's accelerator, rate × 0 fights 0 battles and rate × 1 fights at least one.
 - The contract holds.
 
-**M7a. Save now, with the `sys[15]=20000` trap** — *several days, `--link`; the trap is the work.*
+**M7a. Save now, with the `sys[15]=20000` trap** — *several days, `--link`; the trap is the work.* **Done 2026-10-24** to [specs/save-now.md](specs/save-now.md) (FINDINGS "M7a"): the menu's Save now and `SOA_SAVE_NOW`; `sys15` = 0 after the load of a save-now save; off a save point the save carries the last one for the game alone (X2's `soa.savenow`), measured on `a116c`.
 - Allowed only in scene 6, state 8, with no event running. The script tick freezes while the request is 1 (0x8021214C).
 - On maps whose script contains op 138, the one-word request (0x803473B0 = 0, 0x803473B4 = 1) is used directly.
 - On other maps, a Continue takes the `sys[15]=20000` branch. The proposed fix is to write 0x8030E420 = 0 before the map's script runs [I]; the timing of that write, and where the player then lands, are part of the work.

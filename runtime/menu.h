@@ -26,7 +26,8 @@ enum {
     MENU_ACT_CLOSE = 2,       /* the menu closed: release the hold */
     MENU_ACT_FULLSCREEN = 4,  /* toggle fullscreen now */
     MENU_ACT_TURBO = 8,       /* toggle turbo now */
-    MENU_ACT_QUIT = 16        /* close the window and end the run */
+    MENU_ACT_QUIT = 16,       /* close the window and end the run */
+    MENU_ACT_SAVE_NOW = 32    /* ask for a save now (M7a, savenow.c), the menu closed first */
 };
 
 /* Whether it is open: any thread (si.c withholds the pad while it is). */
@@ -38,6 +39,9 @@ void menu_close(void);
 
 /* What the window can tell it: fullscreen and turbo now, for their rows. */
 void menu_set_state(int fullscreen, int turbo);
+
+/* savenow.c (M7a): what MENU_ACT_SAVE_NOW asks for, from the UI thread. */
+void savenow_request(void);
 
 /* One input, on the UI thread: the MENU_ACT_ bits for the window. */
 int menu_input(int key);
