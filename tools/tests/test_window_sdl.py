@@ -103,6 +103,7 @@ void menu_open(void) {}
 void menu_set_state(int fullscreen, int turbo) { (void)fullscreen; (void)turbo; }
 int menu_input(int key) { (void)key; return 0; }
 void menu_draw(uint8_t* bgra, int w, int h, int stride) { (void)bgra; (void)w; (void)h; (void)stride; }
+void savenow_request(void) {} /* savenow.c (M7a): the menu's Save now */
 
 static void frames(int n)
 {
