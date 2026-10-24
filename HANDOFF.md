@@ -419,6 +419,78 @@ washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-24)
 
+### Start here (for the next session)
+
+**State.** `main` is at 5b59ea6, pushed, CI green. The full pre-push suite passes: 1883 tests in 102 files
+(1842 passed, 41 skipped here; 690 skip with MSVC hidden, so 649 want MSVC). Nothing is uncommitted but the owner's
+`.vscode/`. One session committed to this checkout; use the `orient` skill before choosing work.
+
+**What the last session built (2026-10-22 to 24), in order.** Each has a spec under `docs/specs/` and a FINDINGS
+entry of the same name:
+
+| Slice | What it gives | Spec |
+|---|---|---|
+| T9 | the game's addresses by name (`config/gamedata.txt`, 72 names), `soa_gamedata.h` | game-names.md |
+| T1/I6 | a mod's `files.txt` replaces, adds and aliases disc files | disc-layer.md §3.8 |
+| R0 | the battle harness: `SOA_BATTLE_LOG`, `SOA_BATTLE_FORCE`, `tools/battle.py check`, `on_damage` | battle-harness.md |
+| R1 | ten more battle events for mods; a mod crashing in one exits 10, named | battle-events.md |
+| X2 | mods keep a chunk in the save file; unloaded mods' chunks ride through; `tools/savext.py show` | save-extension.md |
+| T2 | `claim = flag <name>`: flags numbered from 24,576 in `mods.lock`, never reused | content-ids.md |
+| K1 | the plan's "8,192 up is free" was wrong: the area maps own flags to 24,255 (`tools/flagmap.py`) | content-ids.md |
+| K6 | with `SOA_SEED`, the story's first battle repeats blow for blow | (FINDINGS "K6") |
+| K12 | six free battle status bits (`tools/statusbits.py`) | (FINDINGS "K12") |
+| M7a | the menu's Save now, anywhere on a quiet field; a Continue lands where it was made | save-now.md |
+| M7b | the menu's Debug page: warp, part select, the ending, the fade fix, encounters off | debug-actions.md |
+
+Owner decisions taken: D-43 (the gameplay core), D-44 (gameplay Q2: the honest save promise, no mod-map or gear
+fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with it.
+
+**Next, in order.** PLAN-NEXT §0 has the order; this is where it now points.
+1. **The event track** (PLAN-GAMEPLAY-MODS, "The event track (rule 6)", line ~1329): the settings lines first. A
+   "recorded" flag on game-changing `soa.ini` keys and each mod's declared options into the recording's
+   `# config` line, and a strict switch that refuses a replay whose config differs. It is the last item of
+   milestone 2. Write its spec first, against HEAD.
+2. Then **ask the owner** (the questions tool) what follows milestone 2. The candidates are milestone 3
+   (PLAN-GAMEPLAY-MODS §E), widescreen (M10, V9b), which D-43 put behind the core, and I7 (deltas) or the R2
+   status thunks, which the free bits of K12 now allow.
+
+**Waiting on the owner at the machine** (none of these can be done by a session):
+- the menu's Save now and Debug page, in a window;
+- a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point;
+- session D at 60 or 120 Hz (H17b and V12's look and pacing);
+- the menu in a window and the Vulkan menu (M8a/b);
+- a battery run (H20);
+- a small mod built from `docs/MODDING.md` alone (T10).
+
+**Recipes the last session leaned on** (all in FINDINGS with their runs):
+- *Part G's card to the field:* `--card build/savetest/card-partG.raw` and the pad
+  `1600:start,1640:a,1800:start,1840:a,2000:start,2040:a,2240:a,2440:a,2640:a`; the field runs on `a116a` by about
+  frame 2700.
+- *A save from there:* `SOA_SAVE_NOW=3300`, then `3420:a,3490:a,3560:a,3630:b,3700:b,3770:b` (slot A, file 01,
+  overwrite); or the lab's `save:3300-5000:a/a/a/b/b/b` at a save point.
+- *A warp:* `SOA_ACTION=warp:103a@3300`, or `tools/reach.py run NAME --warp 116c`.
+- *Battles:* the `battle` scenario at `SOA_SPEED=3` fights the story's first battle from about frame 9811;
+  part G with `--soak-seed 33 --accelerate 600` fights one near 4420; reach U2's crystal and U3's ship battle
+  recipes are in FINDINGS "R1, the battle events".
+- *The build from before X2* is kept at `build/x2/before/soa.exe` (2ac1b7c): it stands in for the game alone.
+
+**Traps that cost time in that session** (the memory files hold them too):
+- **Never write code containing a backslash through a Bash heredoc**, quoted delimiter or not: `\n` and `\\n`
+  arrive as real line breaks. Use the Write or Edit tool, or a script file written by Write.
+- `Path.write_text` without `encoding="utf-8"` writes the Windows code page, and flips LF to CRLF. Use
+  `write_bytes(text.encode("utf-8"))` with the file's own line ending.
+- Chain a commit after any script that edits what it commits with `&&`, never `;`: the K12 commit went out with
+  stale counts that way.
+- Touching `runtime/window_sdl.c` means CLAUDE.md's whole Linux check, `test_window_sdl.py` under Xvfb included
+  (its driver stubs every function the window calls; a missing one broke CI once). Docker Desktop works here:
+  `python:3.14-slim`, the apt packages CI's `ci.yml` lists, `tools/fetch_sdl.py`, then `xvfb-run`.
+- `reach.py run NAME` refuses a folder that already holds a run: give each run a new name.
+- A peek address worked out by hand was wrong twice (flag words): compute it, or read it off the mod's own log.
+- Counts move with every test added: measure (`pytest --collect-only`, and the MSVC-hidden run with the plugin
+  in the memory file `measure-test-count-rows`) and fix every copy in the same commit.
+
+### Earlier notes, newest first
+
 **Latest, 2026-10-24: M7b, the debug actions, built** (FINDINGS "M7b", `docs/specs/debug-actions.md`). The
 menu's Debug page (and `SOA_ACTION`) warps to any of 189 field maps, opens part select, plays the ending, turns a
 black fade back in and switches random encounters off; each repeated its recipe with frames opened. With M7a
