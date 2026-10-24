@@ -423,6 +423,7 @@ an unquoted path with a space in it is two arguments.
 | `SOA_GAME=path` | a split build only (`recompile.py --cc gcc --split`, Android's arrangement on Linux; specs/android.md L12a): the game library to load, in place of `libsoa_game.so` beside the launcher. It is checked before it is loaded, and refused in words if it was built for another machine, another page size or other sources, or made from another disc's executable |
 | `SOA_SNAP=n` / `SOA_SNAP=n@A-B` | write `build/frames/NNNN.png` every n frames, or every nth from frame A to B; needs `SOA_RENDER=1`. With no window open it also skips rasterizing the frames it is not writing, so the game runs at full speed between them |
 | `SOA_BATTLE_LOG=1` | `[battle]` lines (R0, specs/battle-harness.md): every damage the battle works out -- base, the game's value and what the game got after mods' `on_damage` -- with the target's element multiplier and Guard, and at each frame of a battle any actor's HP, MP or status change, the SP and the turn order; `python tools/battle.py check <log>` holds them to the formula. Since R1 (specs/battle-events.md) also each heal, enemy spawn, enemy action, turn order, spirit gain, escape, rewards, effect, round end and ship damage, before and after mods, and at exit a line per event: its calls, how many a mod changed, and "never called" for one the run did not reach |
+| `SOA_ACTION=NAME[:ARG]@F[,...]` | the menu's Debug actions at frame F (M7b, specs/debug-actions.md): `warp:103a` (the game's own warp, to a map with a script and its geometry, below 500), `part` (the developers' part menu, `355a`), `ending`, `fade` (turn a fade left black back in), `encounters:off` and `encounters:on`; each refused, with its reason, where the field is not quiet |
 | `SOA_SAVE_NOW=F` | at frame F ask for a save now (M7a, specs/save-now.md), as the menu's "Save now" does: the game's save menu opens at the next safe point on a quiet field, or `[savenow]` says why not |
 | `SOA_SAVE_LOG=1` | `[save]` lines (X2, specs/save-extension.md): at each save the mods' chunks written into the block's gap and the file's tail, and the block's and file's SHA-1 as they go to the card (what `python tools/savext.py show <card>` reads back); at each load what was read and kept; at exit each of the four sites' calls and bytes written |
 | `SOA_BATTLE_FORCE=mode:id:stage@F` | start a battle on demand: the game's six-word request written at the first frame from F with the field running (`0:0:2@4000` on `a101b` is its party); one shot, and a map load clears it |
@@ -497,7 +498,7 @@ an unquoted path with a space in it is two arguments.
 ## Checking it still works
 
 ```powershell
-python -m pytest                     # 1874 tests; any that need a dump skip themselves
+python -m pytest                     # 1883 tests; any that need a dump skip themselves
 python -m ruff check tools           # lint and format both gate CI, and the
 python -m ruff format --check tools  #   format one has broken it twice
 python tools/checkdump.py            # the dump is still the build config/ describes

@@ -42,7 +42,8 @@ keyboard, that means leaving the game to change anything. M8 is the menu a playe
 
 ## 2. Not in M8a
 
-Warps and saves from the menu (M7a/b's actions, which the plan's first Done wanted), a
+Warps and saves from the menu (M7a/b's actions, which the plan's first Done wanted: since 2026-10-24 Main's
+Save now, specs/save-now.md, and its Debug page, specs/debug-actions.md), a
 mod's order changed from the menu (M17's list is written by hand for now), and live re-application of options.
 
 ## 3. Done

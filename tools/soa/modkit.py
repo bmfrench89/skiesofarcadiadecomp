@@ -39,6 +39,9 @@ void savext_load(CpuState* s, uint32_t block);
 void savext_new_game(void);
 void savenow_request(void);          /* runtime/savenow.c's (M7a) */
 void savenow_safe_point(CpuState* s);
+int actions_parse(const char* text);  /* runtime/actions.c's (M7b) */
+int actions_request(int kind, uint32_t map);
+void actions_safe_point(CpuState* s);
 
 /* What cpu.h's accessors can reach: none of it is, since every address a
  * patch may name is memory. */
@@ -296,6 +299,19 @@ int main(int argc, char** argv)
         /* M7a: a save now asked for, and the safe point that decides it */
         else if (!strcmp(cmd, "savenow_req")) { savenow_request(); printf("asked\n"); }
         else if (!strcmp(cmd, "savenow_tick")) { savenow_safe_point(&s); printf("ticked\n"); }
+        /* M7b: SOA_ACTION's text, a request as the menu makes one, and the safe point */
+        else if (!strcmp(cmd, "actions")) {
+            char at[256];
+            if (scanf("%255s", at) != 1) break;
+            printf("scheduled %d\n", actions_parse(at));
+        }
+        else if (!strcmp(cmd, "act")) {
+            int ak;
+            unsigned am;
+            if (scanf("%d %x", &ak, &am) != 2) break;
+            printf("requested %d\n", actions_request(ak, am));
+        }
+        else if (!strcmp(cmd, "actions_tick")) { actions_safe_point(&s); printf("ticked\n"); }
         else if (!strcmp(cmd, "hex")) {
             /* n bytes at an address, as hex on one line */
             unsigned ha, hn, hi;
@@ -379,6 +395,7 @@ def driver_sources(out: Path) -> list[Path]:
         RUNTIME / "tick.c",
         RUNTIME / "savext.c",  # X2, its sites left out (SOA_FAKE_GUEST)
         RUNTIME / "savenow.c",  # M7a, which savext.c calls
+        RUNTIME / "actions.c",  # M7b
         *toolchain.runtime_support_sources(),  # plat.c (portability L9)
         out / "driver.c",
     ]

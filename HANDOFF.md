@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1874 |
+| Python tests | 1883 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -418,6 +418,14 @@ a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
 ## Where the last session stopped (2026-10-24)
+
+**Latest, 2026-10-24: M7b, the debug actions, built** (FINDINGS "M7b", `docs/specs/debug-actions.md`). The
+menu's Debug page (and `SOA_ACTION`) warps to any of 189 field maps, opens part select, plays the ending, turns a
+black fade back in and switches random encounters off; each repeated its recipe with frames opened. With M7a
+the same day, milestone 2's M7a/b is done. **Next:** the event track (the last of milestone 2), or the owner's
+pick; **owner:** the menu's Save now and Debug page in a window.
+
+**Before that, the same day:**
 
 **Latest, 2026-10-24: M7a, save now, built** (FINDINGS "M7a", `docs/specs/save-now.md`). "Save now" on the
 menu (and `SOA_SAVE_NOW=F`) opens the game's own save menu wherever the field is quiet; a Continue from it

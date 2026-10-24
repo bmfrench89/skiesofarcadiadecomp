@@ -66,6 +66,12 @@ int mod_menu_option(int m, int i, ModMenuOption* out)
 int mod_menu_off_count(void) { return 1; }
 const char* mod_menu_off_key(int i) { return i == 0 ? "lab" : NULL; }
 
+/* actions.c (M7b), as the Debug page sees it: three maps to warp to */
+int actions_request(int kind, uint32_t map) { printf("action %d %X\n", kind, map); return 1; }
+int actions_encounters_off(void) { return 0; }
+int actions_warp_count(void) { return 3; }
+uint32_t actions_warp_map(int i) { static const uint32_t m[3] = {0x0261, 0x6761, 0x7463}; return i >= 0 && i < 3 ? m[i] : 0; }
+
 static const char* const k_names[] = {"up", "down", "left", "right", "bl", "br", "ok", "back", "toggle"};
 
 int main(int argc, char** argv)
@@ -147,13 +153,27 @@ def test_the_main_page_s_rows_act(driver):
     assert (
         run(driver, "open down down down down down ok")[-1] == "ok -> 35 open 0"
     )  # save now, close, redraw
-    out = run(driver, "open down down down right down left down down ok")
+    out = run(driver, "open down down down right down left down down down ok")
     assert out[0] == "open 1"
     assert "right -> 5 open 1" in out and "left -> 9 open 1" in out, out  # fullscreen, turbo
     assert out[-1] == "ok -> 18 open 0", out  # quit and close
     assert run(driver, "open back")[-1] == "back -> 3 open 0"
     assert run(driver, "open toggle")[-1] == "toggle -> 3 open 0"
     assert run(driver, "up")[-1] == "up -> 0 open 0"  # closed: nothing
+
+
+def test_the_debug_page_s_rows_ask_for_their_actions(driver):
+    """Main > Debug (M7b): the warp row moves through the list, wraps, and A
+    takes it, closing the menu; the other rows ask for theirs. The kinds are
+    actions.h's: 1 warp, 2 part, 4 fade, 5 encounters off, 3 the ending."""
+    debug = "open down down down down down down ok "
+    out = run(driver, debug + "right right ok")
+    assert "action 1 7463" in out and out[-1] == "ok -> 3 open 0", out  # the third map, closed
+    assert "action 1 261" in run(driver, debug + "right right right ok")  # wrapped to the first
+    assert "action 1 7463" in run(driver, debug + "left ok")  # and back round
+    for downs, act in ((1, "action 2 0"), (2, "action 4 0"), (3, "action 5 0"), (4, "action 3 0")):
+        assert act in run(driver, debug + "down " * downs + "ok"), (downs, act)
+    assert run(driver, debug + "back")[-1] == "back -> 1 open 1"  # back to the main page
 
 
 def test_a_mod_s_options_change_and_are_saved(driver):
@@ -275,7 +295,7 @@ def test_the_panel_and_its_text(driver, tmp_path):
     (ROOT / "build").mkdir(exist_ok=True)  # a fresh checkout (CI) has none
     png(ROOT / "build" / "menu-main.png", buf, w, h)
     s = 2
-    pw, ph = 48 * 6 * s, (7 + 7) * 9 * s  # COLS + 2 cells wide; seven rows on the main page
+    pw, ph = 48 * 6 * s, (8 + 7) * 9 * s  # COLS + 2 cells wide; eight rows on the main page
     x0, y0 = (w - pw) // 2, (h - ph) // 2
     for x, y in ((0, 0), (x0 - 1, y0), (x0, y0 - 1), (639, 479)):
         assert px(buf, w, x, y) == background(x, y), (x, y)

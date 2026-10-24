@@ -110,6 +110,7 @@ void dvd_init(const char* p) { (void)p; }
 void battle_init(void) {} /* battle.c (R0): no battle here */
 void savext_init(void) {} /* savext.c (X2): no save here */
 void savenow_init(void) {} /* savenow.c (M7a) */
+void actions_init(void) {} /* actions.c (M7b) */
 /* disc.c (disc-layer I1): an image that opens, and three buffers of zeroes --
  * enough shape for the boot path to reach the guest, and nothing of the game. */
 static const uint8_t zero_dol[0x100], zero_boot[0x440], zero_fst[0x40];

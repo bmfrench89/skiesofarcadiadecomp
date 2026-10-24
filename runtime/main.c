@@ -46,6 +46,7 @@ int selftest(CpuState* s);
 void battle_init(void); /* battle.c, R0 */
 void savext_init(void); /* savext.c, X2 */
 void savenow_init(void); /* savenow.c, M7a */
+void actions_init(void); /* actions.c, M7b */
 int gx_replay(CpuState* s, const char* base);
 int gx_replay_pair(CpuState* s, const char* a, const char* b); /* H10: A, B and B.mid.png */
 void gxr_enable(int on);
@@ -1387,6 +1388,7 @@ int main(int argc, char** argv)
         battle_init(); /* R0: SOA_BATTLE_LOG and SOA_BATTLE_FORCE (runtime/battle.c) */
         savext_init(); /* X2: SOA_SAVE_LOG and the save's report (runtime/savext.c) */
         savenow_init(); /* M7a: SOA_SAVE_NOW and the menu's save now (runtime/savenow.c) */
+        actions_init(); /* M7b: SOA_ACTION and the menu's Debug page (runtime/actions.c) */
         size_t n;
         char seed[16];
         const char* rumble = getenv("SOA_RUMBLE");

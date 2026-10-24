@@ -557,7 +557,7 @@ Add `call_guest(addr, ints, floats)` to the API, allowed at the safe point only,
 - At `a116c`, the known trap, a save-now and Continue with the fix lands without the camera-9001 trap, with frames opened. Without the fix, a save-now there is refused with a message.
 - The contract holds.
 
-**M7b. The other debug actions, headless** — *a day to several days, `--link`.*
+**M7b. The other debug actions, headless** — *a day to several days, `--link`.* **Done 2026-10-24** to [specs/debug-actions.md](specs/debug-actions.md) (FINDINGS "M7b"): warp, part select, the ending, the fade fix and the encounter toggle, from the menu's Debug page and `SOA_ACTION`; the forced battle stays R0's `SOA_BATTLE_FORCE`, the tick unlock M11's.
 Actions are queued to the safe point, and an environment variable drives them for tests.
 - **Warp by name** from the table at 0x802E4780: 158 entries in Shift-JIS, decoded with `MultiByteToWideChar(932)`. Never use the old stage-select route (state 2), which skips the teardown.
 - **Part select.**

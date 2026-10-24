@@ -5237,3 +5237,100 @@ def test_m7a_a_save_now_when_the_field_is_not_quiet_is_refused(driver, tmp_path,
     )
     assert "803473B4=00000000" in out and f"save now refused, {words}" in err, (out, err)
     assert not any(block_and_tail(out)[0])  # nothing for the snapshot to write
+
+
+# --------------------------------------------------------------------------
+# M7b: the debug actions (docs/specs/debug-actions.md), through
+# runtime/actions.c's queue as the menu and SOA_ACTION fill it. The kinds are
+# actions.h's: 1 warp, 2 part, 3 ending, 4 fade, 5 encounters off, 6 on.
+# --------------------------------------------------------------------------
+
+WARP_WORDS = "hex 80305cf0 c get 8030e420 get 80311aec "
+
+
+def script_name(out: str) -> bytes:
+    return bytes.fromhex(re.search(r"^hex 80305CF0 ([0-9A-F]*)$", out, re.M).group(1))
+
+
+@needs_cc
+def test_m7b_a_warp_writes_the_name_the_entrance_then_the_state(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver, empty, FIELD + at("a") + "set 8030e420 4e20 act 1 6761 actions_tick " + WARP_WORDS
+    )
+    assert script_name(out) == b"ME103A.SCT\0\0", out
+    assert "8030E420=00000000" in out and "80311AEC=0000000F" in out, out  # sys15 0, the warp state
+    assert "[action] frame 0: warp to 103a" in err, err
+    out, err = play(driver, empty, FIELD + at("a") + "act 2 0 actions_tick " + WARP_WORDS)
+    assert script_name(out) == b"ME355A.SCT\0\0" and "part select" in err, (out, err)
+
+
+@needs_cc
+def test_m7b_the_ending_the_fade_and_the_encounter_toggle(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        FIELD
+        + at("a")
+        + "act 3 0 actions_tick get 80310a68 "  # B[76], the word's first byte
+        + "set 80347518 1 act 4 0 actions_tick get 80347518 "
+        + "act 5 0 actions_tick set 80346d28 4d2 actions_tick get 80346d28 "
+        + "act 6 0 actions_tick set 80346d28 5 actions_tick get 80346d28",
+    )
+    assert "80310A68=4C000000" in out, out
+    assert "80347518=00000000" in out, out
+    gets = re.findall(r"^80346D28=([0-9A-F]{8})$", out, re.M)
+    assert gets == ["00000000", "00000005"], out  # held at 0 while off, left alone once on
+    assert "encounters off" in err and "encounters on" in err, err
+
+
+@pytest.mark.parametrize(
+    ("state", "kind_map", "words"),
+    [
+        ("set 803475cc 7 ", "1 6761", "warp to 103a refused, in a battle"),
+        ("", "1 1f461", "warp to 500a refused, a ship battle starts through op 210"),
+        ("", "1 7478", "warp to 116x refused, no script and geometry by that name"),
+        ("set 80311aec 3 ", "3 0", "ending refused, while the field loads"),
+    ],
+)
+@needs_cc
+def test_m7b_an_action_it_cannot_take_is_refused_and_writes_nothing(
+    driver, tmp_path, state, kind_map, words
+):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        FIELD + at("a") + state + f"act {kind_map} actions_tick " + WARP_WORDS + "get 80310a68",
+    )
+    assert words in err, err
+    assert script_name(out) == bytes(12) and "80310A68=00000000" in out, out
+
+
+@needs_cc
+def test_m7b_soa_action_s_grammar_its_frames_and_its_faults(driver, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        FIELD + at("a") + "set 80347518 1 actions fade@2,warp:a103a@0 actions_tick get 80347518 "
+        "frame frame actions_tick get 80347518 " + WARP_WORDS,
+    )
+    assert "scheduled 2" in out, (out, err)
+    assert re.findall(r"^80347518=([0-9A-F]{8})$", out, re.M) == ["00000001", "00000000"], (
+        out
+    )  # fade at frame 2
+    assert script_name(out) == b"ME103A.SCT\0\0", out
+    for bad, said in (
+        ("warp:zz@1", "a warp names a map like 116c"),
+        ("dance@1", "is not warp:NNNx, part"),
+        ("fade", "is not NAME[:ARG]@FRAME"),
+        ("fade@soon", "the frame is not a number"),
+    ):
+        out, err = play(driver, empty, f"actions {bad}")
+        assert "scheduled -1" in out and said in err, (bad, out, err)

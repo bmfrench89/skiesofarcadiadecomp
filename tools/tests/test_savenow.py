@@ -38,5 +38,16 @@ def test_the_committed_header_parses():
 @pytest.mark.skipif(
     not (DATA / "disc.iso").exists() and not any(DATA.glob("*.soadisc")), reason="no disc"
 )
-def test_the_header_is_what_the_disc_s_scripts_say():
-    assert savenow.listed(savenow.HEADER.read_text(encoding="utf-8")) == savenow.scan(DATA)
+def test_the_headers_are_what_the_disc_says():
+    saves, warps = savenow.scan_all(DATA)
+    assert savenow.listed(savenow.HEADER.read_text(encoding="utf-8")) == saves
+    assert savenow.listed(savenow.WARP_HEADER.read_text(encoding="utf-8")) == warps  # M7b
+
+
+def test_the_warp_list_is_the_field_s_maps():
+    """M7b: below 500 (the 5xx are ship battles), with 116c and 355a, the part
+    menu, in it, and sorted by map."""
+    maps = savenow.listed(savenow.WARP_HEADER.read_text(encoding="utf-8"))
+    assert "116c" in maps and "355a" in maps and all(int(m[:3]) < 500 for m in maps)
+    assert maps == sorted(maps)
+    assert "0x00006761u, /* a103a */" in savenow.warp_header(["103a"])

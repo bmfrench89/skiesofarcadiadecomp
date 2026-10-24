@@ -63,19 +63,23 @@ const char* savenow_refusal(void) { return g_why; }
 /* Whether the save menu now open is one this port asked for. */
 int savenow_opened(void) { return g_opened; }
 
-static const char* not_quiet(CpuState* s)
+/* Why the field is not quiet (the lab's test), or NULL when it is; the world
+ * map passes too where `world` (M7b's warps start from it). */
+const char* field_not_quiet(CpuState* s, int world)
 {
     uint32_t flags = mem_r32(s, SOA_STORY_FLAGS + (FLAG_EVENT / 32u) * 4u);
-    uint32_t scene = mem_r32(s, SOA_SCENE);
+    uint32_t scene = mem_r32(s, SOA_SCENE), map = mem_r32(s, SOA_MAP_NUMBER);
     if (scene == 7u) return "in a battle";
     if (scene != SCENE_FIELD) return "not on the field";
     if (mem_r32(s, SOA_FIELD_STATE) != FIELD_RUNNING) return "while the field loads";
-    if (mem_r32(s, SOA_MAP_NUMBER) == 99u || mem_r32(s, SOA_MAP_NUMBER) >= 500u)
-        return "on the world map or a ship battle (not built)";
+    if (map >= 500u) return "in a ship battle";
+    if (map == 99u && !world) return "on the world map (not built)";
     if ((flags >> (FLAG_EVENT % 32u)) & 1u || mem_r32(s, SOA_SCRIPT_ENTRY_BUSY) == 1u) return "during an event";
-    if (mem_r32(s, SOA_SAVE_REQUEST) == 1u) return "a save is already open";
+    if (mem_r32(s, SOA_SAVE_REQUEST) == 1u) return "a save is open";
     return NULL;
 }
+
+static const char* not_quiet(CpuState* s) { return field_not_quiet(s, 0); }
 
 /* At each safe point: the last save-point map, SOA_SAVE_NOW's frame, and a
  * pending request written or refused. */

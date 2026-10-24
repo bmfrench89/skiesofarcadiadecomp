@@ -50,6 +50,7 @@
 {"inventory.key_items[].count", 0x8030C048u, 4u, 2u, 1, 0},
 {"sys15", 0x8030E420u, 0u, 0u, 4, 0},
 {"script.entry_busy", 0x8030E714u, 0u, 0u, 4, 0},
+{"fade.direction", 0x80347518u, 0u, 0u, 4, 0},
 {"save.variant", 0x803473B0u, 0u, 0u, 4, 0},
 {"save.request", 0x803473B4u, 0u, 0u, 4, 0},
 {"save.result", 0x803473C4u, 0u, 0u, 4, 0},

@@ -4,7 +4,8 @@
  * presented picture.
  *
  * Main: Resume, Mods, Settings, Fullscreen and Turbo (applied now), Save now
- * (M7a: the game's save menu, wherever the field is quiet), Quit.
+ * (M7a: the game's save menu, wherever the field is quiet), Debug (M7b: warp,
+ * part select, the fade fix, the encounter toggle, the ending), Quit.
  * Mods: each mod, on or off (soa.ini's mod_order, `-ID` off); entered, its
  * declared options (M16). Settings: every soa.ini key with a closed set of
  * values. A change other than fullscreen and turbo is written to soa.ini at
@@ -19,6 +20,7 @@
  * j, p, q and y a row lower so their tails hang below the line.
  */
 #include "menu.h"
+#include "actions.h"
 
 #include "mod.h"
 #include "plat.h"
@@ -140,8 +142,11 @@ static const char* const k_font[95][7] = {
 
 /* ---- the model ----------------------------------------------------------- */
 
-enum { PAGE_MAIN, PAGE_MODS, PAGE_MOD, PAGE_SETTINGS };
-enum { K_RESUME, K_PAGE_MODS, K_PAGE_SETTINGS, K_FULLSCREEN, K_TURBO, K_SAVE_NOW, K_QUIT, K_MOD, K_MOD_OFF, K_OPTION, K_SETTING };
+enum { PAGE_MAIN, PAGE_MODS, PAGE_MOD, PAGE_SETTINGS, PAGE_DEBUG, PAGES };
+enum {
+    K_RESUME, K_PAGE_MODS, K_PAGE_SETTINGS, K_FULLSCREEN, K_TURBO, K_SAVE_NOW, K_PAGE_DEBUG, K_QUIT, K_MOD, K_MOD_OFF,
+    K_OPTION, K_SETTING, K_DBG_WARP, K_DBG_PART, K_DBG_FADE, K_DBG_ENC, K_DBG_ENDING
+};
 
 typedef struct {
     int kind, ref;
@@ -150,7 +155,8 @@ typedef struct {
 } Item;
 
 static plat_a32 g_open;
-static int g_page, g_sel[4], g_top[4], g_mod; /* g_mod: the mod PAGE_MOD shows */
+static int g_page, g_sel[PAGES], g_top[PAGES], g_mod; /* g_mod: the mod PAGE_MOD shows */
+static int g_warp;                                     /* M7b: the warp row's map, an index of actions_warp_map */
 static int g_fullscreen, g_turbo;
 static char g_status[96];
 
@@ -277,8 +283,21 @@ static int items(Item* it, int max)
         ADD(K_FULLSCREEN, 0, "Fullscreen", g_fullscreen ? "on" : "off");
         ADD(K_TURBO, 0, "Turbo", g_turbo ? "on" : "off");
         ADD(K_SAVE_NOW, 0, "Save now", "");
+        ADD(K_PAGE_DEBUG, 0, "Debug", ">");
         ADD(K_QUIT, 0, "Quit", "");
         break;
+    case PAGE_DEBUG: {
+        /* M7b: each taken with A, which closes the menu; the next safe point decides */
+        uint32_t map = actions_warp_map(g_warp);
+        char v[16];
+        snprintf(v, sizeof v, "< %03u%c >", map >> 8, (char)(map & 0xFF));
+        ADD(K_DBG_WARP, 0, "Warp to", v);
+        ADD(K_DBG_PART, 0, "Part select", "");
+        ADD(K_DBG_FADE, 0, "Fade fix", "");
+        ADD(K_DBG_ENC, 0, "Encounters", actions_encounters_off() ? "off" : "on");
+        ADD(K_DBG_ENDING, 0, "The ending", "");
+        break;
+    }
     case PAGE_MODS:
         for (m = 0; m < mod_menu_count(); m++) {
             const char* key = "";
@@ -342,6 +361,11 @@ static int change(const Item* it, int dir, int big)
 {
     char v[64];
     switch (it->kind) {
+    case K_DBG_WARP: {
+        int count = actions_warp_count(), step = big ? (count / 10 > 1 ? count / 10 : 1) : 1;
+        if (count) g_warp = ((g_warp + dir * step) % count + count) % count;
+        return MENU_ACT_REDRAW;
+    }
     case K_FULLSCREEN:
         return MENU_ACT_FULLSCREEN | MENU_ACT_REDRAW;
     case K_TURBO:
@@ -437,6 +461,22 @@ int menu_input(int key)
         case K_SAVE_NOW:
             menu_close();
             return MENU_ACT_SAVE_NOW | MENU_ACT_CLOSE | MENU_ACT_REDRAW;
+        case K_PAGE_DEBUG:
+            g_page = PAGE_DEBUG;
+            g_status[0] = '\0';
+            return MENU_ACT_REDRAW;
+        case K_DBG_WARP:
+        case K_DBG_PART:
+        case K_DBG_FADE:
+        case K_DBG_ENC:
+        case K_DBG_ENDING: {
+            static const int k_act[] = {ACT_WARP, ACT_PART, ACT_FADE, ACT_ENCOUNTERS_OFF, ACT_ENDING};
+            int act = k_act[it[*sel].kind - K_DBG_WARP];
+            if (act == ACT_ENCOUNTERS_OFF && actions_encounters_off()) act = ACT_ENCOUNTERS_ON;
+            actions_request(act, act == ACT_WARP ? actions_warp_map(g_warp) : 0);
+            menu_close();
+            return MENU_ACT_CLOSE | MENU_ACT_REDRAW;
+        }
         case K_QUIT:
             menu_close();
             return MENU_ACT_QUIT | MENU_ACT_CLOSE;
@@ -536,7 +576,7 @@ int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride)
 
 static void draw(uint8_t* bgra, int w, int h, int stride, int alpha)
 {
-    static const char* const k_title[] = {"Skies of Arcadia", "Mods", "", "Settings"};
+    static const char* const k_title[] = {"Skies of Arcadia", "Mods", "", "Settings", "Debug"};
     Item it[64];
     Canvas c;
     int n, rows, pw, ph, x0, y0, i, line = 0, *top, *sel;
