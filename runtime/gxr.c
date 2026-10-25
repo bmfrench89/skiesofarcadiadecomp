@@ -11,6 +11,7 @@
 #include "gxr.h"
 #include "gxr_cmd.h"
 #include "crmath.h"
+#include "interp_rate.h"
 #include "plat.h"
 #include <math.h>
 #include <stdio.h>
@@ -202,6 +203,16 @@ static double g_ms_last;
  * draws slices. claim_slot stamps them on every command for EFB 1. */
 static float g_mid_w[GXR_MID_MAX] = {0.5f};
 static unsigned g_mid_wn = 1;
+/* H17c-b: SOA_INTERP=display, the weights a frame from the display's rate
+ * (interp_rate.h): the rate the window measured (gxr_interp_rate, or
+ * SOA_INTERP_RATE headless), the accumulator's remainder, whether this
+ * frame's real image ends its images (CP_REAL), and whether it has none
+ * between (a frame of one refresh, under 60 Hz). */
+static int g_interp_display;
+static plat_a64 g_rate;
+static unsigned g_rate_r, g_rate_cap = GXR_MID_MAX;
+static int g_mid_real, g_mid_skip;
+static unsigned long long g_display_frames, g_display_images;
 static unsigned long long g_slice_draws, g_slice_prev; /* in-between draws handed to slices; with F's positions */
 
 /* "t1,t2,...": the weights, ascending, each in (0, 1); their count, 0 when
@@ -295,7 +306,10 @@ int gxr_enabled(void)
         g_hash = getenv("SOA_HASH") ? 1 : 0;
         {
             const char* ip = getenv("SOA_INTERP");
-            g_interp = ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
+            g_interp = ip && !strcmp(ip, "check") ? 2 : (ip && (atoi(ip) || !strcmp(ip, "display")) ? 1 : 0);
+            g_interp_display = ip && !strcmp(ip, "display");
+            if (g_interp_display && getenv("SOA_INTERP_RATE") && *getenv("SOA_INTERP_RATE")) /* a check's knob, headless */
+                plat_xchg64(&g_rate, (int64_t)interp_rate_round(atof(getenv("SOA_INTERP_RATE"))));
             const char* lg = getenv("SOA_INTERP_LOG");
             const char* cut = getenv("SOA_INTERP_CUT");
             if (g_interp && lg && *lg && !(g_interp_log = fopen(lg, "w")))
@@ -2219,6 +2233,14 @@ static void workers_start(void)
         fprintf(stderr, "[interp] SOA_INTERP is refused with the %s backend, which has one EFB; off\n", g_backend->name);
         g_interp = 0;
     }
+    if (g_interp_display && !(g_backend && g_backend->slices)) {
+        fprintf(stderr, "[interp] SOA_INTERP=display needs the GPU backend, which draws a slice an image; one in-between "
+                        "image a frame, as SOA_INTERP=1\n");
+        g_interp_display = 0;
+    } else if (g_interp_display) {
+        g_rate_cap = (unsigned)g_backend->slices;
+        g_mid_wn = 1; /* the first frame, before any rate is known: one at the midpoint */
+    }
     if (g_interp && g_mid_wn > 1 && !(g_backend && g_backend->slices >= (int)g_mid_wn)) {
         fprintf(stderr, "[interp] %u in-between images a frame need a backend that draws that many (the GPU's); one, at %.2f\n",
                 g_mid_wn, (double)g_mid_w[0]);
@@ -2542,7 +2564,8 @@ static void pair_rotate(void)
 /* The in-between stream runs while both are set, which only SOA_INTERP allows. */
 static int interp_on(void)
 {
-    return g_interp && g_mid_on && (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
+    return g_interp && g_mid_on && !g_mid_skip &&
+           (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
 }
 
 void gxr_interp_show(int on)
@@ -2602,6 +2625,36 @@ static void interp_frame_begin(void)
     }
 }
 
+/* H17c-b: the next frame's images at the display's rate (interp_rate.h):
+ * its in-between weights, and whether its real image ends them. Every frame
+ * advances the accumulator, one the budget leaves without its stream too, so
+ * each image stays on the refresh it falls on. A device holding fewer slices
+ * than the rate wants is held to the rate its slices serve, and says so. */
+static void interp_display_frame(void)
+{
+    unsigned hz = (unsigned)plat_load64(&g_rate), n, ns;
+    float w[GXR_MID_MAX];
+    static unsigned said;
+    if (!g_interp_display || !hz) return;
+    if (hz > 30u * g_rate_cap) {
+        if (said != hz)
+            fprintf(stderr, "[interp] the display's %u Hz wants up to %u images a frame and this device holds %u; "
+                            "images at %u Hz\n", hz, (hz + 29u) / 30u, g_rate_cap, 30u * g_rate_cap);
+        said = hz;
+        hz = 30u * g_rate_cap;
+    }
+    n = interp_rate_weights(hz, &g_rate_r, w);
+    g_mid_real = n && w[n - 1] == 1.0f;
+    ns = g_mid_real ? n - 1 : n;
+    g_mid_skip = ns == 0;
+    if (ns) {
+        memcpy(g_mid_w, w, sizeof(float) * ns);
+        g_mid_wn = ns;
+    }
+    g_display_frames++;
+    g_display_images += n;
+}
+
 /* The frame's in-between image is a cut's: its 3D draws mostly unmatched
  * (under H4's 90%), or mostly matched and moved far, as at a camera cut, where
  * the lerp makes a frame belonging to neither. A frame with no 3D draw is
@@ -2622,7 +2675,23 @@ int gxr_interp(void)
     const char* ip;
     if (g_enabled >= 0) return g_interp;
     ip = getenv("SOA_INTERP");
-    return ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
+    return ip && !strcmp(ip, "check") ? 2 : (ip && (atoi(ip) || !strcmp(ip, "display")) ? 1 : 0);
+}
+
+/* H17c-b: SOA_INTERP=display, before the renderer starts as after. */
+int gxr_interp_display(void)
+{
+    const char* ip;
+    if (g_enabled >= 0) return g_interp_display;
+    ip = getenv("SOA_INTERP");
+    return ip && !strcmp(ip, "display");
+}
+
+/* H17c-b: the display's rate, as interp_rate_round gives it; 0 none. From the
+ * window's thread; the next frame to begin reads it. */
+void gxr_interp_rate(unsigned hz)
+{
+    plat_xchg64(&g_rate, (int64_t)hz);
 }
 
 int gxr_interp_slices(void)
@@ -2630,8 +2699,9 @@ int gxr_interp_slices(void)
     float w[GXR_MID_MAX];
     const char* wt = getenv("SOA_INTERP_WEIGHTS");
     unsigned n;
-    if (g_enabled >= 0) return g_interp ? (int)g_mid_wn : 0;
+    if (g_enabled >= 0) return g_interp ? (int)(g_interp_display ? GXR_MID_MAX : g_mid_wn) : 0;
     if (!gxr_interp()) return 0;
+    if (gxr_interp_display()) return GXR_MID_MAX;
     n = wt && *wt ? interp_weights(wt, w) : 0;
     return n ? (int)n : 1;
 }
@@ -3715,6 +3785,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
         D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
         D->cp_ring = CP_LAST | CP_MID;
+        if (g_interp_display && g_mid_real) D->cp_ring |= CP_REAL; /* H17c-b */
         if (frame_is_cut()) {
             D->cp_ring |= CP_CUT;
             g_cuts++;
@@ -3791,6 +3862,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
                     (unsigned long long)gxr_screen_hash());
         if (g_pair_flags & GXR_PAIR_RECORD) pair_rotate(); /* H10: this frame becomes the one before */
         interp_frame_begin(); /* H17b: whether the next frame builds its in-between stream */
+        interp_display_frame(); /* H17c-b: and, at the display's rate, its images */
     }
 }
 
@@ -3918,6 +3990,10 @@ void gxr_report(void)
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
         fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts, g_over_budget,
                 g_budget_offs);
+        if (g_display_frames) /* H17c-b */
+            fprintf(stderr, "at the display's rate, %u Hz now: %llu images over %llu frames (%.2f a frame); ",
+                    (unsigned)plat_load64(&g_rate), g_display_images, g_display_frames,
+                    (double)g_display_images / (double)g_display_frames);
         if (g_slice_draws) { /* H17c */
             unsigned k;
             fprintf(stderr, "%u image(s) a frame at weights", g_mid_wn);

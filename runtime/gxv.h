@@ -59,6 +59,10 @@ void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut,
 /* A slot published and not yet taken: the window presents when one is (with
  * in-between images the presented count rises a copy before the slot does). */
 int gxv_screen_fresh(void);
+/* H17c-b: in-between images shown at the window's own rate, one a refresh (SOA_INTERP=display). */
+void gxv_present_display(unsigned hz); /* 0 off */
+/* H17c-b: called on the backend's thread each time a slot is published. */
+void gxv_on_publish(void (*fn)(void));
 void gxv_present_resize(int w, int h);
 /* P5a's filters on the GPU (V8b): picture.c's tables for the state in use,
  * each new frame through them before it is presented; NULL turns them off.

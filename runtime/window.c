@@ -22,6 +22,7 @@
 #include "gxr.h"
 #include "picture.h"
 #include "gxv.h"
+#include "interp_rate.h"
 #include "clock.h"
 #include "menu.h"
 #include <windows.h>
@@ -60,6 +61,10 @@ static GxrShown g_frame;  /* the ring's slot being shown: the UI thread's until 
 static unsigned g_mid_ivl;
 static plat_a32 g_shown_mid, g_shown_cut, g_shown_none;
 static void interp_pace(double hz);
+static HMONITOR g_monitor; /* H17c-b: the monitor the display's rate was read from */
+static HANDLE g_fresh_ev;  /* H17c-b: set when the GPU publishes a frame, which the loop waits on */
+static void fresh_signal(void) { SetEvent(g_fresh_ev); }
+static int g_pace_ready;   /* the presenter is chosen, so a move may pace again */
 
 /* ---- the paced presenter (PLAN-60FPS-MODS H8) ----------------------------
  *
@@ -474,6 +479,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         g_resized = 1;
         if (!g_dxgi) InvalidateRect(h, NULL, FALSE);
         return 0;
+    case WM_MOVE:
+        /* H17c-b: moved to another monitor, perhaps at another rate */
+        if (g_pace_ready && gxr_interp_display() && MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) != g_monitor) {
+            double hz;
+            g_refresh_ms = refresh_ms();
+            hz = g_refresh_ms > 0.0 ? 1000.0 / g_refresh_ms : 60.0;
+            interp_pace(hz);
+        }
+        return 0;
     case WM_DPICHANGED: {
         const RECT* r = (const RECT*)l;
         SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -603,6 +617,25 @@ static double filter_on_cpu(LARGE_INTEGER t0)
     return filter_image(t0, src, w, h);
 }
 
+/* H17c-b: the refresh of the monitor the window is on, as its display mode
+ * gives it (DWM's timing is the primary display's), rounded as RT64 rounds
+ * it; 0 when it cannot be read. */
+static unsigned monitor_hz(void)
+{
+    MONITORINFOEXW mi;
+    DEVMODEW dm;
+    HMONITOR m = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+    g_monitor = m;
+    memset(&mi, 0, sizeof mi);
+    mi.cbSize = sizeof mi;
+    memset(&dm, 0, sizeof dm);
+    dm.dmSize = sizeof dm;
+    if (!m || !GetMonitorInfoW(m, (MONITORINFO*)&mi) || !EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) ||
+        dm.dmDisplayFrequency < 2)
+        return 0;
+    return interp_rate_round((double)dm.dmDisplayFrequency);
+}
+
 /* H17b: whether in-between images are shown -- DXGI's presenter, frames from
  * the ring, the display at a whole multiple of 60 Hz, turbo off -- and the
  * producer told, so it builds none that nobody would see. Said when it
@@ -613,6 +646,35 @@ static void interp_pace(double hz)
     const char* why = NULL;
     unsigned n = present_interp(hz);
     if (!gxr_interp()) return;
+    if (gxr_interp_display() && g_vk) {
+        /* H17c-b: at the display's own rate, the monitor's the window is on,
+         * one image a refresh, each frame given its images by the producer */
+        unsigned rate = monitor_hz();
+        if (!rate) rate = interp_rate_round(hz);
+        if (g_turbo_shown) why = "turbo is on, which shows 60 real frames a second instead";
+        else if (rate < INTERP_RATE_MIN) why = "the display refreshes under 30 times a second";
+        gxr_interp_rate(why ? 0u : rate);
+        gxv_present_display(why ? 0u : rate);
+        g_mid_ivl = why ? 0 : 1;
+        gxv_present_interp(g_mid_ivl);
+        gxr_interp_show(!why);
+        if (!why) g_interval = 1;
+        if (said != (int)(why ? 0 : rate)) {
+            said = (int)(why ? 0 : rate);
+            if (!why)
+                fprintf(stderr, "[interp] in-between images at the display's own rate, %u Hz, one image a refresh (H17c-b); "
+                                "the newest frame reaches the screen up to a frame later than without\n", rate);
+            else
+                fprintf(stderr, "[interp] in-between images not shown, so none is built: %s (%u Hz)\n", why, rate);
+        }
+        return;
+    }
+    if (gxr_interp_display()) {
+        static int told;
+        if (!told++)
+            fprintf(stderr, "[interp] SOA_INTERP=display needs the GPU's presenter; one in-between image at 60, 120, 180 "
+                            "or 240 Hz, as SOA_INTERP=1\n");
+    }
     /* a check's knob: shown at any rate, one refresh an image, so the path runs on a display that
      * cannot pace it evenly (85 Hz); never for play */
     if (!n && getenv("SOA_INTERP_ANYRATE") && atoi(getenv("SOA_INTERP_ANYRATE"))) n = 1;
@@ -1009,6 +1071,7 @@ static unsigned __stdcall ui_thread(void* arg)
             {
                 g_vk = 1;
                 gxv_present_overlay(menu_draw_overlay); /* M8b: the menu blended over the GPU's picture */
+                if ((g_fresh_ev = CreateEventW(NULL, FALSE, FALSE, NULL)) != NULL) gxv_on_publish(fresh_signal);
             } else
                 fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);
         }
@@ -1017,6 +1080,7 @@ static unsigned __stdcall ui_thread(void* arg)
             if (!g_dxgi) fprintf(stderr, "[window] the DXGI presenter could not start; presenting with GDI\n");
         }
         hle_on_report(present_report);
+        g_pace_ready = 1;
         interp_pace(hz);
         fprintf(stderr, "[window] the display refreshes every %.2f ms (%.1f Hz; the mode says %lu Hz)%s\n",
                 g_refresh_ms, hz, EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm) ? dm.dmDisplayFrequency : 0ul,
@@ -1108,7 +1172,9 @@ static unsigned __stdcall ui_thread(void* arg)
             present(1);
         }
         menu_pad();
-        MsgWaitForMultipleObjects(0, NULL, FALSE, 8, QS_ALLINPUT);
+        /* woken by input, by the GPU publishing a frame (H17c-b: one found at
+         * the next poll could be a timer tick late), or after 8 ms */
+        MsgWaitForMultipleObjects(g_fresh_ev ? 1u : 0u, g_fresh_ev ? &g_fresh_ev : NULL, FALSE, 8, QS_ALLINPUT);
     }
 }
 

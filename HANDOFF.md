@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1896 |
+| Python tests | 1898 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -422,8 +422,8 @@ washed-out colour and a correct fix would have failed the suite.
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
-spec and H17c-a (2026-10-25), pushed. The full pre-push suite passes: 1896 tests in 102 files (1855 passed, 41 skipped
-here; 701 skip with MSVC hidden, so 660 want MSVC). Nothing is
+spec, H17c-a and H17c-b (2026-10-25), pushed. The full pre-push suite passes: 1898 tests in 102 files (1857 passed,
+41 skipped here; 703 skip with MSVC hidden, so 662 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -453,8 +453,10 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    interpolates to any refresh rate, RT64's "Display" recipe, since today `present_interp` shows in-between images at
    60/120/180/240 Hz only and the owner's 85 Hz monitor gets none; (b) the fallback tells the player; (c) session D's
    artifact classes are fixed (H18); (d) Android asks for 60. The display-rate mode is specified as **H17c**
-   (`docs/specs/interp-display.md`): H17c-a, slices drawn on the GPU at each weight, is built (FINDINGS "H17c-a"); next
-   is H17c-b, the presenter at the display's rate. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in
+   (`docs/specs/interp-display.md`): H17c-a, slices drawn on the GPU at each weight, and H17c-b, `interp = display`
+   at the monitor's own rate, are built (FINDINGS "H17c-a", "H17c-b"). Left of D-45's four: (b) the fallback the
+   player sees, (d) Android's 60 Hz request, and (c) session D's classes, where H17c-b's 60 Hz and second-monitor
+   lines are checked too. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in
    H17b and V12"). Another recompilation of this game (ogdanimal's, GPL-3.0) ships interpolated 60: read its notes,
    copy none of its code without the owner's licence decision.
 2. **The event track's E3** after it (`docs/specs/event-track.md`): turbo, save now and the debug actions as `@`

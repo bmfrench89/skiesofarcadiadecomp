@@ -2029,9 +2029,42 @@ static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS], g_scr_k[SCREEN_SLOTS];
 static int g_scr_mid[3], g_scr_cut[3]; /* the triple buffer's slot's in-between images (H17c: how many); a cut's */
 static unsigned g_mid_ivl;             /* the window's: refreshes an image while it shows them, 0 when not */
 static unsigned long long g_n_shown_mid, g_n_shown_cut, g_n_shown_none;
+static int g_scr_real[3]; /* H17c-b: the slot's real image ends its images, on a refresh of its own */
+static int g_display;     /* H17c-b: the window shows them at its own rate, one image a refresh */
+static unsigned g_disp_hz; /* ...that rate */
+/* H17c-b: the time from one present's acquire to the next, which FIFO paces
+ * to the display once its queue is full: what one image a refresh comes to.
+ * A gap over a second is a pause or a load, not pacing, and is left out. */
+#define PACE_MAX (1u << 18)
+static uint32_t* g_pace_us;
+static unsigned g_pace_n;
+static uint64_t g_pace_last, g_pace_first, g_pace_paused_ns;
+/* VK_KHR_present_wait2 (H17c-b): the instance's surface capabilities 2, the
+ * device's two extensions, the swap chain made with them; the last present's id. */
+static int g_inst_caps2, g_dev_wait2, g_swap_wait2;
+static uint64_t g_present_id;
+static PFN_vkWaitForPresent2KHR p_vkWaitForPresent2KHR;
+
+/* An interval of the display's pacing, at `now`: one present's arrival to
+ * the next's. */
+static void pace_mark(uint64_t now)
+{
+    if (g_pace_last && now - g_pace_last < 1000000000ull) {
+        if (!g_pace_us) g_pace_us = (uint32_t*)malloc(sizeof(uint32_t) * PACE_MAX);
+        if (g_pace_us && g_pace_n < PACE_MAX) g_pace_us[g_pace_n++] = (uint32_t)((now - g_pace_last) / 1000u);
+    } else if (g_pace_last) {
+        g_pace_paused_ns += now - g_pace_last;
+    }
+    if (!g_pace_first) g_pace_first = now;
+    g_pace_last = now;
+}
+static unsigned long long g_n_superseded, g_n_display_frames; /* frames cut short by a newer one; shown */
 
 /* The back slot to the presenter, the slot it gives back the next to fill. */
 static unsigned long long g_n_published; /* slots published, against g_n_present_frames taken */
+/* H17c-b: told each time a slot is published, so the window wakes for it
+ * rather than finding it at its next poll, up to a timer tick late. */
+static void (*g_on_publish)(void);
 
 static void publish_screen(int sw, int sh)
 {
@@ -2041,7 +2074,10 @@ static void publish_screen(int sw, int sh)
     g_scr_k[g_scr_back] = g_scale;
     g_scr_last = g_scr_back;
     g_scr_back = (unsigned)(plat_xchg64(&g_scr_middle, (int64_t)(g_scr_back | SCREEN_FRESH)) & 3);
+    if (g_on_publish) g_on_publish();
 }
+
+void gxv_on_publish(void (*fn)(void)) { g_on_publish = fn; }
 
 /* A copy to the screen, as copy_to_screen makes it: min(w, 640) by
  * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. At
@@ -2090,13 +2126,14 @@ static int copy_screen(const DrawCmd* D)
         }
         g_scr_mid[g_scr_back] = (int)ns;
         g_scr_cut[g_scr_back] = (D->cp_ring & CP_CUT) != 0;
+        g_scr_real[g_scr_back] = (D->cp_ring & CP_REAL) != 0;
         g_n_mid_copies++;
         publish_screen(sw, sh);
         return 1;
     }
     if (!copy_slice(D, 0, g_scr_back, g_scale > 1 ? SCREEN_NATIVE : g_scr_back, &sw, &sh)) return 0;
     gxr_backend_screen(g_screen_map + (size_t)(g_scale > 1 ? SCREEN_NATIVE : g_scr_back) * READBACK_BYTES, sw, sh);
-    g_scr_mid[g_scr_back] = g_scr_cut[g_scr_back] = 0;
+    g_scr_mid[g_scr_back] = g_scr_cut[g_scr_back] = g_scr_real[g_scr_back] = 0;
     g_n_copies++;
     /* With an in-between copy to follow, the slot waits for it (V12b). */
     if (g_efbs > 1 && !(D->cp_ring & CP_LAST)) {
@@ -2689,6 +2726,12 @@ static int cmp_float(const void* a, const void* b)
     return x < y ? -1 : x > y;
 }
 
+static int cmp_u32(const void* a, const void* b)
+{
+    uint32_t x = *(const uint32_t*)a, y = *(const uint32_t*)b;
+    return x < y ? -1 : x > y;
+}
+
 /* The per-frame line: p50, p95 and p99 of the consumer's and the GPU's
  * milliseconds a frame, over sorted copies (the report may run while the
  * consumer is still writing the lists, from the watchdog). */
@@ -2880,14 +2923,16 @@ static int make_device(char* why, size_t cap)
     {
         /* VK_EXT_pipeline_creation_feedback, where the device has it: only
          * for the report's count of pipelines the disk cache had (V7). */
-        static const char* names[4];
+        static const char* names[6];
+        static VkPhysicalDevicePresentId2FeaturesKHR pidf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR};
+        static VkPhysicalDevicePresentWait2FeaturesKHR pwf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_2_FEATURES_KHR};
         static VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT ilf = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
         static VkPhysicalDeviceExtendedDynamicStateFeaturesEXT edf = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
         const char* eds_off = getenv("SOA_GPU_EDS");
         uint32_t n = 0, i, k = 0;
-        int has_swapchain = 0, has_il = 0, has_eds = 0;
+        int has_swapchain = 0, has_il = 0, has_eds = 0, has_pid2 = 0, has_pw2 = 0;
         VkExtensionProperties* props;
         if (vkEnumerateDeviceExtensionProperties(g_phys, NULL, &n, NULL) == VK_SUCCESS && n &&
             (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
@@ -2897,6 +2942,8 @@ static int make_device(char* why, size_t cap)
                     if (!strcmp(props[i].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) has_swapchain = 1;
                     if (!strcmp(props[i].extensionName, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME)) has_il = 1;
                     if (!strcmp(props[i].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) has_eds = 1;
+                    if (!strcmp(props[i].extensionName, VK_KHR_PRESENT_ID_2_EXTENSION_NAME)) has_pid2 = 1;
+                    if (!strcmp(props[i].extensionName, VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME)) has_pw2 = 1;
                 }
             free(props);
         }
@@ -2939,6 +2986,23 @@ static int make_device(char* why, size_t cap)
             names[k++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
             g_dev_swapchain = 1;
         }
+        /* H17c-b: present ids and waits (VK_KHR_present_wait2), where the
+         * device has both and the instance its surface capabilities 2 */
+        if (g_dev_swapchain && g_inst_caps2 && has_pid2 && has_pw2) {
+            PFN_vkGetPhysicalDeviceFeatures2 feat2 =
+                (PFN_vkGetPhysicalDeviceFeatures2)vkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceFeatures2");
+            VkPhysicalDeviceFeatures2 f2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            f2.pNext = &pidf;
+            pidf.pNext = &pwf;
+            if (feat2) feat2(g_phys, &f2);
+            if (pidf.presentId2 && pwf.presentWait2) {
+                pwf.pNext = (void*)di.pNext;
+                di.pNext = &pidf;
+                names[k++] = VK_KHR_PRESENT_ID_2_EXTENSION_NAME;
+                names[k++] = VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME;
+                g_dev_wait2 = 1;
+            }
+        }
         di.enabledExtensionCount = k;
         di.ppEnabledExtensionNames = k ? names : NULL;
     }
@@ -2946,6 +3010,8 @@ static int make_device(char* why, size_t cap)
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateDevice on %s failed: VkResult %d", g_devname, (int)r); return 0; }
     if (!load_device(why, cap)) return 0;
     vkGetDeviceQueue(g_dev, g_family, 0, &g_queue);
+    if (g_dev_wait2 && !(p_vkWaitForPresent2KHR = (PFN_vkWaitForPresent2KHR)vkGetDeviceProcAddr(g_dev, "vkWaitForPresent2KHR")))
+        g_dev_wait2 = 0;
     if (g_eds) {
         p_vkCmdSetCullModeEXT = (PFN_vkCmdSetCullModeEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetCullModeEXT");
         p_vkCmdSetPrimitiveTopologyEXT = (PFN_vkCmdSetPrimitiveTopologyEXT)vkGetDeviceProcAddr(g_dev, "vkCmdSetPrimitiveTopologyEXT");
@@ -3234,9 +3300,9 @@ int gxv_init(char* why, size_t cap)
          * needs it, and a run with no window never uses it. And, with the
          * validation layer on, VK_EXT_debug_utils, so its messages reach the
          * log (debug_print). */
-        static const char* names[3];
+        static const char* names[4];
         uint32_t n = 0, k, found = 0, m = 0;
-        int has_debug = 0;
+        int has_debug = 0, has_caps2 = 0;
         VkExtensionProperties* props;
         if (vkEnumerateInstanceExtensionProperties && vkEnumerateInstanceExtensionProperties(NULL, &n, NULL) == VK_SUCCESS &&
             n && (props = (VkExtensionProperties*)malloc(sizeof *props * n)) != NULL) {
@@ -3248,6 +3314,7 @@ int gxv_init(char* why, size_t cap)
                         found++;
 #endif
                     if (!strcmp(props[k].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) has_debug = 1;
+                    if (!strcmp(props[k].extensionName, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)) has_caps2 = 1;
                 }
             free(props);
         }
@@ -3255,6 +3322,10 @@ int gxv_init(char* why, size_t cap)
             names[m++] = VK_KHR_SURFACE_EXTENSION_NAME;
             names[m++] = "VK_KHR_win32_surface";
             g_inst_surface = 1;
+            if (has_caps2) { /* H17c-b: what present_wait2 asks of the instance */
+                names[m++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+                g_inst_caps2 = 1;
+            }
         }
         if (ii.enabledLayerCount && has_debug) {
             names[m++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
@@ -3883,6 +3954,24 @@ static int swap_make(int w, int h)
     ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     ci.clipped = VK_TRUE;
     ci.oldSwapchain = old;
+    g_swap_wait2 = 0;
+    if (g_dev_wait2) {
+        /* H17c-b: present ids and waits, where this surface has them */
+        PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR caps2 =
+            (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)vkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
+        VkPhysicalDeviceSurfaceInfo2KHR si2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR};
+        VkSurfaceCapabilities2KHR c2 = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
+        VkSurfaceCapabilitiesPresentId2KHR cid = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR};
+        VkSurfaceCapabilitiesPresentWait2KHR cw = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR};
+        si2.surface = g_surface;
+        c2.pNext = &cid;
+        cid.pNext = &cw;
+        if (caps2 && caps2(g_phys, &si2, &c2) == VK_SUCCESS && cid.presentId2Supported && cw.presentWait2Supported) {
+            ci.flags |= VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR | VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR;
+            g_swap_wait2 = 1;
+        }
+    }
+    g_present_id = 0; /* ids rise from 1 within each swap chain */
     if (p_vkCreateSwapchainKHR(g_dev, &ci, NULL, &made) != VK_SUCCESS) return 0;
     swap_free();
     if (old) p_vkDestroySwapchainKHR(g_dev, old, NULL);
@@ -3998,11 +4087,14 @@ static int present_once(unsigned slot, int mode)
     VkResult r;
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkPresentInfoKHR pi = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    VkPresentId2KHR pid = {VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR};
+    uint64_t id = 0;
     VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     vkWaitForFences(g_dev, 1, &g_pres_fence, VK_TRUE, UINT64_MAX);
     r = p_vkAcquireNextImageKHR(g_dev, g_swap, UINT64_MAX, g_swap_ready[k], VK_NULL_HANDLE, &img);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return 0;
+    if (g_display && !g_swap_wait2) pace_mark(plat_mono_ns()); /* timed as submitted, FIFO's pacing */
     g_swap_k = (k + 1) % g_swap_n;
     vkResetFences(g_dev, 1, &g_pres_fence);
     /* M8b: the window's overlay into its buffer, which the fence above has
@@ -4024,11 +4116,25 @@ static int present_once(unsigned slot, int mode)
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swap;
     pi.pImageIndices = &img;
+    if (g_swap_wait2) {
+        id = ++g_present_id;
+        pid.swapchainCount = 1;
+        pid.pPresentIds = &id;
+        pi.pNext = &pid;
+    }
     plat_lock(&g_queue_lock);
     r = vkQueueSubmit(g_queue, 1, &si, g_pres_fence);
     if (r == VK_SUCCESS) r = p_vkQueuePresentKHR(g_queue, &pi);
     plat_unlock(&g_queue_lock);
     g_n_presents++;
+    if (g_display && g_swap_wait2 && id > 1 && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
+        /* H17c-b: the image before on the screen before this call returns,
+         * so one image is queued at most and the time is the display's */
+        VkPresentWait2InfoKHR wi = {VK_STRUCTURE_TYPE_PRESENT_WAIT_2_INFO_KHR};
+        wi.presentId = id - 1;
+        wi.timeout = 250000000ull;
+        if (p_vkWaitForPresent2KHR(g_dev, g_swap, &wi) == VK_SUCCESS) pace_mark(plat_mono_ns());
+    }
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) g_swap_stale = 1;
     else if (r != VK_SUCCESS) return 0;
     return 1;
@@ -4138,6 +4244,24 @@ static int blend_k(double a)
     return k < 0 ? 0 : k > 256 ? 256 : k;
 }
 
+/* Slot f's in-between image k for `n` refreshes, through P5a's filters when
+ * they are on (V12b's, for any of the slot's images since H17c). */
+static int present_mid(unsigned f, unsigned k, unsigned n, int mode)
+{
+    int ok;
+    if (g_filt_on) {
+        unsigned src = g_filt_src;
+        g_filt_src = SCREEN_MID(f, k);
+        g_filt_pending = 1;
+        ok = present_slot(SCREEN_SHOWN, n, mode);
+        g_filt_src = src;
+        g_filt_pending = 1;
+    } else {
+        ok = present_slot(SCREEN_MID(f, k), n, mode);
+    }
+    return ok;
+}
+
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {
     int ok = 1, took = 0;
@@ -4176,21 +4300,39 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
         }
         slot = SCREEN_SHOWN;
     }
+    if (took && g_display) {
+        /* H17c-b: the frame's images one a refresh, in weight order -- its
+         * in-between images, then its real image where it falls on a refresh
+         * of its own; a frame with none between, or a cut's, its real image
+         * for as many. A newer frame published meanwhile takes over from the
+         * next refresh (RT64's frame reduction), so nothing is shown late. */
+        unsigned f = g_scr_front, k, ns = (unsigned)g_scr_mid[f];
+        g_n_display_frames++;
+        if (!ns || g_scr_cut[f]) {
+            unsigned n = ns + (unsigned)g_scr_real[f];
+            ok = present_slot(slot, n ? n : 1, mode);
+            if (g_scr_cut[f]) g_n_shown_cut++;
+            else g_n_shown_none++;
+        } else {
+            for (k = 0; k < ns && ok; k++) {
+                if (k && gxv_screen_fresh()) break;
+                ok = present_mid(f, k, 1, mode);
+                g_n_shown_mid++;
+            }
+            if (k < ns || (g_scr_real[f] && gxv_screen_fresh())) g_n_superseded++;
+            else if (ok && g_scr_real[f]) ok = present_slot(slot, 1, mode);
+        }
+        if (shown_w) *shown_w = g_scr_w[g_scr_front];
+        if (shown_h) *shown_h = g_scr_h[g_scr_front];
+        plat_unlock(&g_present_lock);
+        return ok;
+    }
     if (took && g_mid_ivl) {
         /* V12b: the image between the frame before and this one for one 60 Hz
          * refresh, unless the frame is a cut or had none; then the frame. */
         unsigned f = g_scr_front;
         if (g_scr_mid[f] && !g_scr_cut[f]) {
-            if (g_filt_on) {
-                unsigned src = g_filt_src;
-                g_filt_src = SCREEN_MID(f, 0);
-                g_filt_pending = 1;
-                ok = present_slot(SCREEN_SHOWN, g_mid_ivl, mode);
-                g_filt_src = src;
-                g_filt_pending = 1;
-            } else {
-                ok = present_slot(SCREEN_MID(f, 0), g_mid_ivl, mode);
-            }
+            ok = present_mid(f, 0, g_mid_ivl, mode);
             g_n_shown_mid++;
         } else if (g_scr_mid[f]) {
             g_n_shown_cut++;
@@ -4212,6 +4354,14 @@ void gxv_present_interp(unsigned refreshes)
     plat_lock(&g_present_lock);
     g_mid_ivl = g_efbs > 1 ? refreshes : 0;
     plat_unlock(&g_present_lock);
+}
+
+/* H17c-b: the window shows the in-between images at its own rate, one a
+ * refresh, the producer giving each frame its images (gxr_interp_rate). */
+void gxv_present_display(unsigned hz)
+{
+    g_display = hz && g_efbs > 1;
+    g_disp_hz = hz;
 }
 
 void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut, unsigned long long* none)
@@ -4349,6 +4499,33 @@ static void present_report(void)
             "presents, %llu swap chains made; %llu frames through P5a's filters on the GPU, %llu of them blended by the "
             "flash limiter (V8b)",
             g_n_present_frames, g_n_published, g_n_stale, g_n_presents, g_n_swap_made, g_n_filtered, g_n_blended);
+    if (g_n_display_frames)
+        say("at the display's rate (H17c-b): %llu frames shown, %llu in-between images, %llu cut short by a newer "
+            "frame, %llu cuts and %llu frames without one shown as their real image",
+            g_n_display_frames, g_n_shown_mid, g_n_superseded, g_n_shown_cut, g_n_shown_none);
+    if (g_pace_n && g_disp_hz) {
+        /* the intervals in refreshes, and the images a second over the time
+         * they were timed */
+        double period = 1e6 / (double)g_disp_hz, secs;
+        unsigned b[4] = {0, 0, 0, 0}, i;
+        uint32_t* s = (uint32_t*)malloc(sizeof(uint32_t) * g_pace_n);
+        for (i = 0; i < g_pace_n; i++) {
+            double rf = (double)g_pace_us[i] / period;
+            b[rf < 0.5 ? 0 : rf < 1.5 ? 1 : rf < 2.5 ? 2 : 3]++;
+        }
+        secs = (double)(g_pace_last - g_pace_first - g_pace_paused_ns) / 1e9;
+        if (s) {
+            memcpy(s, g_pace_us, sizeof(uint32_t) * g_pace_n);
+            qsort(s, g_pace_n, sizeof *s, cmp_u32);
+        }
+        say("one image a refresh at %u Hz (H17c-b), timed %s: %u intervals between presents, under half a refresh %u, "
+            "one %u (%.1f%%), "
+            "two %u, three or more %u; p50 %.2f ms, p99 %.2f ms; %.1f images a second",
+            g_disp_hz, g_swap_wait2 ? "on the screen (present_wait2)" : "as submitted (FIFO's queue)", g_pace_n, b[0], b[1],
+            100.0 * b[1] / g_pace_n, b[2], b[3], s ? s[g_pace_n / 2] / 1e3 : 0.0,
+            s ? s[(size_t)g_pace_n * 99 / 100] / 1e3 : 0.0, secs > 0.0 ? (double)(g_pace_n + 1) / secs : 0.0);
+        free(s);
+    }
 }
 
 /* A slot published that no present has taken yet: what the window waits for,
@@ -4428,6 +4605,10 @@ void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut,
 }
 
 int gxv_screen_fresh(void) { return 0; }
+
+void gxv_present_display(unsigned hz) { (void)hz; }
+
+void gxv_on_publish(void (*fn)(void)) { (void)fn; }
 
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {

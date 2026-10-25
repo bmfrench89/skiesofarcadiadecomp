@@ -81,6 +81,7 @@ typedef struct {
 #define CP_LAST 1 /* the screen copy that ends its frame */
 #define CP_MID 2  /* ...and its frame has an in-between image */
 #define CP_CUT 4  /* ...which is a camera cut's, not to be shown */
+#define CP_REAL 8 /* ...and the frame's real image is its last, on a refresh of its own (H17c-b) */
     uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
     /* H17c (specs/interp-display.md): on a command with efb 1, the frame's
@@ -135,7 +136,8 @@ void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h); /* an in-between
 /* H17c: in-between image k's (0 the first weight's), for its PNG; k 0 is g_screen_mid as well. */
 void gxr_backend_screen_slice(int k, const uint8_t* rgba, int w, int h);
 int gxr_interp(void); /* SOA_INTERP: a backend sizes its EFB for two at start (V12) */
-/* H17c: the in-between images a frame may ask for (SOA_INTERP_WEIGHTS' count, else 1), for a backend's sizing. */
+/* H17c: the in-between images a frame may ask for (SOA_INTERP_WEIGHTS' count, else 1; GXR_MID_MAX for
+ * SOA_INTERP=display), for a backend's sizing. */
 int gxr_interp_slices(void);
 /* H17c: v's x, y, z, w moved to (1 - t) * prev + t * v, as the pair tables lerp them. */
 void gxr_lerp_positions(Vertex* v, const float (*prev)[4], unsigned count, float t);

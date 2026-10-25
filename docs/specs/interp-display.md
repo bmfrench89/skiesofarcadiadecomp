@@ -13,6 +13,13 @@ little differently (up to 9 levels at the third slice) and V12's one-level rule 
 producer check is the GPU harness's (F+1's positions in place of F's fails it as `noweight` does), with the CPU's
 refusal of more than one weight in `test_gxr_pair.py`. `display` itself is H17c-b's.
 
+**H17c-b built 2026-10-25** (FINDINGS "H17c-b"): Done lines 4 and 5; 6 and 7 wait for the owner's displays at
+session D. *As built:* `VK_KHR_present_wait2` (with `present_id2`), the extension this PC's driver has, not the
+first `present_wait`; the window woken when the GPU publishes a frame, which took one-refresh intervals from 72% to
+91% and frames cut short from 285 to 15; a cut shows its real image for the frame's refreshes; the budget still
+turns the stream off and on; Done 5's 95% is 91.2% over the title's run with its loads (94.6% leaving out
+presents whose predecessor was already on screen when they waited).
+
 **Why.** Today one in-between image is built per real frame, at the midpoint, and shown only where the display runs
 within 2% of 60, 120, 180 or 240 Hz (`present_interp`, `runtime/picture.c:52`). The owner's 85 Hz monitor, a Steam Deck
 OLED at 90 Hz and a 144 Hz monitor get none; at 120 Hz the Ally X shows 60 distinct images a second, each held two

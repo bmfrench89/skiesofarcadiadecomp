@@ -10250,3 +10250,47 @@ Spec: `docs/specs/interp-display.md`; the owner's D-45.
   screen copies are one submission a slice, not batched; Done 1's GPU-against-GPU rule is the 16-level one above, not
   V12's one level, for the slice offset.
 - **Next:** H17c-b, the presenter at the display's rate.
+
+**H17c-b: in-between images at the display's own rate, one a refresh; on this PC's 85 Hz monitor, 81 a second.**
+2026-10-25. Spec: `docs/specs/interp-display.md`; the owner's D-45.
+
+- **What it is** [V, `runtime/interp_rate.h`, `gxr.c`, `gxv.c`, `window.c`, `settings.c`]:
+  - `interp = display` (`SOA_INTERP=display`), GPU backend only; with the CPU renderer it says so and runs as `1`.
+    The default stays `0`.
+  - `interp_rate.h`, RT64's accumulator: a frame's images are the refreshes in its interval, at
+    `(30j - r) / hz` with `r = (frame * hz) mod 30`. The producer takes the next frame's weights at each screen
+    copy from the rate the window measured (`gxr_interp_rate`; `SOA_INTERP_RATE` headless) and marks the frame
+    whose real image ends on a refresh (`CP_REAL`); one with none between is drawn alone.
+  - The window reads the refresh of the monitor it is on (`MonitorFromWindow`, then that monitor's mode; DWM's
+    timing is the primary display's), rounded as RT64 rounds it, and again when it moves to another monitor.
+  - The presenter shows a slot's images one a refresh in weight order, then its real image where it falls on a
+    refresh; a cut, or a frame with none between, its real image for as many refreshes; a newer slot takes over from
+    the next refresh (frame reduction). With `VK_KHR_present_wait2`, which this PC's AMD driver has (with
+    `present_id2` and the instance's surface capabilities 2), each present waits for the one before to reach the
+    screen, so one image is queued at most and the time is the display's.
+  - The window is woken when the GPU publishes a slot (`gxv_on_publish`, an event its loop waits on) rather than
+    finding it at its next 8 ms wait, which, with the system timer at its default resolution, can be a tick late.
+- **The run** [V, `build/e2/win-*.log`, the `title` scenario in a window, `SOA_GPU=vulkan`, the monitor at 85 Hz]:
+  - Headless with `SOA_INTERP_RATE=85`: 5666 images over 2000 frames, 2.83 a frame, 85/30.
+  - In the window, without present-wait (FIFO's queue): 80.6 images a second, no frame cut short; the presents could
+    be timed only as submitted, in bursts.
+  - With present-wait2, the window polled: 71.9% of intervals at one refresh, 285 frames cut short, 76.6 a second.
+  - With present-wait2 and the window woken on publish: 91.2% at one refresh (94.6% leaving out the 196 intervals
+    under half a refresh, a present whose predecessor was already on screen when it waited), 15 frames cut short,
+    81.0 images a second against 28.2 real frames a second (85/30 x 28.2 is 79.9). The intervals of two or more
+    refreshes come with the title's loads (its p99 frame 69 ms).
+  - Real frames a second with display, interleaved: 28.1 and 28.3 against 28.6 with `interp = 0`.
+  - Under `SOA_GPU_VALIDATE=1`: no validation message.
+  - `interp = 1` at 85 Hz under `SOA_INTERP_ANYRATE`: 2000 of 2000 slots shown (1994 before the publish wake),
+    1908 in-between images.
+- **Off and `1` change nothing** [V]: replay 23/23 at 1, 2, 3 and 8 threads; `contrast --set
+  corpus,perfset,gpuset` 67/67; `gpuspike.py selftest` and `pairs`; both self tests; `test_gxv_present.py`,
+  `test_picture.py`, `test_gxr_pair.py`.
+- **Tests** [V]: `test_picture.py`, two: the accumulator's images and weights at 60, 85, 90, 120, 144 and 165 Hz,
+  every rate from 30 to 240 against the definition, and the rounding; and its mutation, weights spaced j/n inside
+  each frame, which 60, 90 and 120 Hz cannot tell and 85 and 144 Hz fail.
+- **As built against the spec:** a cut shows its real image for the frame's refreshes, not the frame before held;
+  the budget still turns the stream off and on, not a slice at a time; Done 5's 95% at one refresh is 91.2% over a
+  run with loads in it (94.6% without the wait's own artefact); Done 6 (60 Hz) and 7 (another monitor) wait for the
+  owner's displays at session D.
+- **Next:** D-45's other items: the fallback the player sees, Android's 60 Hz request, session D's classes (H18).

@@ -87,6 +87,10 @@ long gxr_ring_missed(void); /* published, then replaced before a take */
  * a whole multiple of 60 Hz): 0 stops the producer building them. Once it has
  * said, the budget runs (H17b), whichever presenter it has. */
 void gxr_interp_show(int on);
+/* H17c-b: SOA_INTERP=display, and the display's rate the window measured
+ * (interp_rate_round's; 0 none), from which each frame takes its images. */
+int gxr_interp_display(void);
+void gxr_interp_rate(unsigned hz);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

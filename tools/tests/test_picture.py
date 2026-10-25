@@ -91,6 +91,7 @@ DRIVER = r"""
 #include <stdlib.h>
 #include <string.h>
 #include "picture.h"
+#include "interp_rate.h"
 static const char* unset(const char* v) { return strcmp(v, "-") ? v : NULL; }
 int main(void)
 {
@@ -105,6 +106,19 @@ int main(void)
             printf("%u\n", present_interval(hz, a));
         } else if (!strcmp(cmd, "interp") && scanf("%lf", &hz) == 1) {
             printf("%u\n", present_interp(hz));
+        } else if (!strcmp(cmd, "rate") && scanf("%d %d", &a, &n) == 2) {
+            /* H17c-b: n frames at a display of a Hz, a line each: the count,
+             * then the weights */
+            unsigned r = 0, k, m;
+            float w[8];
+            for (i = 0; i < n; i++) {
+                m = interp_rate_weights((unsigned)a, &r, w);
+                printf("%u", m);
+                for (k = 0; k < m; k++) printf(" %.9g", (double)w[k]);
+                printf(i + 1 < n ? ";" : "\n");
+            }
+        } else if (!strcmp(cmd, "round") && scanf("%lf", &hz) == 1) {
+            printf("%u\n", interp_rate_round(hz));
         } else if (!strcmp(cmd, "filter") && scanf("%31s %15s %15s %15s %d", g, cb, md, fl, &n) == 5) {
             /* n pixels, r g b each, through the filters on a 1 x n frame:
              * the refusal ("-" for none), then the pixels */
@@ -181,7 +195,7 @@ int main(void)
 """
 
 
-def build(tmp: Path, source: str | None = None) -> Path:
+def build(tmp: Path, source: str | None = None, include_first: Path | None = None) -> Path:
     from soa import toolchain
 
     tmp.mkdir(parents=True, exist_ok=True)
@@ -194,6 +208,7 @@ def build(tmp: Path, source: str | None = None) -> Path:
     proc = toolchain.cl(
         [
             *toolchain.CFLAGS,
+            *(["/I", str(include_first)] if include_first else []),
             "/I",
             str(ROOT / "runtime"),
             str(src),
@@ -272,6 +287,79 @@ def test_the_spec_s_layouts_and_intervals(driver):
     assert got == [want for _, want in INTERVALS_60], got
     got = [int(v) for v in ask(driver, [f"interp {hz}" for hz, _ in INTERP])]
     assert got == [want for _, want in INTERP], got
+
+
+def rate_frames(exe: Path, rates: list[int], frames: int) -> dict[int, list[list[float]]]:
+    """interp_rate_weights over `frames` frames at each rate: its weights a frame."""
+    out = ask(exe, [f"rate {hz} {frames}" for hz in rates])
+    return {
+        hz: [[float(v) for v in f.split()[1:]] for f in line.split(";")]
+        for hz, line in zip(rates, out, strict=True)
+    }
+
+
+def rate_definition(hz: int, frames: int) -> list[list[float]]:
+    """The spec's definition: refresh i shows the game at i * 30 / hz frames,
+    so frame f's images are the refreshes in (f, f + 1], at weight s - f."""
+    got = []
+    for f in range(frames):
+        first, last = f * hz // 30 + 1, (f + 1) * hz // 30
+        got.append([(i * 30 - f * hz) / hz for i in range(first, last + 1)])
+    return got
+
+
+def rates_agree(got: dict[int, list[list[float]]], frames: int) -> list[str]:
+    bad = []
+    for hz, frs in got.items():
+        want = rate_definition(hz, frames)
+        for f, (g, w) in enumerate(zip(frs, want, strict=True)):
+            if len(g) != len(w) or any(abs(a - b) > 1e-6 for a, b in zip(g, w, strict=True)):
+                bad.append(f"{hz} Hz frame {f}: {g}, not {w}")
+                break
+    return bad
+
+
+@needs_msvc
+def test_the_display_rate_s_images_a_frame(driver):
+    """H17c-b's Done 4 (specs/interp-display.md): RT64's accumulator gives
+    each game frame the refreshes in its interval, at their own weights. The
+    spec's cases, every rate from 30 to 240 against the definition over 60
+    frames (the remainder repeats within 30 at any rate), and the rounding of a
+    display's rate."""
+    got = rate_frames(driver, [60, 85, 90, 120, 144, 165], 6)
+    assert [len(f) for f in got[85]] == [2, 3, 3, 3, 3, 3]
+    assert got[85][5][-1] == 1.0  # the sixth ends on its real image
+    assert got[60] == [[0.5, 1.0]] * 6
+    assert all(len(f) == 3 and f[-1] == 1.0 and abs(f[0] - 1 / 3) < 1e-6 for f in got[90])
+    assert [len(f) for f in got[144]][:5] == [4, 5, 5, 5, 5]
+    assert got[120][0] == [0.25, 0.5, 0.75, 1.0]
+    assert [len(f) for f in got[165]] == [5, 6] * 3
+    everything = rate_frames(driver, list(range(30, 241)), 60)
+    assert rates_agree(everything, 60) == []
+    rounded = [
+        int(v)
+        for v in ask(driver, [f"round {hz}" for hz in (59, 59.94, 60, 119.88, 143.98, 85, 75)])
+    ]
+    assert rounded == [60, 60, 60, 120, 144, 85, 75], rounded
+
+
+@needs_msvc
+def test_the_display_rate_s_mutation_fails(tmp_path):
+    """Weights spaced evenly inside each frame, j / n, rather than by when
+    each refresh falls: 60, 90 and 120 Hz cannot tell, and 85 and 144 Hz
+    must."""
+    src = (ROOT / "runtime" / "interp_rate.h").read_text(encoding="utf-8")
+    line = "    for (j = 1; j <= n; j++) w[j - 1] = (float)(30u * j - *r) / (float)hz;"
+    assert src.count(line) == 1
+    inc = tmp_path / "inc"
+    inc.mkdir()
+    (inc / "interp_rate.h").write_text(
+        src.replace(line, "    for (j = 1; j <= n; j++) w[j - 1] = (float)j / (float)n;"),
+        encoding="utf-8",
+    )
+    exe = build(tmp_path / "build", include_first=inc)
+    bad = rates_agree(rate_frames(exe, [60, 85, 90, 120, 144], 60), 60)
+    assert [b.split()[0] for b in bad] == ["85", "144"], bad
 
 
 @needs_msvc

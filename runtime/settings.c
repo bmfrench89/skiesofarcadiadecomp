@@ -92,7 +92,7 @@ static const Setting k_settings[] = {
     {"fullscreen", "SOA_FULLSCREEN", "1 starts in borderless fullscreen (F11, Alt+Enter or View+LB toggle it)", 0, NULL, "0|1"},
     {"turbo", "SOA_TURBO", "battle, sky or both: up to twice as fast there (View+RS toggles it)", 1, NULL, "battle|sky|both"},
     {"deflicker", "SOA_DEFLICKER", "0 draws the picture without the game's deflicker filter: sharper on a progressive display", 0, NULL, "0|1"},
-    {"interp", "SOA_INTERP", "1: an image between each two frames, for 60 a second where the display runs at 60 or 120 Hz and the machine keeps up (H17b)", 0, NULL, "0|1"},
+    {"interp", "SOA_INTERP", "1: an image between each two frames, for 60 a second where the display runs at 60 or 120 Hz and the machine keeps up (H17b); display: as many as the display refreshes, at any rate, with gpu = vulkan (H17c)", 0, NULL, "0|1|display"},
     {"scaler", "SOA_SCALER", "integer (whole multiples, the default) or fit (the largest 4:3 that fits)", 0, NULL, "integer|fit"},
     {"gamma", "SOA_GAMMA", "0.5 to 2.5: the picture lighter above 1, darker below"},
     {"colorblind", "SOA_COLORBLIND", "off, protan, deutan or tritan: colours corrected for that colour blindness", 0, NULL, "off|protan|deutan|tritan"},
