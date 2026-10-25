@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1899 |
+| Python tests | 1903 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -422,8 +422,8 @@ washed-out colour and a correct fix would have failed the suite.
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
-spec, H17c-a, H17c-b and H17d (2026-10-25), pushed. The full pre-push suite passes: 1899 tests in 102 files (1858
-passed, 41 skipped here; 704 skip with MSVC hidden, so 663 want MSVC). Nothing is
+spec, H17c-a, H17c-b, H17d and H17e (2026-10-25), pushed. The full pre-push suite passes: 1903 tests in 103 files (1862
+passed, 41 skipped here; 706 skip with MSVC hidden, so 665 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -455,7 +455,14 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    artifact classes are fixed (H18); (d) Android asks for 60. The display-rate mode is specified as **H17c**
    (`docs/specs/interp-display.md`): H17c-a, slices drawn on the GPU at each weight, and H17c-b, `interp = display`
    at the monitor's own rate, are built (FINDINGS "H17c-a", "H17c-b"), and H17d, (b) the notice the player sees
-   (FINDINGS "H17d"). Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
+   (FINDINGS "H17d"). H17e fixed the budget, which paused smooth motion on the game's own jitter (now the
+   median of the last 31 frames over 35.5 ms, `runtime/interp_budget.h`), and found where smooth motion really
+   does slow the game: the cutscene aboard Alfonso's ship (battle scenario, from frame about 4124), where the
+   slices' GPU time lands on the game's critical path because nothing of the GPU's frame overlaps the game's
+   next (FINDINGS "H17e"). **Next is H17f** (PLAN-60FPS-MODS): the screen copy submitted without waiting, the
+   consumer finishing it on its own thread while the game builds the next frame, synchronous still where the
+   game reads what was drawn. Measure first how many of the cutscene's frames end with a copy to texture still
+   to land, which must keep waiting. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in

@@ -639,7 +639,7 @@ static void interp_tell(void)
     else if (g_interp_hz) snprintf(line, sizeof line, "Smooth motion: %u images a second, the display's rate", g_interp_hz);
     else snprintf(line, sizeof line, "Smooth motion: 60 images a second");
     menu_notice(line, 4000);
-    fprintf(stderr, "[notice] %s\n", line);
+    fprintf(stderr, "[notice] frame %ld: %s\n", gxr_presented(), line);
     was = now;
 }
 

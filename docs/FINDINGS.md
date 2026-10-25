@@ -10312,3 +10312,47 @@ the owner's D-45, its second item.
   nothing once it is taken away. *Mutation:* the notice drawn only with the menu open.
 - **Not here:** the SDL window posts no notice yet (`window_sdl.c` untouched, which would ask for the Linux check).
 - **Next:** D-45's fourth item, Android's 60 Hz request, which waits for the GPU backend on a phone; and session D.
+
+**H17e: the budget stops for a slow game, not for its jitter; and where smooth motion really does slow it.**
+2026-10-25. The owner's D-45: the budget paused smooth motion often enough to make 60 by default look broken.
+
+- **The defect** [V, `build/e2/battle-display2.ilog`, `build/e2/hl-battle-h17e.ilog`]: H17b's rule, three frames in
+  a row over 35 ms, trips on the game's own frame times. The battle scenario in a window with interpolation off runs
+  p95 36.2 ms and p99 43.3 ms, with slow frames often in threes. In display mode at 85 Hz the rule paused smooth
+  motion at frames 1235 and 2927 (`[notice]` lines), where the game keeps its pace with the images on. The fair
+  test is a headless run, where the stream is on for every frame, so every frame time includes its cost: there the
+  rule first stops at frame 1453 and four times before frame 4000.
+- **The rule now** [V, `runtime/interp_budget.h`]: the median of the last 31 frames over 35.5 ms stops the images;
+  while stopped, the existing count-down (30 frames doubling to 960, a frame under 34.5 ms counting down and a slower
+  one up two). On the same headless log it first stops at frame 4137; live, in the window, at 4139, and at neither
+  pause before it. A median moves one place for a load of any length, and catches a device holding the game at
+  36 ms, which a higher run threshold (three over 40 ms) never would. BlueWake's patch 0132 uses the same 35.5 ms
+  as a mean (research §"Defaults track confidence"); replayed over the windowed battle's log, a mean of 30 frames
+  over 35 ms stopped 22 times, because a load lifts it. The rule is a header shared with its test, as `interp_rate.h` is.
+- **A replay is not a counterfactual** [V]: candidate rules were first replayed over a windowed run's frame
+  times, which put the median rule at 2% of frames without images and 1 stop. Live it was 57.4% and 11 stops,
+  against 55.7% and 7 for the old rule. The windowed log's frames are faster wherever the old rule had the stream
+  off, so the replay never saw what the images cost there. Only a run with the stream on throughout (headless) is a
+  fair input, and only up to a rule's first stop.
+- **Where smooth motion really does slow the game** [V, the same runs; `build/e2/unc-off.log`,
+  `unc-disp.log`]: from frame about 4124, the cutscene aboard Alfonso's ship, frames with the stream on take
+  36-45 ms and drop to 32-34 the frame it stops, in a window and headless alike (median 38.2 ms at frames
+  4000-4499 headless), so not the window or the presenter. Uncapped from 4100 (`SOA_UNCAP`, `SOA_SNAP=0` so every
+  frame is drawn), frames 4100-4599 take p50 33.4 ms and p95 37.8 with interpolation off, and p50 39.3 and p95
+  44.9 in display mode. The GPU's time a frame goes from p95 2.42 ms to 12.68, and the producer's waits at the
+  frame gate from 0.04 s to 2.69 s over the run. The scene is at the edge of a 30 fps frame without any of this, and
+  the in-between work's GPU time lands on the game's critical path: the real frame's screen copy submits the frame,
+  real image and slices, and waits for the GPU (`submit_wait`), each slice's copy is another submission and wait,
+  and the next frame's first command drains everything (the frame gate). Nothing of the GPU's frame overlaps the
+  game's next one.
+- **Tests** [V]: `test_picture.py`, two: synthetic frame times through `interp_budget_step` (a battle's jitter, the
+  opening's one slow frame in ten and a load every 500 frames never stop it; a device at 36 or 50 ms stops within
+  31 frames and stays stopped; a slow spell stops it once, and the images come back). *Mutations:* the slowest of
+  the 31 in place of the median fails the jitter and the opening; a 40 ms threshold fails the device at 36.
+- **Also here:** the `SOA_INTERP_LOG` budget line is written headless too, and `SOA_SNAP` with interpolation writes
+  frame N-1's picture beside N's for `tools/interp_review.py`, a page of in-between images ranked by the share of
+  pixels that match neither frame, for session D. The `[notice]` lines carry the frame they were posted at.
+- **Next:** the GPU's frame overlapped with the game's next one (two frames in flight in `gxv.c`; the copies whose
+  bytes the game reads still wait), so that the slices' GPU time leaves the critical path. Then whether the
+  cutscene's 33 ms without interpolation is the game's own work or its own pacing, which matters for the Steam Deck
+  more than for smooth motion.

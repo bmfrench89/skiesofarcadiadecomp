@@ -11,6 +11,7 @@
 #include "gxr.h"
 #include "gxr_cmd.h"
 #include "crmath.h"
+#include "interp_budget.h"
 #include "interp_rate.h"
 #include "plat.h"
 #include <math.h>
@@ -195,7 +196,8 @@ static double g_f_worst;
 static int g_cut_idx = 2;        /* which of CUT_PX the detector reads */
 static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D draws moved past it (FINDINGS "H17b") */
 static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
-static unsigned long long g_cuts, g_over_budget, g_budget_offs;
+static unsigned long long g_cuts;
+static InterpBudget g_budget; /* interp_budget.h */
 static double g_ms_last;
 /* H17c (docs/specs/interp-display.md): the frame's in-between weights, an
  * image each, ascending in (0, 1); one at the midpoint unless
@@ -232,7 +234,6 @@ static unsigned interp_weights(const char* s, float* out)
     return n;
 }
 static double g_frame_s;                           /* the last screen copy, by gxr_clock */
-static int g_slow_run, g_backoff = 30, g_wait, g_held;
 
 /* A test knob (PLAN-60FPS-MODS H14): SOA_GXR_STALL=<worker>:<kind>:<us>[,...]
  * makes that worker wait that many microseconds before every command of that
@@ -2587,49 +2588,26 @@ void gxr_interp_show(int on)
  *
  * The test is the game's own frame time, from one screen copy to the next (the
  * gate's drain is no clock: anything else that drains first, as a windowed run
- * does, takes it). A 30 fps frame is 33.4 ms, and three in a row over 35 mean
- * the in-between work is slowing the game, so it stops. It starts again once
- * frames are back on time: a count of 30 frames, doubling after each try that
- * failed up to 960 (back to 30 once a try has held ten seconds), down one an
- * on-time frame and up two a slow one, so never while the game is slow without
- * it. A slow frame used to start the count again, and the opening, which runs
- * one in ten even without interpolation, never started again (FINDINGS "V12").
- * Workers' busy time was tried before any of this and is no guide: in the
- * opening every worker averaged far under a frame of work while the frame ran
- * long (FINDINGS "H17b"). */
+ * does, takes it), and the rule is interp_budget.h's: the median of the last
+ * 31 over 35.5 ms stops the images. Workers' busy time was tried before any
+ * of this and is no guide: in the opening every worker averaged far under a
+ * frame of work while the frame ran long (FINDINGS "H17b"). */
 static void interp_frame_begin(void)
 {
-    const double slow = 35.0, on_time = 34.0;
     double now, ms;
-    if (!g_interp || !plat_load32(&g_mid_window)) return;
+    if (!g_interp) return;
     now = gxr_clock(); /* not gxr_ticks: their rate is known only at the report */
     ms = g_frame_s > 0.0 ? (now - g_frame_s) * 1e3 : 0.0;
     g_frame_s = now;
     g_ms_last = ms;
+    if (g_interp_log) /* every frame's time, the stream on or off, headless too, for a replay of the rule */
+        fprintf(g_interp_log, "%u budget frame_ms %.2f on %d\n", gx_frame_count(), ms, g_mid_on);
+    if (!plat_load32(&g_mid_window)) return;
     if (!plat_load32(&g_mid_allowed)) {
         g_mid_on = 0;
         return;
     }
-    if (g_mid_on) {
-        g_slow_run = ms > slow ? g_slow_run + 1 : 0;
-        if (g_slow_run >= 3) {
-            g_mid_on = 0;
-            g_slow_run = 0;
-            g_wait = g_backoff;
-            g_backoff = g_backoff * 2 > 960 ? 960 : g_backoff * 2;
-            g_budget_offs++;
-        } else if (++g_held == 300) {
-            g_backoff = 30;
-        }
-    } else {
-        g_over_budget++;
-        if (ms > on_time) g_wait = g_wait + 2 > 2 * g_backoff ? 2 * g_backoff : g_wait + 2;
-        else if (g_wait > 0) g_wait--;
-        else {
-            g_mid_on = 1;
-            g_held = 0;
-        }
-    }
+    g_mid_on = interp_budget_step(&g_budget, ms);
 }
 
 /* H17c-b: the next frame's images at the display's rate (interp_rate.h):
@@ -3836,7 +3814,16 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         int want = 0;
         unsigned frame = gx_frame_count(); /* the front end increments it after this copy, so this is the frame being presented */
         if (g_png_path[0]) { snprintf(path, sizeof path, "%s", g_png_path); want = 1; }
-        else if (snap_frame(frame)) { ensure_frames_dir(); snprintf(path, sizeof path, "%s/%04u.png", frames_dir(), frame); want = 1; }
+        else if (snap_frame(frame) || (g_interp && snap_frame(frame + 1))) {
+            /* with SOA_INTERP, frame N-1 as well, drawn anyway: N's in-between
+             * images lie between the two, which a reviewer wants beside them
+             * (tools/interp_review.py). Its own in-between images lerp from a
+             * frame never drawn, so they are not written. */
+            ensure_frames_dir();
+            snprintf(path, sizeof path, "%s/%04u.png", frames_dir(), frame);
+            want = 1;
+            if (!snap_frame(frame)) mid_copy = 0;
+        }
         /* The PNG and the hash both describe the finished frame, so wait here
          * for the rows of this copy every other worker owns. The hash is taken
          * from the same buffer the PNG is written from and at the same point,
@@ -3995,8 +3982,8 @@ void gxr_report(void)
                 g_interp_images, g_pair_matched, g_pair_unmatched + g_pair_demoted, g_pair_demoted,
                 g_interp_images ? gxr_seconds(g_interp_ticks) * 1e3 / (double)g_interp_images : 0.0,
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
-        fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts, g_over_budget,
-                g_budget_offs);
+        fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts,
+                g_budget.frames_off, g_budget.stops);
         if (g_display_frames) /* H17c-b */
             fprintf(stderr, "at the display's rate, %u Hz now: %llu images over %llu frames (%.2f a frame); ",
                     (unsigned)plat_load64(&g_rate), g_display_images, g_display_frames,

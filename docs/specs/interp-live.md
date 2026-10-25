@@ -51,7 +51,10 @@ an image that is wrong in a way a repeat would not be.
   stream resumes the frame it is allowed. *As built:* the spec first named the render span with the in-between share
   predicted from workers' busy time; busy time was tried and is no guide (FINDINGS "H17b": every worker far under a
   frame of work while the frame ran long), and the gate's drain is no clock (a windowed run drains first). The guard is
-  the game's own frame rate: with interpolation on it may not fall below what it is off.
+  the game's own frame rate: with interpolation on it may not fall below what it is off. *H17e (2026-10-25):* the rule
+  is now the median of the last 31 frames over 35.5 ms, a frame under 34.5 counting down
+  (`runtime/interp_budget.h`): three in a row over 35 stopped a battle in a window on the game's own jitter, which
+  runs that often with interpolation off (FINDINGS "H17e").
 - **The cut detector.** At a camera cut, draws match across the pair (same display lists, same textures) and their
   positions jump, so the lerp makes a frame that belongs to neither (H17a's battle at frame 4000). Per frame the
   producer counts the 3D draws keyed, matched, and matched with a vertex displaced more than 16, 32, 64 and 128 pixels.

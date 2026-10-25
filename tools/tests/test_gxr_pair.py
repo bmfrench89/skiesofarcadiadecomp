@@ -861,7 +861,8 @@ def test_the_cut_detector(world):
     a camera cut, is a cut, and so is one where nothing matches; H10's small
     move is not. The in-between copy's line in SOA_INTERP_LOG says which."""
     for name, (*_, want) in CUTS.items():
-        lines = world["cuts"][name].splitlines()
+        # the detector's lines; the budget's frame times (H17e) are written headless too
+        lines = [ln for ln in world["cuts"][name].splitlines() if " keyed3d " in ln]
         assert len(lines) == 1, f"{name}: one in-between image, got {lines}"
         got = int(re.search(r"\bcut (\d)", lines[0]).group(1))
         assert got == want, f"{name}: cut {got}, wanted {want}: {lines[0]}"

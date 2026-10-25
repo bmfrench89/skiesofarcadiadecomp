@@ -12,6 +12,7 @@ resize. It exits 1 and names each problem.
 """
 
 import os
+import random
 import re
 import subprocess
 import sys
@@ -92,6 +93,7 @@ DRIVER = r"""
 #include <string.h>
 #include "picture.h"
 #include "interp_rate.h"
+#include "interp_budget.h"
 static const char* unset(const char* v) { return strcmp(v, "-") ? v : NULL; }
 int main(void)
 {
@@ -119,6 +121,16 @@ int main(void)
             }
         } else if (!strcmp(cmd, "round") && scanf("%lf", &hz) == 1) {
             printf("%u\n", interp_rate_round(hz));
+        } else if (!strcmp(cmd, "budget") && scanf("%d", &n) == 1) {
+            /* H17e: n frame times through the budget: whether each next
+             * frame gets its images, a 0 or 1 each, then the stops */
+            InterpBudget bud;
+            memset(&bud, 0, sizeof bud);
+            for (i = 0; i < n; i++) {
+                if (scanf("%lf", &hz) != 1) return 2;
+                putchar('0' + interp_budget_step(&bud, hz));
+            }
+            printf(" %llu\n", bud.stops);
         } else if (!strcmp(cmd, "filter") && scanf("%31s %15s %15s %15s %d", g, cb, md, fl, &n) == 5) {
             /* n pixels, r g b each, through the filters on a 1 x n frame:
              * the refusal ("-" for none), then the pixels */
@@ -360,6 +372,94 @@ def test_the_display_rate_s_mutation_fails(tmp_path):
     exe = build(tmp_path / "build", include_first=inc)
     bad = rates_agree(rate_frames(exe, [60, 85, 90, 120, 144], 60), 60)
     assert [b.split()[0] for b in bad] == ["85", "144"], bad
+
+
+def budget_devices() -> dict[str, list[float]]:
+    """Frame times, 3000 each, in ms. `jitter` is the shape of a battle in a
+    window with interpolation off (FINDINGS "H17e"): on time, with 8% of its
+    frames 36-40 ms in threes, 1% 43-60 ms, and a 300 ms load every 500;
+    `opening` is the opening's one slow frame in ten (FINDINGS "V12")."""
+    rnd = random.Random(17)
+    jitter = [33.4 + rnd.uniform(-0.5, 0.5) for _ in range(3000)]
+    for start in range(40, 3000, 37):
+        for k in range(start, min(start + 3, 3000)):
+            jitter[k] = rnd.uniform(36.0, 40.0)
+    for k in range(25, 3000, 100):
+        jitter[k] = rnd.uniform(43.0, 60.0)
+    for k in range(499, 3000, 500):
+        jitter[k] = 300.0
+    return {
+        "jitter": jitter,
+        "opening": [50.0 if k % 10 == 9 else 33.4 for k in range(3000)],
+        "steady 36": [36.0 + rnd.uniform(-1.0, 1.0) for _ in range(3000)],
+        "steady 50": [50.0 + rnd.uniform(-5.0, 5.0) for _ in range(3000)],
+        "recovers": [45.0 if 600 <= k < 1200 else 33.4 for k in range(3000)],
+    }
+
+
+def budget(exe: Path, devices: dict[str, list[float]]) -> dict[str, tuple[str, int]]:
+    """Each device through interp_budget_step: whether each next frame gets
+    its images, as a string of 0s and 1s, and the stops."""
+    out = ask(
+        exe, [f"budget {len(ms)} " + " ".join(f"{t:.2f}" for t in ms) for ms in devices.values()]
+    )
+    return {
+        name: (line.split()[0], int(line.split()[1]))
+        for name, line in zip(devices, out, strict=True)
+    }
+
+
+def budget_problems(got: dict[str, tuple[str, int]]) -> list[str]:
+    """What H17e's rule must do with each device."""
+    bad = []
+    for name in ("jitter", "opening"):
+        if got[name][1]:
+            bad.append(
+                f"{name}: stopped {got[name][1]} times; the game's own jitter must not stop it"
+            )
+    for name in ("steady 36", "steady 50"):
+        on = got[name][0]
+        if "0" not in on[:32] or on.count("0") < 0.9 * len(on):
+            bad.append(f"{name}: not stopped within 31 frames and held off ({on.count('0')} off)")
+    on, stops = got["recovers"]
+    if stops != 1 or "0" not in on[600:632] or "0" in on[1500:]:
+        bad.append(
+            f"recovers: {stops} stops, off by 631: {'0' in on[600:632]}, on after 1500: {'0' not in on[1500:]}"
+        )
+    return bad
+
+
+@needs_msvc
+def test_the_budget_stops_for_a_slow_game_and_not_for_its_jitter(driver):
+    """H17e: the median of the last 31 frames over 35.5 ms stops the
+    in-between images. The game's own jitter and a load of any length never
+    do; a device that holds the game at 36 ms (93% speed) or 50 stops within
+    31 frames and stays stopped; a slow spell stops once, and the images come
+    back after it."""
+    got = budget(driver, budget_devices())
+    assert budget_problems(got) == [], budget_problems(got)
+    assert got["jitter"][0] == "1" * 3000
+
+
+@needs_msvc
+def test_the_budget_s_mutations_fail(tmp_path):
+    """The slowest of the 31 in place of the median stops for the jitter (as
+    H17b's three-in-a-row over 35 did) and the opening; a 40 ms threshold
+    never stops for the device at 36."""
+    src = (ROOT / "runtime" / "interp_budget.h").read_text(encoding="utf-8")
+    median = "            if (s[INTERP_BUDGET_N / 2u] > INTERP_BUDGET_SLOW) {"
+    slow = "#define INTERP_BUDGET_SLOW 35.5 "
+    assert src.count(median) == 1 and src.count(slow) == 1
+    for name, mutated, want in (
+        ("slowest", src.replace(median, median.replace("N / 2u", "N - 1u")), ["jitter", "opening"]),
+        ("forty", src.replace(slow, "#define INTERP_BUDGET_SLOW 40.0 "), ["steady 36"]),
+    ):
+        inc = tmp_path / name / "inc"
+        inc.mkdir(parents=True)
+        (inc / "interp_budget.h").write_text(mutated, encoding="utf-8")
+        exe = build(tmp_path / name / "build", include_first=inc)
+        bad = budget_problems(budget(exe, budget_devices()))
+        assert [b.split(":")[0] for b in bad] == want, (name, bad)
 
 
 @needs_msvc
