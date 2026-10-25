@@ -314,7 +314,8 @@ they land. `settings_recorded(char*, size_t)` returns `key=value` for each recor
 set. main.c joins it with `mod_describe()` and passes the result through `si_set_config_extra` for every
 run, not only runs with mods. A recording made with none of them set keeps exactly the line it has
 today. The replay's existing mismatch warning (`si.c:572-577`) then names a different seed or preset.
-The strict switch that refuses a mismatch stays in milestone 2.
+The strict switch that refuses a mismatch stays in milestone 2 (built 2026-10-24 as event-track.md's E1,
+`SOA_PAD_STRICT=1`).
 
 **Room for it (P6b, landed).** Settings come first, so a long mod list cannot push them out.
 - main.c's `extra` and si.c's `g_cfg_extra` grow from 320 to 640 bytes.

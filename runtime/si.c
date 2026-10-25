@@ -23,7 +23,9 @@
  * both triggers at the values the player gave them, which is the only way a
  * run long enough to reach a save point can be repeated. A replay ends the
  * run a little after the recording's last line (SOA_PAD_STOP), so a headless
- * replay needs no SOA_FRAMES guessed in advance.
+ * replay needs no SOA_FRAMES guessed in advance. A replay set up unlike its
+ * recording says which entries differ; with SOA_PAD_STRICT=1 it is refused,
+ * exit 11 (docs/specs/event-track.md).
  *
  *   0xCC006400 + 12*ch  SICnOUTBUF   0xCC006404 + 12*ch  SICnINBUFH   +8 INBUFL
  *   0xCC006430  SIPOLL      0xCC006434  SICOMCSR    0xCC006438  SISR
@@ -364,6 +366,37 @@ static const char* under_path_root(const char* path)
     return path[n] == '\\' || path[n] == '/' ? path + n + 1 : path;
 }
 
+/* FNV-1a over a knob's text: a list of pokes can outrun the config line, and
+ * a replay needs only to know whether it was the same list. */
+static uint32_t text_hash(const char* s)
+{
+    uint32_t h = 2166136261u;
+    while (*s) h = (h ^ (uint8_t)*s++) * 16777619u;
+    return h;
+}
+
+/* The test knobs that write guest memory (event-track.md §3), each named
+ * only when set, so a recording made without them keeps the line it had:
+ * SOA_BATTLE_FORCE's first word, which is all battle.c's sscanf reads, and
+ * the two poke lists as hashes of their text. */
+static void pad_knobs(char* out, size_t cap)
+{
+    const char* force = getenv("SOA_BATTLE_FORCE");
+    const char* poke = getenv("SOA_POKE");
+    const char* mempoke = getenv("SOA_MEMPOKE");
+    size_t used = 0;
+    out[0] = '\0';
+    if (force) {
+        int w;
+        while (*force == ' ' || *force == '\t') force++;
+        w = (int)strcspn(force, " \t\r\n");
+        if (w > 48) w = 48; /* mode:id:stage@frame, four 32-bit numbers, is at most 43 */
+        if (w) used += (size_t)snprintf(out, cap, " battle_force=%.*s", w, force);
+    }
+    if (poke && *poke && used < cap) used += (size_t)snprintf(out + used, cap - used, " poke=%08x", text_hash(poke));
+    if (mempoke && *mempoke && used < cap) snprintf(out + used, cap - used, " mempoke=%08x", text_hash(mempoke));
+}
+
 static void pad_config(char* out, size_t cap)
 {
     const char* card_path = env_or("SOA_CARD", "build/cards/slotA.raw");
@@ -373,10 +406,79 @@ static void pad_config(char* out, size_t cap)
      * made without it keeps the line it always had. */
     const char* uncap = getenv("SOA_UNCAP");
     int un = uncap && *uncap && strcmp(uncap, "0") != 0;
-    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s%s%s",
+    char knobs[128];
+    pad_knobs(knobs, sizeof knobs);
+    snprintf(out, cap, "render=%s window=%s speed=%s scale=%s threads=%s card=%s:%lld%s%s%s%s%s",
              env_or("SOA_RENDER", "-"), env_or("SOA_WINDOW", "-"), env_or("SOA_SPEED", "1"),
              env_or("SOA_SCALE", "2"), env_or("SOA_THREADS", "-"), card, file_size(card_path),
-             un ? " uncap=" : "", un ? uncap : "", g_cfg_extra[0] ? " " : "", g_cfg_extra);
+             un ? " uncap=" : "", un ? uncap : "", knobs, g_cfg_extra[0] ? " " : "", g_cfg_extra);
+}
+
+/* Up to `max` words of `text`, split on spaces, copied into buf. */
+static int config_words(const char* text, char* buf, size_t cap, char** words, int max)
+{
+    int n = 0;
+    char* p = buf;
+    snprintf(buf, cap, "%s", text);
+    while (*p && n < max) {
+        while (*p == ' ') *p++ = '\0';
+        if (!*p) break;
+        words[n++] = p;
+        while (*p && *p != ' ') p++;
+    }
+    return n;
+}
+
+static int same_key(const char* a, const char* b)
+{
+    size_t ka = strcspn(a, "="), kb = strcspn(b, "=");
+    return ka == kb && !strncmp(a, b, ka);
+}
+
+/* "key (recorded A, now B)" onto out, for an entry in one line or both. */
+static void config_diff_entry(char* out, size_t cap, const char* was, const char* now)
+{
+    const char* w = was ? was : now;
+    int k = (int)strcspn(w, "=");
+    const char* a = !was ? "not set" : was[k] ? was + k + 1 : was;
+    const char* b = !now ? "not set" : now[k] ? now + k + 1 : now;
+    size_t used = strlen(out);
+    if (used + 1 < cap) snprintf(out + used, cap - used, "%s%.*s (recorded %s, now %s)", used ? ", " : "", k, w, a, b);
+}
+
+/* The entries two config lines disagree on, each keyed by the text before
+ * its '=', so a log says what to set rather than leaving two long lines to
+ * be compared by eye. The count; 0 when they differ only in order. */
+static int config_diff(const char* was, const char* now, char* out, size_t cap)
+{
+    static char a[1024], b[1024];
+    char *wa[96], *wb[96];
+    int na = config_words(was, a, sizeof a, wa, 96), nb = config_words(now, b, sizeof b, wb, 96);
+    int i, j, n = 0;
+    out[0] = '\0';
+    for (i = 0; i < na; i++) {
+        for (j = 0; j < nb && !same_key(wa[i], wb[j]); j++) {}
+        if (j < nb && !strcmp(wa[i], wb[j])) continue;
+        config_diff_entry(out, cap, wa[i], j < nb ? wb[j] : NULL);
+        n++;
+    }
+    for (j = 0; j < nb; j++) {
+        for (i = 0; i < na && !same_key(wa[i], wb[j]); i++) {}
+        if (i < na) continue;
+        config_diff_entry(out, cap, NULL, wb[j]);
+        n++;
+    }
+    if (!n) snprintf(out, cap, "the same entries, in another order");
+    return n;
+}
+
+/* SOA_PAD_STRICT (event-track.md §3): a replay that cannot be shown to be
+ * set up as its recording was is refused rather than warned about. Not
+ * SOA_STRICT, which is hle.c's MMIO switch. */
+static int pad_strict(void)
+{
+    const char* v = getenv("SOA_PAD_STRICT");
+    return v && *v && strcmp(v, "0") != 0;
 }
 
 /* An hour of play is not worth an overwrite: a second run with the same
@@ -646,14 +748,28 @@ static void pad_replay_load(void)
      * through per second of guest time, and the card decides what the game's
      * own menus contain. Replay in the configuration you recorded in. */
     pad_config(now, sizeof now);
-    if (was[0] && strcmp(was, now) != 0)
+    if (was[0] && strcmp(was, now) != 0) {
+        char diff[1024];
+        config_diff(was, now, diff, sizeof diff);
+        fprintf(stderr, "[pad] the configuration differs from the recording's: %s\n", diff);
         fprintf(stderr, "[pad] recorded with %s\n[pad] replaying with %s -- a difference in speed, "
                         "rendering or thread count changes how many frames pass per second of guest "
-                        "time, and a different memory card changes what the game's menus hold, so "
-                        "the input can arrive in the wrong place\n", was, now);
-    else if (!was[0])
+                        "time, a setting or a mod changes the game itself, and a different memory card "
+                        "changes what the game's menus hold, so the input can arrive in the wrong place\n",
+                was, now);
+        if (pad_strict()) {
+            fprintf(stderr, "[pad] SOA_PAD_STRICT: a replay in another configuration is refused (exit 11)\n");
+            exit(11);
+        }
+    } else if (!was[0]) {
         fprintf(stderr, "[pad] %s records no configuration (it predates v2), so nothing can say "
                         "whether this run is set up like the one that made it\n", path);
+        if (pad_strict()) {
+            fprintf(stderr, "[pad] SOA_PAD_STRICT: a recording with no configuration cannot be checked, so it "
+                            "is refused (exit 11)\n");
+            exit(11);
+        }
+    }
     /* Setting both and having one silently do nothing is the trap a scenario
      * author falls into, so name it rather than leaving it to be inferred. */
     script = getenv("SOA_PAD");

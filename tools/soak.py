@@ -312,6 +312,8 @@ RE_CARD_CANNOT = re.compile(r"^\[exi\] cannot write ")
 RE_RUN = re.compile(r"^\[run\] (\d+) game frames,.*?([\d.]+) wall seconds")
 RE_PAD_FILE = re.compile(r"^\[pad\] replaying (\d+) state changes")
 RE_PAD_FILE_TROUBLE = re.compile(r"^\[pad\] (?:cannot read |\S+:\d+ is not )")
+# si.c names each entry of the # config line a replay differs in (event-track.md E1).
+RE_PAD_CONFIG_DIFF = re.compile(r"^\[pad\] the configuration differs from the recording's: ")
 RE_POKE_TROUBLE = re.compile(r"^\[(?:poke|peek)\] SOA_(?:POKE|PEEK): stopped at")
 # What scenario.py itself prints (cmd_run), which only the run_*.log echo has.
 RE_SCENARIO_EXIT = re.compile(r"^\[scenario\] \S+ exited (-?\d+):")
@@ -373,6 +375,7 @@ class Seen:
     generated_events: int | None = None
     pad_file_changes: int | None = None
     pad_file_trouble: str | None = None
+    pad_config_diff: str | None = None
     poke_trouble: str | None = None
     frames: int | None = None
     wall_seconds: float | None = None
@@ -472,6 +475,8 @@ def read_seen(text: str) -> Seen:
             s.frames, s.wall_seconds = int(m.group(1)), float(m.group(2))
         elif m := RE_PAD_FILE.match(line):
             s.pad_file_changes = int(m.group(1))
+        elif RE_PAD_CONFIG_DIFF.match(line) and s.pad_config_diff is None:
+            s.pad_config_diff = line
         elif RE_PAD_FILE_TROUBLE.match(line) and s.pad_file_trouble is None:
             s.pad_file_trouble = line
         elif RE_POKE_TROUBLE.match(line) and s.poke_trouble is None:
@@ -609,11 +614,12 @@ def card_check(s: Seen) -> tuple[scenario.Check, list[str]]:
     return scenario.Check(name, FAIL, f"{s.card_path}: {result}, which the game refuses"), []
 
 
-def pad_check(r: scenario.Report, s: Seen) -> scenario.Check:
+def pad_check(r: scenario.Report, s: Seen, strict: bool = False) -> scenario.Check:
     """scenario.py's pad check, plus a recording (SOA_PAD_FILE) as a source,
-    and the echo's generated count as the number to match."""
+    and the echo's generated count as the number to match. With `strict`, a
+    replay set up unlike its recording fails it (event-track.md E1)."""
     name = "the pad script was understood"
-    trouble = r.pad_trouble or s.pad_file_trouble
+    trouble = r.pad_trouble or s.pad_file_trouble or (s.pad_config_diff if strict else None)
     if trouble:
         return scenario.Check(name, FAIL, trouble, False)
     if r.scripted_events is not None:
@@ -709,6 +715,7 @@ def judge(
     frames_dir: Path | None = None,
     expect_flags: list[tuple[int, int]] | None = None,
     expect_ship_end: bool = False,
+    strict: bool = False,
 ) -> dict:
     """Everything `check` says about one log, as the object summary.json holds."""
     r = scenario.parse_report(text)
@@ -720,7 +727,7 @@ def judge(
         )
         if c.name != "the pad script was understood"
     ]
-    checks.append(pad_check(r, s))
+    checks.append(pad_check(r, s, strict))
     if r.stop_lines:
         checks.append(scenario.Check("no stop line", FAIL, r.stop_lines[0]))
     else:
@@ -831,6 +838,10 @@ def judge(
             seen_warning.add(key)
             questions.append(placed(*q))
     questions += card_questions
+    if s.pad_config_diff and not strict:
+        questions.append(
+            f"{s.pad_config_diff} (check --strict fails a replay set up unlike its recording)"
+        )
     after_rows = None
     if frames_dir is not None and s.traced:
         more, after_rows = after_battle_questions(s, frames_dir)
@@ -1000,6 +1011,7 @@ def cmd_check(args: argparse.Namespace) -> int:
                 frames,
                 args.expect_flag,
                 args.expect_ship_end,
+                args.strict,
             )
         print_result(res)
         results.append(res)
@@ -1130,6 +1142,12 @@ def main(argv: list[str] | None = None) -> int:
         help="add the effect packages these logs loaded to the JSON list at PATH, and say which are new",
     )
     c.add_argument("--json", metavar="PATH", help="write one object per log to PATH")
+    c.add_argument(
+        "--strict",
+        action="store_true",
+        help="a replay whose recording was made in another configuration fails the pad check "
+        "(without it, a question); the runtime's own switch is SOA_PAD_STRICT=1",
+    )
     a = p.parse_args(argv)
     if a.cmd == "check":
         return cmd_check(a)

@@ -10098,3 +10098,40 @@ menu's Debug page and `SOA_ACTION`, each repeating its recipe.** 2026-10-24. Spe
   - `test_savenow.py`, two more: the warp list against the disc, and its shape.
 - **Not in M7b:** the map names on the warp row (Shift-JIS; the font is ASCII), the forced battle and the tick
   unlock on the menu, and the ship battles.
+
+**E1, the event track's strict switch: a replay set up unlike its recording names the entries that differ, and
+with `SOA_PAD_STRICT=1` is refused, exit 11.** 2026-10-24. Spec: `docs/specs/event-track.md`.
+
+- **What was there** [V]: the settings half the plan asked for first was already built: `Setting.recorded` since
+  P6, and each mod's option values after its hash since M16. So E1 is the refusal. A mismatch printed the two whole
+  lines and went on. `SOA_STRICT` is `hle.c`'s MMIO switch, so the replay's is `SOA_PAD_STRICT`.
+- **What it is** [V]:
+  - `runtime/si.c`'s `config_diff` names each entry of the two `# config` lines that differs, keyed by the text
+    before its `=`: `[pad] the configuration differs from the recording's: encounters (recorded double, now
+    half)`, with "not set" for an entry on one side only.
+  - With `SOA_PAD_STRICT=1` (`0` is off), such a replay stops at the game's first controller read with exit 11, and
+    so does a recording with no config line. The log ends at the refusal.
+  - The line names `SOA_BATTLE_FORCE` by its first word (all `battle.c`'s `sscanf` reads), and `SOA_POKE` and
+    `SOA_MEMPOKE` as the FNV-1a of their text, each only when set, so every line recorded without them is
+    unchanged.
+  - `scenario.py`'s `EXIT_MEANINGS[11]`. `soak.py check --strict` fails the pad check on the differing line;
+    without the flag the line is a question.
+- **The run** [V, `build/e1/`]:
+  - The recording: 600 frames headless with the three mods, `SOA_ENCOUNTERS=double` and `SOA_PAD=100:a,200:start`,
+    4 state changes. Its config line ends `encounters=double
+    mods=autotext@1.0:6659ecda,coop@1.0:792e3fe8,encounter-rate@1.0:b0841b27`.
+  - Replayed on `half` with the switch: exit 11 at the first controller read, before any input, naming
+    `encounters (recorded double, now half)` and nothing else.
+  - On `double` with the switch: 4 of 4 replayed over 331 frames, exit 0.
+  - On `half` without it: the same, with the entry named.
+  - `soak.py check` on that last log passes with the line as a question; with `--strict`, the pad check FAILs and
+    exit is 1; the `double` replay's log with `--strict` exits 0.
+- **Tests** [V]:
+  - `test_padrec.py`, four: the refusal naming one entry, against the same pair without the switch and an equal
+    line with it; a v1 file refused, and `0` off; an entry on one side named "not set"; the knobs in the line, a
+    poke's hash moving with its value, none named when unset.
+  - `test_scenario.py`, one: exit 11 in the table, and twice in `si.c`.
+  - `test_soak.py`, one: a question, a FAIL under `--strict`, a pass when alike.
+- **Mutations, each caught** [V]: `pad_strict` answering 0 (both strict tests fail); `pad_knobs` writing nothing
+  (the knobs test fails); `soak.py`'s pad check ignoring `strict` (the soak test fails).
+- **Next:** E2, pad 2 and the host buttons.

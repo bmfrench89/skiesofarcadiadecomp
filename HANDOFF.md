@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1883 |
+| Python tests | 1889 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -421,9 +421,10 @@ washed-out colour and a correct fix would have failed the suite.
 
 ### Start here (for the next session)
 
-**State.** `main` is at 5b59ea6, pushed, CI green. The full pre-push suite passes: 1883 tests in 102 files
-(1842 passed, 41 skipped here; 690 skip with MSVC hidden, so 649 want MSVC). Nothing is uncommitted but the owner's
-`.vscode/`. One session committed to this checkout; use the `orient` skill before choosing work.
+**State.** `main` holds the event track's spec and E1 (2026-10-24), pushed. The full pre-push suite passes: 1889
+tests in 102 files (1848 passed, 41 skipped here; 694 skip with MSVC hidden, so 653 want MSVC). Nothing is
+uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
+choosing work.
 
 **What the last session built (2026-10-22 to 24), in order.** Each has a spec under `docs/specs/` and a FINDINGS
 entry of the same name:
@@ -446,10 +447,11 @@ Owner decisions taken: D-43 (the gameplay core), D-44 (gameplay Q2: the honest s
 fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with it.
 
 **Next, in order.** PLAN-NEXT §0 has the order; this is where it now points.
-1. **The event track** (PLAN-GAMEPLAY-MODS, "The event track (rule 6)", line ~1329): the settings lines first. A
-   "recorded" flag on game-changing `soa.ini` keys and each mod's declared options into the recording's
-   `# config` line, and a strict switch that refuses a replay whose config differs. It is the last item of
-   milestone 2. Write its spec first, against HEAD.
+1. **The event track**, the last item of milestone 2: specified 2026-10-24 in `docs/specs/event-track.md` as E1-E3.
+   The recorded flag and the mods' options were already in the `# config` line. **E1 is built** (FINDINGS "E1"):
+   `SOA_PAD_STRICT=1` refuses a replay whose config differs, exit 11, and the warning names the entries. Next are
+   E2 (pad 2 and the host buttons as `@pad2` and `@host` lines), then E3 (turbo, save now and the debug actions as
+   `@` lines).
 2. Then **ask the owner** (the questions tool) what follows milestone 2. The candidates are milestone 3
    (PLAN-GAMEPLAY-MODS §E), widescreen (M10, V9b), which D-43 put behind the core, and I7 (deltas) or the R2
    status thunks, which the free bits of K12 now allow.

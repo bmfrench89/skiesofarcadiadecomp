@@ -21,6 +21,7 @@ otherwise overwrite the first.
 """
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -119,6 +120,7 @@ int main(int argc, char** argv)
         si_set_config_extra(b);
         free(b);
     }
+    if (getenv("DRIVER_EXTRA_TEXT")) si_set_config_extra(getenv("DRIVER_EXTRA_TEXT")); /* as given */
     si_write(NULL, 0xCC006430u, 4, 0x80u); /* SIPOLL: channel 0 polled every field */
     for (f = 0; f <= last; f++) {
         g_frame = f;
@@ -192,14 +194,25 @@ def driver(tmp_path_factory):
 def run(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
     """One run of the driver. Reports go to stdout, everything si.c says to
     stderr, so the two are never confused for each other."""
+    code, out, err = run_code(driver, tmp_path, mode, env, last, per, reads)
+    assert code == 0, out + err
+    return out, err
+
+
+def run_code(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
+    """run(), for a run that may stop: its exit code, stdout and stderr."""
     e = dict(os.environ)
     for name in (
         "SOA_PAD",
         "SOA_PAD_RECORD",
         "SOA_PAD_FILE",
         "SOA_PAD_STOP",
+        "SOA_PAD_STRICT",
         "SOA_FRAMES",
         "SOA_UNCAP",
+        "SOA_BATTLE_FORCE",
+        "SOA_POKE",
+        "SOA_MEMPOKE",
     ):
         e.pop(name, None)
     # The configuration line a recording carries: pin every switch it names, so
@@ -225,8 +238,7 @@ def run(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
         timeout=120,
         check=False,
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    return proc.stdout, proc.stderr
+    return proc.returncode, proc.stdout, proc.stderr
 
 
 @needs_msvc
@@ -412,6 +424,125 @@ def test_a_long_config_line_arrives_whole_and_a_longer_one_says_it_was_cut(drive
     )
     assert "[pad] the config line was cut at 639 bytes of 800" in err, err
     assert "END" not in rec2.read_text()
+
+
+# --------------------------------------------------------------------------
+# the strict switch (event-track.md E1)
+# --------------------------------------------------------------------------
+
+MODS = "mods=coop@1.0:0000abcd"
+
+
+def record_with(driver, tmp_path, extra, env=None, name="cfg.pad"):
+    rec = tmp_path / name
+    run(
+        driver,
+        tmp_path,
+        "record",
+        {"SOA_PAD_RECORD": str(rec), "DRIVER_EXTRA_TEXT": extra, **(env or {})},
+        last=20,
+    )
+    return rec
+
+
+@needs_msvc
+def test_strict_refuses_a_replay_in_another_configuration_and_names_the_entry(driver, tmp_path):
+    """E1's Done 1. Recorded on double and replayed on half: under
+    SOA_PAD_STRICT the run stops with exit 11 before the guest reads a single
+    report, naming the one entry that differs and not the mod list that does
+    not; without the switch the same pair runs to its end and names it too.
+    The mutation, the switch read but never acted on, runs the first case to
+    its end."""
+    rec = record_with(driver, tmp_path, f"encounters=double {MODS}")
+    half = {"SOA_PAD_FILE": str(rec), "DRIVER_EXTRA_TEXT": f"encounters=half {MODS}"}
+    code, out, err = run_code(driver, tmp_path, "replay", {**half, "SOA_PAD_STRICT": "1"}, last=20)
+    assert code == 11, out + err
+    assert out == "", out  # no report reached the guest
+    said = "[pad] the configuration differs from the recording's: encounters (recorded double, now half)\n"
+    assert said in err, err
+    assert "SOA_PAD_STRICT: a replay in another configuration is refused (exit 11)" in err, err
+    _, err = run(driver, tmp_path, "replay", half, last=20)
+    assert said in err and "[pad] replayed" in err, err
+    _, err = run(
+        driver,
+        tmp_path,
+        "replay",
+        {
+            "SOA_PAD_FILE": str(rec),
+            "DRIVER_EXTRA_TEXT": f"encounters=double {MODS}",
+            "SOA_PAD_STRICT": "1",
+        },
+        last=20,
+    )
+    assert "differs" not in err and "[pad] replayed" in err, err
+
+
+@needs_msvc
+def test_strict_refuses_a_recording_with_no_configuration(driver, tmp_path):
+    """A v1 file, or a hand-written one, cannot be shown to match, so the
+    strict switch refuses it; `0` is the switch off."""
+    rec = tmp_path / "old.pad"
+    rec.write_text("# soa pad recording v1\n3 a\n4 -\n")
+    code, out, err = run_code(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "SOA_PAD_STRICT": "1"}, last=10
+    )
+    assert code == 11 and out == "", out + err
+    assert "a recording with no configuration cannot be checked" in err, err
+    _, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "SOA_PAD_STRICT": "0"}, last=10
+    )
+    assert "records no configuration" in err and "refused" not in err, err
+
+
+@needs_msvc
+def test_an_entry_on_one_side_only_is_named_as_not_set(driver, tmp_path):
+    rec = record_with(driver, tmp_path, f"seed=7 {MODS}")
+    _, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "DRIVER_EXTRA_TEXT": MODS}, last=20
+    )
+    assert "recording's: seed (recorded 7, now not set)\n" in err, err
+    rec = record_with(driver, tmp_path, MODS, name="none.pad")
+    _, err = run(
+        driver,
+        tmp_path,
+        "replay",
+        {"SOA_PAD_FILE": str(rec), "DRIVER_EXTRA_TEXT": f"turbo=battle {MODS}"},
+        last=20,
+    )
+    assert "recording's: turbo (recorded not set, now battle)\n" in err, err
+
+
+def config_line(rec) -> str:
+    return next(ln for ln in rec.read_text().splitlines() if ln.startswith("# config "))
+
+
+@needs_msvc
+def test_the_knobs_that_write_memory_join_the_line(driver, tmp_path):
+    """E1's Done 2: SOA_BATTLE_FORCE by its first word, the two poke lists by
+    a hash that moves with one value; a replay without the same pokes names
+    the entry. With none set the line names none of them, as it always did."""
+    rec = record_with(
+        driver,
+        tmp_path,
+        MODS,
+        {
+            "SOA_BATTLE_FORCE": "0:0:2@3300",
+            "SOA_POKE": "3300:80311AC0=1",
+            "SOA_MEMPOKE": "80000000=1",
+        },
+    )
+    line = config_line(rec)
+    assert " battle_force=0:0:2@3300 " in line, line
+    poke = re.search(r" poke=([0-9a-f]{8}) ", line)
+    assert poke and re.search(r" mempoke=[0-9a-f]{8} ", line), line
+    other = record_with(driver, tmp_path, MODS, {"SOA_POKE": "3300:80311AC0=2"}, name="other.pad")
+    assert f" poke={poke.group(1)} " not in config_line(other), config_line(other)
+    _, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(other), "DRIVER_EXTRA_TEXT": MODS}, last=20
+    )
+    assert "recording's: poke (recorded " in err and ", now not set)" in err, err
+    plain = config_line(record_with(driver, tmp_path, MODS, name="plain.pad"))
+    assert not re.search(r" (battle_force|poke|mempoke)=", plain), plain
 
 
 # --------------------------------------------------------------------------

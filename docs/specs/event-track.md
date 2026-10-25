@@ -4,6 +4,9 @@ Written 2026-10-24 against a6ed71b, from [PLAN-GAMEPLAY-MODS.md](../PLAN-GAMEPLA
 and rule 6 itself: *everything that changes the game is recorded*. It is the last item of milestone 2 (that plan's
 milestone table, row 2). M8 has landed, so the hotkey and overlay lines the plan held back for it are in scope here.
 
+**E1 built 2026-10-24** (FINDINGS "E1"): Done lines 1 to 3. *As built:* the refusal comes at the game's first
+controller read, where the replay is loaded, and the log ends there.
+
 **Why.** A pad recording is how a session is kept: a bug report, a soak's input, a race. Today four things change the
 game mid-run and never reach the file: pad 2, the host buttons a mod reads, turbo, and the menu's save-now and debug
 actions. A replay of such a session silently plays a different game. And when the `# config` line differs, the replay

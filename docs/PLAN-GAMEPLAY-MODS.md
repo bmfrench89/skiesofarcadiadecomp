@@ -89,7 +89,7 @@ Sizes are evenings, as in PLAN.md: **hours**, **a day**, **several days**, **wee
 5. **Hooks never go where the game waits on an interrupt.** A `hooks.txt` entry strips `irq_poll` from every back-edge of its function. The research marks each proposed site; the card writer `fn_801A3B30` and the AI walker `fn_8008A424` are the two to keep `hooks.txt` away from.
 6. **Everything that changes the game is recorded.** Settings that change the game, DLL inputs, hotkeys and network events go into the pad recording's event track, or a modded session cannot be replayed (section F's event track).
    - Its settings lines come first, in milestone 2; the hotkey and overlay lines wait on M8.
-   - **Settings are already recorded (P6, 24d9235 and 79c9ad8).** The recording's `# config` line names each setting that changes the game, as it is in effect: the seed now, and P1's, P10's, P11's and M11a's keys as they land. A replay made with a different value warns. Refusing a mismatch outright waits for the event track (specs/comfort-pack.md 3.3).
+   - **Settings are already recorded (P6, 24d9235 and 79c9ad8).** The recording's `# config` line names each setting that changes the game, as it is in effect: the seed now, and P1's, P10's, P11's and M11a's keys as they land. A replay made with a different value warns, naming the entry. Since E1 (2026-10-24, specs/event-track.md), `SOA_PAD_STRICT=1` refuses it outright, exit 11.
    - P10's pad 2, hold-to-skip and the chord toggles are not in the recording until the event track lands, so those sessions cannot be replayed yet. Each logs that once per run.
 7. **No completion check compares two live runs.** Loads run on the wall clock, so two live runs differ even with no mod (checked here: 22 of 40 title hashes).
    - **A check is one of:**
@@ -1240,7 +1240,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
   - P1 reads its preset (off, half, normal, double) from `SOA_ENCOUNTERS`, which a new `encounters` line in `settings.c`'s `k_settings` sets from `soa.ini` (a relink). M16 later makes it a declared option.
   - P6's and P10's checks close without R0, both in `battle.scn`'s deck fight; P10's pad 2 is scripted through an environment variable the mod reads. Both repeat on R0 once it lands.
   - P10 sessions cannot be replayed until pad 2 goes into the event track (rule 6); the mod logs that once per run.
-  - P1's preset and P6's seed are in the recording's `# config` line since P6 (24d9235, 79c9ad8), and a replay with a different value warns (rule 6). The event track's strict refusal comes in milestone 2.
+  - P1's preset and P6's seed are in the recording's `# config` line since P6 (24d9235, 79c9ad8), and a replay with a different value warns (rule 6). The event track's strict refusal came in milestone 2 (E1, `SOA_PAD_STRICT`).
 - **Slices that must land first:**
   - T9 (names) before T3 and R0, so nothing new is written against raw hex;
   - T4 before N10 (its fight list);
@@ -1326,11 +1326,11 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Load `mod.dll` from a shadow copy in `build/modcache`, so it can be rebuilt while the game runs.
   - A reload at the safe point must drop the mod's callbacks, re-wire the dispatchers, flush the texture cache, restore original values before re-applying `*= k`, and log the new hash as an event.
   - A Lua host is a separate, later slice.
-- **The event track (rule 6)** — *days for the event lines; hours for the rest.* The settings lines come first (milestone 2); the hotkey and overlay lines once M8 lands. **Specified 2026-10-24** in [specs/event-track.md](specs/event-track.md) as E1-E3: the recorded flag and M16's option values were already in the line, so what is left is the strict switch, pad 2 with the host buttons, and the `@` event lines.
+- **The event track (rule 6)** — *days for the event lines; hours for the rest.* The settings lines come first (milestone 2); the hotkey and overlay lines once M8 lands. **Specified 2026-10-24** in [specs/event-track.md](specs/event-track.md) as E1-E3: the recorded flag and M16's option values were already in the line, so what is left is the strict switch, pad 2 with the host buttons, and the `@` event lines. **E1, the strict switch, built the same day** (FINDINGS "E1").
   - A "recorded" flag on game-changing entries of `settings.c`'s `k_settings` (checked here; P1's planned `encounters` line is one), plus each loaded mod's declared option values (M16), building the `# config` line. Today a mod enters that line only as `dir:hash` over `mod.ini`, `patches.txt` and `mod.dll` (`mod.c:865`, `:935`), so an option set in `soa.ini`, such as R3's difficulty, is invisible to it.
   - `@frame kind key=value` lines for hotkeys, chords, overlay actions and mid-run changes, fed to M8's queue on replay.
   - Pad 2's input, for P10, with the settings lines. The recording holds port 1 only, so until pad 2 is in it a co-op session cannot be replayed; P10's mod logs that once per run.
-  - A strict switch for `soak.py`, R0 and T6 that refuses a mismatch; today it only warns (`si.c:573-577`).
+  - A strict switch for `soak.py`, R0 and T6 that refuses a mismatch; today it only warns (`si.c:573-577`). *Built as E1:* `SOA_PAD_STRICT=1`, and `soak.py check --strict`.
   - *Done, the settings lines:* under the strict switch, a recording made with P1 on double is refused on half, and without the switch the log names the mismatch.
   - *Done, pad 2:* a co-op recording holding at least one pad-2 press on a co-op member's turn replays with no second pad connected. In that run the `[si]` log, written after the filter (`si.c:763`), shows each recorded pad-2 press on port 1 at its frame. Deleting one pad-2 line from the recording is the mutation: the `[si]` log then no longer shows that press at its frame.
   - *Done, the event lines (after M8):*

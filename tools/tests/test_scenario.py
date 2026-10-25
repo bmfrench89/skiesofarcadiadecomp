@@ -525,6 +525,14 @@ def test_exit_10_is_a_mod_faulting_in_a_battle_event():
     assert "_Exit(10);" in source
 
 
+def test_exit_11_is_the_strict_replay_refusing():
+    """si.c refuses a replay set up unlike its recording under SOA_PAD_STRICT
+    (event-track.md E1) with exit 11; the runtime's source still says so."""
+    assert "SOA_PAD_STRICT" in scenario.EXIT_MEANINGS[11]
+    source = (scenario.ROOT / "runtime" / "si.c").read_text(encoding="utf-8")
+    assert source.count("exit(11);") == 2  # another configuration, and none at all
+
+
 # --------------------------------------------------------------------------
 # the library itself
 # --------------------------------------------------------------------------

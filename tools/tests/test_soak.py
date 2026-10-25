@@ -311,6 +311,38 @@ def test_the_run_echo_is_read_for_its_exit_and_pad_count():
     assert soak.judge(echo.replace("exited 0:", "exited 5:"), "x")["verdict"] == "FAIL"
 
 
+CONFIG_DIFF = (
+    "[pad] the configuration differs from the recording's: encounters (recorded double, now half)"
+)
+
+
+def replay_log(diff: bool) -> str:
+    """soak_log() driven by a recording rather than a script, set up like it
+    or (diff) not, as si.c says it (event-track.md E1)."""
+    lines = ["[pad] replaying 40 state changes from x.pad, last at frame 5000"]
+    if diff:
+        lines.append(CONFIG_DIFF)
+    return soak_log().replace("[si] 12 scripted controller events", "\n".join(lines))
+
+
+def test_a_replay_unlike_its_recording_is_a_question_and_fails_under_strict(tmp_path):
+    """Without --strict the differing entries are a question and the verdict
+    stands; with it the pad check fails on them. The same replay set up like
+    its recording passes both ways, so the strict check is the line's doing."""
+    asked = soak.judge(replay_log(True), "x.log")
+    assert asked["verdict"] == "pass", asked["checks"]
+    assert any(q.startswith(CONFIG_DIFF) for q in asked["questions"]), asked["questions"]
+    strict = soak.judge(replay_log(True), "x.log", strict=True)
+    assert status(strict, "the pad script was understood") == "FAIL" and strict["verdict"] == "FAIL"
+    assert not any(q.startswith(CONFIG_DIFF) for q in strict["questions"]), strict["questions"]
+    alike = soak.judge(replay_log(False), "x.log", strict=True)
+    assert alike["verdict"] == "pass" and alike["questions"] == [], alike
+    log = tmp_path / "replay.log"
+    log.write_text(replay_log(True), encoding="utf-8")
+    assert soak.main(["check", str(log)]) == 0
+    assert soak.main(["check", str(log), "--strict"]) == 1
+
+
 def test_check_exits_1_on_a_failure_and_writes_one_object_per_log(tmp_path):
     """The exit status is what a batch runner reads; summary.json is what a
     report is built from, so a missing log gets an object too."""
