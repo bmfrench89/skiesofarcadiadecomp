@@ -1326,7 +1326,7 @@ These belong in PLAN-60FPS-MODS.md (worked by another session) or PLAN.md. They 
   - Load `mod.dll` from a shadow copy in `build/modcache`, so it can be rebuilt while the game runs.
   - A reload at the safe point must drop the mod's callbacks, re-wire the dispatchers, flush the texture cache, restore original values before re-applying `*= k`, and log the new hash as an event.
   - A Lua host is a separate, later slice.
-- **The event track (rule 6)** — *days for the event lines; hours for the rest.* The settings lines come first (milestone 2); the hotkey and overlay lines once M8 lands.
+- **The event track (rule 6)** — *days for the event lines; hours for the rest.* The settings lines come first (milestone 2); the hotkey and overlay lines once M8 lands. **Specified 2026-10-24** in [specs/event-track.md](specs/event-track.md) as E1-E3: the recorded flag and M16's option values were already in the line, so what is left is the strict switch, pad 2 with the host buttons, and the `@` event lines.
   - A "recorded" flag on game-changing entries of `settings.c`'s `k_settings` (checked here; P1's planned `encounters` line is one), plus each loaded mod's declared option values (M16), building the `# config` line. Today a mod enters that line only as `dir:hash` over `mod.ini`, `patches.txt` and `mod.dll` (`mod.c:865`, `:935`), so an option set in `soa.ini`, such as R3's difficulty, is invisible to it.
   - `@frame kind key=value` lines for hotkeys, chords, overlay actions and mid-run changes, fed to M8's queue on replay.
   - Pad 2's input, for P10, with the settings lines. The recording holds port 1 only, so until pad 2 is in it a co-op session cannot be replayed; P10's mod logs that once per run.
