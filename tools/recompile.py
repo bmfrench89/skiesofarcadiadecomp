@@ -638,12 +638,26 @@ def post_link_problems(
     )
 
 
+# A compiler's or linker's error line -- cl's "x.c(1): error C2065:", link's
+# "LINK : fatal error LNK1104:", gcc's and clang's "x.c:1:2: error:" -- and not
+# a warning whose text says "error", as cl's C4554 ("possible error") does.
+RE_CC_ERROR = re.compile(r":\s*(?:fatal\s+)?error\b", re.I)
+
+
+def error_lines(proc) -> list[str]:
+    """A failed command's error lines, from stdout and stderr both: clang
+    writes its errors to stderr, cl to stdout."""
+    return [
+        ln
+        for ln in ((proc.stdout or "") + (proc.stderr or "")).splitlines()
+        if RE_CC_ERROR.search(ln)
+    ]
+
+
 def fail_reason(proc) -> str:
-    """The line of a failed command that says why, from stdout and stderr
-    both: clang writes its errors to stderr, cl to stdout."""
-    text = (proc.stdout or "") + (proc.stderr or "")
-    errs = [ln for ln in text.splitlines() if "error" in ln.lower()]
-    return errs[0] if errs else text[-300:]
+    """The line of a failed command that says why."""
+    errs = error_lines(proc)
+    return errs[0] if errs else ((proc.stdout or "") + (proc.stderr or ""))[-300:]
 
 
 def progress_label(cmd: list[str], cwd: Path, out: Path, exe: Path) -> str:
@@ -720,7 +734,21 @@ def run_plan(
                 print(f"built {where}")
             continue
         if proc.returncode != 0:
-            print(((proc.stdout or "") + (proc.stderr or ""))[-2000:], file=sys.stderr)
+            # The errors themselves: the tail of a cl run over every runtime
+            # file is its warnings and file names, with the error long gone by.
+            errs = error_lines(proc)
+            print(
+                "\n".join(errs[:20])
+                if errs
+                else ((proc.stdout or "") + (proc.stderr or ""))[-2000:],
+                file=sys.stderr,
+            )
+            if len(errs) > 20:
+                print(f"... and {len(errs) - 20} more error line(s)", file=sys.stderr)
+            print(
+                f"FAIL: {progress_label(cmd, cwd, out, exe)} exited {proc.returncode}",
+                file=sys.stderr,
+            )
             return 1
         made = next((a[3:].lstrip(":") for a in cmd if a.startswith("/Fe")), "")
         if made and Path(made) == exe:

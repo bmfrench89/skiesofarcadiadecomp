@@ -8,6 +8,7 @@ read back here into the bytes it stands for.
 
 import hashlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -175,3 +176,34 @@ def test_the_sysroot_not_as_recorded_is_refused_before_the_build(monkeypatch, tm
     (tree / "a.h").write_bytes(b"a\n")
     assert recompile.android_sysroot_problem(tmp_path) is None
     assert "no " in recompile.android_sysroot_problem(tmp_path / "none")
+
+
+def test_a_failed_link_says_its_error_not_the_tail_of_its_warnings(tmp_path, monkeypatch, capsys):
+    """A failed step prints its error lines. cl compiling every runtime file
+    writes warnings and file names after an error, and the 2000-character tail
+    printed before showed only those, the error gone (FINDINGS "H17f"). A
+    warning whose text says "possible error" is not one."""
+    noise = [f"runtime{i}.c" for i in range(400)]
+    text = "\n".join(
+        [
+            r"C:\src\soafma.c(145): warning C4554: '>>': check operator precedence for possible error",
+            r"C:\src\gxv.c(2197): error C2065: 'g_frames_seen': undeclared identifier",
+            *noise,
+            "Generating Code...",
+        ]
+    )
+    monkeypatch.setattr(
+        recompile.toolchain,
+        "cc",
+        lambda cmd, cwd, prof: subprocess.CompletedProcess(cmd, 2, text, ""),
+    )
+    exe = tmp_path / "soa.exe"
+    plan = [(["cl", "/Fe" + str(exe)], Path("."))]
+    assert recompile.run_plan(plan, toolchain.MSVC, tmp_path, exe, False) == 1
+    err = capsys.readouterr().err
+    assert "gxv.c(2197): error C2065: 'g_frames_seen'" in err
+    assert "C4554" not in err and "runtime399.c" not in err
+    assert "FAIL: link exited 2" in err
+    assert recompile.fail_reason(subprocess.CompletedProcess([], 2, text, "")).endswith(
+        "undeclared identifier"
+    )

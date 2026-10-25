@@ -373,7 +373,7 @@ python -m pytest tools/tests -q
 1475 passed, 41 skipped in 977.75s
 ```
 
-1903 tests in 103 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
+1904 tests in 103 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
 when it is there and skip without it (the counts below are 2026-10-09's, at 1516, before
 R5c's five in `test_setup.py`, which run on Windows with llvm-mingw, M6's 32 in `test_mods.py`, `test_progress.py`'s 13,
 reach's 95, M16's 47, M17's 22, T10's 13, P1b's 14, H20's 7, M16b's 3, M8a's 11 and M8b's 2). The count you see depends

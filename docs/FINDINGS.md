@@ -10356,3 +10356,38 @@ the owner's D-45, its second item.
   bytes the game reads still wait), so that the slices' GPU time leaves the critical path. Then whether the
   cutscene's 33 ms without interpolation is the game's own work or its own pacing, which matters for the Steam Deck
   more than for smooth motion.
+
+**H17f: the screen copy left in flight, measured, gave nothing, and was taken out; what the cutscene's frame costs
+instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
+
+- **What was tried** [V, the patch kept outside the tree]: the frame's last screen copy submitted without waiting
+  unless the producer reads the picture (a `CP_SYNC` bit for PNGs, hashes and `check`) or a copy to texture is to
+  land; the consumer finishing it (fence, the real picture to gxr, the slot published) before it records anything
+  more or on its idle, under a lock for the producer's `reset_efb`; the slices' copies recorded into one submission,
+  their native passes dropped when nothing reads them. It ran as built: 4286 of 4600 frames of the battle scenario
+  left in flight, 314 waited for a copy to land, the self test passing.
+- **The measurement** [V, `build/e2/unc-disp-h17f.log`, `unc-disp-wait.log`, `unc3-async.log`, `unc3-wait.log`]:
+  frames 4100-4599 uncapped in display mode at 85 Hz, each A/B in one build with `SOA_GPU_SCREEN_WAIT=1` (every
+  frame waited for, as before): p50 36.2 ms against 36.3, the frame gate's waits 2.41 s against 2.25. At three
+  times the EFB (`SOA_GPU_SCALE=3`), where the GPU takes p50 22.7 ms and p95 42 a frame: p50 64.9 against 63.2,
+  gate waits 37.6 s against 40.5. Taken out, since it bought nothing for what it added.
+- **Why it could not** [V, the same runs]: with one command buffer the consumer cannot record frame N+1 until the
+  GPU has finished frame N, so not waiting at N's end moves the wait to N+1's first command; the gate at N+1's end
+  waits for the consumer either way. Only a second command buffer in flight overlaps the two, and at scale 1 the
+  cutscene is not waiting on the GPU at all.
+- **What the cutscene's frame costs in display mode** [V, a per-frame log of the gate's and the setup's time,
+  `build/e2/unc-disp-tmp.ilog`]: at frames 4100-4599 the producer spends p50 9.13 ms a frame in vertex setup
+  (building each draw twice) and waits p50 3.86 ms at the frame gate for the consumer to finish recording; at
+  frames 3000-3999, 2.67 ms and none. 97% of the run's gate waits fall in those 500 frames. Over the whole run,
+  interpolation off against display: setup 8.28 s against 11.58, gate waits 0.04 s against 2.30, the same 5.37
+  million texture lookups (the in-between draw reuses the real draw's textures), 5.4 against 10.8 million draws.
+  So the cost to cut is the producer's second draw and the consumer's recording of it, not the GPU's time.
+- **Found on the way** [V, `tools/recompile.py`]: a failed `--link` printed the last 2000 characters of cl's output,
+  which after a compile error in `gxv.c`'s backend build were file names and "Generating Code...", and exited 1
+  with no message. It now prints the error lines (cl's, link's, gcc's and clang's, and not a warning whose text
+  says "possible error", which `fail_reason` used to pick for a mod) and a `FAIL` line naming the step. Checked by
+  planting an `#error` in the backend build. *Test:* `test_recompile_inputs.py`, one, on 400 lines of noise after
+  the error. *Mutation:* the old tail fails it, showing only the file names.
+- **Next:** a profile of the producer's vertex setup in the cutscene in display mode, to see what building the
+  second draw spends; then the consumer's recording of it (7.3 million draws rebuilt by clipping in display mode
+  against 2.0 million off, each slice's lerp on the CPU).
