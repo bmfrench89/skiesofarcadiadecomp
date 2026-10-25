@@ -64,6 +64,11 @@ static void interp_pace(double hz);
 static HMONITOR g_monitor; /* H17c-b: the monitor the display's rate was read from */
 static HANDLE g_fresh_ev;  /* H17c-b: set when the GPU publishes a frame, which the loop waits on */
 static void fresh_signal(void) { SetEvent(g_fresh_ev); }
+/* H17d: why interp_pace shows no in-between image, as the player is told it
+ * (NULL while they are shown); and the rate they are shown at. */
+static char g_interp_tell[80];
+static int g_interp_off;
+static unsigned g_interp_hz;
 static int g_pace_ready;   /* the presenter is chosen, so a move may pace again */
 
 /* ---- the paced presenter (PLAN-60FPS-MODS H8) ----------------------------
@@ -617,6 +622,27 @@ static double filter_on_cpu(LARGE_INTEGER t0)
     return filter_image(t0, src, w, h);
 }
 
+/* H17d (D-45's visible fallback): what smooth motion is doing, told to the
+ * player in a notice when it changes -- shown, refused and why, paused over
+ * budget, back -- and logged, so a machine that cannot keep up says so. */
+static void interp_tell(void)
+{
+    static int was = -1;
+    int now;
+    char line[120];
+    if (!gxr_interp() || !g_pace_ready) return;
+    now = g_interp_off ? 2 : gxr_interp_running() ? 1 : 0;
+    if (now == was) return;
+    if (now == 2) snprintf(line, sizeof line, "Smooth motion off: %s", g_interp_tell);
+    else if (now == 0) snprintf(line, sizeof line, "Smooth motion paused: the game is running behind");
+    else if (was == 0) snprintf(line, sizeof line, "Smooth motion on again");
+    else if (g_interp_hz) snprintf(line, sizeof line, "Smooth motion: %u images a second, the display's rate", g_interp_hz);
+    else snprintf(line, sizeof line, "Smooth motion: 60 images a second");
+    menu_notice(line, 4000);
+    fprintf(stderr, "[notice] %s\n", line);
+    was = now;
+}
+
 /* H17c-b: the refresh of the monitor the window is on, as its display mode
  * gives it (DWM's timing is the primary display's), rounded as RT64 rounds
  * it; 0 when it cannot be read. */
@@ -659,6 +685,10 @@ static void interp_pace(double hz)
         gxv_present_interp(g_mid_ivl);
         gxr_interp_show(!why);
         if (!why) g_interval = 1;
+        g_interp_off = why != NULL;
+        g_interp_hz = rate;
+        snprintf(g_interp_tell, sizeof g_interp_tell, "%s",
+                 g_turbo_shown ? "turbo is on" : "the display refreshes under 30 times a second");
         if (said != (int)(why ? 0 : rate)) {
             said = (int)(why ? 0 : rate);
             if (!why)
@@ -682,6 +712,14 @@ static void interp_pace(double hz)
     else if (!n) why = "the display is not at a whole multiple of 60 Hz";
     else if (g_turbo_shown) why = "turbo is on, which shows 60 real frames a second instead";
     g_mid_ivl = why ? 0 : n;
+    g_interp_off = why != NULL;
+    g_interp_hz = 0;
+    if (!g_vk && (!g_ring_on || !g_dxgi))
+        snprintf(g_interp_tell, sizeof g_interp_tell, "this presenter cannot pace them");
+    else if (!n)
+        snprintf(g_interp_tell, sizeof g_interp_tell, "the display is at %.0f Hz; interp = display serves any rate", hz);
+    else
+        snprintf(g_interp_tell, sizeof g_interp_tell, "turbo is on");
     if (g_vk) gxv_present_interp(g_mid_ivl); /* V12b: the GPU's presenter shows them */
     gxr_interp_show(g_mid_ivl != 0);
     if (g_mid_ivl) g_interval = g_mid_ivl;
@@ -1172,6 +1210,7 @@ static unsigned __stdcall ui_thread(void* arg)
             present(1);
         }
         menu_pad();
+        interp_tell();
         /* woken by input, by the GPU publishing a frame (H17c-b: one found at
          * the next poll could be a timer tick late), or after 8 ms */
         MsgWaitForMultipleObjects(g_fresh_ev ? 1u : 0u, g_fresh_ev ? &g_fresh_ev : NULL, FALSE, 8, QS_ALLINPUT);

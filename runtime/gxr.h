@@ -91,6 +91,8 @@ void gxr_interp_show(int on);
  * (interp_rate_round's; 0 none), from which each frame takes its images. */
 int gxr_interp_display(void);
 void gxr_interp_rate(unsigned hz);
+/* H17d: the in-between stream runs now, the budget's say included. */
+int gxr_interp_running(void);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

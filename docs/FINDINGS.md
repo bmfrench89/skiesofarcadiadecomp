@@ -10294,3 +10294,21 @@ Spec: `docs/specs/interp-display.md`; the owner's D-45.
   run with loads in it (94.6% without the wait's own artefact); Done 6 (60 Hz) and 7 (another monitor) wait for the
   owner's displays at session D.
 - **Next:** D-45's other items: the fallback the player sees, Android's 60 Hz request, session D's classes (H18).
+
+**H17d: the player told what smooth motion is doing.** 2026-10-25. Spec: `docs/specs/interp-display.md` section 6;
+the owner's D-45, its second item.
+
+- **What it is** [V, `runtime/menu.c`, `window.c`, `gxr.c`]: a notice in the picture's lower-left corner for four
+  seconds, drawn over either presenter with the menu open or closed, posted by the window whenever the in-between
+  images are shown, refused (with its reason), paused over budget or back (`gxr_interp_running`), and logged as
+  `[notice]`.
+- **The runs** [V, `build/e2/notice-*.log`, the `title` scenario in a window at 85 Hz]: `interp = 1` on the GPU and on
+  the CPU, "Smooth motion off: the display is at 85 Hz; interp = display serves any rate"; `display` on the GPU,
+  "Smooth motion: 85 images a second, the display's rate"; the CPU renderer with in-between images forced
+  (`SOA_INTERP_ANYRATE`), "Smooth motion paused: the game is running behind", then "Smooth motion on again". In that
+  last run the stream was paused before the window first looked (the CPU renderer's first frames are slow), so its
+  first notice is the pause.
+- **Tests** [V]: `test_menu.py`, one: the band and its text with the menu closed, the overlay drawing for it, and
+  nothing once it is taken away. *Mutation:* the notice drawn only with the menu open.
+- **Not here:** the SDL window posts no notice yet (`window_sdl.c` untouched, which would ask for the Linux check).
+- **Next:** D-45's fourth item, Android's 60 Hz request, which waits for the GPU backend on a phone; and session D.

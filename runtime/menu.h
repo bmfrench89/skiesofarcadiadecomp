@@ -55,4 +55,11 @@ void menu_draw(uint8_t* bgra, int w, int h, int stride);
  * the menu, 0 when the menu is closed. */
 int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride);
 
+/* H17d (docs/specs/interp-display.md): a line in the picture's lower-left
+ * corner for `ms` milliseconds, the menu open or not, drawn by menu_draw and
+ * menu_draw_overlay -- what smooth motion is doing, told to the player.
+ * NULL or 0 ms takes it away. Whether one shows now. */
+void menu_notice(const char* text, unsigned ms);
+int menu_notice_showing(void);
+
 #endif

@@ -2568,6 +2568,13 @@ static int interp_on(void)
            (g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP);
 }
 
+/* H17d: whether the in-between stream runs now, as the budget leaves it: 0
+ * while it is paused over budget, or a window refuses it. */
+int gxr_interp_running(void)
+{
+    return g_interp && g_mid_on && plat_load32(&g_mid_allowed);
+}
+
 void gxr_interp_show(int on)
 {
     plat_cas32(&g_mid_allowed, on ? 0 : 1, on ? 1 : 0);

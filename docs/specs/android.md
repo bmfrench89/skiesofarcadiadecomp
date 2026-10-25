@@ -474,7 +474,11 @@ read from the `[audio]` line of a pulled log.
 ### 3.12 Pacing, power and the savepoint
 
 - **Pacing:** `ANativeWindow_setFrameRate(window, 30, FRAME_RATE_COMPATIBILITY_DEFAULT)` on every new surface
-  (SDL does not call it), and 60 under turbo (research §9).
+  (SDL does not call it), and 60 under turbo (research §9). *Amended 2026-10-25 (PLAN-NEXT D-45,
+  research/60fps-across-ports.md):* with in-between images on (`interp = 1` or `display`) and the GPU backend running
+  on the phone, 60, as Google's own example and PPSSPP's default ask, so a 90 or 120 Hz phone drops to 60 rather than
+  judder; under Battery game mode or short thermal headroom (read no more than once every 10 s), back to 30 with
+  them off. The CPU renderer stays at 30: it cannot hold the in-between images (FINDINGS "H17a").
 - **Power:** an `APerformanceHint` session over the guest thread and the render workers, aiming at 33.3 ms. No
   affinity pinning (research §9).
 - **The render pool:** the default worker count (`gxr.c:2087`) on Android counts the cores whose `cpu_capacity`

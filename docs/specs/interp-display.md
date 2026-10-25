@@ -147,3 +147,25 @@ Each line names its command and the mutation that proves the check can fail.
    images at the same refreshes (one in-between at 0.5, then the real frame).
 7. Moving the window to a monitor at another rate retargets it: the `[interp]` line names the new rate (a check on a
    second display, or the owner's at session D).
+
+## 6. H17d: the player told
+
+Written and built 2026-10-25, D-45's second item, a fallback the player sees (research: BlueWake's counter that
+read 60 while smooth motion was paused, ogdanimal's settings opened once on a slow device). Until now a machine that
+could not keep up, or a display interp = 1 cannot pace, said so in the log alone.
+
+- **What it is:** a notice in the picture's lower-left corner for four seconds, on a dimmed band in the menu's font,
+  drawn over either presenter whether or not the menu is open (`menu_notice`; `menu_draw_overlay` now draws for a
+  notice too). The window watches what the in-between images are doing and posts one when it changes: shown ("Smooth
+  motion: 85 images a second, the display's rate", or 60), refused with its reason ("Smooth motion off: the display
+  is at 85 Hz; interp = display serves any rate", the presenter, turbo), paused over budget ("Smooth motion paused:
+  the game is running behind") and back ("Smooth motion on again"); each is logged as `[notice]`. Nothing with
+  `interp = 0`.
+- **Not here:** the SDL window (Linux) draws a notice but posts none yet; touching `window_sdl.c` asks for the Linux
+  check in a container, left for the slice that next changes it.
+- **Done:**
+  1. `test_menu.py`: with the menu closed a notice draws its band and its text, the overlay says it drew, and taken
+     away neither does. *Mutation:* the notice drawn only with the menu open.
+  2. On this PC in a window: each notice in its run's log -- `interp = 1` at 85 Hz on the GPU and on the CPU, refused
+     with the display's rate; `display` at 85 Hz, shown; the CPU renderer with in-between images forced at 85 Hz
+     (`SOA_INTERP_ANYRATE`), paused over budget and back.

@@ -81,6 +81,20 @@ int main(int argc, char** argv)
         unsigned k;
         if (!strcmp(cmd, "open")) { menu_open(); printf("open %d\n", menu_is_open()); continue; }
         if (!strcmp(cmd, "state")) { int f, t; if (scanf("%d %d", &f, &t) != 2) return 1; menu_set_state(f, t); continue; }
+        if (!strcmp(cmd, "notice")) { /* H17d: "notice MS text_with_underscores", "-" for none */
+            unsigned ms;
+            char t[96], *q;
+            if (scanf("%u %95s", &ms, t) != 2) return 1;
+            for (q = t; *q; q++) if (*q == '_') *q = ' ';
+            menu_notice(strcmp(t, "-") ? t : NULL, ms);
+            printf("notice %d\n", menu_notice_showing());
+            continue;
+        }
+        if (!strcmp(cmd, "overlay")) {
+            static unsigned char ov[640 * 480 * 4];
+            printf("overlay %d\n", menu_draw_overlay(ov, 640, 480, 640 * 4));
+            continue;
+        }
         if (!strcmp(cmd, "draw")) {
             int w, h, x, y;
             char path[256];
@@ -283,6 +297,31 @@ def test_a_closed_menu_draws_nothing(driver, tmp_path):
     w, h = 640, 480
     buf = draw(driver, tmp_path, "", w, h)
     assert all(px(buf, w, x, y) == background(x, y) for x, y in ((0, 0), (320, 240), (639, 479)))
+
+
+def test_a_notice_shows_in_the_corner_with_the_menu_closed(driver, tmp_path):
+    """H17d: a notice draws a dimmed band in the lower-left corner whether or
+    not the menu is open, its first glyph the font's, and the GPU's overlay
+    says it drew; taken away, nothing is drawn and the overlay draws nothing.
+    The mutation, the notice drawn only with the menu open, fails the first
+    case."""
+    w, h = 640, 480
+    buf = draw(driver, tmp_path, "notice 60000 Smooth_motion_off", w, h)
+    s = 2  # the scale the panel would have at 640x480
+    x0, bh = 6 * s, 2 * 9 * s
+    y0 = h - bh - 9 * s
+    assert px(buf, w, x0 + 1, y0 + 1) == tuple(c // 4 + 8 for c in background(x0 + 1, y0 + 1))
+    assert px(buf, w, 320, 100) == background(320, 100)  # the rest untouched
+    glyph = [".####", "#....", "#....", ".###.", "....#", "....#", "####."]  # S
+    tx, ty = x0 + 6 * s, y0 + 9 * s // 2 + s  # text() leaves a row above each glyph
+    for r, bits in enumerate(glyph):
+        for c, bit in enumerate(bits):
+            lit = px(buf, w, tx + c * s, ty + r * s) == (0xE8, 0xE8, 0xE8)  # INK
+            assert lit == (bit == "#"), (r, c)
+    assert run(driver, "notice 60000 x overlay") == ["notice 1", "overlay 1"]
+    assert run(driver, "notice 60000 x notice 0 - overlay") == ["notice 1", "notice 0", "overlay 0"]
+    gone = draw(driver, tmp_path, "notice 60000 x notice 0 -", w, h)
+    assert px(gone, w, x0 + 1, y0 + 1) == background(x0 + 1, y0 + 1)
 
 
 def test_the_panel_and_its_text(driver, tmp_path):

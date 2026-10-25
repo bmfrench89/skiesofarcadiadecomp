@@ -557,9 +557,28 @@ static void text(const Canvas* c, int x, int y, const char* s, uint32_t rgb)
 
 static void draw(uint8_t* bgra, int w, int h, int stride, int alpha);
 
+/* H17d: the notice and until when it shows. */
+static char g_notice[96];
+static uint64_t g_notice_until;
+
+void menu_notice(const char* text, unsigned ms)
+{
+    snprintf(g_notice, sizeof g_notice, "%s", text && ms ? text : "");
+    g_notice_until = text && ms ? plat_mono_ns() + (uint64_t)ms * 1000000u : 0;
+}
+
+int menu_notice_showing(void)
+{
+    if (g_notice[0] && plat_mono_ns() >= g_notice_until) g_notice[0] = '\0';
+    return g_notice[0] != '\0';
+}
+
+static void notice_draw(uint8_t* bgra, int w, int h, int stride, int alpha);
+
 void menu_draw(uint8_t* bgra, int w, int h, int stride)
 {
     draw(bgra, w, h, stride, 0);
+    notice_draw(bgra, w, h, stride, 0);
 }
 
 /* M8b: the same as an overlay the GPU blends over the picture: the buffer
@@ -567,11 +586,38 @@ void menu_draw(uint8_t* bgra, int w, int h, int stride)
  * the menu is open and was drawn, 0 (and nothing written) when it is not. */
 int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride)
 {
-    int j;
-    if (!menu_is_open() || !bgra || w <= 0 || h <= 0) return 0;
+    int j, open = menu_is_open(), told = menu_notice_showing();
+    if ((!open && !told) || !bgra || w <= 0 || h <= 0) return 0;
     for (j = 0; j < h; j++) memset(bgra + (size_t)j * (size_t)stride, 0, (size_t)w * 4);
     draw(bgra, w, h, stride, 1);
+    notice_draw(bgra, w, h, stride, 1);
     return 1;
+}
+
+/* H17d: the notice on a dimmed band in the lower-left corner, at the scale
+ * the menu's panel would have. */
+static void notice_draw(uint8_t* bgra, int w, int h, int stride, int alpha)
+{
+    Canvas c;
+    int n, bw, bh, x0, y0;
+    if (!menu_notice_showing() || !bgra || w <= 0 || h <= 0) return;
+    c.px = bgra;
+    c.w = w;
+    c.h = h;
+    c.stride = stride;
+    c.alpha = alpha;
+    c.s = w / ((COLS + 2) * CELL_W);
+    if (h / ((ROWS_SHOWN + 7) * CELL_H) < c.s) c.s = h / ((ROWS_SHOWN + 7) * CELL_H);
+    if (c.s < 1) c.s = 1;
+    n = (int)strlen(g_notice);
+    bw = (n + 2) * CELL_W * c.s;
+    bh = 2 * CELL_H * c.s;
+    x0 = CELL_W * c.s;
+    y0 = h - bh - CELL_H * c.s;
+    if (bw > w - x0) bw = w - x0;
+    if (y0 < 0) y0 = 0;
+    dim(&c, x0, y0, bw, bh);
+    text(&c, x0 + CELL_W * c.s, y0 + CELL_H * c.s / 2, g_notice, INK);
 }
 
 static void draw(uint8_t* bgra, int w, int h, int stride, int alpha)
