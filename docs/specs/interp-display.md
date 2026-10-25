@@ -6,6 +6,13 @@ D-45 ("I want the 60fps finished next"; "60fps should be the games new default r
 before 60 becomes the default: a display-rate mode, so that every target screen gets smooth motion, not only one at
 60 or 120 Hz.
 
+**H17c-a built 2026-10-25** (FINDINGS "H17c-a"): Done lines 1 to 3. *As built:* the slices are stacked, not in a grid
+(at 3x a 4096-row device holds one); each slice's screen copy is its own submission, not batched; the GPU-against-GPU
+rule of Done 1 is "no pixel more than 16 levels apart beyond 0.005%", since a slice lower in the image rasterizes a
+little differently (up to 9 levels at the third slice) and V12's one-level rule holds for the first alone; Done 2's
+producer check is the GPU harness's (F+1's positions in place of F's fails it as `noweight` does), with the CPU's
+refusal of more than one weight in `test_gxr_pair.py`. `display` itself is H17c-b's.
+
 **Why.** Today one in-between image is built per real frame, at the midpoint, and shown only where the display runs
 within 2% of 60, 120, 180 or 240 Hz (`present_interp`, `runtime/picture.c:52`). The owner's 85 Hz monitor, a Steam Deck
 OLED at 90 Hz and a 144 Hz monitor get none; at 120 Hz the Ally X shows 60 distinct images a second, each held two

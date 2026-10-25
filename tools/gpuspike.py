@@ -1573,6 +1573,123 @@ def pairs(prof: toolchain.Profile, mutate: str | None, exe: Path | None) -> int:
     return 1 if failures else 0
 
 
+# H17c-a: a slice lower in the EFB image rasterizes a little differently from
+# the same draw higher up -- the viewport's offset moves vertex snapping and
+# attribute interpolation -- so V12's one-level rule holds for the first slice
+# alone: at the third, H10's pairs differed at up to 1009 pixels and by up to
+# 9 levels at a weight correctly drawn, and at thousands of pixels by 45 to
+# 127 levels with every slice at the midpoint (the noweight mutation): no
+# correct slice had a pixel more than 16 levels apart, and every mutated one had
+# 45 or more. At most 0.005% of them (15 pixels) tells the two apart.
+SLICE_LEVELS = 16
+SLICE_FAR = 0.00005
+
+
+def pairs_weights(
+    prof: toolchain.Profile, mutate: str | None, exe: Path | None, weights: list[float]
+) -> int:
+    """H17c-a (docs/specs/interp-display.md): H10's five pairs with
+    SOA_INTERP_WEIGHTS, B drawn once with a slice an in-between image, each
+    lerped by raster.vert at its weight. Each slice's B.midK.png against the
+    GPU's own three passes at SOA_PAIR_T of its weight (the lerp done on the
+    CPU, the draw as a real one) within V12's tolerance, and against the CPU's
+    three passes at that weight by V0; B.png the same as the three passes'. A
+    mutation goes to the slices' run alone, and must fail it."""
+    import midpoint
+    import perfbench
+
+    code = ready(prof)
+    if code is not None:
+        return code
+    exe = (exe if exe is not None else ROOT / "gen" / f"soa{prof.exeext}").resolve()
+    if not exe.exists():
+        print(f"skip: no {exe} (python tools/recompile.py --link)")
+        return SKIP
+    rows = perfbench.read_manifest()
+    out = build_dir(prof) / "pairs-weights"
+    spec = ",".join(f"{w:g}" for w in weights)
+    failures = 0
+
+    def replay(
+        scene: str, pair, run: str, extra: dict
+    ) -> tuple[list[Path], subprocess.CompletedProcess]:
+        d = out / scene / run
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True)
+        bases = [d / Path(n).name for n in (pair.f, pair.f1)]
+        for name, base in zip((pair.f, pair.f1), bases, strict=True):
+            for part in perfbench.PARTS:
+                shutil.copyfile(midpoint.SET / f"{name}{part}", f"{base}{part}")
+        env = {**clean_env(), **extra}
+        if mutate and run == "slices":
+            env["SOA_GPU_MUTATE"] = mutate
+        proc = subprocess.run(
+            [str(exe), "--replay", *map(str, bases)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+        )
+        return bases, proc
+
+    for scene, pair in midpoint.PAIRS.items():
+        if any(n not in rows or perfbench.verify(n, rows[n][1]) for n in (pair.f, pair.f1)):
+            print(f"skip: {scene}'s captures are missing or differ from the perfset manifest")
+            return SKIP
+        bases, proc = replay(
+            scene,
+            pair,
+            "slices",
+            {"SOA_GPU": "vulkan", "SOA_INTERP": "1", "SOA_INTERP_WEIGHTS": spec},
+        )
+        mids = (
+            [Path(f"{bases[1]}.mid.png")]
+            if len(weights) == 1
+            else [Path(f"{bases[1]}.mid{k + 1}.png") for k in range(len(weights))]
+        )
+        real = Path(f"{bases[1]}.png")
+        if proc.returncode != 0 or not real.exists() or not all(m.exists() for m in mids):
+            print(f"FAIL {scene} slices: exit {proc.returncode}, the pictures not all written")
+            print((proc.stdout or "")[-600:] + (proc.stderr or "")[-600:])
+            failures += 1
+            continue
+        for k, w in enumerate(weights):
+            got = {}
+            for run, extra in (("cpu", {}), ("gpu", {"SOA_GPU": "vulkan"})):
+                b, p = replay(scene, pair, f"{run}-{w:g}", {**extra, "SOA_PAIR_T": f"{w:g}"})
+                m = Path(f"{b[1]}.mid.png")
+                if p.returncode != 0 or not m.exists():
+                    print(f"FAIL {scene} {run} at {w:g}: exit {p.returncode}")
+                    failures += 1
+                    break
+                got[run] = (Path(f"{b[1]}.png"), m)
+            if len(got) < 2:
+                continue
+            real_same = png.read_rgba(got["gpu"][0])[2] == png.read_rgba(real)[2]
+            a, b = png.read_rgba(got["gpu"][1])[2], png.read_rgba(mids[k])[2]
+            off = [max(abs(a[i + c] - b[i + c]) for c in range(3)) for i in range(0, len(a), 4)]
+            moved = sum(1 for d in off if d)
+            far = sum(1 for d in off if d > SLICE_LEVELS)
+            near = len(a) == len(b) and far <= SLICE_FAR * len(off)
+            metrics = imgdiff.compare(got["cpu"][1], mids[k], out / scene / f"mid{k + 1}_heat.png")
+            bad = metrics.failures()
+            listed = bool(bad) and f"{Path(pair.f1).parent.name}_{Path(pair.f1).name}" in BY_DESIGN
+            ok = real_same and near and (not bad or listed)
+            failures += not ok
+            print(
+                f"{'pass' if ok else 'FAIL'} {scene:9} at {w:<5g} B.png "
+                f"{'the same' if real_same else 'DIFFERS'}; the slice against the GPU's three passes: {moved} pixels "
+                f"apart by up to {max(off, default=0)}, {far} by more than {SLICE_LEVELS}; against the CPU's"
+                f"{' (by design, as its frame)' if listed else ''}: {metrics.line()}"
+            )
+            for line in bad:
+                print(f"     {line}")
+    print(f"[gpuspike] pairs at weights {spec} {'passes' if not failures else 'FAILS'}")
+    return 1 if failures else 0
+
+
 def reproduced(a: Path, b: Path) -> set[str]:
     """The snapshots two runs made byte for byte alike, by name."""
     theirs = {p.name for p in b.glob("*.png")}
@@ -2317,6 +2434,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--live-seed", default="12345", help="live: the SOA_SEED both runs get")
     ap.add_argument("--cc", choices=tuple(toolchain.PROFILES), default="msvc")
     ap.add_argument("--mutate", default=None, help="a gxv mutation the command must fail on")
+    ap.add_argument(
+        "--weights",
+        default=None,
+        help="pairs: in-between weights, e.g. 0.25,0.5,0.75, drawn as slices of one run (H17c-a)",
+    )
     ap.add_argument("--cases", type=int, default=100000, help="tevdiff and loddiff: random cases")
     ap.add_argument("--rects", type=int, default=200, help="copydiff: rectangles a combination")
     ap.add_argument("--seed", type=int, default=1, help="tevdiff, copydiff and loddiff")
@@ -2408,6 +2530,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "logictest":
         return logictest(prof)
     if args.command == "pairs":
+        if args.weights:
+            try:
+                weights = [float(w) for w in args.weights.split(",")]
+            except ValueError:
+                ap.error(f"--weights {args.weights}: not numbers")
+            return pairs_weights(prof, args.mutate, args.exe, weights)
         return pairs(prof, args.mutate, args.exe)
     if args.command == "time":
         return time_frames(prof, args.set.split(","), args.runs, 3)

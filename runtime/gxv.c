@@ -29,6 +29,7 @@
 
 #include "raster_vert.h"
 #include "raster_vert_noinvariant.h"
+#include "raster_vert_noweight.h"
 #include "raster_frag.h"
 #include "raster_frag_alpha.h"
 #include "raster_frag_lod.h"
@@ -95,19 +96,23 @@ GXV_DEVICE(GXV_DECLARE)
 #define RING_BYTES (32u << 20)     /* the vertex ring: about 215k vertices */
 /* The EFB at the scale SOA_GPU_SCALE sets (V9a): S*640 x S*528 samples. */
 static int g_scale = 1;
-/* V12: 2 when SOA_INTERP builds H17's in-between stream: the EFB's colour and
- * depth images are then twice as tall, the real EFB the upper half and the
- * in-between one the lower, a command with efb 1 reaching its half through a
- * viewport and scissor moved down by EFB_SH. Real and in-between draws arrive
- * interleaved, and two framebuffers would end a render pass at every draw.
- * 1 otherwise, and everything is as before. */
-static int g_halves = 1;
-static int g_dyn_vp = -1;
-static unsigned long long g_n_mid_draws, g_n_mid_clears, g_n_mid_copies;
-/* The half a command is for: its efb with two, 0 with one, whatever a caller
- * that builds its own commands left there (the spike's driver). */
-#define HALF(D) (g_halves > 1 && (D)->efb ? 1 : 0)
+/* V12: the EFBs stacked in the colour and depth images when SOA_INTERP builds
+ * H17's in-between stream: the real EFB on top and below it one slice for
+ * each in-between image a frame may have -- one in V12, up to GXR_MID_MAX
+ * since H17c -- a command for an in-between image reaching its slice through
+ * a viewport and scissor moved down by EFB_SH a slice. Real and in-between
+ * draws arrive interleaved, and framebuffers of their own would end a render
+ * pass at every draw. 1 otherwise, and everything is as before. */
+static int g_efbs = 1;
+static int g_dyn_vp = -1; /* the slice the viewport is on */
+static unsigned long long g_n_mid_draws, g_n_mid_clears, g_n_mid_copies, g_n_slice_draws, g_n_slice_cpu;
+/* Whether a command is for an in-between image: its efb with slices, 0 with
+ * one EFB, whatever a caller that builds its own commands left there (the
+ * spike's driver). */
+#define HALF(D) (g_efbs > 1 && (D)->efb ? 1 : 0)
 #define DRAW_HALF(D) (HALF(D) && !g_mut_midhalf)
+/* Slice k's first row: 0 the real EFB's, 1 the first in-between image's. */
+#define SLICE_Y(k) ((k) * EFB_SH)
 static int g_lod_native; /* SOA_GPU_SCALE_LOD=native: mip levels chosen as at scale 1 */
 /* A line's width and a point's size in samples: S where the device has
  * wideLines and largePoints, so a native pixel's centre is covered where the
@@ -214,6 +219,7 @@ static int g_mut_unclipped, g_mut_unseeded, g_mut_copy, g_mut_tev, g_mut_frag, g
 static int g_mut_midhalf; /* V12's: an in-between draw lands in the real half */
 static unsigned long long g_skip_draw; /* the draw --mutate skip-draw:N leaves out, 1-based; 0 none */
 static int g_mut_noinvariant, g_mut_lodmin, g_mut_pool_inplace, g_mut_late;
+static int g_mut_noweight; /* H17c's: raster.vert lerps every slice to the midpoint */
 static int g_mut_spec_stages; /* --mutate spec-stages (V7): the specialised shape a stage short */
 static int g_mut_compile_wait; /* --mutate compile-wait (V7): the draw path waits for the compiler thread */
 /* --mutate late-readback (V6b): a copy's bytes put in guest RAM only when the
@@ -332,6 +338,8 @@ typedef struct {
     float wd, ht, xorig, yorig, zrange, farz;
     uint32_t base;
     uint32_t record; /* in the draw records, in words */
+    uint32_t prev;   /* H17c: F's positions in the vertex ring, in floats; ~0 for none */
+    float t;         /* ...and the weight raster.vert lerps them to F+1's at */
 } PushDraw;
 
 static void say(const char* fmt, ...)
@@ -474,7 +482,7 @@ static int make_image(VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags 
     ii.imageType = VK_IMAGE_TYPE_2D;
     ii.format = fmt;
     ii.extent.width = (uint32_t)EFB_SW;
-    ii.extent.height = (uint32_t)(EFB_SH * g_halves);
+    ii.extent.height = (uint32_t)(EFB_SH * g_efbs);
     ii.extent.depth = 1;
     ii.mipLevels = 1;
     ii.arrayLayers = 1;
@@ -549,7 +557,7 @@ static int begin_pass(void)
     rb.renderPass = g_pass;
     rb.framebuffer = g_fb;
     rb.renderArea.extent.width = (uint32_t)EFB_SW;
-    rb.renderArea.extent.height = (uint32_t)(EFB_SH * g_halves);
+    rb.renderArea.extent.height = (uint32_t)(EFB_SH * g_efbs);
     vkCmdBeginRenderPass(g_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_layout, 0, 1, &g_dset, 0, NULL);
     vkCmdBindIndexBuffer(g_cb, g_quad_idx, 0, VK_INDEX_TYPE_UINT32);
@@ -578,7 +586,7 @@ static int begin_interlock(void)
     rb.renderPass = g_pass_il;
     rb.framebuffer = g_fb_il;
     rb.renderArea.extent.width = (uint32_t)EFB_SW;
-    rb.renderArea.extent.height = (uint32_t)(EFB_SH * g_halves);
+    rb.renderArea.extent.height = (uint32_t)(EFB_SH * g_efbs);
     vkCmdBeginRenderPass(g_cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindDescriptorSets(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_layout, 0, 1, &g_dset, 0, NULL);
     vkCmdBindIndexBuffer(g_cb, g_quad_idx, 0, VK_INDEX_TYPE_UINT32);
@@ -756,8 +764,8 @@ static int fragment_module(void)
 {
     VkShaderModuleCreateInfo si = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     if (!g_vs) {
-        si.codeSize = g_mut_noinvariant ? sizeof raster_vert_noinvariant : sizeof raster_vert;
-        si.pCode = g_mut_noinvariant ? raster_vert_noinvariant : raster_vert;
+        si.codeSize = g_mut_noinvariant ? sizeof raster_vert_noinvariant : g_mut_noweight ? sizeof raster_vert_noweight : sizeof raster_vert;
+        si.pCode = g_mut_noinvariant ? raster_vert_noinvariant : g_mut_noweight ? raster_vert_noweight : raster_vert;
         VKCHECK(vkCreateShaderModule(g_dev, &si, NULL, &g_vs));
     }
     if (g_fs) return 1;
@@ -962,7 +970,7 @@ static VkResult pipe_make(const PipeState* S, const uint32_t* shape, VkPipeline*
         ds.depthWriteEnable = VK_FALSE;
     }
     dys.dynamicStateCount = g_eds ? 6 : 1;
-    if (g_halves > 1) { /* V12: the viewport moves with the half (after the six, or in place of the five) */
+    if (g_efbs > 1) { /* V12: the viewport moves with the half (after the six, or in place of the five) */
         if (!g_eds) dyn[1] = VK_DYNAMIC_STATE_VIEWPORT;
         dys.dynamicStateCount++;
     }
@@ -1475,19 +1483,16 @@ static void describe_draw(const DrawCmd* D)
     }
 }
 
+static int emit(const DrawCmd* D, const Vertex* up, unsigned n, int topo, int quads, const float (*prev)[4], int slice0,
+                unsigned ns, const float* t);
+static int draw_slices(const DrawCmd* D, int topo, int quads, unsigned n);
+
 static int gxv_draw(const DrawCmd* D)
 {
     const char* why = unsupported(D);
     const Vertex* up = D->v;
-    unsigned n = D->count, first;
+    unsigned n = D->count;
     int topo, rebuilt = 0, quads = 0;
-    const Rect* s = &D->rc.scissor;
-    VkRect2D sc;
-    PushDraw pc;
-    uint32_t tev[GXV_TEV_WORDS]; /* the draw's TEV words, for its pipeline */
-    int route;
-    PipeState ps; /* the draw's state, which dynamic state sets (V7) */
-    VkPipeline p;
 
     static int ztop_said;
     if (why) { say("draw refused: it needs %s", why); return 0; }
@@ -1516,6 +1521,7 @@ static int gxv_draw(const DrawCmd* D)
         if (want == -2) want = getenv("SOA_GPU_DRAW") ? atoll(getenv("SOA_GPU_DRAW")) : -1;
         if ((long long)g_n_draws == want) describe_draw(D);
     }
+    if (HALF(D) && D->mid_n) return draw_slices(D, topo, quads, n);
     if (needs_rebuild(D)) {
         if (!rebuild(D, &topo)) return 0;
         up = g_tmp;
@@ -1525,21 +1531,44 @@ static int gxv_draw(const DrawCmd* D)
         g_n_rebuilt++;
     }
     if (g_hook) g_hook(D, up, n, rebuilt);
+    {
+        float t = 0.0f;
+        return emit(D, up, n, topo, quads, NULL, DRAW_HALF(D) ? 1 : 0, 1, &t);
+    }
+}
+
+/* A draw's vertices, uploaded once, drawn once into each of `ns` slices from
+ * `slice0`: F+1's vertices with F's positions beside them (`prev`, H17c),
+ * which raster.vert lerps at each slice's weight `t[k]`, or with none, drawn
+ * as they are. Everything a draw costs but the draw itself -- its record,
+ * pipeline, upload, a logic op's snapshot -- is paid once. */
+static int emit(const DrawCmd* D, const Vertex* up, unsigned n, int topo, int quads, const float (*prev)[4], int slice0,
+                unsigned ns, const float* t)
+{
+    const Rect* s = &D->rc.scissor;
+    VkRect2D sc;
+    PushDraw pc;
+    uint32_t tev[GXV_TEV_WORDS]; /* the draw's TEV words, for its pipeline */
+    int route, x0, y0, x1, y1;
+    unsigned first, k;
+    uint32_t prev_at = 0xFFFFFFFFu;
+    size_t bytes = (size_t)n * sizeof(Vertex) + (prev ? (size_t)n * 16 + 16 + sizeof(Vertex) : 0);
+    PipeState ps; /* the draw's state, which dynamic state sets (V7) */
+    VkPipeline p;
     if (n == 0) return 1;
     if (quads && n / 4 > MAX_QUADS) { say("draw refused: %u quads, more than the index buffer's %u", n / 4, MAX_QUADS); return 0; }
-    if ((size_t)n * sizeof(Vertex) > RING_BYTES) { say("draw refused: %u vertices do not fit the vertex ring", n); return 0; }
+    if (bytes > RING_BYTES) { say("draw refused: %u vertices do not fit the vertex ring", n); return 0; }
     /* The scissor, inclusive, on the EFB; an empty one draws nothing. Each
      * native pixel is S x S samples at scale (V9a). */
-    {
-        int x0 = s->x0 < 0 ? 0 : s->x0, y0 = s->y0 < 0 ? 0 : s->y0;
-        int x1 = s->x1 > EFB_W - 1 ? EFB_W - 1 : s->x1, y1 = s->y1 > EFB_H - 1 ? EFB_H - 1 : s->y1;
-        if (x1 < x0 || y1 < y0) return 1;
-        sc.offset.x = x0 * g_scale;
-        sc.offset.y = y0 * g_scale + (DRAW_HALF(D) ? EFB_SH : 0);
-        sc.extent.width = (uint32_t)((x1 - x0 + 1) * g_scale);
-        sc.extent.height = (uint32_t)((y1 - y0 + 1) * g_scale);
-    }
-    if (g_ring_used + (size_t)n * sizeof(Vertex) > RING_BYTES && !submit_wait()) return 0;
+    x0 = s->x0 < 0 ? 0 : s->x0;
+    y0 = s->y0 < 0 ? 0 : s->y0;
+    x1 = s->x1 > EFB_W - 1 ? EFB_W - 1 : s->x1;
+    y1 = s->y1 > EFB_H - 1 ? EFB_H - 1 : s->y1;
+    if (x1 < x0 || y1 < y0) return 1;
+    sc.offset.x = x0 * g_scale;
+    sc.extent.width = (uint32_t)((x1 - x0 + 1) * g_scale);
+    sc.extent.height = (uint32_t)((y1 - y0 + 1) * g_scale);
+    if (g_ring_used + bytes > RING_BYTES && !submit_wait()) return 0;
     if ((g_draw_used + GXV_DRAW_WORDS) * 4 > DRAWREC_BYTES && !submit_wait()) return 0;
     if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used, tev)) {
         if (!submit_wait()) return 0;
@@ -1555,7 +1584,8 @@ static int gxv_draw(const DrawCmd* D)
         /* The EFB as it is before this draw, where the shader reads the
          * destination from. Exact while the draw's triangles do not overlap
          * each other, which every logic draw here satisfies (one full-screen
-         * quad each, 3.5); the interlock route is for those that may. */
+         * quad each, 3.5); the interlock route is for those that may. The
+         * slices never overlap, so one snapshot serves them all. */
         if (route == LOGIC_SNAPSHOT && !efb_to_buffer(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, -1)) return 0;
     }
     if (route == LOGIC_INTERLOCK ? !begin_interlock() : !begin_pass()) return 0;
@@ -1564,15 +1594,17 @@ static int gxv_draw(const DrawCmd* D)
     first = g_ring_used / (uint32_t)sizeof(Vertex);
     memcpy(g_ring_map + g_ring_used, up, (size_t)n * sizeof(Vertex));
     g_ring_used += n * (uint32_t)sizeof(Vertex);
+    if (prev) {
+        /* F's positions after F+1's vertices, on a 16-byte boundary, and the
+         * ring left on a whole vertex again for the next draw's index */
+        uint32_t at = (g_ring_used + 15u) & ~15u;
+        memcpy(g_ring_map + at, prev, (size_t)n * 16);
+        prev_at = at / 4u;
+        g_ring_used = at + n * 16u;
+        g_ring_used = (g_ring_used + (uint32_t)sizeof(Vertex) - 1u) / (uint32_t)sizeof(Vertex) * (uint32_t)sizeof(Vertex);
+    }
     g_n_verts += n;
     if (p != g_bound) { vkCmdBindPipeline(g_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p); g_bound = p; }
-    vkCmdSetScissor(g_cb, 0, 1, &sc);
-    if (g_halves > 1 && DRAW_HALF(D) != g_dyn_vp) {
-        VkViewport vp = {0.0f, DRAW_HALF(D) ? (float)EFB_SH : 0.0f, (float)EFB_SW, (float)EFB_SH, 0.0f, 1.0f};
-        vkCmdSetViewport(g_cb, 0, 1, &vp);
-        g_dyn_vp = DRAW_HALF(D);
-    }
-    if (HALF(D)) g_n_mid_draws++;
     if (g_eds) {
         /* What the pipeline no longer holds; the interlock's pass has no depth. */
         int il = route == LOGIC_INTERLOCK;
@@ -1591,26 +1623,102 @@ static int gxv_draw(const DrawCmd* D)
     pc.farz = D->rc.farz;
     pc.base = first;
     pc.record = g_draw_used;
+    pc.prev = prev_at;
     g_draw_used += GXV_DRAW_WORDS;
-    vkCmdPushConstants(g_cb, g_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
-    if (g_measure && g_occ_used == OCC_QUERIES) {
-        say("measure: more than %u draws in one submission; the rest are not counted", OCC_QUERIES);
-        g_measure = 0;
+    if (HALF(D)) g_n_mid_draws++;
+    for (k = 0; k < ns; k++) {
+        int slice = slice0 + (int)k;
+        sc.offset.y = y0 * g_scale + SLICE_Y(slice);
+        vkCmdSetScissor(g_cb, 0, 1, &sc);
+        if (g_efbs > 1 && slice != g_dyn_vp) {
+            VkViewport vp = {0.0f, (float)SLICE_Y(slice), (float)EFB_SW, (float)EFB_SH, 0.0f, 1.0f};
+            vkCmdSetViewport(g_cb, 0, 1, &vp);
+            g_dyn_vp = slice;
+        }
+        pc.t = t[k];
+        vkCmdPushConstants(g_cb, g_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+        if (g_measure && g_occ_used == OCC_QUERIES) {
+            say("measure: more than %u draws in one submission; the rest are not counted", OCC_QUERIES);
+            g_measure = 0;
+        }
+        if (g_measure) {
+            g_occ_draw[g_occ_used] = g_n_draws;
+            vkCmdBeginQuery(g_cb, g_occ, g_occ_used, g_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
+        }
+        if (quads) vkCmdDrawIndexed(g_cb, n / 4 * 6, 1, 0, 0, 0);
+        else vkCmdDraw(g_cb, n, 1, 0, 0);
+        if (g_measure) vkCmdEndQuery(g_cb, g_occ, g_occ_used++);
     }
-    if (g_measure) {
-        g_occ_draw[g_occ_used] = g_n_draws;
-        vkCmdBeginQuery(g_cb, g_occ, g_occ_used, g_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
-    }
-    if (quads) vkCmdDrawIndexed(g_cb, n / 4 * 6, 1, 0, 0, 0);
-    else vkCmdDraw(g_cb, n, 1, 0, 0);
-    if (g_measure) vkCmdEndQuery(g_cb, g_occ, g_occ_used++);
     if (route == LOGIC_INTERLOCK) end_interlock();
+    return 1;
+}
+
+/* F's positions inside the clip volume wherever F+1's are: the volume is
+ * convex in clip space, so every weight between them is too, and the GPU's
+ * lerp needs no clipping of the CPU's. Lines and points ask only w > 0. */
+static int prev_unclipped(const DrawCmd* D)
+{
+    unsigned i;
+    int tri = D->prim < 0xA8;
+    for (i = 0; i < D->count; i++) {
+        Vertex v;
+        v.x = D->prev[i][0];
+        v.y = D->prev[i][1];
+        v.z = D->prev[i][2];
+        v.w = D->prev[i][3];
+        if (tri ? !gxr_vertex_unclipped(&v) : !(v.w > 0.0f)) return 0;
+    }
+    return 1;
+}
+
+/* H17c: an in-between draw, once per weight of its frame, each into its
+ * slice. Where F's positions came and neither frame's vertices need the CPU's
+ * clipping, F+1's vertices and F's positions go up once and raster.vert lerps
+ * at each slice's weight; a draw with no match is drawn as it is in every
+ * slice. Otherwise each slice is lerped here, clipped as V12 clipped, and
+ * drawn on its own. */
+static int draw_slices(const DrawCmd* D, int topo, int quads, unsigned n)
+{
+    static Vertex* lerped;
+    static unsigned lerped_cap;
+    static DrawCmd one;
+    unsigned k, ns = D->mid_n < (unsigned)(g_efbs - 1) ? D->mid_n : (unsigned)(g_efbs - 1);
+    if (!needs_rebuild(D) && (!D->prev || prev_unclipped(D))) {
+        g_n_slice_draws += ns;
+        return emit(D, D->v, n, topo, quads, D->prev, 1, ns, D->mid_t);
+    }
+    if (D->count > lerped_cap) {
+        Vertex* grown = (Vertex*)realloc(lerped, sizeof(Vertex) * D->count);
+        if (!grown) { say("draw refused: no memory to lerp %u vertices", D->count); return 0; }
+        lerped = grown;
+        lerped_cap = D->count;
+    }
+    for (k = 0; k < ns; k++) {
+        const Vertex* up = lerped;
+        unsigned m = n;
+        int tp = topo, qd = quads;
+        float t = D->mid_t[k];
+        memcpy(lerped, D->v, sizeof(Vertex) * D->count);
+        if (D->prev) gxr_lerp_positions(lerped, D->prev, D->count, t);
+        one = *D;
+        one.v = lerped;
+        if (needs_rebuild(&one)) {
+            if (!rebuild(&one, &tp)) return 0;
+            up = g_tmp;
+            m = g_tmp_n;
+            qd = 0;
+            g_n_rebuilt++;
+        }
+        g_n_slice_draws++;
+        g_n_slice_cpu++;
+        if (!emit(&one, up, m, tp, qd, NULL, 1 + (int)k, 1, &t)) return 0;
+    }
     return 1;
 }
 
 /* efb_clear's rectangle and values, unmasked: vkCmdClearAttachments ignores
  * the pipeline's scissor and write masks, as the CPU's clear does. */
-static int clear_rect(int efb, int x0, int y0, int w, int h, uint32_t ar, uint32_t gb, uint32_t z)
+static int clear_rect(int slice, int x0, int y0, int w, int h, uint32_t ar, uint32_t gb, uint32_t z)
 {
     VkClearAttachment ca[2];
     VkClearRect cr;
@@ -1631,7 +1739,7 @@ static int clear_rect(int efb, int x0, int y0, int w, int h, uint32_t ar, uint32
     ca[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     ca[1].clearValue.depthStencil.depth = (float)(z & 0xFFFFFFu) / 16777216.0f;
     cr.rect.offset.x = x0 * g_scale;
-    cr.rect.offset.y = y0 * g_scale + (efb ? EFB_SH : 0);
+    cr.rect.offset.y = y0 * g_scale + SLICE_Y(slice);
     cr.rect.extent.width = (uint32_t)((x1 - x0) * g_scale);
     cr.rect.extent.height = (uint32_t)((y1 - y0) * g_scale);
     cr.baseArrayLayer = 0;
@@ -1645,8 +1753,12 @@ static int gxv_clear(const DrawCmd* D)
 {
     int x0 = (int)(D->cp_tl & 0x3FF), y0 = (int)((D->cp_tl >> 10) & 0x3FF);
     int w = (int)(D->cp_wh & 0x3FF) + 1, h = (int)((D->cp_wh >> 10) & 0x3FF) + 1;
-    if (HALF(D)) g_n_mid_clears++;
-    return clear_rect(HALF(D), x0, y0, w, h, D->cp_ar, D->cp_gb, D->cp_z);
+    int k;
+    if (!HALF(D)) return clear_rect(0, x0, y0, w, h, D->cp_ar, D->cp_gb, D->cp_z);
+    g_n_mid_clears++;
+    for (k = 1; k < g_efbs; k++) /* every in-between image's slice (H17c) */
+        if (!clear_rect(k, x0, y0, w, h, D->cp_ar, D->cp_gb, D->cp_z)) return 0;
+    return 1;
 }
 
 /* gxr_reset_efb's fill: the clear registers over the whole EFB, z 0 standing
@@ -1655,7 +1767,7 @@ static void gxv_reset_efb(const uint32_t* bp)
 {
     uint32_t z = bp[0x51] & 0xFFFFFFu;
     int h;
-    for (h = 0; h < g_halves; h++) /* gxr_reset_efb starts the in-between EFB where the real one starts */
+    for (h = 0; h < g_efbs; h++) /* gxr_reset_efb starts the in-between EFB where the real one starts */
         if (!clear_rect(h, 0, 0, EFB_W, EFB_H, bp[0x4F], bp[0x50], z ? z : 0xFFFFFFu)) say("the EFB reset failed");
 }
 
@@ -1842,9 +1954,9 @@ static int efb_to_buffer(VkPipelineStageFlags reader, int half)
     memset(&rg, 0, sizeof rg);
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.imageSubresource.layerCount = 1;
-    rg.imageOffset.y = half > 0 ? EFB_SH : 0;
+    rg.imageOffset.y = half > 0 ? SLICE_Y(half) : 0;
     rg.imageExtent.width = (uint32_t)EFB_SW;
-    rg.imageExtent.height = (uint32_t)(half < 0 ? EFB_SH * g_halves : EFB_SH);
+    rg.imageExtent.height = (uint32_t)(half < 0 ? EFB_SH * g_efbs : EFB_SH);
     rg.imageExtent.depth = 1;
     vkCmdCopyImageToBuffer(g_cb, g_color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_readback, 1, &rg);
     barrier_image(g_color, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1903,16 +2015,18 @@ static void copy_rect(const DrawCmd* D, CopyPush* p)
  * so neither ever writes or reads a slot the other holds. A slot's size --
  * the picture's, native -- and the scale it is drawn at are written before
  * it is published. */
-#define SCREEN_SLOTS 9
 #define SCREEN_SCRATCH 3
 #define SCREEN_NATIVE 4
 #define SCREEN_SHOWN 5
-#define SCREEN_MID0 6 /* V12b: slot i's in-between image, with two halves only */
+#define SCREEN_MID0 6 /* V12b: the triple buffer's in-between images, with slices only */
+#define SCREEN_SLOTS (SCREEN_MID0 + 3 * GXR_MID_MAX) /* the most there can be */
+/* Slot i's in-between image k (H17c: one an in-between slice). */
+#define SCREEN_MID(i, k) (SCREEN_MID0 + (unsigned)(i) * (unsigned)(g_efbs - 1) + (unsigned)(k))
 #define SCREEN_FRESH 4
 static unsigned g_scr_back = 0, g_scr_front = 2, g_scr_last;
 static plat_a64 g_scr_middle = 1;
 static int g_scr_w[SCREEN_SLOTS], g_scr_h[SCREEN_SLOTS], g_scr_k[SCREEN_SLOTS];
-static int g_scr_mid[3], g_scr_cut[3]; /* the triple buffer's slot holds an in-between image too; a cut's */
+static int g_scr_mid[3], g_scr_cut[3]; /* the triple buffer's slot's in-between images (H17c: how many); a cut's */
 static unsigned g_mid_ivl;             /* the window's: refreshes an image while it shows them, 0 when not */
 static unsigned long long g_n_shown_mid, g_n_shown_cut, g_n_shown_none;
 
@@ -1933,49 +2047,59 @@ static void publish_screen(int sw, int sh)
  * min(h, 528), the filter on RGB, alpha 255, black outside the EFB. At
  * scale (V9a) the presenter's slot holds it S times the size, and the
  * native picture g_screen takes is a second pass into SCREEN_NATIVE. */
-static int copy_screen(const DrawCmd* D)
+/* One EFB slice's picture into screen slot `shown`, and its native picture
+ * into `native` (the same slot at scale 1), finished when it returns. */
+static int copy_slice(const DrawCmd* D, int slice, unsigned shown, unsigned native, int* sw, int* sh)
 {
     CopyPush p;
-    int sw, sh;
-    /* V12b: an in-between copy into its slot's partner, beside the real one */
-    unsigned shown = HALF(D) ? SCREEN_MID0 + g_scr_back : g_scr_back;
-    unsigned native = g_scale > 1 ? (HALF(D) ? SCREEN_SCRATCH : SCREEN_NATIVE) : shown;
     copy_rect(D, &p);
     if (g_mut_nofilter) p.flags &= ~4u;
-    sw = p.w > EFB_W ? EFB_W : p.w;
-    sh = p.h > EFB_H ? EFB_H : p.h;
-    if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, HALF(D))) return 0;
+    *sw = p.w > EFB_W ? EFB_W : p.w;
+    *sh = p.h > EFB_H ? EFB_H : p.h;
+    if (!copy_pipeline() || !efb_to_buffer(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, slice)) return 0;
     p.mode = 2;
     if (g_scale > 1) {
         CopyPush q = p;
         q.flags |= 16u;
-        q.count = (uint32_t)(sw * sh * g_scale * g_scale);
+        q.count = (uint32_t)(*sw * *sh * g_scale * g_scale);
         q.screen_at = (uint32_t)(shown * (READBACK_BYTES / 4));
         run_compute(&g_copy_cs, &q, sizeof q, q.count);
     }
-    p.count = (uint32_t)(sw * sh);
+    p.count = (uint32_t)(*sw * *sh);
     p.screen_at = (uint32_t)(native * (READBACK_BYTES / 4));
     run_compute(&g_copy_cs, &p, sizeof p, p.count);
     compute_to_host();
-    if (!submit_wait()) return 0;
+    return submit_wait();
+}
+
+static int copy_screen(const DrawCmd* D)
+{
+    int sw, sh;
     if (HALF(D)) {
-        /* V12: the in-between image to g_screen_mid, and the slot, real frame
-         * and all, to the presenter */
-        gxr_backend_screen_mid(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
-        g_scr_w[shown] = sw;
-        g_scr_h[shown] = sh;
-        g_scr_k[shown] = g_scale;
-        g_scr_mid[g_scr_back] = 1;
+        /* V12: the in-between images, each from its slice into its slot's
+         * partner (H17c: one a weight), then the slot, real frame and all,
+         * to the presenter */
+        unsigned k, ns = D->mid_n ? (D->mid_n < (unsigned)(g_efbs - 1) ? D->mid_n : (unsigned)(g_efbs - 1)) : 1;
+        for (k = 0; k < ns; k++) {
+            unsigned shown = SCREEN_MID(g_scr_back, k), native = g_scale > 1 ? SCREEN_SCRATCH : shown;
+            if (!copy_slice(D, 1 + (int)k, shown, native, &sw, &sh)) return 0;
+            gxr_backend_screen_slice((int)k, g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
+            g_scr_w[shown] = sw;
+            g_scr_h[shown] = sh;
+            g_scr_k[shown] = g_scale;
+        }
+        g_scr_mid[g_scr_back] = (int)ns;
         g_scr_cut[g_scr_back] = (D->cp_ring & CP_CUT) != 0;
         g_n_mid_copies++;
         publish_screen(sw, sh);
         return 1;
     }
-    gxr_backend_screen(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
+    if (!copy_slice(D, 0, g_scr_back, g_scale > 1 ? SCREEN_NATIVE : g_scr_back, &sw, &sh)) return 0;
+    gxr_backend_screen(g_screen_map + (size_t)(g_scale > 1 ? SCREEN_NATIVE : g_scr_back) * READBACK_BYTES, sw, sh);
     g_scr_mid[g_scr_back] = g_scr_cut[g_scr_back] = 0;
     g_n_copies++;
     /* With an in-between copy to follow, the slot waits for it (V12b). */
-    if (g_halves > 1 && !(D->cp_ring & CP_LAST)) {
+    if (g_efbs > 1 && !(D->cp_ring & CP_LAST)) {
         g_scr_w[g_scr_back] = sw; /* its size now, for a reader of g_scr_last */
         g_scr_h[g_scr_back] = sh;
         return 1;
@@ -2499,7 +2623,7 @@ static void timed_finish(void)
 /* Its own thread (V6a): the renderer runs every command on it, and the
  * producer calls nothing here but reset_efb, after a drain, when that thread
  * is idle. */
-static const GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1, 1,
+static GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1, 1,
                                   timed_idle, 1};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
@@ -2536,6 +2660,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "nofilter")) g_mut_nofilter = 1;
     else if (!strcmp(name, "midhalf")) g_mut_midhalf = 1;
     else if (!strcmp(name, "noinvariant")) g_mut_noinvariant = 1;
+    else if (!strcmp(name, "noweight")) g_mut_noweight = 1;
     else if (!strcmp(name, "lodmin")) g_mut_lodmin = 1;
     else if (!strcmp(name, "pool-in-place")) g_mut_pool_inplace = 1;
     else if (!strcmp(name, "late-readback")) g_mut_late = 1;
@@ -2640,9 +2765,11 @@ void gxv_report(void)
         g_n_pipes + (unsigned long long)plat_load64(&g_bg_made), g_n_submits, g_gpu_ms,
         g_timestamps ? "" : " (this queue has no timestamps)");
     say("consumer %.3f ms, waiting for the GPU %.3f ms", (double)g_consumer_ns / 1e6, (double)g_wait_ns / 1e6);
-    if (g_halves > 1)
-        say("the in-between EFB (V12): %llu draws, %llu clears, %llu screen copies, in the same submissions as the real "
-            "frame's, so the GPU time above holds both", g_n_mid_draws, g_n_mid_clears, g_n_mid_copies);
+    if (g_efbs > 1)
+        say("the in-between EFBs (V12, H17c): %d slice(s); %llu draws, %llu of them into slices (%llu lerped here, the rest "
+            "by raster.vert), %llu clears, %llu screen copies, in the same submissions as the real frame's, so the GPU "
+            "time above holds them all",
+            g_efbs - 1, g_n_mid_draws, g_n_slice_draws, g_n_slice_cpu, g_n_mid_clears, g_n_mid_copies);
     say("copies to a texture: %llu, landed with the submissions they were in but for %llu readback waits of their own; "
         "%llu samplers served by a copy image from the pool",
         g_n_tex_copies, g_n_land_waits, g_n_cimg_served);
@@ -2872,7 +2999,7 @@ static int make_pass(void)
     fi.attachmentCount = 2;
     fi.pAttachments = views;
     fi.width = (uint32_t)EFB_SW;
-    fi.height = (uint32_t)(EFB_SH * g_halves);
+    fi.height = (uint32_t)(EFB_SH * g_efbs);
     fi.layers = 1;
     VKCHECK(vkCreateFramebuffer(g_dev, &fi, NULL, &g_fb));
     if (g_has_interlock) {
@@ -3075,7 +3202,7 @@ int gxv_init(char* why, size_t cap)
         const char* sc = getenv("SOA_GPU_SCALE");
         const char* lod = getenv("SOA_GPU_SCALE_LOD");
         g_scale = 1;
-        g_halves = gxr_interp() ? 2 : 1;
+        g_efbs = gxr_interp() ? 1 + gxr_interp_slices() : 1;
         if (sc && *sc) {
             if (!strcmp(sc, "1") || !strcmp(sc, "2") || !strcmp(sc, "3")) g_scale = atoi(sc);
             else say("SOA_GPU_SCALE=%s is not 1, 2 or 3; the EFB is the console's size", sc);
@@ -3149,6 +3276,22 @@ int gxv_init(char* why, size_t cap)
     }
     if (r != VK_SUCCESS) { snprintf(why, cap, "vkCreateInstance failed: VkResult %d (no Vulkan 1.1 driver?)", (int)r); return 0; }
     if (!load_instance(why, cap) || !pick_device(why, cap) || !make_device(why, cap)) return 0;
+    if (g_efbs > 1) {
+        /* H17c: a slice for each in-between image a frame asks for, as many as
+         * the device's images are tall enough for, stacked, and as a memory
+         * budget holds: each costs its colour and depth, its readback and a
+         * partner slot in each of the triple buffer's three */
+        const size_t budget = (size_t)512 << 20, per = READBACK_BYTES * 6;
+        int want = g_efbs, fit = (int)(g_props.limits.maxImageDimension2D / (uint32_t)EFB_SH), mem = (int)(budget / per);
+        if (g_efbs > fit) g_efbs = fit;
+        if (g_efbs > mem) g_efbs = mem;
+        if (g_efbs > 1 + GXR_MID_MAX) g_efbs = 1 + GXR_MID_MAX;
+        if (g_efbs < 2) g_efbs = 2;
+        if (g_efbs < want)
+            say("%d in-between images a frame asked for; %d at %dx on this device (its images up to %u rows; %u MB for them)",
+                want - 1, g_efbs - 1, g_scale, g_props.limits.maxImageDimension2D, (unsigned)(budget >> 20));
+    }
+    g_gxv.slices = g_efbs > 1 ? g_efbs - 1 : 0;
     if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                                   (g_has_interlock ? VK_IMAGE_USAGE_STORAGE_BIT : 0),
                     VK_IMAGE_ASPECT_COLOR_BIT, &g_color, &g_color_view) ||
@@ -3157,11 +3300,11 @@ int gxv_init(char* why, size_t cap)
                     VK_IMAGE_ASPECT_DEPTH_BIT, &g_depth, &g_depth_view) ||
         !make_buffer(RING_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_ring, &g_ring_map) ||
         !make_buffer((VkDeviceSize)MAX_QUADS * 6 * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 0, &g_quad_idx, (uint8_t**)&g_quad_map) ||
-        !make_buffer(READBACK_BYTES * (size_t)g_halves, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        !make_buffer(READBACK_BYTES * (size_t)g_efbs, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      0, &g_readback, &g_readback_map) ||
         !make_buffer(DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) ||
         !make_buffer(IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
-        !make_buffer((VkDeviceSize)READBACK_BYTES * (g_halves > 1 ? SCREEN_SLOTS : SCREEN_MID0),
+        !make_buffer((VkDeviceSize)READBACK_BYTES * (g_efbs > 1 ? SCREEN_MID0 + 3 * (g_efbs - 1) : SCREEN_MID0),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1,
                      &g_screenbuf, &g_screen_map) ||
         !make_buffer(DRAWREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_drawbuf, &g_draw_map) ||
@@ -4040,13 +4183,13 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
         if (g_scr_mid[f] && !g_scr_cut[f]) {
             if (g_filt_on) {
                 unsigned src = g_filt_src;
-                g_filt_src = SCREEN_MID0 + f;
+                g_filt_src = SCREEN_MID(f, 0);
                 g_filt_pending = 1;
                 ok = present_slot(SCREEN_SHOWN, g_mid_ivl, mode);
                 g_filt_src = src;
                 g_filt_pending = 1;
             } else {
-                ok = present_slot(SCREEN_MID0 + f, g_mid_ivl, mode);
+                ok = present_slot(SCREEN_MID(f, 0), g_mid_ivl, mode);
             }
             g_n_shown_mid++;
         } else if (g_scr_mid[f]) {
@@ -4067,7 +4210,7 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
 void gxv_present_interp(unsigned refreshes)
 {
     plat_lock(&g_present_lock);
-    g_mid_ivl = g_halves > 1 ? refreshes : 0;
+    g_mid_ivl = g_efbs > 1 ? refreshes : 0;
     plat_unlock(&g_present_lock);
 }
 

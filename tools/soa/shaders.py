@@ -27,6 +27,7 @@ HEADERS = VENDOR / "vulkan-headers" / "include"
 SHADERS = [
     ("raster.vert", "raster_vert", ()),
     ("raster.vert", "raster_vert_noinvariant", ("GXV_MUTATE_NOINVARIANT",)),
+    ("raster.vert", "raster_vert_noweight", ("GXV_MUTATE_NOWEIGHT",)),
     ("raster.frag", "raster_frag", ()),
     ("raster.frag", "raster_frag_alpha", ("GXV_MUTATE_ALPHA",)),
     ("raster.frag", "raster_frag_lod", ("GXV_MUTATE_LOD",)),

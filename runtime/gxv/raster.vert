@@ -15,6 +15,8 @@ layout(push_constant) uniform Draw {
     float wd, ht, xorig, yorig, zrange, farz;
     uint base;
     uint record;
+    uint prev; // H17c: F's positions in the ring, in floats, 4 a vertex; ~0 for none
+    float t;   // ...lerped to F+1's at this weight, the slice's
 } pc;
 
 // The game draws the same vertices more than once under different TEV and
@@ -38,6 +40,25 @@ void main()
 {
     uint o = (pc.base + uint(gl_VertexIndex)) * 39u;
     float x = v[o], y = v[o + 1u], z = v[o + 2u], w = v[o + 3u];
+    // H17c: an in-between image's slice, F's position moved toward F+1's as
+    // gxr_lerp_positions moves it, (1 - t) * F + t * F+1 with nothing fused.
+    if (pc.prev != 0xFFFFFFFFu) {
+        uint q = pc.prev + uint(gl_VertexIndex) * 4u;
+#ifdef GXV_MUTATE_NOWEIGHT
+        float t = 0.5; // the mutation: every slice the midpoint, whatever its weight
+#else
+        float t = pc.t;
+#endif
+        precise float u = 1.0 - t;
+        precise float lx = u * v[q] + t * x;
+        precise float ly = u * v[q + 1u] + t * y;
+        precise float lz = u * v[q + 2u] + t * z;
+        precise float lw = u * v[q + 3u] + t * w;
+        x = lx;
+        y = ly;
+        z = lz;
+        w = lw;
+    }
     // The GPU's divide and the full 640x528 viewport turn this into the CPU's
     // sx = xorig + x/w*wd, sy = yorig + y/w*ht (to_screen). z is held at 0.5w,
     // inside the GPU's own depth clip volume, so the GPU never cuts what the

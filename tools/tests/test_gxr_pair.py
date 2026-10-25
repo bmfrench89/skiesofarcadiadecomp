@@ -585,7 +585,27 @@ def world(tmp_path_factory):
         r = run("pair", str(out / a), str(out / b), extra=extra)
         assert r.returncode == 0, f"{name}: exit {r.returncode}\n{r.stdout}{r.stderr}"
         cuts[name] = log.read_text()
-    yield {"out": out, "runs": results, "strip": strip, "rings": rings, "cuts": cuts}
+    # H17c: SOA_INTERP_WEIGHTS on the CPU renderer, which draws one in-between
+    # image: more than one weight is refused to the first, and a list that is
+    # not ascending weights in (0, 1) to the midpoint, each said.
+    weights = {}
+    for name, spec in (("two", "0.25,0.75"), ("down", "0.75,0.25"), ("one", "1")):
+        r = run(
+            "pair",
+            str(out / "move" / "0001"),
+            str(out / "move" / "0002"),
+            extra={"SOA_INTERP": "1", "SOA_INTERP_WEIGHTS": spec},
+        )
+        assert r.returncode == 0, f"weights {spec}: exit {r.returncode}\n{r.stdout}{r.stderr}"
+        weights[name] = r.stderr
+    yield {
+        "out": out,
+        "runs": results,
+        "strip": strip,
+        "rings": rings,
+        "cuts": cuts,
+        "weights": weights,
+    }
     # Twenty-odd 24 MB images: pytest keeps the last three temporary trees.
     for ram in out.rglob("*.ram"):
         ram.unlink()
@@ -767,6 +787,21 @@ def test_the_live_stream_makes_the_three_pass_midpoint(world):
             assert got["report"] == want["report"], f"{name}: the matching differs"
     move = world["runs"][("move.pair", "1")]["png"]
     assert move[0] != move[1]
+
+
+@needs_msvc
+def test_more_weights_than_the_cpu_draws_are_held_to_one(world):
+    """H17c: the CPU renderer draws one in-between image a frame, so
+    SOA_INTERP_WEIGHTS asking two is held to the first, and a list that is not
+    weights ascending, each above 0 and below 1, to the midpoint; each says
+    so. The GPU's slices are gpuspike.py pairs --weights'."""
+    w = world["weights"]
+    assert (
+        "2 in-between images a frame need a backend that draws that many (the GPU's); one, at 0.25"
+        in w["two"]
+    ), w["two"]
+    assert "SOA_INTERP_WEIGHTS=0.75,0.25 is not up to 8 weights, ascending" in w["down"], w["down"]
+    assert "SOA_INTERP_WEIGHTS=1 is not up to 8 weights, ascending" in w["one"], w["one"]
 
 
 @needs_msvc

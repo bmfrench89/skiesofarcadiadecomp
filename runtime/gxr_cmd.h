@@ -11,6 +11,8 @@
 
 typedef struct { int x0, y0, x1, y1; } Rect;
 
+#define GXR_MID_MAX 8 /* in-between images a frame, at most (H17c) */
+
 typedef struct {
     int blend_en, logic_en, col_upd, alpha_upd, subtract;
     unsigned sfac, dfac, lop;
@@ -81,6 +83,16 @@ typedef struct {
 #define CP_CUT 4  /* ...which is a camera cut's, not to be shown */
     uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
+    /* H17c (specs/interp-display.md): on a command with efb 1, the frame's
+     * in-between weights, ascending in (0, 1), an image each (claim_slot);
+     * none on a real command. A draw for a backend that draws slices carries
+     * F's positions too -- x, y, z, w a vertex, as the pair tables keep them --
+     * or NULL where it matched nothing, and its v is F+1's: the backend draws
+     * it once per weight, lerping. Every other in-between draw's v is lerped
+     * already, at the one weight. */
+    uint8_t mid_n;
+    float mid_t[GXR_MID_MAX];
+    const float (*prev)[4];
 } DrawCmd;
 
 /* A backend draws the queue's commands instead of the worker pool (GPU spec
@@ -111,12 +123,22 @@ typedef struct GxrBackend {
     /* Draws a command with efb 1 into an EFB of its own (V12), so H17's
      * in-between stream can run on it; SOA_INTERP is refused with any other. */
     int two_efbs;
+    /* H17c: how many in-between images a frame it draws, each in an EFB of
+     * its own, from a draw's F+1 vertices and F's positions; 0 for a backend
+     * that draws one, already lerped, as V12 did. */
+    int slices;
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */
 void gxr_backend_screen(const uint8_t* rgba, int w, int h); /* a screen copy's pixels, exactly g_screen's size */
 void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h); /* an in-between screen copy's, into g_screen_mid (V12) */
+/* H17c: in-between image k's (0 the first weight's), for its PNG; k 0 is g_screen_mid as well. */
+void gxr_backend_screen_slice(int k, const uint8_t* rgba, int w, int h);
 int gxr_interp(void); /* SOA_INTERP: a backend sizes its EFB for two at start (V12) */
+/* H17c: the in-between images a frame may ask for (SOA_INTERP_WEIGHTS' count, else 1), for a backend's sizing. */
+int gxr_interp_slices(void);
+/* H17c: v's x, y, z, w moved to (1 - t) * prev + t * v, as the pair tables lerp them. */
+void gxr_lerp_positions(Vertex* v, const float (*prev)[4], unsigned count, float t);
 /* lands_late: every command below `through` has its guest RAM writes in
  * place. Raised only, by whichever thread runs the backend. */
 void gxr_backend_landed(long long through);

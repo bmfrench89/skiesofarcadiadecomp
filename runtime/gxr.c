@@ -196,6 +196,30 @@ static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D dr
 static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
 static unsigned long long g_cuts, g_over_budget, g_budget_offs;
 static double g_ms_last;
+/* H17c (docs/specs/interp-display.md): the frame's in-between weights, an
+ * image each, ascending in (0, 1); one at the midpoint unless
+ * SOA_INTERP_WEIGHTS gives others, more than one only for a backend that
+ * draws slices. claim_slot stamps them on every command for EFB 1. */
+static float g_mid_w[GXR_MID_MAX] = {0.5f};
+static unsigned g_mid_wn = 1;
+static unsigned long long g_slice_draws, g_slice_prev; /* in-between draws handed to slices; with F's positions */
+
+/* "t1,t2,...": the weights, ascending, each in (0, 1); their count, 0 when
+ * it is not that. */
+static unsigned interp_weights(const char* s, float* out)
+{
+    unsigned n = 0;
+    while (*s) {
+        char* end;
+        double t = strtod(s, &end);
+        if (end == s || !(t > 0.0 && t < 1.0) || n == GXR_MID_MAX || (n && (float)t <= out[n - 1])) return 0;
+        out[n++] = (float)t;
+        s = end;
+        if (*s == ',') s++;
+        else if (*s) return 0;
+    }
+    return n;
+}
 static double g_frame_s;                           /* the last screen copy, by gxr_clock */
 static int g_slow_run, g_backoff = 30, g_wait, g_held;
 
@@ -290,6 +314,16 @@ int gxr_enabled(void)
             if (g_interp && g_draw_limit) {
                 fprintf(stderr, "[interp] SOA_INTERP is refused with SOA_GXR_DRAWS: a frame cut short has no in-between image; off\n");
                 g_interp = 0;
+            }
+            if (g_interp && getenv("SOA_INTERP_WEIGHTS") && *getenv("SOA_INTERP_WEIGHTS")) {
+                const char* wt = getenv("SOA_INTERP_WEIGHTS");
+                unsigned n = interp_weights(wt, g_mid_w);
+                if (n) g_mid_wn = n;
+                else {
+                    fprintf(stderr, "[interp] SOA_INTERP_WEIGHTS=%s is not up to %d weights, ascending, each above 0 and below 1; "
+                                    "one at 0.5\n", wt, GXR_MID_MAX);
+                    g_mid_w[0] = 0.5f;
+                }
             }
         }
     }
@@ -1774,6 +1808,9 @@ static DrawCmd* claim_slot(int kind, long long want, long long want_near)
     D->kind = kind;
     D->efb = (uint8_t)g_target;
     D->cp_ring = 0;
+    D->prev = NULL;
+    D->mid_n = g_target ? (uint8_t)g_mid_wn : 0; /* H17c: the frame's weights, on everything for EFB 1 */
+    if (g_target) memcpy(D->mid_t, g_mid_w, sizeof D->mid_t);
     fence = want > g_fence_after ? want : g_fence_after;
     if (fence > n) {
         WARN_ONCE("[gxr] command %lld asked for a fence at %lld, past itself; held to its own number\n", n, fence);
@@ -2182,9 +2219,14 @@ static void workers_start(void)
         fprintf(stderr, "[interp] SOA_INTERP is refused with the %s backend, which has one EFB; off\n", g_backend->name);
         g_interp = 0;
     }
+    if (g_interp && g_mid_wn > 1 && !(g_backend && g_backend->slices >= (int)g_mid_wn)) {
+        fprintf(stderr, "[interp] %u in-between images a frame need a backend that draws that many (the GPU's); one, at %.2f\n",
+                g_mid_wn, (double)g_mid_w[0]);
+        g_mid_wn = 1;
+    }
     /* A live run: record and lerp from the first frame. A pair replay has
      * set its own mode already (gx_replay_pair). */
-    if (g_interp && !g_pair_flags && !gxr_pair_mode(GXR_PAIR_RECORD | GXR_PAIR_LERP, 0.5f)) {
+    if (g_interp && !g_pair_flags && !gxr_pair_mode(GXR_PAIR_RECORD | GXR_PAIR_LERP, g_mid_w[0])) {
         fprintf(stderr, "[interp] cannot allocate the pair tables; off\n");
         g_interp = 0;
     }
@@ -2424,9 +2466,43 @@ static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ort
     return c;
 }
 
+/* Only x, y, z, w -- colours and texture coordinates stay F+1's. Every
+ * in-between image's positions come from here, the GPU's slices lerping on
+ * the CPU included (H17c), and raster.vert's lerp repeats it exactly. */
+void gxr_lerp_positions(Vertex* v, const float (*prev)[4], unsigned count, float t)
+{
+    float u = 1.0f - t;
+    unsigned i;
+    for (i = 0; i < count; i++) {
+        v[i].x = u * prev[i][0] + t * v[i].x;
+        v[i].y = u * prev[i][1] + t * v[i].y;
+        v[i].z = u * prev[i][2] + t * v[i].z;
+        v[i].w = u * prev[i][3] + t * v[i].w;
+    }
+}
+
+/* A matched draw's farthest move on screen from F (p) to F+1 (v), for the
+ * cut detector, and the pairs' counts. */
+static double pair_measure(const RasterCfg* rc, const Vertex* v, const float (*p)[4], unsigned count)
+{
+    unsigned i;
+    double worst = 0.0;
+    for (i = 0; i < count; i++)
+        if (p[i][3] > 0.0f && v[i].w > 0.0f) {
+            double dx = ((double)v[i].x / v[i].w - (double)p[i][0] / p[i][3]) * rc->wd;
+            double dy = ((double)v[i].y / v[i].w - (double)p[i][1] / p[i][3]) * rc->ht;
+            double d = sqrt(dx * dx + dy * dy);
+            if (d > worst) worst = d;
+        }
+    g_pair_verts += count;
+    if (worst > g_pair_maxdisp) g_pair_maxdisp = worst;
+    if (worst > 32.0) g_pair_over32++;
+    return worst;
+}
+
 /* After a draw's vertices are transformed and before it is published: keep
  * them as this frame's, or move them to the point between the frame before
- * and this one. Only x, y, z, w -- colours and texture coordinates stay F+1's. */
+ * and this one. */
 static double pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, PairClaim c)
 {
     unsigned i;
@@ -2441,23 +2517,9 @@ static double pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, Pai
         }
     }
     if (c.prev_off != PAIR_NONE) {
-        float (*p)[4] = g_pair[g_pair_cur ^ 1].pos + c.prev_off;
-        float t = g_pair_t, u = 1.0f - g_pair_t;
-        for (i = 0; i < count; i++) {
-            if (p[i][3] > 0.0f && v[i].w > 0.0f) {
-                double dx = ((double)v[i].x / v[i].w - (double)p[i][0] / p[i][3]) * rc->wd;
-                double dy = ((double)v[i].y / v[i].w - (double)p[i][1] / p[i][3]) * rc->ht;
-                double d = sqrt(dx * dx + dy * dy);
-                if (d > worst) worst = d;
-            }
-            v[i].x = u * p[i][0] + t * v[i].x;
-            v[i].y = u * p[i][1] + t * v[i].y;
-            v[i].z = u * p[i][2] + t * v[i].z;
-            v[i].w = u * p[i][3] + t * v[i].w;
-        }
-        g_pair_verts += count;
-        if (worst > g_pair_maxdisp) g_pair_maxdisp = worst;
-        if (worst > 32.0) g_pair_over32++;
+        const float (*p)[4] = (const float (*)[4])(g_pair[g_pair_cur ^ 1].pos + c.prev_off);
+        worst = pair_measure(rc, v, p, count);
+        gxr_lerp_positions(v, p, count, g_pair_t);
     }
     return worst;
 }
@@ -2563,6 +2625,17 @@ int gxr_interp(void)
     return ip && !strcmp(ip, "check") ? 2 : (ip && atoi(ip) ? 1 : 0);
 }
 
+int gxr_interp_slices(void)
+{
+    float w[GXR_MID_MAX];
+    const char* wt = getenv("SOA_INTERP_WEIGHTS");
+    unsigned n;
+    if (g_enabled >= 0) return g_interp ? (int)g_mid_wn : 0;
+    if (!gxr_interp()) return 0;
+    n = wt && *wt ? interp_weights(wt, w) : 0;
+    return n ? (int)n : 1;
+}
+
 int gxr_pair_mode(unsigned flags, float t)
 {
     int i;
@@ -2614,10 +2687,11 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     unsigned prim = op & 0xF8, vat = op & 7, i;
     const uint8_t* p = verts;
     Vertex *v, *v2 = NULL;
+    float (*pv)[4] = NULL; /* H17c: F's positions, for a backend drawing slices */
     DrawCmd* D;
     PairClaim pc = {PAIR_NONE, PAIR_NONE};
     long long tfence;
-    int mid;
+    int mid, slices;
     (void)vsize;
     if (!gxr_enabled() || count == 0) return;
     ++g_draw_no;
@@ -2634,6 +2708,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     if (!g_started) { g_started = 1; workers_start(); }
     tex_set_memory(s);
     mid = interp_on();
+    slices = mid && g_backend && g_backend->slices; /* H17c: F's positions travel, the backend lerps */
 
     /* Every drain on this path comes before tev_prepare: the gate (a screen
      * copy was the last frame's end), then the arena and the graveyard. */
@@ -2655,7 +2730,10 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     v = (Vertex*)(g_arena + g_arena_used);
     g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
-    if (mid) { /* the in-between command's own block, taken with the draw's: run_here frees the arena */
+    if (slices) { /* F's positions, taken with the draw's block: run_here frees the arena */
+        pv = (float (*)[4])(g_arena + g_arena_used);
+        g_arena_used += (16 * (size_t)count + 15) & ~(size_t)15;
+    } else if (mid) { /* the in-between command's own block, taken with the draw's: run_here frees the arena */
         v2 = (Vertex*)(g_arena + g_arena_used);
         g_arena_used += (sizeof(Vertex) * count + 15) & ~(size_t)15;
     }
@@ -2686,10 +2764,24 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     if (mid) { /* F+1's positions recorded and drawn; the lerp goes to the copy */
         PairClaim rec = {pc.cur_off, PAIR_NONE}, lerp = {PAIR_NONE, pc.prev_off};
-        double worst;
+        double worst = 0.0;
         pair_positions(&D->rc, v, count, rec);
-        memcpy(v2, v, sizeof(Vertex) * count);
-        worst = pair_positions(&D->rc, v2, count, lerp);
+        if (slices) {
+            /* H17c: F's positions copied out of the pair tables, which the
+             * next frame overwrites while the backend may still draw this */
+            if (pc.prev_off != PAIR_NONE) {
+                const float (*f)[4] = (const float (*)[4])(g_pair[g_pair_cur ^ 1].pos + pc.prev_off);
+                memcpy(pv, f, 16 * (size_t)count);
+                worst = pair_measure(&D->rc, v, f, count);
+                g_slice_prev++;
+            } else {
+                pv = NULL;
+            }
+            g_slice_draws++;
+        } else {
+            memcpy(v2, v, sizeof(Vertex) * count);
+            worst = pair_positions(&D->rc, v2, count, lerp);
+        }
         if (!(xf[0x1026] & 1)) { /* a 3D draw: the cut detector's */
             int k;
             g_f_keyed3d++;
@@ -2733,7 +2825,9 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         M->nchan = D->nchan;
         M->miptex = D->miptex;
         memcpy(M->texmap_of, D->texmap_of, sizeof M->texmap_of);
-        M->prim = prim; M->count = count; M->v = v2;
+        M->prim = prim; M->count = count;
+        M->v = slices ? v : v2; /* H17c: F+1's own, with F's positions beside them */
+        M->prev = (const float (*)[4])pv;
         if (g_workers > 0) {
             publish();
         } else {
@@ -3015,6 +3109,22 @@ void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h)
         exit(8);
     }
     for (y = 0; y < h; y++) memcpy(g_screen_mid[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
+}
+
+/* H17c: each slice's picture beyond the first, for its PNG (the first is
+ * g_screen_mid, which everything else reads); made on first use. */
+static uint8_t* g_screen_slice[GXR_MID_MAX];
+
+void gxr_backend_screen_slice(int k, const uint8_t* rgba, int w, int h)
+{
+    int y;
+    if (k == 0) {
+        gxr_backend_screen_mid(rgba, w, h);
+        return;
+    }
+    if (k < 0 || k >= GXR_MID_MAX) return;
+    if (!g_screen_slice[k] && !(g_screen_slice[k] = (uint8_t*)malloc((size_t)EFB_H * EFB_W * 4))) return;
+    for (y = 0; y < h; y++) memcpy(g_screen_slice[k] + (size_t)y * EFB_W * 4, rgba + (size_t)y * w * 4, (size_t)w * 4);
 }
 
 /* One filtered EFB sample: the three rows the copy filter reads, weighted and
@@ -3657,9 +3767,20 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         if (want) TIMED(T_PNG, write_frame_png(path, &g_screen[0][0][0], g_screen_w, g_screen_h));
         if (want && mid_copy) { /* NNNN.mid.png, or B.mid.png beside a replay's B.png */
             size_t n = strlen(path);
+            unsigned k;
             if (n >= 4 && !strcmp(path + n - 4, ".png")) path[n - 4] = '\0';
-            strncat(path, ".mid.png", sizeof path - strlen(path) - 1);
-            TIMED(T_PNG, write_frame_png(path, &g_screen_mid[0][0][0], g_screen_w, g_screen_h));
+            if (g_mid_wn == 1) {
+                strncat(path, ".mid.png", sizeof path - strlen(path) - 1);
+                TIMED(T_PNG, write_frame_png(path, &g_screen_mid[0][0][0], g_screen_w, g_screen_h));
+            } else { /* H17c: NNNN.mid1.png onward, a slice each, in weight order */
+                char base[512], one[540];
+                snprintf(base, sizeof base, "%s", path);
+                for (k = 0; k < g_mid_wn; k++) {
+                    const uint8_t* img = k ? g_screen_slice[k] : &g_screen_mid[0][0][0];
+                    snprintf(one, sizeof one, "%s.mid%u.png", base, k + 1);
+                    if (img) TIMED(T_PNG, write_frame_png(one, img, g_screen_w, g_screen_h));
+                }
+            }
         }
         /* One line per presented frame, for a tool to diff between runs:
          * "[gxr] frame <n> <w>x<h> hash <16 hex digits>". Note that SOA_SNAP
@@ -3797,6 +3918,12 @@ void gxr_report(void)
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
         fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts, g_over_budget,
                 g_budget_offs);
+        if (g_slice_draws) { /* H17c */
+            unsigned k;
+            fprintf(stderr, "%u image(s) a frame at weights", g_mid_wn);
+            for (k = 0; k < g_mid_wn; k++) fprintf(stderr, " %.3f", (double)g_mid_w[k]);
+            fprintf(stderr, ", %llu draws lerped by the backend (%llu with F's positions); ", g_slice_draws, g_slice_prev);
+        }
         if (g_interp == 2)
             fprintf(stderr, "the real picture unchanged by its in-between copy at %llu of %llu frames\n", g_interp_same,
                     g_interp_checked);

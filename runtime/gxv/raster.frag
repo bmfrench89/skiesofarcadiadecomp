@@ -47,6 +47,8 @@ layout(push_constant) uniform Draw {
     float wd, ht, xorig, yorig, zrange, farz;
     uint base;
     uint record;
+    uint prev; // raster.vert's (H17c)
+    float t;
 } pc;
 
 layout(location = 0) noperspective in float i_depth;

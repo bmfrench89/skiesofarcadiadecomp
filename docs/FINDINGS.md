@@ -10207,3 +10207,46 @@ Both were found by reading the code, each confirmed in it before it was fixed.
   - *Fixed:* on the GPU path the window presents when gxv has a slot published and not yet taken
     (`gxv_screen_fresh`). The CPU path already polled its own ring; SDL has no GPU presenter.
 - **Next:** the display-rate mode's spec (PLAN-NEXT D-45).
+
+**H17c-a: several in-between images a frame, each a slice of the GPU's EFB, lerped in raster.vert.** 2026-10-25.
+Spec: `docs/specs/interp-display.md`; the owner's D-45.
+
+- **What it is** [V, `runtime/gxr.c`, `gxr_cmd.h`, `gxv.c`, `gxv/raster.vert`]:
+  - The frame's in-between weights (`g_mid_w`, one at 0.5 unless `SOA_INTERP_WEIGHTS=t1,t2,...` gives up to 8,
+    ascending in (0, 1)) are stamped on every command for EFB 1 (`claim_slot`). With a backend that draws slices,
+    the in-between draw carries F+1's own vertices and a copy of F's positions (16 bytes a vertex, out of the pair
+    tables, which the next frame overwrites), or none for a draw with no match; the CPU renderer keeps the one
+    CPU-lerped copy, and more than one weight is held to the first with a line.
+  - `pair_positions` is split into `pair_measure` (the cut detector's move) and `gxr_lerp_positions`, the one lerp
+    formula, which the GPU's CPU route calls and `raster.vert` repeats under `precise`.
+  - gxv stacks 1 + N EFBs (V12 had two halves): N from the weights, capped by `maxImageDimension2D` and a 512 MB
+    budget. An in-between draw goes up once and is drawn once per slice, the slice's viewport and scissor and push
+    constants `prev` (F's positions in the ring) and `t`; a draw with any vertex of F or F+1 needing the CPU's
+    clipping is lerped on the CPU per slice and drawn as V12 drew it. Clears go to every slice; each slice's screen
+    copy fills its own partner image, one submission each for now; `B.midK.png` / `NNNN.midK.png` beside the frame's.
+  - `SOA_GPU_MUTATE=noweight`, a new shader variant, lerps every slice to the midpoint.
+- **The lerp on the GPU is the CPU's** [V, `gpuspike.py pairs`]: at one weight, 0.5, every in-between draw now goes
+  through `raster.vert`'s lerp, and H10's five pairs give exactly the numbers they gave with V12's CPU-lerped
+  copies (B.mid.png 6, 16, 0 and 11 pixels apart by one level from the GPU's three passes, the field 59-pixel blob by
+  design).
+- **Slices at 0.25, 0.5 and 0.75 in one run** [V, `gpuspike.py pairs --weights 0.25,0.5,0.75`]: every B.png the three
+  passes', every slice V0 against the CPU's three passes at its weight (the field by design). Against the GPU's own
+  three passes at its weight, a slice lower in the image rasterizes a little differently -- the viewport's offset
+  moves vertex snapping and attribute interpolation: up to 1009 pixels (ship, third slice) and up to 9 levels
+  (battle, cutscene), where the first slice holds V12's one level but for one 2-level pixel. So the check is no pixel
+  more than 16 levels apart beyond 0.005%: 0 at every correct slice.
+  *Mutation:* `noweight` leaves 45 to 832 pixels more than 16 levels apart at 0.25 and 0.75 and fails all ten of
+  those rows; V0 against the CPU alone would have let some through, which is why both are checked.
+- **Off and one weight change nothing** [V]: replay 23/23 at 1, 2, 3 and 8 threads; `contrast --set
+  corpus,perfset,gpuset` 67/67 after the draw path was restructured; `gpuspike.py selftest`; the self test;
+  `test_gxr_pair.py` (the pair replays through the split `pair_positions`).
+- **The cost** [V, `build/e2/cost-*.log`, the `title` scenario headless, `SOA_GPU=vulkan`, every frame drawn]: one
+  slice, GPU 2.16 ms a frame (p50) and consumer 1.26; three, 3.95 and 1.74. About 0.9 ms of GPU and 0.24 ms of
+  consumer CPU a slice at 1x; real frames 28.3 a second both. About half the title screen's in-between draws take
+  the CPU route (a vertex of F or F+1 outside the clip volume), which is where the consumer's share goes.
+- **Tests** [V]: `test_gxr_pair.py`, one: the CPU renderer holding two weights to the first and refusing a list not
+  ascending or not inside (0, 1), each said. *Mutation:* a descending list accepted.
+- **As built against the spec:** the slices are stacked, not in a grid, so at 3x a 4096-row device holds one; the
+  screen copies are one submission a slice, not batched; Done 1's GPU-against-GPU rule is the 16-level one above, not
+  V12's one level, for the slice offset.
+- **Next:** H17c-b, the presenter at the display's rate.
