@@ -518,7 +518,8 @@ static void pad_record_open(void)
         return;
     }
     pad_config(cfg, sizeof cfg);
-    fprintf(g_rec, "# soa pad recording v2 -- frame buttons stick cstick triggers, one line per change\n");
+    fprintf(g_rec, "# soa pad recording v3 -- frame buttons stick cstick triggers, one line per change; "
+                   "`frame @kind` lines are the event track (docs/specs/event-track.md)\n");
     fprintf(g_rec, "# config %s\n", cfg);
     fflush(g_rec);
     fprintf(stderr, "[pad] recording controller input to %s (%s)\n", g_rec_path, cfg);
@@ -538,23 +539,28 @@ static int pad_buttons_str(char* out, size_t cap, uint16_t b)
     return n;
 }
 
-static void pad_record(const PadState* st, unsigned frame)
+/* A state as a line gives it: buttons, then the sticks and triggers while
+ * any of them, or one after it, is off centre or down. */
+static void pad_state_str(char* out, size_t cap, const PadState* st)
 {
-    char btn[64], opt[64], line[256];
-    int n = 0;
+    int n;
     int trig = st->trig[0] || st->trig[1];
     int cstick = trig || st->cstick[0] != 128 || st->cstick[1] != 128;
     int stick = cstick || st->stick[0] != 128 || st->stick[1] != 128;
+    n = pad_buttons_str(out, cap, st->buttons);
+    if (stick) n += snprintf(out + n, cap - (size_t)n, " %u,%u", (unsigned)st->stick[0], (unsigned)st->stick[1]);
+    if (cstick) n += snprintf(out + n, cap - (size_t)n, " %u,%u", (unsigned)st->cstick[0], (unsigned)st->cstick[1]);
+    if (trig) snprintf(out + n, cap - (size_t)n, " %u,%u", (unsigned)st->trig[0], (unsigned)st->trig[1]);
+}
+
+static void pad_record(const PadState* st, unsigned frame)
+{
+    char state[128], line[256];
     /* si_report writes the totals from whichever thread is stopping the run
      * while this one may still be playing, so nothing may follow them. */
     if (g_rec_done || pad_same(st, &g_rec_last)) return;
-    pad_buttons_str(btn, sizeof btn, st->buttons);
-    opt[0] = '\0';
-    if (stick) n += snprintf(opt + n, sizeof opt - (size_t)n, " %u,%u", (unsigned)st->stick[0], (unsigned)st->stick[1]);
-    if (cstick) n += snprintf(opt + n, sizeof opt - (size_t)n, " %u,%u", (unsigned)st->cstick[0], (unsigned)st->cstick[1]);
-    if (trig) n += snprintf(opt + n, sizeof opt - (size_t)n, " %u,%u", (unsigned)st->trig[0], (unsigned)st->trig[1]);
-    snprintf(line, sizeof line, "%u %s%s #r%llu\n", frame, btn, opt,
-             (unsigned long long)irq_retrace_count());
+    pad_state_str(state, sizeof state, st);
+    snprintf(line, sizeof line, "%u %s #r%llu\n", frame, state, (unsigned long long)irq_retrace_count());
     /* One fputs, not five fprintfs: the CRT locks a FILE for the length of a
      * call, so a line built in a buffer and written whole cannot be spliced
      * into the middle of another thread's line. It could before, and the two
@@ -570,10 +576,85 @@ static void pad_record(const PadState* st, unsigned frame)
     g_rec_changes++;
 }
 
+/* ---- the event track (docs/specs/event-track.md) -------------------------
+ * What changes the game besides pad 1, as `F @kind value` lines in the same
+ * file: since E2, `@pad2 STATE` and `@pad2 off` (port 2, which mods read)
+ * and `@host NAMES` (the host buttons, which mods read and chords come from).
+ * Each kind is written when it changes, kept apart from pad 1's lines on
+ * replay, in its own frame order, and read through its own cursor. A replay
+ * is the whole input for these as for pad 1: none recorded means none. */
+enum { EV_PAD2, EV_HOST, EV_KINDS };
+static const char* const k_ev_names[EV_KINDS] = {"pad2", "host"};
+typedef struct { unsigned frame; uint8_t kind, there, host; PadState st; } EventLine;
+static EventLine* g_ev;
+static int g_ev_n, g_ev_cap;
+static int g_ev_at[EV_KINDS], g_ev_next[EV_KINDS]; /* the line in effect, -1 none; the next of its kind */
+static int g_replaying; /* the recording held a line of either sort, so it is the whole input */
+static PadState g_rec_p2;
+static int g_rec_p2_there;
+static uint32_t g_rec_host;
+
+/* One event line, written whole, as pad_record writes its lines. */
+static void event_record(unsigned frame, const char* kind, const char* value)
+{
+    char line[192];
+    if (!g_rec || g_rec_done) return;
+    snprintf(line, sizeof line, "%u @%s %s\n", frame, kind, value);
+    fputs(line, g_rec);
+    fflush(g_rec);
+}
+
+static void host_names_str(char* out, size_t cap, uint32_t host)
+{
+    size_t i, n = 0;
+    snprintf(out, cap, "-");
+    for (i = 0; i < HOST_NAMES && n < cap; i++)
+        if (host & g_host_names[i].b) n += (size_t)snprintf(out + n, cap - n, "%s%s", n ? "+" : "", g_host_names[i].n);
+}
+
+/* Port 2 as a mod read it this frame, when it differs from the last line. */
+static void pad2_record(const PadState* st, int there, unsigned frame)
+{
+    char state[128];
+    if (there == g_rec_p2_there && (!there || pad_same(st, &g_rec_p2))) return;
+    if (there) pad_state_str(state, sizeof state, st);
+    event_record(frame, "pad2", there ? state : "off");
+    g_rec_p2_there = there;
+    g_rec_p2 = *st;
+}
+
+/* The line of `kind` in effect at `frame`: its index, or -1 before the
+ * first. Frames only go forward, so each kind is a cursor, and finding the
+ * next of a kind costs one pass over the lines in all. */
+static int event_at(int kind, unsigned frame)
+{
+    while (g_ev_next[kind] < g_ev_n && g_ev[g_ev_next[kind]].frame <= frame) {
+        int j = g_ev_next[kind];
+        g_ev_at[kind] = j;
+        for (j++; j < g_ev_n && g_ev[j].kind != kind; j++) {}
+        g_ev_next[kind] = j;
+    }
+    return g_ev_at[kind];
+}
+
+static int event_push(const EventLine* e)
+{
+    if (g_ev_n == g_ev_cap) {
+        int cap = g_ev_cap ? g_ev_cap * 2 : 64;
+        EventLine* grown = (EventLine*)realloc(g_ev, (size_t)cap * sizeof *grown);
+        if (!grown) return 0;
+        g_ev = grown;
+        g_ev_cap = cap;
+    }
+    g_ev[g_ev_n++] = *e;
+    return 1;
+}
+
 typedef struct { unsigned frame; uint64_t retrace; PadState st; } PadFrame;
 static PadFrame* g_play;
 static int g_play_n, g_play_cap, g_play_i = -1;
 static int g_play_tried, g_play_done;
+static unsigned g_play_last; /* the last frame any line names, pad 1's or an event's */
 static const char* g_play_path;
 static uint64_t g_play_late;                      /* states delivered a read later than the recording had them */
 static long long g_play_drift, g_play_drift_max;  /* retraces ahead of (+) or behind (-) the recording */
@@ -673,12 +754,102 @@ static int pad_play_push(const PadFrame* e)
     return 1;
 }
 
+/* "lb+view" or "-" into host bits; 0 for a name it does not know. */
+static int pad_parse_host(const char* s, uint8_t* out)
+{
+    uint8_t b = 0;
+    if (strcmp(s, "-") == 0) { *out = 0; return 1; }
+    while (*s) {
+        const char* q = s;
+        uint8_t one;
+        while (*q && *q != '+') q++;
+        one = host_named(s, (size_t)(q - s));
+        if (!one) return 0;
+        b |= one;
+        s = *q == '+' ? q + 1 : q;
+    }
+    *out = b;
+    return 1;
+}
+
+/* A `F @kind ...` line: 1 kept, 0 passed over (and said why, while `bad`
+ * allows), -1 not an event line at all. `last` and `seen` hold each kind's
+ * latest frame, which is all its order is checked against. */
+static int pad_parse_event(char* line, const char* path, unsigned lineno, unsigned last[EV_KINDS],
+                           int seen[EV_KINDS], unsigned* bad)
+{
+    char* p = line;
+    char *tok, *end, *kind;
+    EventLine e;
+    int k, ok = 1;
+    /* Looked at before anything is cut: pad_token writes into the line, and
+     * one that is not an event goes on to pad_parse_line whole. */
+    while (*p == ' ' || *p == '\t') p++;
+    while (*p >= '0' && *p <= '9') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '@' || p == line) return -1;
+    p = line;
+    tok = pad_token(&p);
+    if (!tok) return -1;
+    memset(&e, 0, sizeof e);
+    e.frame = (unsigned)strtoul(tok, &end, 10);
+    if (end == tok || *end) return -1;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '@') return -1;
+    kind = pad_token(&p) + 1;
+    for (k = 0; k < EV_KINDS && strcmp(kind, k_ev_names[k]) != 0; k++) {}
+    if (k == EV_KINDS) {
+        if ((*bad)++ < 5)
+            fprintf(stderr, "[pad] %s:%u: `@%s` is not an event this build knows; passed over\n", path, lineno, kind);
+        return 0;
+    }
+    if (seen[k] && e.frame < last[k]) {
+        if ((*bad)++ < 5)
+            fprintf(stderr, "[pad] %s:%u: `@%s` goes back to frame %u from %u; that line is ignored\n", path, lineno,
+                    kind, e.frame, last[k]);
+        return 0;
+    }
+    e.kind = (uint8_t)k;
+    e.there = 1;
+    e.st = PAD_NEUTRAL;
+    if (k == EV_PAD2) {
+        /* pad 1's grammar after the frame, so the parser is the one pad 1 uses */
+        char again[256], rest[200];
+        PadFrame f;
+        char *q = rest, *word;
+        snprintf(rest, sizeof rest, "%s", p); /* pad_token writes into what it reads */
+        word = pad_token(&q);
+        if (word && strcmp(word, "off") == 0 && !pad_token(&q)) {
+            e.there = 0;
+        } else {
+            snprintf(again, sizeof again, "%u %s", e.frame, p);
+            ok = pad_parse_line(again, &f) == 1;
+            e.st = f.st;
+        }
+    } else {
+        tok = pad_token(&p);
+        ok = tok && pad_parse_host(tok, &e.host) && !pad_token(&p);
+    }
+    if (!ok) {
+        if ((*bad)++ < 5)
+            fprintf(stderr, "[pad] %s:%u is not \"frame @%s %s\"; that line is ignored\n", path, lineno, kind,
+                    k == EV_PAD2 ? "buttons [stick] [cstick] [triggers] | off" : "host+buttons | -");
+        return 0;
+    }
+    if (!event_push(&e)) return 0;
+    last[k] = e.frame;
+    seen[k] = 1;
+    return 1;
+}
+
 static void pad_replay_load(void)
 {
     const char* path = getenv("SOA_PAD_FILE");
     const char* script;
     char line[2048], was[1024], now[1024]; /* line holds "# config " and a whole cfg */
-    unsigned lineno = 0, bad = 0;
+    unsigned lineno = 0, bad = 0, ev_last[EV_KINDS] = {0};
+    int ev_seen[EV_KINDS] = {0}, k;
+    unsigned last;
     FILE* f;
     g_play_tried = 1;
     was[0] = '\0';
@@ -698,6 +869,7 @@ static void pad_replay_load(void)
             snprintf(was, sizeof was, "%s", line + 9);
             continue;
         }
+        if (pad_parse_event(line, path, lineno, ev_last, ev_seen, &bad) >= 0) continue;
         ok = pad_parse_line(line, &e);
         if (ok < 0) continue;
         if (ok && g_play_n && e.frame < g_play[g_play_n - 1].frame) {
@@ -722,16 +894,21 @@ static void pad_replay_load(void)
     fclose(f);
     g_play_path = path;
     if (bad > 5) fprintf(stderr, "[pad] and %u more lines of %s ignored\n", bad - 5, path);
-    if (!g_play_n) {
+    if (!g_play_n && !g_ev_n) {
         fprintf(stderr, "[pad] %s holds no usable lines, so nothing will be pressed\n", path);
         return;
+    }
+    g_replaying = 1;
+    for (k = 0; k < EV_KINDS; k++) {
+        g_ev_at[k] = -1;
+        for (g_ev_next[k] = 0; g_ev_next[k] < g_ev_n && g_ev[g_ev_next[k]].kind != k; g_ev_next[k]++) {}
     }
     /* A run that ended in Ctrl-C, a kill or a crash never wrote its release
      * line, and a file cut by hand at the save point almost never ends on
      * one: the last state would then be held for the rest of the replay, with
      * a button down. Letting go here rather than at the writer covers all
      * four cases at once and costs the writer nothing. */
-    if (!pad_same(&g_play[g_play_n - 1].st, &PAD_NEUTRAL)) {
+    if (g_play_n && !pad_same(&g_play[g_play_n - 1].st, &PAD_NEUTRAL)) {
         PadFrame e;
         e.frame = g_play[g_play_n - 1].frame + 1;
         e.retrace = 0;
@@ -740,9 +917,18 @@ static void pad_replay_load(void)
             fprintf(stderr, "[pad] %s ends with input still held, so a neutral state is added at "
                             "frame %u; the replay lets go of it there\n", path, e.frame);
     }
-    fprintf(stderr, "[pad] replaying %d state changes from %s, last at frame %u; it is the whole "
-                    "input for this run, a window's keyboard and gamepad included\n",
-            g_play_n, path, g_play[g_play_n - 1].frame);
+    last = g_play_n ? g_play[g_play_n - 1].frame : 0;
+    for (k = 0; k < g_ev_n; k++)
+        if (g_ev[k].frame > last) last = g_ev[k].frame;
+    g_play_last = last;
+    if (g_ev_n)
+        fprintf(stderr, "[pad] replaying %d state changes and %d event lines from %s, last at frame %u; it is "
+                        "the whole input for this run, a window's keyboard and gamepad and port 2 included\n",
+                g_play_n, g_ev_n, path, last);
+    else
+        fprintf(stderr, "[pad] replaying %d state changes from %s, last at frame %u; it is the whole "
+                        "input for this run, a window's keyboard and gamepad included\n",
+                g_play_n, path, last);
     /* The recording is not self-contained and this is where that is cheapest
      * to notice: the switches below decide how many frames the port gets
      * through per second of guest time, and the card decides what the game's
@@ -774,6 +960,8 @@ static void pad_replay_load(void)
      * author falls into, so name it rather than leaving it to be inferred. */
     script = getenv("SOA_PAD");
     if (script && *script) fprintf(stderr, "[pad] SOA_PAD is set as well, and is ignored\n");
+    script = getenv("SOA_PAD2");
+    if (script && *script) fprintf(stderr, "[pad] SOA_PAD2 is set as well, and is ignored\n");
 }
 
 void gx_set_frame_limit(unsigned frames);
@@ -846,7 +1034,7 @@ static void pad_replay_end(unsigned frame)
 static int pad_replay(PadState* st, unsigned frame)
 {
     if (!g_play_tried) pad_replay_load();
-    if (!g_play_n) return 0;
+    if (!g_replaying) return 0;
     /* One entry per read, not every entry that is due. A frame the guest
      * never polled would let a while-loop step over that frame's entry
      * without anyone reading it; stepping once hands it over a read late
@@ -857,7 +1045,7 @@ static int pad_replay(PadState* st, unsigned frame)
         g_play_i++;
         pad_replay_drift(&g_play[g_play_i]);
         if (g_play_i + 1 < g_play_n && g_play[g_play_i + 1].frame <= frame) g_play_late++;
-    } else if (!g_play_done && g_play_i + 1 >= g_play_n && frame > g_play[g_play_n - 1].frame) {
+    } else if (!g_play_done && g_play_i + 1 >= g_play_n && frame > g_play_last) {
         pad_replay_end(frame);
     }
     *st = g_play_i < 0 ? PAD_NEUTRAL : g_play[g_play_i].st;
@@ -934,8 +1122,9 @@ void si_set_pad_filter(void (*fn)(unsigned frame, void* pad))
  * A second pad for mods -- couch co-op -- and never for the game: g_present
  * stays {1,0,0,0}, so an SI transfer on channel 1 still finds nothing there.
  * The window's next connected XInput pad after port 1's (a source main.c
- * sets), or SOA_PAD2's script in checks. Not recorded yet: that is the event
- * track's, and one change here now that si.c reads it. */
+ * sets), or SOA_PAD2's script in checks. A recording holds it as `@pad2`
+ * lines (E2), latched a frame at a time as pad 1 is, and a replay gives back
+ * those and nothing else. */
 static int (*g_pad2_source)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
 
 void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]))
@@ -943,13 +1132,9 @@ void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t c
     g_pad2_source = fn;
 }
 
-/* Port `port`'s state as a PadState (SoaPad's layout): 1 when something is
- * there, 0 otherwise. Port 2 only; port 1 is the pad filter's own. */
-int si_read_pad(unsigned port, void* out)
+static int pad2_sample(PadState* st)
 {
-    PadState* st = (PadState*)out;
     uint8_t host;
-    if (port != 2) return 0;
     *st = PAD_NEUTRAL;
     if (g_pad2_source && g_pad2_source(&st->buttons, st->stick, st->cstick, st->trig)) {
         st->buttons &= BTN_ALL;
@@ -961,14 +1146,50 @@ int si_read_pad(unsigned port, void* out)
     return 1;
 }
 
+/* Port `port`'s state as a PadState (SoaPad's layout): 1 when something is
+ * there, 0 otherwise. Port 2 only; port 1 is the pad filter's own. */
+int si_read_pad(unsigned port, void* out)
+{
+    static PadState latched;
+    static unsigned latch_frame;
+    static int latch_valid, latch_there;
+    PadState* st = (PadState*)out;
+    unsigned frame = gx_frame_count();
+    int there;
+    if (port != 2) return 0;
+    if (!g_rec_tried) pad_record_open();
+    if (!g_play_tried) pad_replay_load();
+    if (g_replaying) {
+        int at = event_at(EV_PAD2, frame);
+        *st = at < 0 ? PAD_NEUTRAL : g_ev[at].st;
+        return at >= 0 && g_ev[at].there;
+    }
+    /* While recording, the first read of a frame is the frame's, as pad 1's
+     * is (pad_report): one line per frame cannot hold two answers. */
+    if (g_rec && latch_valid && latch_frame == frame) {
+        *st = latched;
+        return latch_there;
+    }
+    there = pad2_sample(st);
+    if (g_rec) {
+        latched = *st;
+        latch_there = there;
+        latch_frame = frame;
+        latch_valid = 1;
+        pad2_record(st, there, frame);
+    }
+    return there;
+}
+
 /* ---- host buttons and chords (CH1) --------------------------------------
  * g_host is the window's host buttons and the script's, taken on the first
  * read of each frame -- whether or not a recording latches -- so a chord
- * read three times a frame fires once. During a replay it is 0: the replay
- * is the whole input. A chord fires on the frame its last button goes down;
- * the handler main.c sets does what it names, and a recording gets a
- * `# chord` comment the replay passes over (replaying the actions is the
- * event track's, milestone 2). LB held alone is not a chord: mods read it. */
+ * read three times a frame fires once. A recording holds them as `@host`
+ * lines (E2), and during a replay they are those lines', for the mods that
+ * read them, and fire no chord. A chord fires on the frame its last button
+ * goes down; the handler main.c sets does what it names, and a recording gets
+ * a `# chord` comment the replay passes over (what a chord did is the event
+ * track's own line, E3). LB held alone is not a chord: mods read it. */
 static uint32_t g_host, g_host_prev;
 static unsigned g_host_frame;
 static int g_host_valid;
@@ -1005,13 +1226,23 @@ static void host_update(unsigned frame)
     g_host_frame = frame;
     g_host_prev = g_host;
     g_host = 0;
-    if (!g_play_n) {
+    if (g_replaying) {
+        int at = event_at(EV_HOST, frame);
+        g_host = at < 0 ? 0 : g_ev[at].host;
+    } else {
         uint16_t w = 0;
         uint8_t stick[2], script = 0;
         if (window_host(&w)) g_host = w;
         script_now(stick, &script);
         g_host |= script;
     }
+    if (g_rec && g_host != g_rec_host) {
+        char names[40];
+        host_names_str(names, sizeof names, g_host);
+        event_record(frame, "host", names);
+        g_rec_host = g_host;
+    }
+    if (g_replaying) return;
     pressed = g_host & ~g_host_prev;
     for (i = 0; i < sizeof k_chords / sizeof k_chords[0]; i++) {
         if ((g_host & k_chords[i].mask) != k_chords[i].mask || !(pressed & k_chords[i].mask)) continue;
@@ -1258,6 +1489,9 @@ void si_report(void)
             PadState idle = PAD_NEUTRAL;
             pad_record(&idle, g_pad_frame + 1); /* let go of whatever was held */
         }
+        if (g_pad_seen && g_rec_host) event_record(g_pad_frame + 1, "host", "-"); /* and on the event track */
+        if (g_pad_seen && g_rec_p2_there && !pad_same(&g_rec_p2, &PAD_NEUTRAL))
+            event_record(g_pad_frame + 1, "pad2", "-");
         /* This runs on whichever thread is stopping the run -- the window's,
          * when the player closes it -- while the CPU thread may still be
          * reading the pad and writing lines. Each writes its line with one

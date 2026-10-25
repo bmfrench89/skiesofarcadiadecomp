@@ -10135,3 +10135,41 @@ with `SOA_PAD_STRICT=1` is refused, exit 11.** 2026-10-24. Spec: `docs/specs/eve
 - **Mutations, each caught** [V]: `pad_strict` answering 0 (both strict tests fail); `pad_knobs` writing nothing
   (the knobs test fails); `soak.py`'s pad check ignoring `strict` (the soak test fails).
 - **Next:** E2, pad 2 and the host buttons.
+
+**E2, the event track's pad 2 and host buttons: a co-op or hold-to-skip session replays as it was played.**
+2026-10-24 to 25. Spec: `docs/specs/event-track.md`.
+
+- **What it is** [V]:
+  - A recording is `v3`. Beside pad 1's lines it holds `F @pad2 STATE` (pad 1's grammar), `F @pad2 off`, and
+    `F @host NAMES` (`lb`, `view+rs`, `-`), each written when it changes. Pad 2 is latched a frame at a time while
+    recording, as pad 1 is, so a mod that reads it twice a frame gets one answer.
+  - On replay the `@` lines are parsed apart from pad 1's, each kind in its own frame order with its own cursor.
+    `si_read_pad(2)` gives the recording's pad 2 and nothing else (none before its first line, none after `off`), and
+    `si_host_buttons()` the recording's host buttons; neither the window, `SOA_PAD2` nor a chord is read, and
+    `SOA_PAD2` set during a replay is said to be ignored.
+  - A recording holding only `@` lines (a session where only pad 2 or LB moved) replays; the run ends after the
+    last line of either sort. An unknown `@kind` and one that goes back in frames are passed over and named.
+  - The end of a recording lets go of held host buttons and pad 2, as it does pad 1.
+  - The coop mod's "pad 2 is not in recordings yet" and autotext's "host buttons are not in recordings yet" are gone.
+    `test_mods.py`'s P10b check reads pad 1's presses only, not `@` lines.
+- **The run** [V, `build/e2/`, P10b's recipe with `SOA_SEED=7`]:
+  - *Recorded:* the `battle` scenario with the three mods, `SOA_COOP=1` (Aika, slot 1, is pad 2's) and
+    `SOA_PAD2=10225:right,10245:right,10270:a,10420:a@150`. The file holds 148 state changes and 29 `@pad2` lines
+    (`10225 @pad2 right`, `10235 @pad2 -`, ...). Pad 2 had Aika's turns at 10202-10272 and 11102-11322; coop forwarded
+    five presses (10225 and 10245 right, 10270, 11170 and 11320 A), and her first command was Focus (`frame 10272
+    commands: 0=3 1=0`).
+  - *Replayed* with no `SOA_PAD2`: "replaying 148 state changes and 29 event lines". The same two turns, the same five
+    presses forwarded at the same frames, all 156 `[si]` reads of the run equal to the recording's, drift 6 retraces
+    at the worst. `test_mods.py p10b` holds both logs to P10b's rules with no problem.
+  - *Mutation:* the recording with `10225 @pad2 right` deleted. Pad 2's first press is gone from the forwards, one
+    right leaves Aika's wheel on Magic, whose menu takes A without moving on (FINDINGS "P10b's spike"), and her turn
+    never ends: no `commands:` line, and pad 2's A every 150 frames forwarded to the end.
+- **Tests** [V]:
+  - `test_padrec.py`, five new and two changed: pad 2 recorded and replayed with no second pad, the deleted-line
+    mutation inside the test; pad 2 absent before its first line and after `off`, `SOA_PAD2` ignored; the host
+    buttons recorded and replayed with no chord; a recording of event lines alone; an unknown kind and an
+    out-of-order line named. The chord test now holds the host lines equal; the header test reads `v3`.
+  - `test_mods.py`: the two mods' tests hold their old line absent.
+- **Mutations, each caught** [V]: pad 2 not replayed (two tests fail); the host buttons not replayed (one); chords
+  fired during a replay (two).
+- **Next:** 60 fps, by the owner's D-45; E3 (turbo, save now and the debug actions as `@` lines) after it.

@@ -3339,7 +3339,7 @@ def test_hold_to_skip_presses_in_states_3_and_4_while_lb_is_held(driver, tmp_pat
     assert pressed(out)[:6] == [1, 2, 5, 6, 9, 10], pressed(out)
     assert "[mod] autotext: frame 1 skip press in state 3" in err, err
     assert "[mod] autotext: frame 9 skip press in state 4" in err, err
-    assert err.count("host buttons are not in recordings yet") == 1, err
+    assert "not in recordings" not in err, err  # they are, since the event track's E2
     # LB let go on a page the skip already pressed: it waits for the next page
     assert pressed(out)[6:] == [], pressed(out)
 
@@ -3433,13 +3433,14 @@ DIRECTIONS = 0x0003  # left, right
 
 def recorded_presses(pad: str) -> set[int]:
     """The frames a recording shows a button of port 1's going down or held
-    in a new combination: every line whose buttons are not "-"."""
+    in a new combination: every line whose buttons are not "-". The event
+    track's `F @kind` lines (pad 2, the host buttons) are not port 1's."""
     got = set()
     for line in pad.splitlines():
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        if len(parts) >= 2 and parts[1] != "-":
+        if len(parts) >= 2 and parts[1] != "-" and not parts[1].startswith("@"):
             got.add(int(parts[0]))
     return got
 
@@ -3449,7 +3450,7 @@ def recorded_a(pad: str) -> set[int]:
     for line in pad.splitlines():
         if line and not line.startswith("#"):
             parts = line.split()
-            if len(parts) >= 2 and "a" in parts[1].split("+"):
+            if len(parts) >= 2 and not parts[1].startswith("@") and "a" in parts[1].split("+"):
                 got.add(int(parts[0]))
     return got
 
@@ -3679,7 +3680,7 @@ def test_coop_follows_the_member_and_phase_words(driver, tmp_path):
     assert "[mod] coop: frame 6 pad 2 press 0100 forwarded" in err, err
     assert "[mod] coop: frame 7 commands: 0=3 1=4 2=-1 3=-1" in err, err
     assert "[mod] coop: frame 7 handover: back to port 1" in err, err
-    assert err.count("pad 2 is not in recordings yet") == 1, err
+    assert "not in recordings" not in err, err  # pad 2 is, since the event track's E2
     assert err.count(" commands: ") == 1, err  # the 1 -> 2 edge, and only that
     assert err.count(" forwarded") == 1, err
 

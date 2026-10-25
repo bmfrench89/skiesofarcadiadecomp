@@ -57,7 +57,8 @@ the rules the plans promise but never place:
 - check `api->size` against `SOA_MOD_HAS(member)` for anything appended;
 - pointer patches belong on load triggers: in a battle `0x803474BC` still names the field's table while its
   memory holds something else (FINDINGS "R5c and M6 on the PC");
-- a recording replays with the same mods; pad 2 and host buttons are not recorded yet;
+- a recording replays with the same mods; pad 2 and host buttons are not recorded yet (since the event track's
+  E2, 2026-10-24, they are);
 - no game data in a mod: `tools/guard.py` refuses anything in a mod folder that is not text.
 
 ## 3. The API reference

@@ -473,7 +473,8 @@ B's `/field/a002b.mld` [V run]. HANDOFF and FINDINGS had one menu level fewer.
 **Hold-to-skip is P11b**, after CH1. While host button LB is held (`api->host_buttons()`), it presses A
 in states 3 and 4 on the same two-on, two-off cadence, never in 6 and never when `(flags & 0x50) != 0`.
 Each press is logged with its state (`[mod] autotext: frame F skip press in state 3`). The first time it
-is used, it logs once that host buttons are not in the recording yet.
+is used, it logs once that host buttons are not in the recording yet (until the event track's E2, 2026-10-24,
+which records them and dropped the line).
 
 ### 3.6 CH1 — gamepad chords and host buttons
 
@@ -698,7 +699,8 @@ All in window.c, on the UI thread that already owns the window and presents.
     (0 Focus, 1 Magic, 2 S-move, 3 Attack, 4 Guard, 5 Item, 6 Run: battle-system.md:107). The word is stored by `stwx r31,r3,r0` at
     `0x8007C7E0`, with the member index from `0x80347330` shifted by 5 at `0x8007C7DC` [V static]. An
     `SOA_PEEK` of that address reads it whole;
-  - once per run, that the session cannot be replayed yet.
+  - once per run, that the session cannot be replayed yet (until the event track's E2, 2026-10-24, which
+    records pad 2 and dropped the line).
 - **The one-hour spike first** (before any mod code):
   - going back with B (the member index drops, a handover);
   - members who cannot act (`+28 & 0x6D00`, skipped by the game);
@@ -862,7 +864,8 @@ Test-only variables (not in `k_settings`): `SOA_ENCOUNTERS_TEST`, `SOA_AUTOTEXT_
   surprise shows in the log rather than as a wrong choice.
 - **More sessions cannot be replayed for a while.** Pad 2 (P10), hold-to-skip (P11b) and chord toggles
   (CH1, M11a) are not in the recording until milestone 2. If you play co-op or toggle turbo with
-  `SOA_PAD_RECORD` on and something breaks, the recording will not reproduce it.
+  `SOA_PAD_RECORD` on and something breaks, the recording will not reproduce it. (Pad 2 and the host
+  buttons since the event track's E2, 2026-10-24; turbo's toggles with E3.)
 - **M19 changes the clock of every run.** A mistake there changes game timing everywhere. Mitigations:
   - every gap is logged, and ordinary runs on an unloaded host must log none (M19's Done). A heavily
     loaded host can starve the guest past the gap rule and log a real gap (fe7e48f's first run; the

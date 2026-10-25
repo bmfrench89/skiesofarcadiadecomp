@@ -30,9 +30,9 @@
  * keyboard's Tab), it presses A in states 3 and 4 -- text still appearing,
  * and a complete page -- two frames down and two up for as long as LB is
  * held, never in a choice box and never on a page the game turns itself.
- * A press in state 3 shows the page at once, the next turns it. Host
- * buttons are not in recordings yet, so a replay does not skip; the first
- * skip says so, once.
+ * A press in state 3 shows the page at once, the next turns it. A recording
+ * holds the host buttons (the event track, E2), so a replay skips where the
+ * session did.
  *
  * SOA_AUTOTEXT_TEST=press-in-choice also presses in state 6: the mutation
  * the Done runs, never for play. soa.ini's `autotext` sets the same switch.
@@ -66,7 +66,7 @@ static uint32_t g_delay;       /* frames on a complete page before pressing */
 static int g_press_in_choice;  /* SOA_AUTOTEXT_TEST=press-in-choice */
 static int g_phase = ARMED;
 static uint32_t g_since, g_until; /* the frame the wait began; the frame this phase ends */
-static int g_skipping, g_skip_told;
+static int g_skipping;
 static uint32_t g_skip_next, g_skip_down_until; /* hold-to-skip's cadence */
 
 /* The window's state, or -1 when there is no window to read. */
@@ -92,10 +92,6 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
         !theirs) {
         if (!g_skipping || frame >= g_skip_next) {
             char line[96];
-            if (!g_skip_told) {
-                g_skip_told = 1;
-                g_api->log("hold-to-skip in use: host buttons are not in recordings yet, so a replay will not skip");
-            }
             snprintf(line, sizeof line, "frame %u skip press in state %d", frame, state);
             g_api->log(line);
             g_skipping = 1;

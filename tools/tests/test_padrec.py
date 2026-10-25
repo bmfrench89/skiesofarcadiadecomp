@@ -131,11 +131,16 @@ int main(int argc, char** argv)
             was_host = si_host_buttons();
             printf("host %u %X\n", f, (unsigned)was_host);
         }
-        if (getenv("SOA_PAD2")) { /* port 2, for mods only (P10a) */
+        if (getenv("SOA_PAD2") || getenv("DRIVER_PAD2")) {
+            /* port 2, for mods only (P10a), read as often as port 1, as a
+             * mod's filter would; DRIVER_PAD2 reads it with no script, as a
+             * replay does (E2) */
             uint8_t p2[8];
-            uint16_t b2;
-            int there = si_read_pad(2, p2);
-            b2 = there ? (uint16_t)(p2[0] | p2[1] << 8) : 0xFFFE;
+            uint16_t b2 = 0;
+            for (k = 0; k < reads; k++) {
+                int there = si_read_pad(2, p2);
+                b2 = there ? (uint16_t)(p2[0] | p2[1] << 8) : 0xFFFE;
+            }
             if (b2 != was_pad2) {
                 was_pad2 = b2;
                 printf("pad2 %u %04X\n", f, (unsigned)b2);
@@ -248,7 +253,7 @@ def test_a_recording_replays_to_the_same_reports(driver, tmp_path):
     rec = tmp_path / "play.pad"
     played, _ = run(driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec)})
     text = rec.read_text()
-    assert text.startswith("# soa pad recording v2"), text[:200]
+    assert text.startswith("# soa pad recording v3"), text[:200]
     assert "# config " in text
     again, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)})
     assert again == played, "the replay read different bytes:\n" + text
@@ -550,6 +555,10 @@ def test_the_knobs_that_write_memory_join_the_line(driver, tmp_path):
 # --------------------------------------------------------------------------
 
 
+def host_lines(out: str) -> list[str]:
+    return [ln for ln in out.splitlines() if ln.startswith("host ")]
+
+
 def reports(out: str) -> list[str]:
     return [ln for ln in out.splitlines() if ln[:1].isdigit()]
 
@@ -597,7 +606,7 @@ def test_a_misspelt_host_button_is_refused(driver, tmp_path):
 @needs_msvc
 def test_a_chord_is_a_comment_in_the_recording_and_not_replayed(driver, tmp_path):
     """The recording says the chord happened; the replay is the whole input,
-    so it carries no host buttons and fires no chord, and plays the same."""
+    so it carries the host buttons (E2) but fires no chord, and plays the same."""
     rec = tmp_path / "chord.pad"
     live, _ = run(
         driver, tmp_path, "record", {"SOA_PAD_RECORD": str(rec), "SOA_PAD": "12:view+lb"}, last=40
@@ -605,7 +614,8 @@ def test_a_chord_is_a_comment_in_the_recording_and_not_replayed(driver, tmp_path
     assert "# chord 12 view+lb fullscreen" in rec.read_text(), rec.read_text()
     assert "chord 12 0" in live, live
     again, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=40)
-    assert "chord" not in again and "host" not in again, again
+    assert "chord" not in again, again
+    assert host_lines(again) == host_lines(live), (live, again)
     assert reports(again) == reports(live), (live, again)
 
 
@@ -718,3 +728,110 @@ def test_the_menu_withholds_the_pad_before_the_recording(driver, tmp_path):
     assert state_at(menu, 35) == state_at(plain, 35), (menu, plain)  # and given back after
     again, _ = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)})
     assert again == menu, rec.read_text()
+
+
+# --------------------------------------------------------------------------
+# the event track: pad 2 and the host buttons (event-track.md E2)
+# --------------------------------------------------------------------------
+
+
+def event_lines(rec, kind: str) -> list[str]:
+    """The recording's `F @kind ...` lines, in file order."""
+    return [ln for ln in rec.read_text().splitlines() if ln.split()[1:2] == [f"@{kind}"]]
+
+
+@needs_msvc
+def test_pad2_is_recorded_and_replays_with_no_second_pad(driver, tmp_path):
+    """E2's Done 4. Port 2 from SOA_PAD2, read twice a frame as a mod's filter
+    would, is written as @pad2 lines at the frames it changed, and the replay,
+    with no SOA_PAD2, gives si_read_pad(2) the same states at the same frames.
+    The mutation is one @pad2 line deleted: the replay then holds A+B on past
+    frame 25, and the comparison fails there."""
+    rec = tmp_path / "coop.pad"
+    live, _ = run(
+        driver,
+        tmp_path,
+        "record",
+        {"SOA_PAD_RECORD": str(rec), "SOA_PAD": "3:a", "SOA_PAD2": "5:a+b#20,40:start"},
+        last=60,
+    )
+    assert event_lines(rec, "pad2") == [
+        "0 @pad2 -",
+        "5 @pad2 a+b",
+        "25 @pad2 -",
+        "40 @pad2 start",
+        "50 @pad2 -",
+    ], rec.read_text()
+    again, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "DRIVER_PAD2": "1"}, last=60
+    )
+    assert pad2_lines(again) == pad2_lines(live), (live, again)
+    assert reports(again) == reports(live), (live, again)
+    cut = tmp_path / "cut.pad"
+    cut.write_text(rec.read_text().replace("25 @pad2 -\n", ""))
+    mutant, _ = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(cut), "DRIVER_PAD2": "1"}, last=60
+    )
+    assert "pad2 25 0000" in pad2_lines(live) and "pad2 25 0000" not in pad2_lines(mutant), mutant
+
+
+@needs_msvc
+def test_pad2_is_absent_before_its_first_line_and_after_off(driver, tmp_path):
+    """A replay is the whole input: port 2 is the recording's, nothing before
+    its first line and nothing after an `off`, and SOA_PAD2 is not read while
+    one runs (and says so)."""
+    rec = tmp_path / "hand.pad"
+    rec.write_text("# soa pad recording v3\n0 -\n5 @pad2 a\n10 @pad2 off\n30 -\n")
+    out, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "SOA_PAD2": "3:b"}, last=20
+    )
+    assert pad2_lines(out) == ["pad2 0 FFFE", "pad2 5 0100", "pad2 10 FFFE"], out
+    assert "[pad] SOA_PAD2 is set as well, and is ignored" in err, err
+
+
+@needs_msvc
+def test_host_buttons_are_recorded_and_replay_with_no_chord(driver, tmp_path):
+    """E2's Done 5. LB held, then View+RS: an @host line at each change; the
+    replay gives si_host_buttons() the same buttons at the same frames, and
+    the chord handler is never called -- a chord's effect is an event line of
+    its own (E3), not a press replayed."""
+    rec = tmp_path / "host.pad"
+    live, _ = run(
+        driver,
+        tmp_path,
+        "record",
+        {"SOA_PAD_RECORD": str(rec), "SOA_PAD": "3:a,5:lb#10,30:view+rs"},
+        last=50,
+    )
+    assert event_lines(rec, "host") == [
+        "5 @host lb",
+        "15 @host -",
+        "30 @host view+rs",
+        "40 @host -",
+    ], rec.read_text()
+    assert "chord 30 1" in live, live
+    again, _ = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=50)
+    assert host_lines(again) == host_lines(live) and host_lines(live), (live, again)
+    assert "chord" not in again, again
+
+
+@needs_msvc
+def test_a_recording_of_event_lines_alone_replays(driver, tmp_path):
+    """A session in which only pad 2 or the host buttons moved has no pad 1
+    line, and is still a recording: pad 1 is neutral throughout and the
+    events replay."""
+    rec = tmp_path / "events.pad"
+    rec.write_text("# soa pad recording v3\n4 @host lb\n9 @host -\n")
+    out, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=20)
+    assert host_lines(out) == ["host 4 1", "host 9 0"], out
+    assert "holds no usable lines" not in err, err
+
+
+@needs_msvc
+def test_an_unknown_event_and_one_out_of_order_are_passed_over_and_named(driver, tmp_path):
+    rec = tmp_path / "odd.pad"
+    rec.write_text("# soa pad recording v3\n0 -\n5 @teleport 116c\n8 @host lb\n6 @host -\n12 -\n")
+    out, err = run(driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec)}, last=20)
+    assert f"[pad] {rec}:3: `@teleport` is not an event this build knows; passed over" in err, err
+    assert f"[pad] {rec}:5: `@host` goes back to frame 6 from 8; that line is ignored" in err, err
+    assert host_lines(out) == ["host 8 1"], out

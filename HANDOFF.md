@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1889 |
+| Python tests | 1894 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -421,8 +421,8 @@ washed-out colour and a correct fix would have failed the suite.
 
 ### Start here (for the next session)
 
-**State.** `main` holds the event track's spec and E1 (2026-10-24), pushed. The full pre-push suite passes: 1889
-tests in 102 files (1848 passed, 41 skipped here; 694 skip with MSVC hidden, so 653 want MSVC). Nothing is
+**State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), pushed. The full pre-push suite passes:
+1894 tests in 102 files (1853 passed, 41 skipped here; 699 skip with MSVC hidden, so 658 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -447,19 +447,24 @@ Owner decisions taken: D-43 (the gameplay core), D-44 (gameplay Q2: the honest s
 fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with it.
 
 **Next, in order.** PLAN-NEXT §0 has the order; this is where it now points.
-1. **The event track**, the last item of milestone 2: specified 2026-10-24 in `docs/specs/event-track.md` as E1-E3.
-   The recorded flag and the mods' options were already in the `# config` line. **E1 is built** (FINDINGS "E1"):
-   `SOA_PAD_STRICT=1` refuses a replay whose config differs, exit 11, and the warning names the entries. Next are
-   E2 (pad 2 and the host buttons as `@pad2` and `@host` lines), then E3 (turbo, save now and the debug actions as
-   `@` lines).
-2. Then **ask the owner** (the questions tool) what follows milestone 2. The candidates are milestone 3
+1. **60 fps, finished** (the owner's D-45, 2026-10-25: "I want the 60fps finished next"). The research is
+   `docs/research/60fps-across-ports.md`: 60 becomes the default on the GPU renderer once (a) a display-rate mode
+   interpolates to any refresh rate, RT64's "Display" recipe, since today `present_interp` shows in-between images at
+   60/120/180/240 Hz only and the owner's 85 Hz monitor gets none; (b) the fallback tells the player; (c) session D's
+   artifact classes are fixed (H18); (d) Android asks for 60. The display-rate mode first, its spec written first.
+   Another recompilation of this game (ogdanimal's, GPL-3.0) ships interpolated 60: read its notes, copy none of its
+   code without the owner's licence decision.
+2. **The event track's E3** after it (`docs/specs/event-track.md`): turbo, save now and the debug actions as `@`
+   lines. E1 and E2 are built (FINDINGS "E1", "E2").
+3. Then **ask the owner** (the questions tool) what follows milestone 2. The candidates are milestone 3
    (PLAN-GAMEPLAY-MODS §E), widescreen (M10, V9b), which D-43 put behind the core, and I7 (deltas) or the R2
    status thunks, which the free bits of K12 now allow.
 
 **Waiting on the owner at the machine** (none of these can be done by a session):
 - the menu's Save now and Debug page, in a window;
 - a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point;
-- session D at 60 or 120 Hz (H17b and V12's look and pacing);
+- session D at 60 or 120 Hz (H17b and V12's look and pacing; the research's checklist of where to look is in
+  `docs/research/60fps-across-ports.md`'s last table);
 - the menu in a window and the Vulkan menu (M8a/b);
 - a battery run (H20);
 - a small mod built from `docs/MODDING.md` alone (T10).

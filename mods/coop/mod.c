@@ -24,8 +24,8 @@
  * With pad 2 absent, port 1 plays everyone, said once. Each handover and
  * each press forwarded from pad 2 is logged, and at every phase 1 -> 2 edge
  * each member's command type (the s32 at 0x80309174 + 32 * m: 3 Attack,
- * 4 Guard, 5 Item...). Pad 2 is not in recordings yet, so a run it played a
- * part in cannot be replayed; the first forward says so.
+ * 4 Guard, 5 Item...). A recording holds pad 2 (the event track, E2), so a
+ * run it played a part in replays with no second pad connected.
  *
  * soa.ini's `coop` sets the same switch, and a recording names it. Built
  * beside its mod.ini by `python tools/recompile.py --link`.
@@ -55,7 +55,7 @@ static int g_owner = PORT1;     /* whose pad the game reads now */
 static int g_hold;              /* a handover: neutral until the incoming pad is let go */
 static uint16_t g_last2;        /* pad 2's buttons at the last read, for its presses */
 static uint32_t g_last_phase = 0xFFFFFFFFu;
-static int g_absent_told, g_replay_told;
+static int g_absent_told;
 
 static void neutral(SoaPad* pad)
 {
@@ -119,10 +119,6 @@ static void on_pad(void* user, uint32_t frame, SoaPad* pad)
         uint16_t down = (uint16_t)(two.buttons & ~g_last2);
         if (down) {
             char line[96];
-            if (!g_replay_told) {
-                g_replay_told = 1;
-                g_api->log("pad 2 is not in recordings yet: a run it played a part in cannot be replayed");
-            }
             snprintf(line, sizeof line, "frame %u pad 2 press %04X forwarded", frame, down);
             g_api->log(line);
         }

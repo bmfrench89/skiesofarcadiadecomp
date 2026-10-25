@@ -200,8 +200,9 @@ the table, so a save loaded on an install that numbered a claim differently says
 
 A recording (`SOA_PAD_RECORD`) names every mod it was made with, by id, version and a hash of its files,
 in load order, with any option away from its default. Replay it with the same mods and it plays the same;
-the port says when the mods differ. Pad 2 and the host buttons (LB, View, the stick clicks) are not in
-recordings yet, so a mod that reads them does not replay exactly.
+the port says when the mods differ, and with `SOA_PAD_STRICT=1` refuses the replay. Pad 2 and the host
+buttons (LB, View, the stick clicks) are in the recording too, as `@pad2` and `@host` lines, so a mod that
+reads them replays as it played.
 
 ## What the kit can and cannot tell you
 

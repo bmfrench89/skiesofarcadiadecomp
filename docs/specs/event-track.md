@@ -7,6 +7,11 @@ milestone table, row 2). M8 has landed, so the hotkey and overlay lines the plan
 **E1 built 2026-10-24** (FINDINGS "E1"): Done lines 1 to 3. *As built:* the refusal comes at the game's first
 controller read, where the replay is loaded, and the log ends there.
 
+**E2 built 2026-10-25** (FINDINGS "E2"): Done lines 4 to 6. *As built:* a recording of `@` lines alone replays, the
+run ending after the last line of either sort; the end of a recording lets go of held host buttons and pad 2 as it
+does pad 1; `@pad2` lines carry no `#r` count, since drift is pad 1's. **E3 waits** behind 60 fps (the owner's D-45,
+2026-10-25).
+
 **Why.** A pad recording is how a session is kept: a bug report, a soak's input, a race. Today four things change the
 game mid-run and never reach the file: pad 2, the host buttons a mod reads, turbo, and the menu's save-now and debug
 actions. A replay of such a session silently plays a different game. And when the `# config` line differs, the replay
@@ -50,7 +55,7 @@ The header becomes `# soa pad recording v3`. Pad 1's lines and the `# config` li
 replay. Everything new is a line whose second field starts with `@`:
 
 ```
-# soa pad recording v3 -- frame buttons stick cstick triggers, one line per change; @frame lines are the event track
+# soa pad recording v3 -- frame buttons stick cstick triggers, one line per change; `frame @kind` lines are the event track (docs/specs/event-track.md)
 # config render=- window=- speed=1 scale=2 threads=- card=build/cards/slotA.raw:524288 seed=7 mods=coop@1.0:1a2b3c4d
 412 a #r930
 412 @pad2 b
