@@ -1679,6 +1679,35 @@ static int g_workers; /* worker threads; the main thread (tid 0) only produces *
 static TevSetup g_prep;
 static uint64_t g_prepare_hazards; /* draws whose setup read a texture a queued copy writes */
 
+/* A draw's TEV setup into its slot: what is read of it -- the stages it runs
+ * and the textures those name -- and not the 16 stages and 8 textures every
+ * TevSetup has room for, about 3 KB that each draw copied, and the in-between
+ * draw again (H17g). Nothing reads a stage at or past `stages`, in gxr's
+ * workers, gxr_tev.c or gxv, nor a texture no enabled stage names (texmap_of,
+ * miptex and gxv's uploads all come from them); what the slot held before is
+ * left in the rest. */
+static void tev_copy(TevSetup* dst, const TevSetup* src)
+{
+    unsigned st, m, n = src->stages < 16 ? src->stages : 16, maps = 0;
+    dst->stages = src->stages;
+    memcpy(dst->st, src->st, sizeof(Stage) * n);
+    for (st = 0; st < n; st++)
+        if (src->st[st].texen) maps |= 1u << (src->st[st].texmap & 7);
+    for (m = 0; m < 8; m++)
+        if ((maps >> m) & 1) dst->tex[m] = src->tex[m];
+    dst->used_tex = src->used_tex;
+    dst->used_chan = src->used_chan;
+    dst->aref0 = src->aref0;
+    dst->aref1 = src->aref1;
+    dst->acomp0 = src->acomp0;
+    dst->acomp1 = src->acomp1;
+    dst->alogic = src->alogic;
+    dst->alpha_always = src->alpha_always;
+    dst->fast_c = src->fast_c;
+    dst->fast_a = src->fast_a;
+    memcpy(dst->reg_init, src->reg_init, sizeof dst->reg_init);
+}
+
 /* H14's producer-side state, all producer only. g_fence_after is the fence
  * the next command published must carry: a copy that read rows other workers
  * own is not over until every worker has finished it. g_frame_gate says a
@@ -2794,7 +2823,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     }
     tfence = tex_draw_fence();
     D = claim_slot(0, tfence, 0); /* every worker past the copies whose images it samples */
-    D->tev = g_prep;
+    tev_copy(&D->tev, &g_prep);
     pixel_prepare(bp, &D->px);
     raster_prepare(xf, bp, &D->rc);
     D->ntex = D->tev.used_tex & ((1u << (xf[0x103F] & 15)) - 1u);
@@ -2873,7 +2902,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         g_target = 1;
         M = claim_slot(0, tfence, 0);
         g_target = 0;
-        M->tev = D->tev;
+        tev_copy(&M->tev, &D->tev);
         M->px = D->px;
         M->rc = D->rc;
         M->ntex = D->ntex;

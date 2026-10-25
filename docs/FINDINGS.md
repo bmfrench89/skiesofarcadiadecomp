@@ -10391,3 +10391,27 @@ instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
 - **Next:** a profile of the producer's vertex setup in the cutscene in display mode, to see what building the
   second draw spends; then the consumer's recording of it (7.3 million draws rebuilt by clipping in display mode
   against 2.0 million off, each slice's lerp on the CPU).
+
+**H17g, first part: a draw's TEV setup copied as far as it is read.** 2026-10-25. PLAN-60FPS-MODS H17g.
+
+- **What the profile said** [V, `build/e2/prof-disp.log`, `prof-off.log`: `SOA_HOSTPROF` over the battle scenario
+  uncapped from frame 4100, display mode at 85 Hz against interpolation off]: the guest thread's extra samples in
+  display mode were `drain` 1783 (the frame gate), `memcpy` 1173, `pair_claim` 629 and `gxr_draw_inner` 219. The
+  copies are each draw's `TevSetup`, about 3 KB -- 16 stages and 8 textures of room -- into its queue slot, and in
+  display mode into the in-between draw's slot again.
+- **The change** [V, `runtime/gxr.c` `tev_copy`]: the stages a draw runs, the textures those name and the header;
+  nothing reads a stage at or past `stages` (gxr's workers, `gxr_tev.c`, `gxv_pack_tev`) or a texture no enabled
+  stage names (`texmap_of`, `miptex` and gxv's uploads all come from them, each guarded by `texen` or the
+  `miptex` bit).
+- **What it gave** [V, `build/e2/unc-off-g.log`, `unc-disp-g.log` against the same day's runs]: the producer's
+  vertex setup over the run, 8.28 s to 7.71 with interpolation off and 11.7-11.9 s to 10.46 in display mode. The
+  cutscene's frame did not move: off p50 33.5 ms (33.4 before), display p50 39.0 (36.2 to 39.3 across the day's
+  runs), while the frame gate's waits rose to 2.84 s from 2.3-2.4. In display mode the producer reaches the gate
+  sooner and waits longer: the consumer's serial path -- recording the frame (p95 6.7 ms), then waiting on its one
+  command buffer for the GPU (p95 12.8 ms) -- is what the cutscene's frame is.
+- **Checks** [V]: replay 23/23 at 1, 2, 3 and 8 threads; `gpuspike.py selftest`; `contrast --set
+  corpus,perfset,gpuset` 67 of 67; `oracle` 33 of 35, the two the Dangral field pair's by design (FINDINGS "V4");
+  `pairs` and `pairs --weights 0.25,0.5,0.75` passing. *Mutation:* the textures left out of the copy fails the
+  replay on all 23.
+- **Next:** H17h, the consumer's GPU wait off its serial path: two command buffers in flight, so that it records
+  frame N+1 while the GPU draws frame N, with H17f's screen copy left in flight on top (the patch H17f took out).
