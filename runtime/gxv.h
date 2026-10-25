@@ -56,6 +56,9 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
 /* V12b: in-between images shown, each held `refreshes` (0: none shown), and the counts of what was. */
 void gxv_present_interp(unsigned refreshes);
 void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut, unsigned long long* none);
+/* A slot published and not yet taken: the window presents when one is (with
+ * in-between images the presented count rises a copy before the slot does). */
+int gxv_screen_fresh(void);
 void gxv_present_resize(int w, int h);
 /* P5a's filters on the GPU (V8b): picture.c's tables for the state in use,
  * each new frame through them before it is presented; NULL turns them off.

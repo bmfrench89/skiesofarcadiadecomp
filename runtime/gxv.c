@@ -1917,8 +1917,11 @@ static unsigned g_mid_ivl;             /* the window's: refreshes an image while
 static unsigned long long g_n_shown_mid, g_n_shown_cut, g_n_shown_none;
 
 /* The back slot to the presenter, the slot it gives back the next to fill. */
+static unsigned long long g_n_published; /* slots published, against g_n_present_frames taken */
+
 static void publish_screen(int sw, int sh)
 {
+    g_n_published++;
     g_scr_w[g_scr_back] = sw;
     g_scr_h[g_scr_back] = sh;
     g_scr_k[g_scr_back] = g_scale;
@@ -3350,6 +3353,7 @@ static int g_ovl_draw; /* the next present_record blends it */
 static int (*g_ovl_fn)(uint8_t* bgra, int w, int h, int stride);
 static int g_ovl_said;
 static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
+static unsigned long long g_n_stale; /* asked for a new frame with none published: the slot came later */
 /* P5a's filters on the GPU (V8b): the pass, its tables (picture.c's, laid
  * out as filters.comp reads them), which filters are on, and the frame that
  * the next present runs through them -- the slot it was drawn in and the
@@ -4012,6 +4016,8 @@ int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown
             g_filt_k = blend_k(blend);
             g_filt_pending = 1;
         }
+    } else if (fresh) {
+        g_n_stale++;
     }
     if (!g_scr_w[g_scr_front]) { /* nothing drawn yet */
         plat_unlock(&g_present_lock);
@@ -4196,9 +4202,18 @@ static int present_check_with(const uint8_t* bgra, int w, int h, int k, int dw, 
 static void present_report(void)
 {
     if (g_swap || g_n_presents)
-        say("presented from the GPU: %llu screen copies taken, %llu presents, %llu swap chains made; %llu frames through "
-            "P5a's filters on the GPU, %llu of them blended by the flash limiter (V8b)",
-            g_n_present_frames, g_n_presents, g_n_swap_made, g_n_filtered, g_n_blended);
+        say("presented from the GPU: %llu screen copies taken of %llu published (%llu asked for with none new), %llu "
+            "presents, %llu swap chains made; %llu frames through P5a's filters on the GPU, %llu of them blended by the "
+            "flash limiter (V8b)",
+            g_n_present_frames, g_n_published, g_n_stale, g_n_presents, g_n_swap_made, g_n_filtered, g_n_blended);
+}
+
+/* A slot published that no present has taken yet: what the window waits for,
+ * since with in-between images the presented count rises at the real copy, a
+ * copy before the slot is published. */
+int gxv_screen_fresh(void)
+{
+    return (plat_load64(&g_scr_middle) & SCREEN_FRESH) != 0;
 }
 
 static void present_shutdown(void)
@@ -4268,6 +4283,8 @@ void gxv_present_interp_counts(unsigned long long* mid, unsigned long long* cut,
 {
     *mid = *cut = *none = 0;
 }
+
+int gxv_screen_fresh(void) { return 0; }
 
 int gxv_present(int fresh, unsigned interval, int mode, double blend, int* shown_w, int* shown_h)
 {

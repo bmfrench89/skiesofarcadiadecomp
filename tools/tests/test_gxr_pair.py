@@ -60,6 +60,7 @@ uint32_t mmio_read32(CpuState* s, uint32_t ea) { (void)s; (void)ea; return 0; }
 void hle_report(void) {}
 int gx_replay(CpuState* s, const char* base);
 int gx_replay_pair(CpuState* s, const char* a, const char* b);
+void gxr_interp_show(int on);
 
 #define RED 0xFF0000FFu
 #define GREEN 0x00FF00FFu
@@ -342,6 +343,12 @@ int main(int argc, char** argv)
     if (!gxr_enabled()) return 3;
     if (!strcmp(argv[1], "one")) rc = gx_replay(&s, argv[2]);
     else if (!strcmp(argv[1], "pair") && argc > 3) rc = gx_replay_pair(&s, argv[2], argv[3]);
+    else if (!strcmp(argv[1], "hidden") && argc > 3) {
+        /* a window that shows no in-between image (85 Hz, turbo): the live
+         * stream's frames with the in-between one off */
+        gxr_interp_show(0);
+        rc = gx_replay_pair(&s, argv[2], argv[3]);
+    }
     else if (!strcmp(argv[1], "ring") && argc > 4) return ring(&s, argv[2], argv[3], atoi(argv[4]));
     else return 2;
     if (rc) return rc;
@@ -537,6 +544,22 @@ def world(tmp_path_factory):
             res = parse(text)
             res["png"] = pngs(Path(caps[1]))
             results[(name, "interp" + threads)] = res
+    # The live stream with its in-between image off, as a window refusing it
+    # leaves every frame: the frames must be drawn as they are.
+    for threads in INTERP_THREADS:
+        for name in ("move.pair", "copies.pair"):
+            caps = [str(out / c) for c in RUNS[name][1:]]
+            for stale in pngs_of(Path(caps[1])):
+                stale.unlink(missing_ok=True)
+            extra = {"SOA_THREADS": threads, "SOA_HASH": "1", "SOA_INTERP": "1"}
+            r = run("hidden", *caps, extra=extra)
+            text = r.stdout + r.stderr
+            assert r.returncode == 0, (
+                f"{name} hidden at {threads} threads: exit {r.returncode}\n{text}"
+            )
+            res = parse(text)
+            res["png"] = pngs(Path(caps[1]))
+            results[(name, "hidden" + threads)] = res
     strip = run(
         "pair", str(out / "move" / "strip"), str(out / "move" / "0002"), extra={"SOA_HASH": "1"}
     )
@@ -744,6 +767,34 @@ def test_the_live_stream_makes_the_three_pass_midpoint(world):
             assert got["report"] == want["report"], f"{name}: the matching differs"
     move = world["runs"][("move.pair", "1")]["png"]
     assert move[0] != move[1]
+
+
+@needs_msvc
+def test_with_the_in_between_image_off_the_frame_is_drawn_as_it_is(world):
+    """SOA_INTERP's stream off for a frame -- over budget, a display it cannot
+    pace (85 Hz), turbo -- must leave the frame as it would be with SOA_INTERP
+    off: drawn where it is, its copies to texture run, no in-between image.
+    Until 2026-10-25 such a frame drew its matched draws at the midpoint and
+    skipped its copies, which no headless run could see: only a window turns
+    the stream off. The mutation is that code: B.png is then the midpoint and
+    two copies are skipped."""
+    for name in ("move.pair", "copies.pair"):
+        want = world["runs"][(name, "1")]
+        for threads in INTERP_THREADS:
+            got = world["runs"][(name, "hidden" + threads)]
+            assert got["png"][0] == want["png"][0], (
+                f"{name} B.png at {threads} threads is not B as it is"
+            )
+            assert got["png"][1] is None, (
+                f"{name}: an in-between image was written with the stream off"
+            )
+            assert got["hashes"] == want["hashes"][:2], (
+                f"{name}: the run presents A and B, as they are"
+            )
+            assert (got["report"]["skipped"], got["report"]["kept"]) == (0, 0), got["report"]
+    assert (
+        world["runs"][("move.pair", "1")]["png"][0] != world["runs"][("move.pair", "1")]["png"][1]
+    )
 
 
 @needs_msvc

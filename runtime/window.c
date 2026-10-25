@@ -1097,6 +1097,12 @@ static unsigned __stdcall ui_thread(void* arg)
         if (logged_resize) window_line(now);
         if (g_ring_on) {
             if (gxr_ring_take(&g_frame)) present(1);
+        } else if (g_vk) {
+            /* the GPU's slot, not the count: with in-between images the count
+             * rises at the real copy, a copy before the slot is published, and
+             * a present between the two showed the frame before again while
+             * the new one waited, or was replaced unseen (5% of frames) */
+            if (gxv_screen_fresh()) present(1);
         } else if (now != last) {
             last = now;
             present(1);

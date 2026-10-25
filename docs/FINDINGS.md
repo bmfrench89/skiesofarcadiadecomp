@@ -10173,3 +10173,37 @@ with `SOA_PAD_STRICT=1` is refused, exit 11.** 2026-10-24. Spec: `docs/specs/eve
 - **Mutations, each caught** [V]: pad 2 not replayed (two tests fail); the host buttons not replayed (one); chords
   fired during a replay (two).
 - **Next:** 60 fps, by the owner's D-45; E3 (turbo, save now and the debug actions as `@` lines) after it.
+
+**Two defects in H17b and V12, found mapping the in-between pipeline for the display-rate mode (D-45).** 2026-10-25.
+Both were found by reading the code, each confirmed in it before it was fixed.
+
+- **A frame whose in-between stream was off was drawn at the midpoint, its copies to texture skipped** [V,
+  `runtime/gxr.c`]:
+  - The live stream sets RECORD|LERP once. When `g_mid_on` was 0 for a frame (over budget, a display
+    `present_interp` refuses such as 85 Hz, or turbo), `gxr_draw_inner` fell to `pair_positions(..., pc)` with the
+    claim's previous-frame offset, lerping the real draw in place, and `enqueue_copy` skipped every copy to texture,
+    its test (`LERP && !interp_on()`) written for the pair replay's lerping pass.
+  - So any windowed session with `interp = 1` showed the real frames at the halfway point whenever no in-between
+    image was shown, and lost every effect drawn through a copy to texture. Headless runs never turn the stream off
+    (only a window does, through `gxr_interp_show`), so no replay, scenario or test saw it. H17b's windowed CPU runs,
+    where the budget stopped the stream early and never restarted, drew most of their frames that way; their frame
+    rates stand, their pictures did not.
+  - *Fixed:* with RECORD|LERP and the stream off, a draw records and is drawn as it is; copies to texture are skipped
+    only in a pass that lerps without recording, the pair replay's.
+  - *Test:* `test_gxr_pair.py`'s new `hidden` driver mode tells the renderer no window shows in-between images, then
+    replays `move` and `copies` with `SOA_INTERP=1` at 1 and 4 threads: B.png equals the three-pass replay's B,
+    no in-between PNG, no copy skipped. *Mutations:* the real draw lerped again (B.png is the midpoint), and the old
+    copy test (two copies skipped); each fails it, and the replay's own copy test still passes under the second.
+  - Off changes nothing: `scenario.py replay` 23/23 at 1, 2, 3 and 8 threads; `gpuspike.py pairs` passes all five.
+- **The GPU presenter dropped or delayed 5% of frames with in-between images** [V, `runtime/window.c`, `gxv.c`]:
+  - With the Vulkan presenter the window presented when `gxr_presented()` rose. That count rises after the backend's
+    real screen copy, but gxv publishes the slot only at the in-between copy after it. A poll falling between the two
+    presented the old slot again and moved on, so the new frame waited for the next one or was replaced unseen.
+  - *Measured* [V, `build/e2/race-*.log`, the `title` scenario in a window, `SOA_GPU=vulkan SOA_INTERP=1
+    SOA_INTERP_ANYRATE=1`, the display at 85 Hz]: gxv's report now counts slots published against taken, and
+    presents asked for with no new slot. Before: 1900 of 2000 taken, 96 asked with none new, 1811 in-between images
+    shown. After, twice: 1992 and 1994 of 2000, 0 asked with none new, 1731 and 1901 shown (the first after run's
+    budget stopped the stream once, 172 frames, which the window cannot cause).
+  - *Fixed:* on the GPU path the window presents when gxv has a slot published and not yet taken
+    (`gxv_screen_fresh`). The CPU path already polled its own ring; SDL has no GPU presenter.
+- **Next:** the display-rate mode's spec (PLAN-NEXT D-45).

@@ -2701,6 +2701,13 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
             }
         }
     } else if (g_pair_flags) {
+        /* Recording and lerping at once is the live stream's mode, whose lerp
+         * is only ever the in-between copy's: with the stream off this frame
+         * (over budget, a display it cannot pace, turbo) the frame records and
+         * is drawn as it is. Lerping alone is a pair replay's in-between pass,
+         * which moves the draw itself. */
+        if ((g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == (GXR_PAIR_RECORD | GXR_PAIR_LERP))
+            pc.prev_off = PAIR_NONE;
         pair_positions(&D->rc, v, count, pc);
     }
     if (prim <= 0xA0) g_tris += prim == 0x80 ? (count / 4) * 2 : (prim == 0x90 ? count / 3 : (count >= 2 ? count - 2 : 0));
@@ -3453,8 +3460,11 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     tex_set_memory(s);
     /* H10's in-between pass: a copy to a texture would write what F+1's own
      * frame reads next, so it is skipped -- but its clear is kept, since the
-     * draws after it expect the EFB it leaves. The screen copy runs as ever. */
-    if ((g_pair_flags & GXR_PAIR_LERP) && !to_screen && !interp_on()) {
+     * draws after it expect the EFB it leaves. The screen copy runs as ever.
+     * Only a pair replay's lerping pass: the live stream (recording too)
+     * draws the real frame, whose copies run whether or not this frame builds
+     * an in-between image beside it. */
+    if ((g_pair_flags & (GXR_PAIR_RECORD | GXR_PAIR_LERP)) == GXR_PAIR_LERP && !to_screen) {
         g_pair_skipped++;
         if (v & 0x800u) {
             publish_clear(s, bp, v);
