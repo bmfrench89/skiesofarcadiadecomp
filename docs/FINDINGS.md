@@ -10415,3 +10415,53 @@ instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
   replay on all 23.
 - **Next:** H17h, the consumer's GPU wait off its serial path: two command buffers in flight, so that it records
   frame N+1 while the GPU draws frame N, with H17f's screen copy left in flight on top (the patch H17f took out).
+
+**H17h: the GPU backend with a frame in flight; display mode in the cutscene at interpolation off's pace.**
+2026-10-26. Spec: `docs/specs/gpu-frames-in-flight.md`; PLAN-60FPS-MODS H17h; the owner's D-45.
+
+- **What it is** [V, `runtime/gxv.c`]: two slots, each a command buffer, a fence and its half of the vertex ring,
+  draw records, texel pool, texture records and copy regions. The consumer records one while the GPU draws the
+  other. `submit_next` (a full half, a frame's end) switches slots; `submit_wait` (a result needed now) finishes
+  both. A slot is finished -- copies landed, GPU time counted, the frame's picture to gxr, its screen slot
+  published -- as soon as `vkGetFenceStatus` says it is done, polled at every command, or on the consumer's idle.
+  A screen copy carries `CP_SYNC` when the producer reads the picture (a PNG, a hash, `check`), and those frames
+  wait as before. `gxr_backend_landed` reports the first copy still to land in either slot. `SOA_GPU_FRAMES=1`
+  keeps one slot, every submission waited for: the A/B.
+- **The measurement** [V, `build/e2/unc-h-*.log`: frames 4100-4599 of the battle scenario uncapped, display mode at
+  85 Hz, A/B in one build]: two slots, p50 33.4 ms and p95 41.2, the frame gate's waits 0.41 s; one slot, p50 36.5
+  and p95 44.8, gate 2.59 s. Interpolation off with two slots: p50 34.2, p95 37.1. Display mode now costs this
+  cutscene nothing at the median.
+- **Two slots alone moved the wait, not the frame** [V, `build/e2/unc-h17h-two.log`]: gate waits fell to 0.87 s,
+  but the producer waited 1.42 s for copies to land instead, and p50 stayed 36.7. A draw sampling the image of a
+  copy whose slot was in flight finished that slot -- a wait for the GPU in the middle of the frame -- so the
+  consumer fell behind and 665 frames ended with a copy still to land, against 147 with one slot. Now the copy's
+  image is carried into the recording slot's pool by a GPU buffer copy (`carry_copy_image`), ordered by the
+  submission's opening barrier: 4520 carried over the windowed battle, no wait. A copy to texture also goes in
+  flight at once while the other slot is free, so it lands as the rest of the frame is recorded (`SOA_GPU_LAND_EARLY=0`
+  keeps it in its slot): frames ending with a copy to land, 146 to 42, and no producer wait for a landing left.
+- **A contract kept** [V]: `gxr.h` promises a finished frame after `gxr_flush`; the GPU harness's self test read
+  the picture after one and failed all 17 checks, its frames in flight. `gxr_flush` now ends with the backend's
+  `settle`, which finishes every slot under the lock that `reset_efb` takes. The live game calls `gxr_flush` only
+  for a capture and at `SOA_FRAMES`, so play pays nothing for it. Before the next frame's screen copy is
+  recorded, a slot in flight with a picture or a publish due is finished: the screen slots are written in GPU
+  order.
+- **The battle in a window** [V, `build/e2/win-battle-h17h.log`, display mode at 85 Hz, against H17e's run]: frames
+  without an in-between image 1805 of 12000 (15%) against 6889 (57%); stops 5 against 11; in-between images 10195
+  against 5111; no stop before frame 4760. One image a refresh on 87.8% of intervals, 93.7% leaving out the 1909
+  of three refreshes or more that the frames without one make (H17c-b's title run: 91.2%, 94.6% leaving out
+  presents whose predecessor was already on screen).
+- **What still pauses it** [V, `build/e2/battle-h17h.ilog`]: each stop follows real slow frames (40-54 ms before
+  the one at 6099); the stream then stays off long -- 6099 to 7110 -- because the come-back count, V12's, adds two
+  for a frame over 34.5 ms and takes one off for one under, and in a window about a third of the battle's frames
+  run over 34.5 with the stream off. That is the stop rule's old fault on the other side (FINDINGS "H17e").
+- **Checks** [V]: replay 23/23 at 1, 2, 3 and 8 threads; self test; `gpuspike.py selftest`, `oracle` (33 of 35, the
+  Dangral pair by design), `contrast --set corpus,perfset,gpuset` 67 of 67, `pairs`, `pairs --weights`, `queue`,
+  `overlap`, `specdiff` 35 of 35, `present` -- the spike reads its picture after `gxr_flush`, so these ran the frame
+  in flight throughout. New: `gpuspike.py repeat` (61 s), every capture three times with frames in flight against
+  one slot, 67 of 67 at every pass, 201 frames left in flight; `--mutate deliver-early` fails all 67.
+  `copyimage` runs three routes -- the pool (`SOA_GPU_LAND_EARLY=0`), the carry (`SOA_GPU_POLL=0`) and the default
+  -- each the CPU's frame; `cimg-cpu` fails the first two, `land-at-copy` the first.
+- **The copy regions stay whole** [V]: halved like the rest, a slot could no longer hold the largest copy the
+  buffers ever took, and `copydiff`'s 781x723 rectangle was refused (eight of the suite's tests); `destbuf` and
+  `imagebuf` are made twice over instead, 20 MB more of host-visible memory.
+- **Next:** the come-back rule by the same median (H17i), then session D and Android's 60 Hz request (D-45).

@@ -494,6 +494,18 @@ void gxr_set_output(const char* png_path)
     snprintf(g_png_path, sizeof g_png_path, "%s", png_path);
 }
 
+const char* gxr_output(void) { return g_png_path; }
+
+/* H17h: whether the producer reads the picture of the frame whose screen copy
+ * it is queueing, once the copy has run: a PNG (a replay's, or SOA_SNAP's, N-1
+ * included under SOA_INTERP), a hash, or SOA_INTERP=check's. Those copies
+ * carry CP_SYNC; the frame-end code below reads the same conditions. */
+static int screen_read(void)
+{
+    unsigned frame = gx_frame_count();
+    return g_png_path[0] || g_hash || g_interp == 2 || snap_frame(frame) || (g_interp && snap_frame(frame + 1));
+}
+
 /* SOA_SNAP skips the frames it is not writing, which is what makes a
  * snapshot run fast -- but the XFB copy still clears and presents every
  * frame, so with a window that skip shows the clear colour all but one frame
@@ -2296,6 +2308,7 @@ static void drain(int why);
 void gxr_flush(void)
 {
     drain(W_EXTERNAL);
+    if (g_backend && g_backend->settle) g_backend->settle(); /* H17h: its frames in flight too */
 }
 
 /* Nothing below the wait is written that a worker reads: the numbering is left
@@ -3182,6 +3195,14 @@ void gxr_backend_screen(const uint8_t* rgba, int w, int h)
     for (y = 0; y < h; y++) memcpy(g_screen[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
 }
 
+void gxr_backend_screen_late(const uint8_t* rgba, int w, int h)
+{
+    int y;
+    if (w > EFB_W) w = EFB_W;
+    if (h > EFB_H) h = EFB_H;
+    for (y = 0; y < h; y++) memcpy(g_screen[y][0], rgba + (size_t)y * w * 4, (size_t)w * 4);
+}
+
 /* V12: an in-between screen copy's pixels, into the buffer H17a's PNG and
  * check read; nothing of the real frame's. */
 void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h)
@@ -3711,6 +3732,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
     D->cp_ar = bp[0x4F]; D->cp_gb = bp[0x50]; D->cp_z = bp[0x51];
     D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
     if (to_screen && !interp_on()) D->cp_ring = CP_LAST; /* else the in-between copy ends the frame */
+    if (to_screen && screen_read()) D->cp_ring |= CP_SYNC; /* H17h */
     if (to_screen) { g_screen_w = w > EFB_W ? EFB_W : w; g_screen_h = h > EFB_H ? EFB_H : h; g_copies_xfb++; }
     else {
         if (bytes) {
@@ -3800,6 +3822,7 @@ static void enqueue_copy(CpuState* s, const uint32_t* bp, uint32_t v)
         D->cp_f_up = f_up; D->cp_f_mid = f_mid; D->cp_f_dn = f_dn;
         D->cp_ring = CP_LAST | CP_MID;
         if (g_interp_display && g_mid_real) D->cp_ring |= CP_REAL; /* H17c-b */
+        if (screen_read()) D->cp_ring |= CP_SYNC;                 /* H17h */
         if (frame_is_cut()) {
             D->cp_ring |= CP_CUT;
             g_cuts++;

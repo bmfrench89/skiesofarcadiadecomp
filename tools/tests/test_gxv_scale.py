@@ -72,16 +72,23 @@ def test_a_copy_at_scale_3_sampled_in_its_frame_gives_the_cpus_frame():
     proc = spike("copyimage", "--scale", "3")
     out = proc.stdout
     assert proc.returncode == 0, out + proc.stderr
-    cpu = next(ln for ln in out.splitlines() if ln.startswith("cpu: "))
-    gpu = next(ln for ln in out.splitlines() if ln.startswith("gpu: "))
-    assert gpu.startswith(f"gpu: 16 of 16 cells right, hash {cpu.split('hash ')[1]};"), gpu
-    assert "1 samplers served by a copy image" in gpu
+    lines = out.splitlines()
+    cpu = next(ln for ln in lines if ln.startswith("cpu: "))
+    frame = cpu.split("hash ")[1]
+    # H17h's three routes, the carried one copying the image at scale
+    for name in ("pool", "carried", "default"):
+        gpu = next(ln for ln in lines if ln.startswith(f"gpu {name}: "))
+        assert gpu.startswith(f"gpu {name}: 16 of 16 cells right, hash {frame};"), gpu
+    assert "1 samplers served by a copy image" in next(
+        ln for ln in lines if ln.startswith("gpu pool: ")
+    )
+    assert next(ln for ln in lines if ln.startswith("gpu carried: ")).endswith(", 1 carried")
 
 
 def test_the_scaled_image_sampled_as_if_native_fails_it():
     proc = spike("copyimage", "--scale", "3", "--mutate", "copy-scale")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "PROBLEM gpu:" in proc.stdout
+    assert "PROBLEM gpu pool:" in proc.stdout and "PROBLEM gpu carried:" in proc.stdout
 
 
 def test_the_presenter_averages_a_scaled_picture_as_picture_scale_area_does():

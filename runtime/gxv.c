@@ -76,13 +76,13 @@ typedef char gxv_vertex_is_39_floats[sizeof(Vertex) == 39 * sizeof(float) ? 1 : 
     X(vkDestroyPipeline) X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool)                            \
     X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkCreateCommandPool)                         \
     X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer)    \
-    X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) X(vkQueueSubmit)              \
+    X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) X(vkGetFenceStatus) X(vkQueueSubmit)              \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool)           \
     X(vkCmdWriteTimestamp) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline)            \
     X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdPushConstants) X(vkCmdSetScissor) X(vkCmdSetViewport)          \
     X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdClearAttachments) X(vkCmdPipelineBarrier)                    \
     X(vkCmdCopyImageToBuffer) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)                    \
-    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage) X(vkCmdBeginQuery) X(vkCmdEndQuery)    \
+    X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkCmdCopyBufferToImage) X(vkCmdCopyBuffer) X(vkCmdBeginQuery) X(vkCmdEndQuery) \
     X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)
 
 #define GXV_DECLARE(name) static PFN_##name name;
@@ -203,7 +203,6 @@ static struct {
 static uint32_t g_epoch = 1;
 static VkCommandPool g_cpool;
 static VkCommandBuffer g_cb;
-static VkFence g_fence;
 static VkQueryPool g_qpool;
 static int g_timestamps, g_precise;
 
@@ -237,12 +236,12 @@ static void late_land(void)
  * its own -- its bytes in g_destbuf, seeded from guest RAM; its decoded image
  * in g_imagebuf and in the texel pool -- and is counted as soon as it is
  * recorded. It lands, its bytes into guest RAM and its image into the
- * producer's copy image, when the submission it is in is done (land_all),
+ * producer's copy image, when the slot it is in is finished (slot_finish),
  * and gxr is told (gxr_backend_landed); every producer wait for what a copy
  * wrote waits for that. A draw later in the same submission that samples
- * the copy's image samples the pool's (g_cimg) with no wait at all. */
+ * the copy's image samples the pool's (cimg) with no wait at all. */
 #define LAND_MAX 64
-static struct {
+typedef struct {
     uint8_t* ram;      /* where its bytes go in guest RAM */
     uint32_t guest;    /* the same, as a masked guest address, for overlaps */
     uint32_t dest_at;  /* byte offset of its bytes in g_destbuf */
@@ -250,16 +249,52 @@ static struct {
     uint8_t* image;    /* the producer's copy image, or NULL */
     uint32_t image_at; /* texel offset of its image in g_imagebuf */
     uint32_t texels;
-} g_land[LAND_MAX];
-static unsigned g_land_n;
-static uint32_t g_dest_used, g_image_used; /* bytes and texels this submission's copies hold */
-static struct {
+} Land;
+typedef struct {
     const uint8_t* cpu; /* the producer's copy image, which a draw's TexCfg names */
     uint32_t rec;       /* the pool's, in g_texrecbuf */
-} g_cimg[LAND_MAX];
-static unsigned g_cimg_n;
-static long long g_seq_cur; /* every command below it has been run here */
+} CopyImage;
+
+/* H17h (docs/specs/gpu-frames-in-flight.md): two slots, each a command
+ * buffer, a fence and its half of the vertex ring, the draw records, the pool,
+ * the texture records and the copy regions. One is recorded (g_cur), the other
+ * may be in flight, and switching slots finishes it -- normally long done. A
+ * slot keeps what is left to do when it is finished: its copies to land (the
+ * command number of the first, for gxr_backend_landed), the copy images it
+ * served its own draws from the pool, and a frame's real picture for gxr (its
+ * readback slot, or -1) and screen slot for the presenter. SOA_GPU_FRAMES=1
+ * keeps one slot, every submission waited for, as before. */
+typedef struct {
+    VkCommandBuffer cb;
+    VkFence fence;
+    int inflight;
+    uint32_t ring0, ring1, draw0, draw1, pool0, pool1, texrec0, texrec1, dest0, dest1, image0, image1;
+    Land land[LAND_MAX];
+    unsigned land_n;
+    long long land_first;
+    CopyImage cimg[LAND_MAX];
+    unsigned cimg_n;
+    int deliver_slot, deliver_w, deliver_h;
+    int publish_due, publish_w, publish_h;
+} Slot;
+static Slot g_slot[2];
+static int g_cur, g_nslots = 2;
+/* The consumer finishes a slot, and the producer may too, in reset_efb after
+ * a drain, and in the report: the outer entry points that can meet (idle,
+ * reset_efb, report) take this; nothing under them does. */
+static PlatLock g_slot_lock;
+static uint32_t g_dest_used, g_image_used;          /* bytes and texels of the copy regions, absolute */
+static uint32_t g_ring_end, g_draw_end, g_pool_end, g_texrec_end, g_dest_end, g_image_end; /* the slot's ends */
+static uint32_t g_ring_cap, g_pool_slot, g_dest_cap, g_image_cap; /* a slot's room: the largest one thing */
+static long long g_seq_cur;    /* every command below it has been run here */
+static long long g_landed_said; /* what gxr_backend_landed was last told */
 static unsigned long long g_n_land_waits, g_n_cimg_served;
+static unsigned long long g_n_screen_async, g_n_screen_land, g_n_screen_read, g_n_fence_waits;
+static uint64_t g_fence_wait_ns;   /* finishing a slot whose fence was not yet signalled */
+static int g_mut_deliver_early;    /* --mutate deliver-early (H17h): a frame's picture to gxr when submitted */
+static int g_land_early_off;       /* SOA_GPU_LAND_EARLY=0: a copy to texture stays in its slot (H17h's A/B) */
+static int g_poll_off;             /* SOA_GPU_POLL=0: a slot in flight finished only when needed (copyimage's carry) */
+static unsigned long long g_n_copy_submits, g_n_cimg_carried; /* copies sent ahead; their images carried over */
 /* --mutate land-at-copy: every copy waited for and landed at the copy, as V6
  * did; --mutate cimg-cpu: a draw samples the producer's copy image, not yet
  * landed, instead of the pool's. */
@@ -524,9 +559,12 @@ static void barrier_image(VkImage img, VkImageAspectFlags aspect, VkImageLayout 
     vkCmdPipelineBarrier(g_cb, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
-/* Each submission starts with a full memory barrier: the one before it has
- * finished (its fence was waited on), and this makes what it wrote visible to
- * everything this one does, whatever stage did the writing. */
+/* Each submission starts with a full memory barrier. The one before it has
+ * finished, or (H17h) is the other slot's, submitted earlier on this queue,
+ * which a barrier's first scope holds as well: either way what it wrote is
+ * visible to everything this one does, whatever stage did the writing, and
+ * nothing here starts before it ends -- the EFB, the readback buffer and the
+ * screen slots are both slots' in turn. */
 static int begin_cb(void)
 {
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -538,9 +576,9 @@ static int begin_cb(void)
     mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
-    if (g_timestamps) {
-        vkCmdResetQueryPool(g_cb, g_qpool, 0, 2);
-        vkCmdWriteTimestamp(g_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_qpool, 0);
+    if (g_timestamps) { /* two queries a slot */
+        vkCmdResetQueryPool(g_cb, g_qpool, (uint32_t)g_cur * 2u, 2);
+        vkCmdWriteTimestamp(g_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_qpool, (uint32_t)g_cur * 2u);
     }
     if (g_measure) vkCmdResetQueryPool(g_cb, g_occ, 0, OCC_QUERIES);
     g_occ_used = 0;
@@ -603,75 +641,158 @@ static void end_interlock(void)
     g_bound = VK_NULL_HANDLE;
 }
 
-/* What the submission just done held for guest RAM (V7): each copy's bytes
- * into RAM and its image into the producer's copy image, the pool's copy of
- * it gone with the submission, and gxr told. --mutate late-readback (V6b)
- * tells gxr first and puts the bytes in RAM only at the next command. */
-static void land_all(void)
+/* gxr_backend_landed (V7): every command below the first copy still to land,
+ * in either slot, has its bytes in guest RAM; with none, every command run
+ * here has. It never moves back. */
+static void say_landed(void)
+{
+    long long through = g_seq_cur;
+    int s;
+    for (s = 0; s < g_nslots; s++)
+        if (g_slot[s].land_n && g_slot[s].land_first < through) through = g_slot[s].land_first;
+    if (through > g_landed_said) {
+        g_landed_said = through;
+        gxr_backend_landed(through);
+    }
+}
+
+/* What a slot's submission held for guest RAM (V7): each copy's bytes into
+ * RAM and its image into the producer's copy image, the pool's copy of it
+ * gone with the submission. --mutate late-readback (V6b) tells gxr first and
+ * puts the bytes in RAM only at the next command. */
+static void land_slot(Slot* S)
 {
     unsigned i;
-    if (!g_land_n) return;
-    for (i = 0; i < g_land_n; i++) {
-        const uint8_t* bytes = g_dest_map + g_land[i].dest_at;
+    for (i = 0; i < S->land_n; i++) {
+        const Land* L = &S->land[i];
+        const uint8_t* bytes = g_dest_map + L->dest_at;
         if (g_mut_late) {
-            uint8_t* keep = (uint8_t*)realloc(g_late_bytes, g_land[i].extent);
+            uint8_t* keep = (uint8_t*)realloc(g_late_bytes, L->extent);
             late_land();
             if (keep) {
                 g_late_bytes = keep;
-                memcpy(g_late_bytes, bytes, g_land[i].extent);
-                g_late_ram = g_land[i].ram;
-                g_late_n = g_land[i].extent;
+                memcpy(g_late_bytes, bytes, L->extent);
+                g_late_ram = L->ram;
+                g_late_n = L->extent;
             }
         } else {
-            memcpy(g_land[i].ram, bytes, g_land[i].extent);
+            memcpy(L->ram, bytes, L->extent);
         }
-        if (g_land[i].image) memcpy(g_land[i].image, g_image_map + (size_t)g_land[i].image_at * 4, (size_t)g_land[i].texels * 4);
+        if (L->image) memcpy(L->image, g_image_map + (size_t)L->image_at * 4, (size_t)L->texels * 4);
     }
-    g_land_n = 0;
-    g_cimg_n = 0;
-    g_dest_used = 0;
-    g_image_used = 0;
-    gxr_backend_landed(g_seq_cur);
+    S->land_n = 0;
+    S->cimg_n = 0;
 }
 
-/* Submit what is recorded and wait for it. The vertex ring is free again. */
-static int submit_wait(void)
+static void publish_screen(int sw, int sh);
+
+/* Slot s to record into: its command buffer and its halves, empty. What the
+ * pool held is no longer this submission's. */
+static void slot_enter(int s)
 {
+    Slot* S = &g_slot[s];
+    g_cur = s;
+    g_cb = S->cb;
+    g_ring_used = S->ring0;
+    g_ring_end = S->ring1;
+    g_draw_used = S->draw0;
+    g_draw_end = S->draw1;
+    g_pool_used = S->pool0;
+    g_pool_end = S->pool1;
+    g_texrec_used = S->texrec0;
+    g_texrec_end = S->texrec1;
+    g_dest_used = S->dest0;
+    g_dest_end = S->dest1;
+    g_image_used = S->image0;
+    g_image_end = S->image1;
+    g_epoch++;
+}
+
+/* The halves, once the buffers are made: a slot each of n. */
+static int slots_init(int n)
+{
+    uint32_t vsz = (uint32_t)sizeof(Vertex), ring = RING_BYTES / (uint32_t)n / vsz * vsz;
+    uint32_t draw = DRAWREC_BYTES / 4u / (uint32_t)n, pool = g_pool_cap / (uint32_t)n;
+    /* the copy regions are made twice over, a whole one a slot: a copy as
+     * large as the buffers ever held still fits (copydiff's reach 1024 x 1024) */
+    uint32_t texrec = TEXREC_BYTES / 4u / (uint32_t)n, dest = DEST_BYTES, image = IMAGE_BYTES / 4u;
+    int s;
+    g_nslots = n;
+    for (s = 0; s < n; s++) {
+        Slot* S = &g_slot[s];
+        uint32_t k = (uint32_t)s;
+        S->ring0 = k * ring;
+        S->ring1 = (k + 1) * ring;
+        S->draw0 = k * draw;
+        S->draw1 = (k + 1) * draw;
+        S->pool0 = k * pool;
+        S->pool1 = (k + 1) * pool;
+        S->texrec0 = k * texrec;
+        S->texrec1 = (k + 1) * texrec;
+        S->dest0 = k * dest;
+        S->dest1 = (k + 1) * dest;
+        S->image0 = k * image;
+        S->image1 = (k + 1) * image;
+        S->deliver_slot = -1;
+    }
+    g_ring_cap = ring;
+    g_pool_slot = pool;
+    g_dest_cap = dest;
+    g_image_cap = image;
+    slot_enter(0);
+    return 1;
+}
+
+/* Submit the slot being recorded, with its fence; it is in flight until
+ * slot_finish. Its command buffer and halves are the GPU's until then. */
+static int submit_go(void)
+{
+    Slot* S = &g_slot[g_cur];
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     VkResult r;
-    if (!g_rec) return 1;
     end_pass();
-    if (g_timestamps) vkCmdWriteTimestamp(g_cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, 1);
+    if (g_timestamps) vkCmdWriteTimestamp(g_cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_qpool, (uint32_t)g_cur * 2u + 1u);
     VKCHECK(vkEndCommandBuffer(g_cb));
     si.commandBufferCount = 1;
     si.pCommandBuffers = &g_cb;
     plat_lock(&g_queue_lock); /* the presenter submits and presents on this queue too (V8) */
-    r = vkQueueSubmit(g_queue, 1, &si, g_fence);
+    r = vkQueueSubmit(g_queue, 1, &si, S->fence);
     plat_unlock(&g_queue_lock);
     if (r != VK_SUCCESS) {
         say("vkQueueSubmit failed: VkResult %d", (int)r);
         return 0;
     }
-    {
-        uint64_t t0 = plat_mono_ns();
-        VKCHECK(vkWaitForFences(g_dev, 1, &g_fence, VK_TRUE, UINT64_MAX));
-        g_wait_ns += plat_mono_ns() - t0;
-    }
-    VKCHECK(vkResetFences(g_dev, 1, &g_fence));
     g_rec = 0;
-    g_ring_used = 0;
-    g_draw_used = 0;
-    g_pool_used = 0;
-    g_texrec_used = 0;
-    g_epoch++;
+    S->inflight = 1;
     g_n_submits++;
-    land_all();
+    return 1;
+}
+
+/* Slot s, in flight, finished: waited for, its copies landed and gxr told,
+ * its GPU time counted, its frame's real picture to gxr and its screen slot
+ * to the presenter (H17h). Under g_slot_lock when the producer may be here. */
+static int slot_finish(int s)
+{
+    Slot* S = &g_slot[s];
+    uint64_t t0;
+    if (!S->inflight) return 1;
+    t0 = plat_mono_ns();
+    if (vkGetFenceStatus(g_dev, S->fence) != VK_SUCCESS) {
+        VKCHECK(vkWaitForFences(g_dev, 1, &S->fence, VK_TRUE, UINT64_MAX));
+        g_n_fence_waits++;
+        g_fence_wait_ns += plat_mono_ns() - t0;
+    }
+    g_wait_ns += plat_mono_ns() - t0;
+    VKCHECK(vkResetFences(g_dev, 1, &S->fence));
+    S->inflight = 0;
+    land_slot(S);
     if (g_timestamps) {
         uint64_t ts[2];
-        if (vkGetQueryPoolResults(g_dev, g_qpool, 0, 2, sizeof ts, ts, sizeof ts[0], VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
+        if (vkGetQueryPoolResults(g_dev, g_qpool, (uint32_t)s * 2u, 2, sizeof ts, ts, sizeof ts[0],
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
             g_gpu_ms += (double)(ts[1] - ts[0]) * g_props.limits.timestampPeriod / 1e6;
     }
-    if (g_measure && g_occ_used) {
+    if (g_measure && g_occ_used) { /* measuring keeps to one submission in flight: see submit_next */
         static uint64_t samples[OCC_QUERIES];
         unsigned q;
         if (vkGetQueryPoolResults(g_dev, g_occ, 0, g_occ_used, sizeof(uint64_t) * g_occ_used, samples, sizeof(uint64_t),
@@ -688,6 +809,60 @@ static int submit_wait(void)
             }
         g_occ_used = 0;
     }
+    if (S->deliver_slot >= 0) {
+        gxr_backend_screen_late(g_screen_map + (size_t)S->deliver_slot * READBACK_BYTES, S->deliver_w, S->deliver_h);
+        S->deliver_slot = -1;
+    }
+    if (S->publish_due) {
+        S->publish_due = 0;
+        publish_screen(S->publish_w, S->publish_h);
+    }
+    say_landed();
+    return 1;
+}
+
+/* Every slot in flight finished, the older first. */
+static int finish_all(void)
+{
+    return slot_finish(g_cur ^ (g_nslots - 1)) && slot_finish(g_cur);
+}
+
+/* The other slot finished if the GPU is done with it, without waiting: at
+ * every command, so a frame is published, and its copies land, as soon as it
+ * is drawn. */
+static int slot_poll(void)
+{
+    int o = g_cur ^ (g_nslots - 1);
+    if (g_poll_off || o == g_cur || !g_slot[o].inflight || vkGetFenceStatus(g_dev, g_slot[o].fence) != VK_SUCCESS) return 1;
+    return slot_finish(o);
+}
+
+/* Submit the slot being recorded and go on in the other, once the other is
+ * finished: what a full buffer and a frame's end ask for (H17h). With one
+ * slot, or measuring, it waits for the submission, as before. */
+static int submit_next(void)
+{
+    int o = g_cur ^ (g_nslots - 1);
+    if (!g_rec) return 1;
+    if (!submit_go()) return 0;
+    if (o == g_cur || g_measure) {
+        if (!slot_finish(g_cur)) return 0;
+        slot_enter(g_cur);
+        return 1;
+    }
+    if (!slot_finish(o)) return 0;
+    slot_enter(o);
+    return 1;
+}
+
+/* Submit what is recorded and wait for it, and for the slot in flight: what
+ * needs a result now. The slot's halves are free again. */
+static int submit_wait(void)
+{
+    int had = g_rec;
+    if (had && !submit_go()) return 0;
+    if (!finish_all()) return 0;
+    if (had) slot_enter(g_cur);
     return 1;
 }
 
@@ -1236,6 +1411,42 @@ static unsigned tex_texels(const TexCfg* C)
 /* A texture's levels into the pool, once a submission for each cache slot
  * and generation: a slot re-decoded mid-frame gets a fresh allocation, and
  * nothing is overwritten before the submission that reads it is done. */
+/* A copy's image from the slot in flight, into this slot's pool on the GPU
+ * (H17h): the pool's copy there is the other slot's, written before this
+ * submission began -- whose barrier orders it -- and reused once that slot is
+ * entered again, so this slot takes its own. Its record, as the copy made it,
+ * pointing at the new place; NO_TEXTURE - 1 when this slot has no room. */
+static uint32_t carry_copy_image(const CopyImage* from)
+{
+    Slot* S = &g_slot[g_cur];
+    const uint32_t* src = (const uint32_t*)g_texrec_map + from->rec;
+    uint32_t texels = src[11] * src[22], *rec;
+    VkBufferCopy rg;
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    if (S->cimg_n == LAND_MAX || g_pool_used + texels > g_pool_end || g_texrec_used + TEXREC_WORDS > g_texrec_end)
+        return NO_TEXTURE - 1;
+    if (!begin_cb()) return NO_TEXTURE;
+    end_pass();
+    rg.srcOffset = (VkDeviceSize)src[0] * 4;
+    rg.dstOffset = (VkDeviceSize)g_pool_used * 4;
+    rg.size = (VkDeviceSize)texels * 4;
+    vkCmdCopyBuffer(g_cb, g_poolbuf, g_poolbuf, 1, &rg);
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0,
+                         NULL);
+    rec = (uint32_t*)g_texrec_map + g_texrec_used;
+    memcpy(rec, src, TEXREC_WORDS * 4);
+    rec[0] = g_pool_used;
+    S->cimg[S->cimg_n].cpu = from->cpu;
+    S->cimg[S->cimg_n].rec = g_texrec_used;
+    S->cimg_n++;
+    g_pool_used += texels;
+    g_texrec_used += TEXREC_WORDS;
+    g_n_cimg_carried++;
+    return S->cimg[S->cimg_n - 1].rec;
+}
+
 static uint32_t upload_texture(const TexCfg* C)
 {
     uint32_t* rec;
@@ -1243,15 +1454,27 @@ static uint32_t upload_texture(const TexCfg* C)
     int l;
     if (!C->level[0] || C->nlevels < 1 || C->w <= 0 || C->h <= 0 || id >= 1024) return NO_TEXTURE;
     /* A copy's image from this submission: the pool's, which the copy wrote
-     * there; the producer's is filled only when the copy lands (V7). From an
+     * there; the producer's is filled only when the copy lands (V7). From the
+     * slot in flight (H17h) it has not landed yet: the pool's is carried
+     * over on the GPU, or with no room that slot is finished first. From any
      * earlier submission it has landed, and is uploaded as any texture. */
     if (C->copy_image && !g_mut_cimg_cpu) {
+        const Slot* S = &g_slot[g_cur];
+        const Slot* O = &g_slot[g_cur ^ (g_nslots - 1)];
         unsigned i;
-        for (i = 0; i < g_cimg_n; i++)
-            if (g_cimg[i].cpu == C->level[0]) {
+        for (i = 0; i < S->cimg_n; i++)
+            if (S->cimg[i].cpu == C->level[0]) {
                 g_n_cimg_served++;
-                return g_cimg[i].rec;
+                return S->cimg[i].rec;
             }
+        if (O != S && O->inflight)
+            for (i = 0; i < O->cimg_n; i++)
+                if (O->cimg[i].cpu == C->level[0]) {
+                    uint32_t rec = carry_copy_image(&O->cimg[i]);
+                    if (rec != NO_TEXTURE - 1) return rec;
+                    if (!slot_finish(g_cur ^ 1)) return NO_TEXTURE;
+                    break;
+                }
     }
     if (g_resident[id].epoch == g_epoch && g_resident[id].gen == C->tex_gen) return g_resident[id].rec;
     if (g_mut_pool_inplace && g_resident[id].epoch == g_epoch) {
@@ -1265,7 +1488,7 @@ static uint32_t upload_texture(const TexCfg* C)
             return g_resident[id].rec;
         }
     }
-    if (g_pool_used + n > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) return NO_TEXTURE - 1; /* full */
+    if (g_pool_used + n > g_pool_end || g_texrec_used + TEXREC_WORDS > g_texrec_end) return NO_TEXTURE - 1; /* full */
     rec = (uint32_t*)g_texrec_map + g_texrec_used;
     memset(rec, 0, TEXREC_WORDS * 4);
     for (l = 0; l < C->nlevels && l < MAX_MIPS; l++) {
@@ -1306,7 +1529,7 @@ static int draw_record(const DrawCmd* D, uint32_t* dst, uint32_t* tev)
         if (D->tev.st[st].texen) maps |= 1u << (D->tev.st[st].texmap & 7);
     for (m = 0; m < 8; m++)
         if ((maps >> m) & 1) needed += tex_texels(&D->tev.tex[m]);
-    if (g_pool_used + needed > g_pool_cap || (g_texrec_used + 8 * TEXREC_WORDS) * 4 > TEXREC_BYTES) return 0;
+    if (g_pool_used + needed > g_pool_end || g_texrec_used + 8 * TEXREC_WORDS > g_texrec_end) return 0;
     for (m = 0; m < 8; m++)
         if ((maps >> m) & 1) recs[m] = upload_texture(&D->tev.tex[m]);
     memset(r, 0, sizeof r);
@@ -1557,7 +1780,7 @@ static int emit(const DrawCmd* D, const Vertex* up, unsigned n, int topo, int qu
     VkPipeline p;
     if (n == 0) return 1;
     if (quads && n / 4 > MAX_QUADS) { say("draw refused: %u quads, more than the index buffer's %u", n / 4, MAX_QUADS); return 0; }
-    if (bytes > RING_BYTES) { say("draw refused: %u vertices do not fit the vertex ring", n); return 0; }
+    if (bytes > g_ring_cap) { say("draw refused: %u vertices do not fit a slot's half of the vertex ring", n); return 0; }
     /* The scissor, inclusive, on the EFB; an empty one draws nothing. Each
      * native pixel is S x S samples at scale (V9a). */
     x0 = s->x0 < 0 ? 0 : s->x0;
@@ -1568,12 +1791,13 @@ static int emit(const DrawCmd* D, const Vertex* up, unsigned n, int topo, int qu
     sc.offset.x = x0 * g_scale;
     sc.extent.width = (uint32_t)((x1 - x0 + 1) * g_scale);
     sc.extent.height = (uint32_t)((y1 - y0 + 1) * g_scale);
-    if (g_ring_used + bytes > RING_BYTES && !submit_wait()) return 0;
-    if ((g_draw_used + GXV_DRAW_WORDS) * 4 > DRAWREC_BYTES && !submit_wait()) return 0;
+    /* A slot's half full: on into the other (H17h) */
+    if (g_ring_used + bytes > g_ring_end && !submit_next()) return 0;
+    if (g_draw_used + GXV_DRAW_WORDS > g_draw_end && !submit_next()) return 0;
     if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used, tev)) {
-        if (!submit_wait()) return 0;
+        if (!submit_next()) return 0;
         if (!draw_record(D, (uint32_t*)g_draw_map + g_draw_used, tev)) {
-            say("draw refused: its textures do not fit the %u-texel pool", g_pool_cap);
+            say("draw refused: its textures do not fit a slot's %u-texel half of the pool", g_pool_slot);
             return 0;
         }
     }
@@ -2084,8 +2308,10 @@ void gxv_on_publish(void (*fn)(void)) { g_on_publish = fn; }
  * scale (V9a) the presenter's slot holds it S times the size, and the
  * native picture g_screen takes is a second pass into SCREEN_NATIVE. */
 /* One EFB slice's picture into screen slot `shown`, and its native picture
- * into `native` (the same slot at scale 1), finished when it returns. */
-static int copy_slice(const DrawCmd* D, int slice, unsigned shown, unsigned native, int* sw, int* sh)
+ * into `native` (the same slot at scale 1; none, -1, at scale when nothing
+ * reads it); finished when it returns if `wait`, else recorded. Copies
+ * recorded one after another are ordered by efb_to_buffer's barrier. */
+static int copy_slice(const DrawCmd* D, int slice, unsigned shown, int native, int* sw, int* sh, int wait)
 {
     CopyPush p;
     copy_rect(D, &p);
@@ -2101,25 +2327,63 @@ static int copy_slice(const DrawCmd* D, int slice, unsigned shown, unsigned nati
         q.screen_at = (uint32_t)(shown * (READBACK_BYTES / 4));
         run_compute(&g_copy_cs, &q, sizeof q, q.count);
     }
-    p.count = (uint32_t)(*sw * *sh);
-    p.screen_at = (uint32_t)(native * (READBACK_BYTES / 4));
-    run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    if (native >= 0) {
+        p.count = (uint32_t)(*sw * *sh);
+        p.screen_at = (uint32_t)((unsigned)native * (READBACK_BYTES / 4));
+        run_compute(&g_copy_cs, &p, sizeof p, p.count);
+    }
     compute_to_host();
-    return submit_wait();
+    return wait ? submit_wait() : 1;
+}
+
+/* The frame's last screen copy, recorded: its slot to the presenter once the
+ * GPU has finished it (H17h). A frame whose picture the producer reads
+ * (CP_SYNC) is finished already, a copy at a time, as before. Any other goes
+ * in flight in its slot: the producer goes on to the next frame -- its gate
+ * drains what has run, which this has -- while the consumer records it into
+ * the other slot and the GPU draws this one, and slot_finish hands over the
+ * real picture and publishes the screen slot. A copy to texture in the same
+ * slot keeps the gate waiting until it lands, which the consumer's idle sees
+ * to. With one slot it is waited for here, as before. */
+static int screen_end(const DrawCmd* D, int sw, int sh)
+{
+    Slot* S = &g_slot[g_cur];
+    if (D->cp_ring & CP_SYNC) {
+        g_n_screen_read++;
+        publish_screen(sw, sh);
+        return 1;
+    }
+    S->publish_due = 1;
+    S->publish_w = sw;
+    S->publish_h = sh;
+    if (S->land_n) g_n_screen_land++;
+    if (g_mut_deliver_early && S->deliver_slot >= 0) { /* before the GPU has drawn it */
+        gxr_backend_screen_late(g_screen_map + (size_t)S->deliver_slot * READBACK_BYTES, S->deliver_w, S->deliver_h);
+        S->deliver_slot = -1;
+    }
+    g_n_screen_async++;
+    return submit_next();
 }
 
 static int copy_screen(const DrawCmd* D)
 {
-    int sw, sh;
+    int sw, sh, sync = (D->cp_ring & CP_SYNC) != 0;
+    Slot* O = &g_slot[g_cur ^ (g_nslots - 1)];
+    /* The screen slots are written in GPU order: a frame in flight is
+     * finished, its picture handed over and its slot published, before this
+     * one's copies go in after it (H17h). */
+    if (O->inflight && (O->publish_due || O->deliver_slot >= 0) && !slot_finish(g_cur ^ (g_nslots - 1))) return 0;
     if (HALF(D)) {
         /* V12: the in-between images, each from its slice into its slot's
          * partner (H17c: one a weight), then the slot, real frame and all,
-         * to the presenter */
+         * to the presenter. Their native pictures are the PNG's and check's,
+         * so only a frame whose picture is read has them (H17h). */
         unsigned k, ns = D->mid_n ? (D->mid_n < (unsigned)(g_efbs - 1) ? D->mid_n : (unsigned)(g_efbs - 1)) : 1;
         for (k = 0; k < ns; k++) {
-            unsigned shown = SCREEN_MID(g_scr_back, k), native = g_scale > 1 ? SCREEN_SCRATCH : shown;
-            if (!copy_slice(D, 1 + (int)k, shown, native, &sw, &sh)) return 0;
-            gxr_backend_screen_slice((int)k, g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
+            unsigned shown = SCREEN_MID(g_scr_back, k);
+            int native = g_scale == 1 ? (int)shown : sync ? SCREEN_SCRATCH : -1;
+            if (!copy_slice(D, 1 + (int)k, shown, native, &sw, &sh, sync)) return 0;
+            if (sync) gxr_backend_screen_slice((int)k, g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
             g_scr_w[shown] = sw;
             g_scr_h[shown] = sh;
             g_scr_k[shown] = g_scale;
@@ -2128,11 +2392,20 @@ static int copy_screen(const DrawCmd* D)
         g_scr_cut[g_scr_back] = (D->cp_ring & CP_CUT) != 0;
         g_scr_real[g_scr_back] = (D->cp_ring & CP_REAL) != 0;
         g_n_mid_copies++;
-        publish_screen(sw, sh);
-        return 1;
+        return screen_end(D, sw, sh);
     }
-    if (!copy_slice(D, 0, g_scr_back, g_scale > 1 ? SCREEN_NATIVE : g_scr_back, &sw, &sh)) return 0;
-    gxr_backend_screen(g_screen_map + (size_t)(g_scale > 1 ? SCREEN_NATIVE : g_scr_back) * READBACK_BYTES, sw, sh);
+    {
+        unsigned native = g_scale > 1 ? SCREEN_NATIVE : g_scr_back;
+        if (!copy_slice(D, 0, g_scr_back, (int)native, &sw, &sh, sync)) return 0;
+        if (sync) {
+            gxr_backend_screen(g_screen_map + (size_t)native * READBACK_BYTES, sw, sh);
+        } else { /* when the slot it is in is finished */
+            Slot* S = &g_slot[g_cur];
+            S->deliver_slot = (int)native;
+            S->deliver_w = sw;
+            S->deliver_h = sh;
+        }
+    }
     g_scr_mid[g_scr_back] = g_scr_cut[g_scr_back] = g_scr_real[g_scr_back] = 0;
     g_n_copies++;
     /* With an in-between copy to follow, the slot waits for it (V12b). */
@@ -2141,16 +2414,15 @@ static int copy_screen(const DrawCmd* D)
         g_scr_h[g_scr_back] = sh;
         return 1;
     }
-    publish_screen(sw, sh);
-    return 1;
+    return screen_end(D, sw, sh);
 }
 
-/* A copy still to land whose bytes overlap [guest, guest + bytes). */
-static int land_overlaps(uint32_t guest, uint32_t bytes)
+/* A copy still to land in slot S whose bytes overlap [guest, guest + bytes). */
+static int land_overlaps(const Slot* S, uint32_t guest, uint32_t bytes)
 {
     unsigned i;
-    for (i = 0; i < g_land_n; i++)
-        if (guest < g_land[i].guest + g_land[i].extent && guest + bytes > g_land[i].guest) return 1;
+    for (i = 0; i < S->land_n; i++)
+        if (guest < S->land[i].guest + S->land[i].extent && guest + bytes > S->land[i].guest) return 1;
     return 0;
 }
 
@@ -2158,7 +2430,7 @@ static int land_overlaps(uint32_t guest, uint32_t bytes)
  * the copies to a texture must outnumber (V7's Done). */
 static int land_wait(void)
 {
-    if (g_land_n) g_n_land_waits++;
+    if (g_slot[0].land_n || g_slot[g_nslots - 1].land_n) g_n_land_waits++;
     return submit_wait();
 }
 
@@ -2188,8 +2460,8 @@ static int copy_texture(const DrawCmd* D)
     cols = (p.ow + tw - 1) / tw;
     extent = rows && cols ? (rows - 1) * row_bytes + cols * bpt : 0;
     if ((dest & MEM_MASK) + (size_t)extent > MEM1_SIZE) { g_n_refused++; return 1; }
-    if (extent > DEST_BYTES || (size_t)p.ow * p.oh * 4 > IMAGE_BYTES) {
-        say("copy refused: %ux%u, %u bytes, more than the copy buffers hold", p.ow, p.oh, extent);
+    if (extent > g_dest_cap || p.ow * p.oh > g_image_cap) {
+        say("copy refused: %ux%u, %u bytes, more than a slot's half of the copy buffers holds", p.ow, p.oh, extent);
         return 0;
     }
     if (!extent) return 1;
@@ -2197,12 +2469,21 @@ static int copy_texture(const DrawCmd* D)
     scaled = texels * (uint32_t)(g_scale * g_scale); /* the pool's image, S x S texels each (V9a) */
     /* Regions of its own in this submission, and no copy still to land under
      * its bytes, whose seed must hold what that copy wrote. */
-    if (g_land_n == LAND_MAX || g_dest_used + extent > DEST_BYTES || g_image_used + texels > IMAGE_BYTES / 4 ||
-        land_overlaps(dest & MEM_MASK, extent)) {
-        if (!land_wait()) return 0;
+    {
+        /* An earlier copy under its bytes still to land, in this slot or the
+         * one in flight, lands first (H17h); a slot without room goes in
+         * flight and the copy takes the other's. */
+        const Slot* O = &g_slot[g_cur ^ (g_nslots - 1)];
+        if (land_overlaps(&g_slot[g_cur], dest & MEM_MASK, extent)) {
+            if (!land_wait()) return 0;
+        } else if (O != &g_slot[g_cur] && O->inflight && land_overlaps(O, dest & MEM_MASK, extent)) {
+            g_n_land_waits++;
+            if (!slot_finish(g_cur ^ 1)) return 0;
+        }
     }
-    if (g_pool_used + scaled > g_pool_cap || (g_texrec_used + TEXREC_WORDS) * 4 > TEXREC_BYTES) {
-        if (!submit_wait()) return 0;
+    if (g_slot[g_cur].land_n == LAND_MAX || g_dest_used + extent > g_dest_end || g_image_used + texels > g_image_end ||
+        g_pool_used + scaled > g_pool_end || g_texrec_used + TEXREC_WORDS > g_texrec_end) {
+        if (!submit_next()) return 0;
     }
     p.texfmt = texfmt;
     p.flags |= ((D->cp_v >> 15) & 1) | (uint32_t)half << 1 | (g_scale == 1 ? 8u : 0u);
@@ -2244,21 +2525,27 @@ static int copy_texture(const DrawCmd* D)
         rec[33] = (uint32_t)g_scale;
         g_pool_at = g_pool_used;
         if (D->cp_image) {
-            g_cimg[g_cimg_n].cpu = D->cp_image;
-            g_cimg[g_cimg_n].rec = g_texrec_used;
-            g_cimg_n++;
+            Slot* S = &g_slot[g_cur];
+            S->cimg[S->cimg_n].cpu = D->cp_image;
+            S->cimg[S->cimg_n].rec = g_texrec_used;
+            S->cimg_n++;
         }
         g_texrec_used += TEXREC_WORDS;
         g_pool_used += scaled;
     }
-    g_land[g_land_n].ram = ram;
-    g_land[g_land_n].guest = dest & MEM_MASK;
-    g_land[g_land_n].dest_at = g_dest_used;
-    g_land[g_land_n].extent = extent;
-    g_land[g_land_n].image = D->cp_image;
-    g_land[g_land_n].image_at = g_image_used;
-    g_land[g_land_n].texels = texels;
-    g_land_n++;
+    {
+        Slot* S = &g_slot[g_cur];
+        Land* L = &S->land[S->land_n];
+        if (!S->land_n) S->land_first = g_seq_cur; /* this copy's number: gxr_backend_landed stays below it */
+        L->ram = ram;
+        L->guest = dest & MEM_MASK;
+        L->dest_at = g_dest_used;
+        L->extent = extent;
+        L->image = D->cp_image;
+        L->image_at = g_image_used;
+        L->texels = texels;
+        S->land_n++;
+    }
     g_img_at = g_image_used;
     g_dest_used += extent;
     g_image_used += texels;
@@ -2274,6 +2561,17 @@ static int copy_texture(const DrawCmd* D)
     g_n_tex_copies++;
     /* V6's protocol, a mutation now, and late-readback's base. */
     if ((g_mut_land_at_copy || g_mut_late) && !land_wait()) return 0;
+    /* H17h: in flight at once while the other slot is free, so the copy lands
+     * as the rest of the frame is recorded rather than at the frame's end,
+     * where the gate would wait for it; a draw after it samples its image
+     * carried into the other slot's pool. */
+    if (g_nslots > 1 && !g_measure && !g_land_early_off) {
+        if (!slot_poll()) return 0;
+        if (!g_slot[g_cur ^ 1].inflight) {
+            g_n_copy_submits++;
+            if (!submit_next()) return 0;
+        }
+    }
     return 1;
 }
 
@@ -2496,17 +2794,24 @@ static void gxv_finish(void)
 }
 
 /* The consumer has nothing to run (V7): land what it holds, since a producer
- * waiting for that publishes nothing more. Nothing to land, nothing done --
- * the producer may be in reset_efb, after a drain, as this is called. */
+ * waiting for that publishes nothing more, and finish a slot in flight (H17h),
+ * whose frame the presenter waits for. Nothing to do, nothing done -- the
+ * producer may be in reset_efb, after a drain, as this is called, which the
+ * lock keeps apart. */
 static void timed_idle(void)
 {
     uint64_t t0, w0;
-    if (!g_land_n) return;
-    late_land();
-    t0 = plat_mono_ns();
-    w0 = g_wait_ns;
-    if (!land_wait()) say("a submission failed");
-    g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
+    const Slot* O;
+    plat_lock(&g_slot_lock);
+    O = &g_slot[g_cur ^ (g_nslots - 1)];
+    if (g_slot[g_cur].land_n || (O != &g_slot[g_cur] && O->inflight)) {
+        late_land();
+        t0 = plat_mono_ns();
+        w0 = g_wait_ns;
+        if (g_slot[g_cur].land_n ? !land_wait() : !finish_all()) say("a submission failed");
+        g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
+    }
+    plat_unlock(&g_slot_lock);
 }
 
 static int timed_draw(const DrawCmd* D)
@@ -2514,7 +2819,7 @@ static int timed_draw(const DrawCmd* D)
     late_land();
     g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
-    int r = gxv_draw(D);
+    int r = slot_poll() && gxv_draw(D); /* H17h: the slot in flight, finished if the GPU is done */
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
     g_seq_cur = D->seq + 1;
     return r;
@@ -2622,12 +2927,12 @@ static int timed_copy(const DrawCmd* D)
     late_land();
     g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
-    int r = gxv_copy(D);
+    int r = slot_poll() && gxv_copy(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
     if (r && (D->cp_v & 0x4000u) && !HALF(D)) frame_mark(); /* an in-between image is not a frame (V12) */
     g_seq_cur = D->seq + 1;
     /* Nothing of this copy's, or before it, still to land: say so now. */
-    if (!g_land_n) gxr_backend_landed(g_seq_cur);
+    say_landed();
     return r;
 }
 
@@ -2636,7 +2941,7 @@ static int timed_clear(const DrawCmd* D)
     late_land();
     g_seq_cur = D->seq;
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
-    int r = gxv_clear(D);
+    int r = slot_poll() && gxv_clear(D);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
     g_seq_cur = D->seq + 1;
     return r;
@@ -2645,7 +2950,9 @@ static int timed_clear(const DrawCmd* D)
 static void timed_reset_efb(const uint32_t* bp)
 {
     uint64_t t0 = plat_mono_ns(), w0 = g_wait_ns;
-    gxv_reset_efb(bp);
+    plat_lock(&g_slot_lock); /* on the producer, after a drain, while the consumer may idle (H17h) */
+    if (finish_all()) gxv_reset_efb(bp);
+    plat_unlock(&g_slot_lock);
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
 }
 
@@ -2657,11 +2964,20 @@ static void timed_finish(void)
     g_consumer_ns += plat_mono_ns() - t0 - (g_wait_ns - w0);
 }
 
+/* gxr_flush's end, on the producer, the queue drained (H17h): every slot in
+ * flight finished, its frame's picture in g_screen. */
+static void timed_settle(void)
+{
+    plat_lock(&g_slot_lock);
+    if (!finish_all()) say("a submission failed");
+    plat_unlock(&g_slot_lock);
+}
+
 /* Its own thread (V6a): the renderer runs every command on it, and the
- * producer calls nothing here but reset_efb, after a drain, when that thread
- * is idle. */
+ * producer calls nothing here but reset_efb and settle, after a drain, when
+ * that thread is idle. The slices are set at start. */
 static GxrBackend g_gxv = {"vulkan", timed_draw, timed_copy, timed_clear, timed_reset_efb, timed_finish, gxv_report, 1, 1,
-                                  timed_idle, 1};
+                                  timed_idle, 1, 0, timed_settle};
 
 const GxrBackend* gxv_backend(void) { return &g_gxv; }
 
@@ -2715,6 +3031,7 @@ int gxv_set_mutation(const char* name)
     else if (!strcmp(name, "or-and")) g_mut_logic = MUT_OR_AND;
     else if (!strcmp(name, "skip-copies")) g_mut_skip_copies = 1;
     else if (!strcmp(name, "dest+32")) g_mut_dest32 = 1;
+    else if (!strcmp(name, "deliver-early")) g_mut_deliver_early = 1;
     else if (!strncmp(name, "skip-draw:", 10) && atoi(name + 10) > 0) g_skip_draw = (unsigned long long)atoi(name + 10);
     else return 0;
     return 1;
@@ -2802,6 +3119,9 @@ static void report_pipelines(void)
 
 void gxv_report(void)
 {
+    plat_lock(&g_slot_lock); /* H17h: the last frame's GPU time in the totals */
+    if (!finish_all()) say("a submission failed");
+    plat_unlock(&g_slot_lock);
     say("%llu draws (%llu rebuilt by clipping), %llu vertices, %llu clears, %llu screen copies, %llu copies to a "
         "texture (%llu refused), %llu pipelines, %llu submissions, GPU %.3f ms%s",
         g_n_draws, g_n_rebuilt, g_n_verts, g_n_clears, g_n_copies, g_n_tex_copies, g_n_refused,
@@ -2816,6 +3136,13 @@ void gxv_report(void)
     say("copies to a texture: %llu, landed with the submissions they were in but for %llu readback waits of their own; "
         "%llu samplers served by a copy image from the pool",
         g_n_tex_copies, g_n_land_waits, g_n_cimg_served);
+    say("frames in flight (H17h): %d slot(s)%s; %llu frames left in flight while the next was recorded (%llu of them "
+        "with a copy to texture still to land), %llu waited for with their picture read (a PNG, a hash or a check); "
+        "%llu slots waited for at their fence, %.3f ms in all; %llu copies to a texture sent ahead, %llu of their "
+        "images carried into the next slot's pool",
+        g_nslots, g_nslots == 1 ? " (SOA_GPU_FRAMES=1: every submission waited for, as before)" : "",
+        g_n_screen_async, g_n_screen_land, g_n_screen_read, g_n_fence_waits, (double)g_fence_wait_ns / 1e6,
+        g_n_copy_submits, g_n_cimg_carried);
     report_pipelines();
     report_frames();
     present_report();
@@ -3176,17 +3503,22 @@ static int make_commands(void)
     VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkQueryPoolCreateInfo qi = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    VkCommandBuffer cbs[2];
+    int s;
     pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pi.queueFamilyIndex = g_family;
     VKCHECK(vkCreateCommandPool(g_dev, &pi, NULL, &g_cpool));
     ai.commandPool = g_cpool;
     ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
-    VKCHECK(vkAllocateCommandBuffers(g_dev, &ai, &g_cb));
-    VKCHECK(vkCreateFence(g_dev, &fi, NULL, &g_fence));
+    ai.commandBufferCount = 2; /* a slot each (H17h) */
+    VKCHECK(vkAllocateCommandBuffers(g_dev, &ai, cbs));
+    for (s = 0; s < 2; s++) {
+        g_slot[s].cb = cbs[s];
+        VKCHECK(vkCreateFence(g_dev, &fi, NULL, &g_slot[s].fence));
+    }
     if (g_timestamps) {
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = 2;
+        qi.queryCount = 4; /* two a slot */
         VKCHECK(vkCreateQueryPool(g_dev, &qi, NULL, &g_qpool));
     }
     qi.queryType = VK_QUERY_TYPE_OCCLUSION;
@@ -3267,6 +3599,11 @@ int gxv_init(char* why, size_t cap)
     {
         const char* sc = getenv("SOA_GPU_SCALE");
         const char* lod = getenv("SOA_GPU_SCALE_LOD");
+        const char* fr = getenv("SOA_GPU_FRAMES");
+        const char* le = getenv("SOA_GPU_LAND_EARLY");
+        g_nslots = fr && atoi(fr) == 1 ? 1 : 2; /* H17h's A/B: 1, one slot, as before */
+        g_land_early_off = le && !strcmp(le, "0");
+        g_poll_off = getenv("SOA_GPU_POLL") && !strcmp(getenv("SOA_GPU_POLL"), "0");
         g_scale = 1;
         g_efbs = gxr_interp() ? 1 + gxr_interp_slices() : 1;
         if (sc && *sc) {
@@ -3373,15 +3710,16 @@ int gxv_init(char* why, size_t cap)
         !make_buffer((VkDeviceSize)MAX_QUADS * 6 * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 0, &g_quad_idx, (uint8_t**)&g_quad_map) ||
         !make_buffer(READBACK_BYTES * (size_t)g_efbs, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      0, &g_readback, &g_readback_map) ||
-        !make_buffer(DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) ||
-        !make_buffer(IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
+        !make_buffer(2u * DEST_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_destbuf, &g_dest_map) || /* a slot each (H17h) */
+        !make_buffer(2u * IMAGE_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1, &g_imagebuf, &g_image_map) ||
         !make_buffer((VkDeviceSize)READBACK_BYTES * (g_efbs > 1 ? SCREEN_MID0 + 3 * (g_efbs - 1) : SCREEN_MID0),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1,
                      &g_screenbuf, &g_screen_map) ||
         !make_buffer(DRAWREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_drawbuf, &g_draw_map) ||
-        !make_buffer(pool_bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_poolbuf, &g_pool_map) ||
+        !make_buffer(pool_bytes(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                     0, &g_poolbuf, &g_pool_map) ||
         !make_buffer(TEXREC_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0, &g_texrecbuf, &g_texrec_map) || !make_pass() ||
-        !make_layout() || !make_commands() || !init_images()) {
+        !make_layout() || !make_commands() || !slots_init(g_nslots) || !init_images()) {
         snprintf(why, cap, "setting up on %s failed (see above)", g_devname);
         return 0;
     }
@@ -3447,7 +3785,8 @@ void gxv_shutdown(void)
         if (g_pipes[i].key && g_pipes[i].pipe) vkDestroyPipeline(g_dev, g_pipes[i].pipe, NULL);
     if (g_qpool) vkDestroyQueryPool(g_dev, g_qpool, NULL);
     if (g_occ) vkDestroyQueryPool(g_dev, g_occ, NULL);
-    vkDestroyFence(g_dev, g_fence, NULL);
+    if (g_slot[0].fence) vkDestroyFence(g_dev, g_slot[0].fence, NULL);
+    if (g_slot[1].fence) vkDestroyFence(g_dev, g_slot[1].fence, NULL);
     vkDestroyCommandPool(g_dev, g_cpool, NULL);
     if (g_vs) vkDestroyShaderModule(g_dev, g_vs, NULL);
     if (g_fs) vkDestroyShaderModule(g_dev, g_fs, NULL);

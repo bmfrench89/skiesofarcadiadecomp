@@ -41,15 +41,25 @@ def run_copyimage(*extra):
 
 
 def test_a_copy_sampled_in_its_frame_is_the_gpus_own_image():
+    """Each of H17h's three routes gives the CPU's frame with no readback
+    wait: the pool (the copy kept in its slot, V7's), the image carried into
+    the next slot's pool while the copy's is in flight, and the default."""
     proc = run_copyimage()
     out = proc.stdout
     assert proc.returncode == 0, out + proc.stderr
-    cpu = next(ln for ln in out.splitlines() if ln.startswith("cpu: "))
-    gpu = next(ln for ln in out.splitlines() if ln.startswith("gpu: "))
+    lines = out.splitlines()
+    cpu = next(ln for ln in lines if ln.startswith("cpu: "))
     frame = cpu.split("hash ")[1]
     assert cpu.startswith("cpu: 16 of 16 cells right")
-    assert gpu.startswith(f"gpu: 16 of 16 cells right, hash {frame};"), gpu
-    assert "1 copies to a texture, 0 readback waits, 1 samplers served by a copy image" in gpu
+    route = {
+        name: next(ln for ln in lines if ln.startswith(f"gpu {name}: "))
+        for name in ("pool", "carried", "default")
+    }
+    for name, gpu in route.items():
+        assert gpu.startswith(f"gpu {name}: 16 of 16 cells right, hash {frame};"), gpu
+        assert "1 copies to a texture, 0 readback waits" in gpu, gpu
+    assert "1 samplers served by a copy image" in route["pool"], route["pool"]
+    assert route["carried"].endswith(", 1 carried"), route["carried"]
 
 
 def test_the_producers_image_before_it_lands_is_a_different_picture():
@@ -57,7 +67,8 @@ def test_the_producers_image_before_it_lands_is_a_different_picture():
     image, which the copy fills only when it lands."""
     proc = run_copyimage("--mutate", "cimg-cpu")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "PROBLEM gpu: 0 of 16, hash" in proc.stdout
+    assert "PROBLEM gpu pool: 0 of 16, hash" in proc.stdout
+    assert "PROBLEM gpu carried: 0 of 16, hash" in proc.stdout
 
 
 def test_waiting_to_land_every_copy_fails_it():
@@ -65,4 +76,4 @@ def test_waiting_to_land_every_copy_fails_it():
     pool's image unused and the waits as many as the copies."""
     proc = run_copyimage("--mutate", "land-at-copy")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "PROBLEM gpu: 1 readback waits for 1 copies, not fewer" in proc.stdout
+    assert "PROBLEM gpu pool: 1 readback waits for 1 copies, not fewer" in proc.stdout

@@ -422,7 +422,8 @@ washed-out colour and a correct fix would have failed the suite.
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
-spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), pushed. The full pre-push suite passes: 1904 tests in 103 files (1863
+spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h
+(2026-10-26), pushed. The full pre-push suite passes: 1904 tests in 103 files (1863
 passed, 41 skipped here; 706 skip with MSVC hidden, so 665 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
@@ -467,10 +468,12 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    whole, twice in display mode; copied as far as it is read, the producer's setup fell 7-11%, and the
    cutscene's frame did not move: the producer now waits longer at the gate, for the consumer, whose serial
    path (record the frame, then wait on its one command buffer for the GPU) is the frame (FINDINGS "H17g").
-   **Next is H17h** (PLAN-60FPS-MODS): two command buffers in flight in `gxv.c`, with H17f's screen copy left
-   in flight on top -- H17f's patch was not committed; it is easiest rebuilt from FINDINGS "H17f"'s
-   description (CP_SYNC, inflight_finish at every entry point and in idle, the late picture delivery, the
-   replay's earlier passes without a PNG). Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
+   H17h built two command buffers in flight (`docs/specs/gpu-frames-in-flight.md`), a copy's image carried
+   into the next slot on the GPU, a copy to texture sent ahead: the cutscene in display mode at p50 33.4 ms
+   against one slot's 36.5, the battle in a window without an in-between image on 15% of frames against 57%
+   (FINDINGS "H17h"). `SOA_GPU_FRAMES=1` is the old route, for A/B. **Next is H17i** (PLAN-60FPS-MODS): the
+   budget's come-back count, V12's, keeps smooth motion off for a thousand frames after a stop in a window;
+   give it the same median as the stop rule (`runtime/interp_budget.h`). Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in

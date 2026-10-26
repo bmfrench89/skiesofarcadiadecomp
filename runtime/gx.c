@@ -840,19 +840,32 @@ static int load_capture(CpuState* s, const char* base, int with_ram, uint8_t** f
     return 0;
 }
 
+void gxr_set_output(const char* png_path);
+const char* gxr_output(void);
+uint64_t gxr_screen_hash(void);
+
 int gx_replay(CpuState* s, const char* base)
 {
     uint8_t* fifo = NULL;
     size_t len = 0, done = 0;
     /* SOA_REPLAY_REPEAT=N renders the capture N times, each from its own RAM
      * image, so that a profiler (SOA_HOSTPROF) has more than one frame's worth
-     * of the pixel path to sample. The PNG is the last pass's, the same. */
+     * of the pixel path to sample. The PNG is the last pass's, the same, and
+     * only the last writes it: the others' pictures are read by nothing, so
+     * the GPU backend leaves each in flight while the next is built (H17h).
+     * The next pass's start finishes it, its picture handed over, and says
+     * that picture's hash, which `gpuspike.py repeat` holds to the last
+     * pass's and a single replay's. */
     const char* rep = getenv("SOA_REPLAY_REPEAT");
     int n = rep && atoi(rep) > 1 ? atoi(rep) : 1, i;
+    char out[512];
+    snprintf(out, sizeof out, "%s", gxr_output());
     for (i = 0; i < n; i++) {
         if (fifo) free(fifo);
+        gxr_set_output(i + 1 < n ? "" : out);
         if (load_capture(s, base, 1, &fifo, &len)) return 1;
         gxr_reset_efb();
+        if (i > 0) fprintf(stderr, "[gx] pass %d of %d: picture hash %016llx\n", i, n, (unsigned long long)gxr_screen_hash());
         g_dl_rec = 0;
         g_replaying = 1;
         done = parse(s, fifo, len, 0);
@@ -873,7 +886,6 @@ int gxr_pair_mode(unsigned flags, float t);
 unsigned long long gxr_pair_rotations(void);
 void gxr_pair_list(void* file);
 void gxr_pair_report(void);
-void gxr_set_output(const char* png_path);
 int gxr_interp(void);
 
 /* The image between two consecutive captures (PLAN-60FPS-MODS H10), in three

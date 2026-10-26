@@ -82,6 +82,11 @@ typedef struct {
 #define CP_MID 2  /* ...and its frame has an in-between image */
 #define CP_CUT 4  /* ...which is a camera cut's, not to be shown */
 #define CP_REAL 8 /* ...and the frame's real image is its last, on a refresh of its own (H17c-b) */
+/* H17h: on either screen copy of a frame whose picture the producer reads once
+ * the copy has run -- a PNG, a hash, SOA_INTERP=check -- so a backend that
+ * lands late finishes it first. Without it the backend may finish the frame
+ * while the producer builds the next. */
+#define CP_SYNC 16
     uint8_t* cp_image; /* a copy to memory's image, which each worker decodes its rows into; or NULL */
     CpuState* s;
     /* H17c (specs/interp-display.md): on a command with efb 1, the frame's
@@ -128,10 +133,18 @@ typedef struct GxrBackend {
      * its own, from a draw's F+1 vertices and F's positions; 0 for a backend
      * that draws one, already lerped, as V12 did. */
     int slices;
+    /* H17h: called on the producer at the end of gxr_flush, the queue drained:
+     * every frame a backend left in flight finished, its picture in g_screen,
+     * as gxr_flush promises its callers (the self test, a capture, the
+     * report). May be NULL. */
+    void (*settle)(void);
 } GxrBackend;
 
 void gxr_set_backend(const GxrBackend* b); /* NULL: the worker pool */
 void gxr_backend_screen(const uint8_t* rgba, int w, int h); /* a screen copy's pixels, exactly g_screen's size */
+/* H17h: the same, for a copy without CP_SYNC finished after the producer may
+ * have queued the next screen copy, whose size it need not have. */
+void gxr_backend_screen_late(const uint8_t* rgba, int w, int h);
 void gxr_backend_screen_mid(const uint8_t* rgba, int w, int h); /* an in-between screen copy's, into g_screen_mid (V12) */
 /* H17c: in-between image k's (0 the first weight's), for its PNG; k 0 is g_screen_mid as well. */
 void gxr_backend_screen_slice(int k, const uint8_t* rgba, int w, int h);

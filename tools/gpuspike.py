@@ -20,6 +20,7 @@
     python tools/gpuspike.py present --filters            # V8b: P5a's filters on the GPU against picture.c
     python tools/gpuspike.py logictest                    # V10: logic ops routed without logicOp
     python tools/gpuspike.py oracle --scale 3             # V9a: the EFB at 3x, its centre samples judged
+    python tools/gpuspike.py repeat [--mutate M]          # H17h: frames in flight, each the one-slot replay's
 
 specs/gpu-backend.md V3a, V3b, V4a, V4b and V5's loddiff. `build` compiles the shaders in
 runtime/gxv/ to SPIR-V with the pinned glslang (tools/fetch_gpu.py), as C
@@ -1486,6 +1487,75 @@ def contrast(
     return 0 if ok else 1
 
 
+RE_PASS = re.compile(r"^\[gx\] pass (\d+) of (\d+): picture hash ([0-9a-f]{16})$", re.M)
+RE_IN_FLIGHT = re.compile(
+    r"frames in flight \(H17h\): (\d+) slot\(s\)[^;]*; (\d+) frames left in flight"
+)
+
+
+def repeat(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
+    """H17h (docs/specs/gpu-frames-in-flight.md): each capture replayed once
+    with one slot (SOA_GPU_FRAMES=1, every submission waited for, as before),
+    then three times (SOA_REPLAY_REPEAT=3) with two, every pass left in flight
+    -- the spike reads the picture after gxr_flush, which settles the last.
+    Every pass's picture, the first two as the next pass's start hands them
+    over, must be the one-slot replay's, and at least two frames must have
+    been left in flight, or the route was never taken. A mutation goes to the
+    three-pass run, and must fail it."""
+    code = ready(prof)
+    if code is not None:
+        return code
+    scratch = build_dir(prof) / "repeat"
+    scratch.mkdir(parents=True, exist_ok=True)
+    caps = captures(sets)
+    problems, passed, flown = [], 0, 0
+    for cap in caps:
+        at = f"{cap.setname}/{cap.capture.name}"
+        base = replay_base(cap, scratch)
+        one, h1 = replay(
+            prof, "gpu", base, scratch / f"{cap.capture.name}_one.png", env={"SOA_GPU_FRAMES": "1"}
+        )
+        if skipped(one):
+            return SKIP
+        three, h3 = replay(
+            prof,
+            "gpu",
+            base,
+            scratch / f"{cap.capture.name}_three.png",
+            mutate=mutate,
+            env={"SOA_REPLAY_REPEAT": "3"},
+        )
+        text = (three.stdout or "") + (three.stderr or "")
+        passes = [h for _, _, h in RE_PASS.findall(text)]
+        flight = RE_IN_FLIGHT.search(text)
+        bad = []
+        if one.returncode != 0 or three.returncode != 0 or h1 is None or h3 is None:
+            bad.append(f"exit {one.returncode} and {three.returncode}, hashes {h1} and {h3}")
+        if len(passes) != 2:
+            bad.append(f"{len(passes)} pass lines where two were due")
+        if flight is None or int(flight.group(2)) < 2:
+            bad.append(f"{flight.group(2) if flight else 'no'} frames left in flight, not two")
+        else:
+            flown += int(flight.group(2))
+        if h1 is not None and any(h != h1 for h in [*passes, h3]):
+            bad.append(
+                f"passes {' '.join(passes)} and last {h3}, where the one-slot replay's is {h1}"
+            )
+        if bad:
+            problems.append(f"{at}: " + "; ".join(bad))
+        else:
+            passed += 1
+    for p_ in problems:
+        print(f"PROBLEM {p_}")
+    print(
+        f"[gpuspike] repeat: {passed} of {len(caps)} captures the one-slot replay's picture at every pass, "
+        f"{flown} frames left in flight"
+    )
+    ok = not problems and passed == len(caps) and len(caps) > 0
+    print(f"[gpuspike] repeat {'passes' if ok else 'FAILS'}")
+    return 0 if ok else 1
+
+
 # V12: the in-between half rasterizes where the real one would within one
 # level, its attributes interpolated at another row; H10's five pairs differ
 # at 6 to 54 pixels of 307,200 (FINDINGS "V12"). Twice the most, or so.
@@ -2010,16 +2080,30 @@ RE_LANDING = re.compile(
 )
 
 
-def copyimage_run(prof: toolchain.Profile, backend: str, mutate: str | None = None):
+RE_CARRIED = re.compile(r"copies to a texture sent ahead, (\d+) of their images carried")
+
+
+def copyimage_run(
+    prof: toolchain.Profile,
+    backend: str,
+    mutate: str | None = None,
+    env: dict[str, str] | None = None,
+):
     """V7's copy image frame: (cells right, frame hash, the landing figures or
-    None), "skip", or None with the output printed."""
+    None, the images carried into another slot's pool -- H17h), "skip", or
+    None with the output printed."""
     out = build_dir(prof) / "copyimage" / backend
     out.mkdir(parents=True, exist_ok=True)
     args = [str(exe_path(prof)), "--backend", backend, "--out", str(out), "--copyimage", "1"]
     if mutate:
         args += ["--mutate", mutate]
     proc = subprocess.run(
-        args, cwd=ROOT, env=clean_env(), capture_output=True, text=True, check=False
+        args,
+        cwd=ROOT,
+        env={**clean_env(), **(env or {})},
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if skipped(proc):
         return "skip"
@@ -2029,7 +2113,13 @@ def copyimage_run(prof: toolchain.Profile, backend: str, mutate: str | None = No
         print(text[-3000:])
         return None
     land = RE_LANDING.search(text)
-    return int(m.group(1)), m.group(2), tuple(map(int, land.groups())) if land else None
+    carried = RE_CARRIED.search(text)
+    return (
+        int(m.group(1)),
+        m.group(2),
+        tuple(map(int, land.groups())) if land else None,
+        int(carried.group(1)) if carried else 0,
+    )
 
 
 def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
@@ -2037,9 +2127,12 @@ def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
     in the same frame, on the CPU and on the GPU. The GPU must give the CPU's
     frame hash and all 16 cells, sample the copy's image from its pool (the
     count above zero), and land the copy with the frame's own submission
-    rather than a wait of its own. A mutation goes to the GPU run: cimg-cpu
-    (the producer's image, not yet landed, sampled instead) and land-at-copy
-    (V6's wait at every copy) must each fail it.
+    rather than a wait of its own. Since H17h the copy goes in flight at once
+    and its image reaches the draw by one of three routes, each run: the pool
+    (SOA_GPU_LAND_EARLY=0), carried into the next slot's pool (SOA_GPU_POLL=0)
+    and the default. A mutation goes to the first two: cimg-cpu (the
+    producer's image, not yet landed, sampled instead) and land-at-copy (V6's
+    wait at every copy) must each fail it.
 
     At --scale 3 (V9a) the copy's image in the pool is three times its size,
     and the frame -- its centre samples -- must still be the CPU's, hash and
@@ -2052,26 +2145,38 @@ def copyimage(prof: toolchain.Profile, mutate: str | None) -> int:
     if cpu in (None, "skip"):
         return 1
     print(f"cpu: {cpu[0]} of 16 cells right, hash {cpu[1]}")
-    gpu = copyimage_run(prof, "gpu", mutate)
-    if gpu == "skip":
-        return SKIP
     problems = []
     if cpu[0] != 16:
         problems.append(f"the CPU's frame is not the one intended: {cpu[0]} of 16 cells")
-    if gpu is None or gpu[2] is None:
-        problems.append("gpu: no result, or no landing figures")
-    else:
-        right, frame, (copies, waits, served) = gpu
+    # H17h: three routes to the copy's image. "pool", the copy kept in its own
+    # slot, V7's route; "carried", polling off, so the copy's slot is still in
+    # flight at the draw and its image is carried into the next slot's pool;
+    # and the default. A mutation goes to the first two.
+    routes = (
+        ("pool", {"SOA_GPU_LAND_EARLY": "0"}, mutate),
+        ("carried", {"SOA_GPU_POLL": "0"}, mutate),
+        ("default", {}, None),
+    )
+    for name, env, mut in routes:
+        gpu = copyimage_run(prof, "gpu", mut, env)
+        if gpu == "skip":
+            return SKIP
+        if gpu is None or gpu[2] is None:
+            problems.append(f"gpu {name}: no result, or no landing figures")
+            continue
+        right, frame, (copies, waits, served), carried = gpu
         print(
-            f"gpu: {right} of 16 cells right, hash {frame}; {copies} copies to a texture, "
-            f"{waits} readback waits, {served} samplers served by a copy image"
+            f"gpu {name}: {right} of 16 cells right, hash {frame}; {copies} copies to a texture, "
+            f"{waits} readback waits, {served} samplers served by a copy image, {carried} carried"
         )
         if right != 16 or (frame != cpu[1] and SCALE % 2):
-            problems.append(f"gpu: {right} of 16, hash {frame} where the CPU's is {cpu[1]}")
-        if not served:
-            problems.append("gpu: no sampler served by a copy image from the pool")
+            problems.append(f"gpu {name}: {right} of 16, hash {frame} where the CPU's is {cpu[1]}")
+        if name == "pool" and not served:
+            problems.append("gpu pool: no sampler served by a copy image from the pool")
+        if name == "carried" and not carried:
+            problems.append("gpu carried: no copy image carried into the next slot's pool")
         if not copies or waits >= copies:
-            problems.append(f"gpu: {waits} readback waits for {copies} copies, not fewer")
+            problems.append(f"gpu {name}: {waits} readback waits for {copies} copies, not fewer")
     for p in problems:
         print(f"PROBLEM {p}")
     ok = not problems
@@ -2423,6 +2528,7 @@ def main(argv: list[str] | None = None) -> int:
             "present",
             "logictest",
             "pairs",
+            "repeat",
         ),
     )
     ap.add_argument(
@@ -2442,7 +2548,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cases", type=int, default=100000, help="tevdiff and loddiff: random cases")
     ap.add_argument("--rects", type=int, default=200, help="copydiff: rectangles a combination")
     ap.add_argument("--seed", type=int, default=1, help="tevdiff, copydiff and loddiff")
-    ap.add_argument("--set", default="corpus,perfset", help="oracle and time: capture sets")
+    ap.add_argument(
+        "--set", default="corpus,perfset", help="oracle, time, contrast and repeat: capture sets"
+    )
     ap.add_argument("--mutations", action="store_true", help="oracle: also the GPU mutations")
     ap.add_argument("--runs", type=int, default=5, help="time: replays a capture")
     ap.add_argument(
@@ -2521,6 +2629,8 @@ def main(argv: list[str] | None = None) -> int:
         return live(prof, args.frames[0], args.range, args.mutate, args.live_seed)
     if args.command == "contrast":
         return contrast(prof, args.set.split(","), args.mutate, args.exe)
+    if args.command == "repeat":
+        return repeat(prof, args.set.split(","), args.mutate)
     if args.command == "specdiff":
         return specdiff(prof, args.set.split(","), args.mutate)
     if args.command == "copyimage":
