@@ -93,6 +93,9 @@ int gxr_interp_display(void);
 void gxr_interp_rate(unsigned hz);
 /* H17d: the in-between stream runs now, the budget's say included. */
 int gxr_interp_running(void);
+/* H17k: the images a second smooth motion gives while the budget has taken
+ * some away (60 at 85 Hz, one a frame); 0 while it gives all, or none. */
+int gxr_interp_cap(void);
 /* A mod's filter on GXSetProjection's six parameters (mod.c, M3c); NULL removes it. */
 void gxr_set_projection_filter(void (*fn)(float p[6], int orthographic));
 /* A mod's texture provider (mod.c, M3c): return 1 with a w x h RGBA8 image to

@@ -10509,3 +10509,28 @@ is frames 7500-8499, on the GPU.** 2026-10-26. PLAN-60FPS-MODS H17j.
   is as much the device's state as the stream's cost, so a run's stops are evidence about that run.
 - **Next:** for the overload the GPU makes (7500-8499), the budget by slice, which H17c's spec planned and left
   unbuilt: a slice taken away before the whole stream. And session D, on the device in its normal state.
+
+**H17k: the budget takes in-between images away one at a time before it stops the stream.** 2026-10-26.
+PLAN-60FPS-MODS H17k; H17c's spec §2, "the budget, by slice", built.
+
+- **What it is** [V, `runtime/interp_budget.h`, `gxr.c`, `window.c`]: the budget is told how many in-between images
+  a frame the display asks for -- one for `interp = 1`, two at 85 Hz, three at 120, four at 144 -- and gives a
+  number, not a yes or no. Each step down (the median of the last 31 frames over 35.5 ms, as H17e made it) takes one
+  away, at none the stream is off, and each step back up waits V12's count. The weights are then made at the rate
+  the rest serve -- one image a frame at 60, two at 90 -- the way a device holding fewer slices has them, so the
+  GPU draws fewer slices and the presenter holds the frame's real image for the refreshes left. A notice says each
+  rate stepped to ("Smooth motion: 60 images a second, the game is running behind"); `interp = 1` is on or off as
+  before.
+- **Tests** [V, `test_picture.py`]: a model device in the C driver whose next frame costs a fixed amount for each
+  image the budget gave it: at 1.5 ms an image on an 85 Hz display it steps down once at frame 30 and keeps one
+  image a frame for the other 2969, never off; at 3 ms one is too many as well and it is off 2783 of 3000; at
+  0.5 ms nothing is taken; one image a frame is on or off. *Mutation:* a step taking every image at once fails the
+  first. The budget's earlier cases, at one image a frame, pass unchanged.
+- **The battle in a window** [V, `build/e2/win-battle-h17k.log`, display mode at 85 Hz]: the first step down at
+  frame 7707, inside H17j's overload; 60 images a second from 8519 to 10383 where the stream would have been off,
+  then 85 again. Frames without an in-between image 749 (H17h's run: 1805), with fewer than the display asks 1924,
+  in-between images 11251 (10195). One image a refresh on 84.0% of intervals: at 60 images a second on 85 Hz some
+  hold two refreshes (2049 intervals of two). Whether that unevenness beats none is for the owner's eye at
+  session D.
+- **Next:** session D (D-45), on the device in its normal state: the in-between images' classes, `display` at 60,
+  85 and 120 Hz, the window moved between monitors, the notices, and the 60-of-85 steps.

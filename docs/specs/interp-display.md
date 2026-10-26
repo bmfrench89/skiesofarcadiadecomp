@@ -95,9 +95,9 @@ after the other three items and session D.
 
 **The budget, by slice.** Three frames over 35 ms take one slice away rather than the whole stream; back on time, one
 is given back after the existing back-off. At no slices the stream is off, as today, and the frame is drawn as it is.
-*Not built:* H17c-b's budget still turns the whole stream off and on, and H17e (FINDINGS "H17e") changed its rule to
-the median of the last 31 frames over 35.5 ms, which no longer stops for the game's own jitter. By slice is left for
-a device that cannot hold its display's rate but could hold 60.
+*Built as H17k* (FINDINGS "H17k", 2026-10-26), after H17e changed the rule to the median of the last 31 frames over
+35.5 ms: each step down takes one image a frame away -- the weights then at the rate the rest serve, 60 at 85 Hz,
+as a device holding fewer slices has them -- and at none the stream is off; each step back up waits V12's count.
 
 **The report.** `[interp]` adds the display's rate, images per frame (the mean and the range), slices drawn, repeats
 and frames superseded; `[gxv]` the GPU time of the slices.

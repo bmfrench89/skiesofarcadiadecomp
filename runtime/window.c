@@ -624,17 +624,20 @@ static double filter_on_cpu(LARGE_INTEGER t0)
 
 /* H17d (D-45's visible fallback): what smooth motion is doing, told to the
  * player in a notice when it changes -- shown, refused and why, paused over
- * budget, back -- and logged, so a machine that cannot keep up says so. */
+ * budget, back -- and logged, so a machine that cannot keep up says so. Since
+ * H17k the budget takes images away one at a time before it pauses: each
+ * rate it steps to is said too. */
 static void interp_tell(void)
 {
     static int was = -1;
-    int now;
+    int now, cap = gxr_interp_cap();
     char line[120];
     if (!gxr_interp() || !g_pace_ready) return;
-    now = g_interp_off ? 2 : gxr_interp_running() ? 1 : 0;
+    now = g_interp_off ? 2 : !gxr_interp_running() ? 0 : cap ? 1000 + cap : 1;
     if (now == was) return;
     if (now == 2) snprintf(line, sizeof line, "Smooth motion off: %s", g_interp_tell);
     else if (now == 0) snprintf(line, sizeof line, "Smooth motion paused: the game is running behind");
+    else if (cap) snprintf(line, sizeof line, "Smooth motion: %d images a second, the game is running behind", cap);
     else if (was == 0) snprintf(line, sizeof line, "Smooth motion on again");
     else if (g_interp_hz) snprintf(line, sizeof line, "Smooth motion: %u images a second, the display's rate", g_interp_hz);
     else snprintf(line, sizeof line, "Smooth motion: 60 images a second");

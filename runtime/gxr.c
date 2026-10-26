@@ -198,6 +198,7 @@ static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D dr
 static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
 static unsigned long long g_cuts;
 static InterpBudget g_budget; /* interp_budget.h */
+static unsigned g_mid_cap;    /* H17k: in-between images a frame the budget allows, 0 for all */
 static int g_budget_off;      /* SOA_INTERP_BUDGET=0, a check's (H17j): the budget never stops the stream */
 static double g_ms_last;
 /* H17c (docs/specs/interp-display.md): the frame's in-between weights, an
@@ -2620,6 +2621,13 @@ int gxr_interp_running(void)
     return g_interp && g_mid_on && plat_load32(&g_mid_allowed);
 }
 
+/* H17k: the images a second the stream gives while the budget has taken some
+ * away, 0 while it gives all (or none) */
+int gxr_interp_cap(void)
+{
+    return gxr_interp_running() && g_mid_cap ? (int)(30u * (g_mid_cap + 1u)) : 0;
+}
+
 void gxr_interp_show(int on)
 {
     plat_cas32(&g_mid_allowed, on ? 0 : 1, on ? 1 : 0);
@@ -2651,7 +2659,18 @@ static void interp_frame_begin(void)
         g_mid_on = 0;
         return;
     }
-    g_mid_on = interp_budget_step(&g_budget, ms);
+    {
+        /* H17k: the most images a frame the display's rate asks for -- one
+         * for interp = 1, two at 85 Hz, four at 144 -- and how many of them
+         * the budget gives */
+        unsigned top = 1, hz = g_interp_display ? (unsigned)plat_load64(&g_rate) : 0;
+        int given;
+        if (hz > 30u * g_rate_cap) hz = 30u * g_rate_cap;
+        if (hz >= 60u) top = (hz + 29u) / 30u - 1u;
+        given = interp_budget_step(&g_budget, ms, top);
+        g_mid_on = given > 0;
+        g_mid_cap = given > 0 && (unsigned)given < top ? (unsigned)given : 0;
+    }
 }
 
 /* H17c-b: the next frame's images at the display's rate (interp_rate.h):
@@ -2672,6 +2691,10 @@ static void interp_display_frame(void)
         said = hz;
         hz = 30u * g_rate_cap;
     }
+    /* H17k: images taken away by the budget, the weights at the rate the
+     * rest serve -- one a frame at 60, two at 90 -- as a device holding fewer
+     * slices has them; the presenter holds the frame's real image the rest */
+    if (g_mid_cap && hz > 30u * (g_mid_cap + 1u)) hz = 30u * (g_mid_cap + 1u);
     n = interp_rate_weights(hz, &g_rate_r, w);
     g_mid_real = n && w[n - 1] == 1.0f;
     ns = g_mid_real ? n - 1 : n;
@@ -4036,8 +4059,8 @@ void gxr_report(void)
                 g_interp_images, g_pair_matched, g_pair_unmatched + g_pair_demoted, g_pair_demoted,
                 g_interp_images ? gxr_seconds(g_interp_ticks) * 1e3 / (double)g_interp_images : 0.0,
                 span > 0.0 ? ((double)real + (double)g_interp_images) / span : 0.0, span, real, g_interp_images);
-        fprintf(stderr, "%llu cuts, %llu frames without one over budget (stopped %llu times); ", g_cuts,
-                g_budget.frames_off, g_budget.stops);
+        fprintf(stderr, "%llu cuts, %llu frames without one over budget, %llu with fewer than the display asks "
+                "(%llu steps down); ", g_cuts, g_budget.frames_off, g_budget.frames_cut, g_budget.stops);
         if (g_display_frames) /* H17c-b */
             fprintf(stderr, "at the display's rate, %u Hz now: %llu images over %llu frames (%.2f a frame); ",
                     (unsigned)plat_load64(&g_rate), g_display_images, g_display_frames,

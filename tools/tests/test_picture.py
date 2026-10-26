@@ -99,7 +99,7 @@ int main(void)
 {
     char cmd[16], mode[16], g[32], cb[16], md[16], fl[16], why[160];
     int a, b, c, d, i, n;
-    double hz;
+    double hz, w0, w1;
     while (scanf("%15s", cmd) == 1) {
         if (!strcmp(cmd, "layout") && scanf("%d %d %d %d %15s", &a, &b, &c, &d, mode) == 5) {
             PicRect r = picture_layout(a, b, c, d, strcmp(mode, "fit") ? PICTURE_INTEGER : PICTURE_FIT);
@@ -128,9 +128,26 @@ int main(void)
             memset(&bud, 0, sizeof bud);
             for (i = 0; i < n; i++) {
                 if (scanf("%lf", &hz) != 1) return 2;
-                putchar('0' + interp_budget_step(&bud, hz));
+                putchar('0' + interp_budget_step(&bud, hz, 1u));
             }
             printf(" %llu\n", bud.stops);
+        } else if (!strcmp(cmd, "budgetm") && scanf("%d %d %lf %lf %lf", &a, &n, &hz, &w0, &w1) == 5) {
+            /* H17k: a device whose frame takes hz ms, plus w0 for each
+             * in-between image the budget gave it, plus up to w1 either way
+             * (a fixed LCG), on a display asking a images a frame: the images
+             * given each frame, then the steps down, the frames off and the
+             * frames with fewer than a */
+            InterpBudget bud;
+            unsigned lcg = 12345u, given = (unsigned)a;
+            memset(&bud, 0, sizeof bud);
+            for (i = 0; i < n; i++) {
+                double t;
+                lcg = lcg * 1103515245u + 12345u;
+                t = hz + w0 * given + w1 * ((double)((lcg >> 8) & 0xFFFFu) / 32767.5 - 1.0);
+                given = (unsigned)interp_budget_step(&bud, t, (unsigned)a);
+                putchar('0' + (int)given);
+            }
+            printf(" %llu %llu %llu\n", bud.stops, bud.frames_off, bud.frames_cut);
         } else if (!strcmp(cmd, "filter") && scanf("%31s %15s %15s %15s %d", g, cb, md, fl, &n) == 5) {
             /* n pixels, r g b each, through the filters on a 1 x n frame:
              * the refusal ("-" for none), then the pixels */
@@ -447,7 +464,7 @@ def test_the_budget_s_mutations_fail(tmp_path):
     H17b's three-in-a-row over 35 did) and the opening; a 40 ms threshold
     never stops for the device at 36."""
     src = (ROOT / "runtime" / "interp_budget.h").read_text(encoding="utf-8")
-    median = "            if (s[INTERP_BUDGET_N / 2u] > INTERP_BUDGET_SLOW) {"
+    median = "    return s[INTERP_BUDGET_N / 2u];"
     slow = "#define INTERP_BUDGET_SLOW 35.5 "
     assert src.count(median) == 1 and src.count(slow) == 1
     for name, mutated, want in (
@@ -460,6 +477,80 @@ def test_the_budget_s_mutations_fail(tmp_path):
         exe = build(tmp_path / name / "build", include_first=inc)
         bad = budget_problems(budget(exe, budget_devices()))
         assert [b.split(":")[0] for b in bad] == want, (name, bad)
+
+
+def budget_model(
+    exe: Path, cases: list[tuple[int, int, float, float, float]]
+) -> list[tuple[str, int, int, int]]:
+    """Each (top, frames, base ms, ms an image, jitter ms) through the driver's
+    model device: the images given each frame, the steps down, the frames off
+    and the frames with fewer than top."""
+    out = ask(exe, [f"budgetm {t} {n} {b} {c} {j}" for t, n, b, c, j in cases])
+    return [(ln.split()[0], *(int(v) for v in ln.split()[1:])) for ln in out]
+
+
+# H17k's devices, 3000 frames each: a display asking two images a frame (85
+# Hz) on hardware where an image costs 1.5 ms over a 33.4 ms frame, 3 ms, and
+# 0.5 ms; and one image a frame (interp = 1) at 3 ms.
+BUDGET_MODELS = [
+    (2, 3000, 33.4, 1.5, 0.6),
+    (2, 3000, 33.4, 3.0, 0.6),
+    (2, 3000, 33.4, 0.5, 0.6),
+    (1, 3000, 33.4, 3.0, 0.6),
+]
+
+
+def budget_model_problems(got: list[tuple[str, int, int, int]]) -> list[str]:
+    """What H17k's budget must do with each model device."""
+    bad = []
+    (
+        (holds, h_stops, h_off, _),
+        (heavy, _, k_off, _),
+        (light, l_stops, _, _),
+        (single, s_stops, _, _),
+    ) = got
+    if h_stops != 1 or h_off or holds[:30] != "2" * 30 or holds[40:] != "1" * (len(holds) - 40):
+        bad.append(
+            f"holds: {h_stops} steps, {h_off} off, {holds[:60]}...: two, then one image a frame for good"
+        )
+    if "0" not in heavy or k_off < len(heavy) // 2:
+        bad.append(
+            f"heavy: {k_off} of {len(heavy)} frames off: one image a frame is too many there too"
+        )
+    if l_stops or light != "2" * len(light):
+        bad.append(f"light: {l_stops} steps down where nothing should be taken")
+    if not s_stops or set(single) - {"0", "1"}:
+        bad.append(
+            f"single: {s_stops} steps, images {sorted(set(single))}: one image or none, as before"
+        )
+    return bad
+
+
+@needs_msvc
+def test_the_budget_takes_images_away_one_at_a_time(driver):
+    """H17k: where each image costs 1.5 ms, two make the median 36.4 ms, over
+    35.5, so one is taken away -- 34.9, under it -- and the stream keeps one
+    image a frame from then on, never off; where each costs 3 ms one is too
+    many as well and it goes off most of the time; at 0.5 ms nothing is taken;
+    one image a frame (interp = 1) is on or off, as before H17k."""
+    assert budget_model_problems(budget_model(driver, BUDGET_MODELS)) == []
+
+
+@needs_msvc
+def test_the_budget_taking_every_image_at_once_fails(tmp_path):
+    """The step down taking every image at once, as before H17k: the device
+    that holds one image a frame goes off instead."""
+    src = (ROOT / "runtime" / "interp_budget.h").read_text(encoding="utf-8")
+    step = "            b->cut++;\n"
+    assert src.count(step) == 1
+    inc = tmp_path / "inc"
+    inc.mkdir()
+    (inc / "interp_budget.h").write_text(
+        src.replace(step, "            b->cut = top;\n"), encoding="utf-8"
+    )
+    exe = build(tmp_path / "build", include_first=inc)
+    bad = budget_model_problems(budget_model(exe, BUDGET_MODELS))
+    assert [b.split(":")[0] for b in bad] == ["holds"], bad
 
 
 @needs_msvc

@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1904 |
+| Python tests | 1906 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -422,9 +422,9 @@ washed-out colour and a correct fix would have failed the suite.
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
-spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h
-(2026-10-26), pushed. The full pre-push suite passes: 1904 tests in 103 files (1863
-passed, 41 skipped here; 706 skip with MSVC hidden, so 665 want MSVC). Nothing is
+spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h, H17i's
+finding, H17j's first look and H17k (2026-10-26), pushed. The full pre-push suite passes: 1906 tests in 103 files (1865
+passed, 41 skipped here; 708 skip with MSVC hidden, so 667 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -476,9 +476,11 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    stretches, so V12's long pause there was right (FINDINGS "H17i"). H17j kept the stream on in a window
    (`SOA_INTERP_BUDGET=0`, with `SOA_GPU_FRAME_LOG` for each frame's GPU ms): frames 4000-7499 held their
    pace, so the earlier stops there were the device's state after hours of GPU runs, and the real
-   overload is 7500-8499 on the GPU (FINDINGS "H17j"). **Next is H17k** (PLAN-60FPS-MODS): the budget by
-   slice, a slice taken before the whole stream. Measure on a cool device: a run's stops are evidence
-   about that run. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
+   overload is 7500-8499 on the GPU (FINDINGS "H17j"). H17k built the budget by slice: each step down
+   takes one in-between image a frame away, the weights at the rate the rest serve (60 at 85 Hz), and at
+   none the stream is off; the battle in a window held 60 images a second through 8519-10383 (FINDINGS
+   "H17k"). Measure on a cool device: a run's stops are evidence about that run. What is left of D-45 is
+   the owner's (session D, below) and Android's 60 Hz request. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in

@@ -30,7 +30,7 @@ Build Tools, with an extracted disc in `extracted/` and the capture corpus in
 | 5f | `python tools/citest/disc_check.py` | 7 s | MSVC |
 | 5g | `python tools/fetch_android_sysroot.py --verify`, then `test_android_sysroot.py` and `test_android_build.py` under `noskip` | 43 s | llvm-mingw, the sysroot (`python tools/fetch_android_sysroot.py`), and MSVC for `elfcheck.c`'s half |
 | 6 | `python tools/decomp.py` | 3.6 s | disc, `vendor/mwcc/` |
-| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (665 tests want MSVC) |
+| 7 | `python -m pytest tools/tests -q` | 978 s | nothing (667 tests want MSVC) |
 | 8 | `python tools/recompile.py --link` | not run here | disc, MSVC |
 | 9 | `$env:SOA_SELFTEST='1'; gen\soa.exe extracted` | 0.11 s | disc, built exe |
 | 10 | `python tools/scenario.py run title --check --quiet` | 70.9 s | disc, built exe |
@@ -373,7 +373,7 @@ python -m pytest tools/tests -q
 1475 passed, 41 skipped in 977.75s
 ```
 
-1904 tests in 103 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
+1906 tests in 103 files, none of which needs the disc; `test_mod_kit.py`'s `check` cases read the extracted DOL
 when it is there and skip without it (the counts below are 2026-10-09's, at 1516, before
 R5c's five in `test_setup.py`, which run on Windows with llvm-mingw, M6's 32 in `test_mods.py`, `test_progress.py`'s 13,
 reach's 95, M16's 47, M17's 22, T10's 13, P1b's 14, H20's 7, M16b's 3, M8a's 11 and M8b's 2). The count you see depends
