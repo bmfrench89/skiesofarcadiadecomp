@@ -190,6 +190,13 @@ static void draw_frame(CpuState* s, const char* scene, int k)
          * a camera cut; 3 is a quad instead, nothing matched. */
         if (k == 3) quad(s, 300.25f, 200.0f, 340.25f, 240.0f, RED);
         else tri(s, 100.25f + (k == 2 ? 300.0f : 0.0f), 100.0f + (k == 2 ? 200.0f : 0.0f), 36.0f, RED);
+    } else if (!strcmp(scene, "jump")) {
+        /* H18d: a triangle that jumps 300 px and a quad that moves 10 (two
+         * keys: the counts differ). 3 is the in-between image expected: the
+         * triangle where 2 has it, the quad halfway. */
+        float tx = k == 1 ? 100.25f : 400.25f, qx = k == 1 ? 300.25f : k == 2 ? 310.25f : 305.25f;
+        tri(s, tx, 100.0f, 50.0f, RED);
+        quad(s, qx, 300.0f, qx + 40.0f, 340.0f, BLUE);
     } else if (!strcmp(scene, "twins")) {
         /* Two triangles with one key (colour is a vertex attribute, not part of
          * it). 4 is F+1 with the two in the other order; 5 is where that order
@@ -208,7 +215,7 @@ static void draw_frame(CpuState* s, const char* scene, int k)
 }
 
 static const struct { const char* name; int persp, frames; } SCENES[] = {
-    {"move", 0, 3}, {"persp", 1, 3}, {"depth", 1, 2}, {"tex", 0, 4}, {"copies", 0, 3}, {"twins", 0, 5}, {"far", 1, 3},
+    {"move", 0, 3}, {"persp", 1, 3}, {"depth", 1, 2}, {"tex", 0, 4}, {"copies", 0, 3}, {"twins", 0, 5}, {"far", 1, 3}, {"jump", 0, 3},
 };
 
 /* build/fifo is the pinned corpus (CLAUDE.md): a capture must go anywhere else. */
@@ -358,7 +365,7 @@ int main(int argc, char** argv)
 }
 """
 
-SCENES = ("move", "persp", "depth", "tex", "copies", "twins", "far")
+SCENES = ("move", "persp", "depth", "tex", "copies", "twins", "far", "jump")
 
 # H17b's cut detector: name: (A, B, SOA_INTERP_CUT or None, cut expected). The
 # last proves the move rule is what calls far.move a cut: with no share able
@@ -396,6 +403,8 @@ RUNS = {
     "twins.C2": ("one", "twins/0005"),
     "twins.pair": ("pair", "twins/0001", "twins/0002"),
     "twins.swap": ("pair", "twins/0001", "twins/0004"),
+    "jump.C": ("one", "jump/0003"),
+    "jump.pair": ("pair", "jump/0001", "jump/0002"),
 }
 
 THREAD_COUNTS = ("1", "3")
@@ -508,6 +517,8 @@ def world(tmp_path_factory):
             extra = {"SOA_THREADS": threads, "SOA_HASH": "1"}
             if t:
                 extra["SOA_PAIR_T"] = t[0]
+            if name.startswith("jump."):
+                extra["SOA_INTERP_JUMP"] = "128"  # H18d's knob, off by default
             if mode == "pair":
                 extra["SOA_PAIR_LIST"] = str(out / f"{name}.{threads}.pairs")
             r = run(mode, *caps, extra=extra)
@@ -534,6 +545,8 @@ def world(tmp_path_factory):
             extra = {"SOA_THREADS": threads, "SOA_HASH": "1", "SOA_INTERP": "1"}
             if t:
                 extra["SOA_PAIR_T"] = t[0]
+            if name.startswith("jump."):
+                extra["SOA_INTERP_JUMP"] = "128"
             for stale in pngs_of(Path(caps[1])):
                 stale.unlink(missing_ok=True)
             r = run(mode, *caps, extra=extra)
@@ -750,6 +763,19 @@ def test_equal_key_draws_pair_by_position(world):
         assert mid(world, "twins.swap", threads) == one(world, "twins.C", threads)
         assert mid(world, "twins.swap", threads) != one(world, "twins.C2", threads)
     assert world["runs"][("twins.swap", "1")]["pairs"] == [(1, 0), (0, 1)]
+
+
+@needs_msvc
+def test_a_draw_that_jumps_is_drawn_where_f1_has_it(world):
+    """H18d, per draw, with SOA_INTERP_JUMP=128 (off by default): of two
+    matched draws, the triangle that jumps 300 px is drawn in the in-between
+    image where F+1 has it, as an unmatched draw is, and the quad that moves
+    10 px lands halfway -- the leap at battle frame 9180, not lerped into
+    smears (FINDINGS "H18d")."""
+    for threads in THREAD_COUNTS:
+        assert mid(world, "jump.pair", threads) == one(world, "jump.C", threads), threads
+    run = world["runs"][("jump.pair", "1")]
+    assert "1 matched draws moved over 128 px" in run["text"], run["text"][-600:]
 
 
 @needs_msvc

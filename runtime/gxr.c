@@ -200,6 +200,7 @@ static unsigned long long g_cuts;
 static InterpBudget g_budget; /* interp_budget.h */
 static unsigned g_mid_cap;    /* H17k: in-between images a frame the budget allows, 0 for all */
 static int g_budget_off;      /* SOA_INTERP_BUDGET=0, a check's (H17j): the budget never stops the stream */
+static double g_pair_far_px;  /* SOA_INTERP_JUMP=px (H18d), 0 off: a draw moving further drawn as F+1 has it */
 static double g_ms_last;
 /* H17c (docs/specs/interp-display.md): the frame's in-between weights, an
  * image each, ascending in (0, 1); one at the midpoint unless
@@ -319,6 +320,7 @@ int gxr_enabled(void)
                 fprintf(stderr, "[interp] cannot write SOA_INTERP_LOG=%s\n", lg);
             if (g_interp_log) g_draw_every = 1; /* the log is of every frame, snapshots or not */
             g_budget_off = getenv("SOA_INTERP_BUDGET") && !strcmp(getenv("SOA_INTERP_BUDGET"), "0");
+            if (getenv("SOA_INTERP_JUMP")) g_pair_far_px = atof(getenv("SOA_INTERP_JUMP")); /* H18d */
             if (cut && *cut) { /* px:share, px one of 16, 32, 64, 128 */
                 double px = 0.0, sh = 0.0;
                 int i;
@@ -2608,6 +2610,39 @@ static double pair_measure(const RasterCfg* rc, const Vertex* v, const float (*p
     return worst;
 }
 
+/* H18d, per draw, with SOA_INTERP_JUMP=px (off by default): a matched draw
+ * whose on-screen vertices move more than px between F and F+1 -- Aika
+ * leaping between two animation keys at battle frame 9180, her pose lerped
+ * halfway into stretched textures -- is drawn where F+1 has it, as an
+ * unmatched one is. Only vertices in front of the camera and within half a
+ * screen of it in both frames count, so ground under the camera, whose near
+ * vertices project far, keeps its lerp. Off by default because fast motion
+ * that is real steps too: at 128 px the title's fly-through clouds rushing
+ * past the camera went to 30 Hz (FINDINGS "H18d"), which is for the owner's
+ * eye at session D. A scene that moves this far as a whole is the cut
+ * detector's, which keeps its own measure. */
+#define PAIR_FAR_BAND 1.5f
+static unsigned long long g_pair_far;
+static int pair_far(const RasterCfg* rc, const Vertex* v, const float (*p)[4], unsigned count)
+{
+    unsigned i;
+    if (g_pair_far_px <= 0.0) return 0;
+    for (i = 0; i < count; i++) {
+        float vw = v[i].w, pw = p[i][3];
+        double dx, dy;
+        if (!(vw > 0.0f && pw > 0.0f)) continue;
+        if (fabsf(v[i].x) > PAIR_FAR_BAND * vw || fabsf(v[i].y) > PAIR_FAR_BAND * vw) continue;
+        if (fabsf(p[i][0]) > PAIR_FAR_BAND * pw || fabsf(p[i][1]) > PAIR_FAR_BAND * pw) continue;
+        dx = ((double)v[i].x / vw - (double)p[i][0] / pw) * rc->wd;
+        dy = ((double)v[i].y / vw - (double)p[i][1] / pw) * rc->ht;
+        if (dx * dx + dy * dy > g_pair_far_px * g_pair_far_px) {
+            g_pair_far++;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* After a draw's vertices are transformed and before it is published: keep
  * them as this frame's, or move them to the point between the frame before
  * and this one. */
@@ -2627,7 +2662,7 @@ static double pair_positions(const RasterCfg* rc, Vertex* v, unsigned count, Pai
     if (c.prev_off != PAIR_NONE) {
         const float (*p)[4] = (const float (*)[4])(g_pair[g_pair_cur ^ 1].pos + c.prev_off);
         worst = pair_measure(rc, v, p, count);
-        gxr_lerp_positions(v, p, count, g_pair_t);
+        if (!pair_far(rc, v, p, count)) gxr_lerp_positions(v, p, count, g_pair_t); /* H18d */
     }
     return worst;
 }
@@ -2833,6 +2868,9 @@ void gxr_pair_report(void)
             (double)g_pair_t, g_pair_matched, g_pair_matched + g_pair_unmatched + g_pair_demoted, g_pair_verts,
             g_pair_unmatched, g_pair_demoted, g_pair_skipped, g_pair_kept, g_pair_over, g_pair_maxdisp,
             g_pair_over32, g_pair_peak_draws, g_pair_peak_verts, (unsigned long long)g_pair_list_hash);
+        if (g_pair_far)
+            fprintf(stderr, "[pair] %llu matched draws moved over %.0f px on screen, drawn where F+1 has them (H18d)\n",
+                    g_pair_far, g_pair_far_px);
 }
 
 static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8_t* verts, unsigned vsize);
@@ -2942,6 +2980,7 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
                 const float (*f)[4] = (const float (*)[4])(g_pair[g_pair_cur ^ 1].pos + pc.prev_off);
                 memcpy(pv, f, 16 * (size_t)count);
                 worst = pair_measure(&D->rc, v, f, count);
+                if (pair_far(&D->rc, v, f, count)) pv = NULL; /* H18d: drawn where F+1 has it */
                 g_slice_prev++;
             } else {
                 pv = NULL;
@@ -4123,6 +4162,9 @@ void gxr_report(void)
                     g_interp_checked);
         else
             fprintf(stderr, "the real picture not checked (SOA_INTERP=check checks it)\n");
+        if (g_pair_far)
+            fprintf(stderr, "[interp] %llu matched draws moved over %.0f px on screen, drawn where F+1 has them (H18d)\n",
+                    g_pair_far, g_pair_far_px);
     }
     /* Two facts about lifetimes, stated when they happened at all, because
      * between them they say whether a run took the paths the queue's rules are

@@ -10569,3 +10569,24 @@ in-between images.** 2026-10-26. PLAN-60FPS-MODS H18; built ahead of session D, 
   two animation keys, her pose lerped halfway into stretched textures; 513 draws moved over 128 px, too few for the
   cut detector's 80%. A draw moving that far where the scene does not is a per-draw cut: next to look at, with the
   ground near the camera, whose vertices project far, kept out of the measure.
+
+**H18d, per draw: a draw that jumps drawn where F+1 has it, built behind `SOA_INTERP_JUMP` and left off for the
+owner's eye.** 2026-10-26. PLAN-60FPS-MODS H18; from FINDINGS "H18a".
+
+- **The case** [V, `build/interp-review/battle`, frame 9180, 18.6% of pixels matching neither neighbour before H18a
+  and after]: Aika leaps between two animation keys from one frame to the next; lerped halfway, her pose stretches
+  her textures into smears. 513 draws moved over 128 px, too few for the cut detector, which needs 80% of the
+  matched 3D draws.
+- **What was built** [V, `runtime/gxr.c` `pair_far`]: with `SOA_INTERP_JUMP=px`, a matched draw whose vertices move
+  more than px on screen is drawn in the in-between images where F+1 has it, as an unmatched draw is. Only
+  vertices in front of the camera and within half a screen of it in both frames are measured, so ground under the
+  camera, whose near vertices project far, keeps its lerp. The cut detector keeps its own measure. Counted on a
+  line of its own in the `[pair]` and `[interp]` reports.
+- **Why off by default** [V, the review pages at 128 px against H18a's]: battle frame 9180 left the list, but the
+  title's frame 980, the opening's fly-through, went from 7.8% to 15.9%: clouds rushing past the camera move over
+  128 px a frame for real, and stepped at 30 Hz while everything else moved smoothly. 36383 draws over the
+  battle's 12000 frames and 617 over the title's 2000 were taken. Smears on a leap against stepping on a fly-past
+  is a judgement for the owner at 120 Hz, not a pixel score; session D compares the two.
+- **Tests** [V, `test_gxr_pair.py`, one]: a "jump" scene, a triangle jumping 300 px and a quad moving 10 (two keys),
+  with the knob at 128: the triangle lands where F+1 has it and the quad halfway, on the three-pass and the live
+  route alike. *Mutation:* `pair_far` never saying yes fails it.
