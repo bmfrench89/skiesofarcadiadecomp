@@ -479,8 +479,13 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    overload is 7500-8499 on the GPU (FINDINGS "H17j"). H17k built the budget by slice: each step down
    takes one in-between image a frame away, the weights at the rate the rest serve (60 at 85 Hz), and at
    none the stream is off; the battle in a window held 60 images a second through 8519-10383 (FINDINGS
-   "H17k"). Measure on a cool device: a run's stops are evidence about that run. What is left of D-45 is
-   the owner's (session D, below) and Android's 60 Hz request. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
+   "H17k"). Measure on a cool device: a run's stops are evidence about that run. Preparing session D's
+   review page (`tools/interp_review.py` over headless 120 Hz runs of title and battle, pages under
+   `build/interp-review/`) found the opening cutscene's fog gone from every in-between image: re-sorted
+   clouds paired in stream order. H18a pairs equal-key draws by position (FINDINGS "H18a"). The next
+   candidate is per-draw: a draw moving over 128 px where the scene does not (battle frame 9180). What
+   is left of D-45 otherwise is the owner's (session D, below) and Android's 60 Hz request. Left of
+   D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in

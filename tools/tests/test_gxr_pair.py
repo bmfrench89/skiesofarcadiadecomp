@@ -739,14 +739,17 @@ def test_copies_to_texture_are_skipped_and_their_clear_kept(world):
 
 
 @needs_msvc
-def test_equal_key_draws_pair_in_stream_order(world):
-    """Within a key, the oldest unmatched draw of F: two triangles of one key
-    each land at d. Swapped in F+1, they pair first with first, and both land
-    where the crossed lerp puts them -- the known limit fifopair.match has too."""
+def test_equal_key_draws_pair_by_position(world):
+    """Within a key, the unmatched draw of F whose centre is nearest (H18a):
+    two triangles of one key each land at d. Swapped in F+1, each still pairs
+    with its own and the midpoint is the plain move's -- not where the crossed
+    lerp of stream order puts both (C2), the limit that took the opening's fog
+    out of every in-between image (FINDINGS "H18a"). fifopair.match agrees."""
     for threads in THREAD_COUNTS:
         assert mid(world, "twins.pair", threads) == one(world, "twins.C", threads)
-        assert mid(world, "twins.swap", threads) == one(world, "twins.C2", threads)
-    assert world["runs"][("twins.swap", "1")]["pairs"] == [(0, 0), (1, 1)]
+        assert mid(world, "twins.swap", threads) == one(world, "twins.C", threads)
+        assert mid(world, "twins.swap", threads) != one(world, "twins.C2", threads)
+    assert world["runs"][("twins.swap", "1")]["pairs"] == [(1, 0), (0, 1)]
 
 
 @needs_msvc

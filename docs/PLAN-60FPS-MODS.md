@@ -415,6 +415,8 @@ Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b*
 
 *Done, for each:* a fix or a documented fallback to repeating the frame for that class, with before-and-after in-between PNGs opened. Off: 23/23.
 
+**H18a, in part, built ahead of session D** (2026-10-26, FINDINGS "H18a"): equal-key draws paired by position, not stream order. Found preparing session D's review page: the opening cutscene's fog went from every in-between image, which at 120 Hz flickers the whole screen, a defect no list would leave out. **H18d's per-draw cousin**, next to look at: a draw that moves over 128 px in a frame where the scene does not (Aika's leap at battle frame 9180, her pose lerped into smears) drawn as F+1 has it.
+
 ---
 
 ### Track M — Mod framework and enhancements

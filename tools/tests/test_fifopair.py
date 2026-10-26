@@ -280,16 +280,17 @@ def test_draws_that_swap_places_are_matched_and_counted_as_reordered(tmp_path):
     assert hist(rep)["0"] == 8
 
 
-def test_repeated_draws_pair_in_stream_order_even_when_that_is_wrong(tmp_path):
-    """The known limit of keying by content: two draws with equal keys are
-    paired first-with-first. Swap them and each is paired with the other's
-    instance, which shows as displacement, not as a mismatch."""
+def test_repeated_draws_pair_by_position_when_their_order_changes(tmp_path):
+    """Two draws with equal keys, swapped in the second frame: each pairs with
+    its own instance, the nearer by its centre in clip space, as gxr.c's
+    pair_match (H18a) -- the order changed, nothing moved. Stream order paired
+    them first with first and called every vertex moved 390 pixels."""
     left, right = quad(10, 10, 100, 100), quad(400, 10, 100, 100)
     a = capture(tmp_path, "a", texture(TEX_A) + left + right + XFB_COPY)
     b = capture(tmp_path, "b", texture(TEX_A) + right + left + XFB_COPY)
     rep = report(a, b)
-    assert rep["matched"]["area_share"] == 1.0 and rep["matched"]["order_changed"] == 0
-    assert hist(rep)[">=128"] == 8  # every vertex "moved" 390 pixels
+    assert rep["matched"]["area_share"] == 1.0 and rep["matched"]["order_changed"] == 1
+    assert hist(rep)["0"] == 8 and hist(rep)[">=128"] == 0
 
 
 def test_a_count_change_unmatches_and_the_loose_pairing_says_so(tmp_path):

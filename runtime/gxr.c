@@ -2388,6 +2388,7 @@ static void drain(int why)
 typedef struct {
     uint64_t key;
     uint32_t count, off, next, idx; /* idx: its number among the frame's draws, as fifopair numbers them */
+    float cen[4];                   /* its vertices' centre in clip space, for the match (H18a) */
     uint8_t prim, ortho;
 } PairRec;
 
@@ -2406,6 +2407,7 @@ typedef struct {
 
 typedef struct {
     uint32_t cur_off, prev_off;
+    uint32_t rec, idx; /* this frame's record of the draw, PAIR_NONE for none; its number in the frame */
 } PairClaim;
 
 static PairFrame g_pair[2];
@@ -2479,32 +2481,12 @@ static void pair_reset(PairFrame* F)
     memset(F->slot, 0, sizeof(PairSlot) * PAIR_SLOTS);
 }
 
-/* RECORD: note this draw as frame F's. LERP: find its match in the frame
- * before, oldest first within the key, and say where that frame's positions
- * are. A match whose projection kind differs (a 2D draw that was 3D, or the
- * other way) is written to the list, consumed and demoted: F+1 draws it. */
+/* RECORD: note this draw as frame F's, its record kept in c.rec for its
+ * centre once it is transformed (pair_match). */
 static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ortho)
 {
-    PairClaim c = {PAIR_NONE, PAIR_NONE};
-    uint32_t idx = g_pair_ndraw++;
-    if (g_pair_flags & GXR_PAIR_LERP) {
-        PairFrame* P = &g_pair[g_pair_cur ^ 1];
-        PairSlot* sl = pair_slot(P, key, count);
-        if (sl && sl->count && sl->head != PAIR_NONE) {
-            PairRec* r = &P->rec[sl->head];
-            sl->head = r->next;
-            if (g_pair_list) fprintf(g_pair_list, "%u %u\n", r->idx, idx);
-            g_pair_list_hash = pair_mix(pair_mix(g_pair_list_hash, r->idx), idx);
-            if (r->ortho != (uint8_t)ortho) {
-                g_pair_demoted++;
-            } else {
-                c.prev_off = r->off;
-                g_pair_matched++;
-            }
-        } else {
-            g_pair_unmatched++;
-        }
-    }
+    PairClaim c = {PAIR_NONE, PAIR_NONE, PAIR_NONE, 0};
+    c.idx = g_pair_ndraw++;
     if (g_pair_flags & GXR_PAIR_RECORD) {
         PairFrame* C = &g_pair[g_pair_cur];
         PairSlot* sl = C->nrec < PAIR_DRAWS && C->npos + count <= PAIR_VERTS ? pair_slot(C, key, count) : NULL;
@@ -2516,7 +2498,7 @@ static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ort
             C->rec[r].count = count;
             C->rec[r].off = C->npos;
             C->rec[r].next = PAIR_NONE;
-            C->rec[r].idx = idx;
+            C->rec[r].idx = c.idx;
             C->rec[r].prim = (uint8_t)prim;
             C->rec[r].ortho = (uint8_t)ortho;
             if (!sl->count) {
@@ -2528,10 +2510,68 @@ static PairClaim pair_claim(uint64_t key, unsigned prim, unsigned count, int ort
                 sl->tail = r;
             }
             c.cur_off = C->npos;
+            c.rec = r;
             C->npos += count;
         }
     }
     return c;
+}
+
+/* LERP, once the draw is transformed: its match in the frame before among
+ * the draws of its key not yet matched -- of the first PAIR_LOOK, in stream
+ * order, the one whose centre in clip space is nearest; the first of equals.
+ * A key's draws can come in another order each frame: the opening's clouds
+ * are sorted far to near, and the nearest, which fills the screen, paired
+ * by stream order with a small one off to the side and the fog went from
+ * every in-between image (FINDINGS "H18a"). The draw's own centre is kept
+ * for the frame after. A match whose projection kind differs (a 2D draw that
+ * was 3D, or the other way) is written to the list, consumed and demoted:
+ * F+1 draws it. fifopair.match is the same rule. */
+#define PAIR_LOOK 32u
+static void pair_match(PairClaim* c, uint64_t key, unsigned count, int ortho, const Vertex* v)
+{
+    float cen[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned i;
+    for (i = 0; i < count; i++) {
+        cen[0] += v[i].x;
+        cen[1] += v[i].y;
+        cen[2] += v[i].z;
+        cen[3] += v[i].w;
+    }
+    for (i = 0; i < 4; i++) cen[i] /= (float)count;
+    if (c->rec != PAIR_NONE) memcpy(g_pair[g_pair_cur].rec[c->rec].cen, cen, sizeof cen);
+    if (!(g_pair_flags & GXR_PAIR_LERP)) return;
+    {
+        PairFrame* P = &g_pair[g_pair_cur ^ 1];
+        PairSlot* sl = pair_slot(P, key, count);
+        uint32_t r, prev = PAIR_NONE, best = PAIR_NONE, best_prev = PAIR_NONE;
+        float best_d = 0.0f;
+        unsigned k = 0;
+        if (!sl || !sl->count || sl->head == PAIR_NONE) {
+            g_pair_unmatched++;
+            return;
+        }
+        for (r = sl->head; r != PAIR_NONE && k < PAIR_LOOK; prev = r, r = P->rec[r].next, k++) {
+            float d = 0.0f;
+            for (i = 0; i < 4; i++) d += (P->rec[r].cen[i] - cen[i]) * (P->rec[r].cen[i] - cen[i]);
+            if (best == PAIR_NONE || d < best_d) {
+                best = r;
+                best_prev = prev;
+                best_d = d;
+            }
+        }
+        if (best_prev == PAIR_NONE) sl->head = P->rec[best].next;
+        else P->rec[best_prev].next = P->rec[best].next;
+        if (sl->tail == best) sl->tail = best_prev;
+        if (g_pair_list) fprintf(g_pair_list, "%u %u\n", P->rec[best].idx, c->idx);
+        g_pair_list_hash = pair_mix(pair_mix(g_pair_list_hash, P->rec[best].idx), c->idx);
+        if (P->rec[best].ortho != (uint8_t)ortho) {
+            g_pair_demoted++;
+        } else {
+            c->prev_off = P->rec[best].off;
+            g_pair_matched++;
+        }
+    }
 }
 
 /* Only x, y, z, w -- colours and texture coordinates stay F+1's. Every
@@ -2811,7 +2851,9 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
     Vertex *v, *v2 = NULL;
     float (*pv)[4] = NULL; /* H17c: F's positions, for a backend drawing slices */
     DrawCmd* D;
-    PairClaim pc = {PAIR_NONE, PAIR_NONE};
+    PairClaim pc = {PAIR_NONE, PAIR_NONE, PAIR_NONE, 0};
+    uint64_t pkey = 0; /* the pair machinery's key and projection kind (H10, H18a) */
+    int portho = 0;
     long long tfence;
     int mid, slices;
     (void)vsize;
@@ -2878,12 +2920,17 @@ static void gxr_draw_inner(CpuState* s, unsigned op, unsigned count, const uint8
         }
     }
     D->prim = prim; D->count = count; D->v = v;
-    if (g_pair_flags) pc = pair_claim(pair_key(gx_cp_regs(), bp, prim, count), prim, count, (int)(xf[0x1026] & 1));
+    if (g_pair_flags) {
+        pkey = pair_key(gx_cp_regs(), bp, prim, count);
+        portho = (int)(xf[0x1026] & 1);
+        pc = pair_claim(pkey, prim, count, portho);
+    }
     for (i = 0; i < count; i++) {
         VertexIn in;
         p = decode_vertex(s, p, vat, &in);
         transform(s, &in, &v[i]);
     }
+    if (g_pair_flags) pair_match(&pc, pkey, count, portho, v); /* H18a: by where it is */
     if (mid) { /* F+1's positions recorded and drawn; the lerp goes to the copy */
         PairClaim rec = {pc.cur_off, PAIR_NONE}, lerp = {PAIR_NONE, pc.prev_off};
         double worst = 0.0;

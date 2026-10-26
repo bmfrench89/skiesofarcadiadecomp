@@ -10534,3 +10534,38 @@ PLAN-60FPS-MODS H17k; H17c's spec §2, "the budget, by slice", built.
   session D.
 - **Next:** session D (D-45), on the device in its normal state: the in-between images' classes, `display` at 60,
   85 and 120 Hz, the window moved between monitors, the notices, and the 60-of-85 steps.
+
+**H18a, in part: equal-key draws paired by where they are, not by stream order; the opening's fog back in the
+in-between images.** 2026-10-26. PLAN-60FPS-MODS H18; built ahead of session D, why below.
+
+- **Found preparing session D** [V, `tools/interp_review.py` over headless runs of title and battle in display mode
+  at 120 Hz, `SOA_SNAP` writing frame N-1 beside N, pages under `build/interp-review/`]: battle frame 7380 scored
+  45.5% of pixels matching neither neighbour, with no cut marked: frames 7379 and 7380 have the mast deep in fog,
+  and every in-between image showed a clear blue sky. At 120 Hz that is the whole screen flickering, fog one
+  refresh in four.
+- **The cause** [V, frames 7379 and 7380 captured to `build/e2/fog/`, replayed as a pair]: the CPU's three-pass
+  replay and live stream lost the fog as the GPU did, so not the slices. Replaying 7380 alone stopping after N
+  draws (`SOA_GXR_DRAWS`) put the fog in one draw, the 4422nd. `fifopair.py`'s records showed why: the clouds are
+  four-vertex strips with one key, sorted far to near each frame; the near one, filling the screen at view depth
+  -157, was draw 4420 in 7379 and 4421 in 7380, and stream order paired it with 7379's draw 4423, a small cloud at
+  depth -708 off to the right. Lerped halfway to it, the fog shrank to a quad beside the mast. Two guesses failed
+  first: a quad crossing the camera's plane (none did) and a drift in ordering (only 9 of 4430 pairs out of
+  place, and they were these).
+- **The change** [V, `runtime/gxr.c` `pair_match`, `tools/fifopair.py` `match`]: the match waits for the draw's
+  vertices, then takes of the first 32 unmatched draws of its key in the frame before the one whose centre in clip
+  space is nearest, the first of equals. Static repeated instances still pair with themselves; re-sorted ones
+  find their own. `fifopair.match` keeps the same rule, so the renderer's pairs stay H4's measured ones.
+- **What it gave** [V, the review pages before and after]: battle 7380 off the list; title frame 980, the opening's
+  fly-through, from 41.1% to 7.8% -- the same clouds. The pair replay's image at 7380 now has the fog, halfway
+  between the frames, on the CPU and the GPU.
+- **Tests** [V]: `test_gxr_pair.py`'s twins, two triangles of one key swapped in F+1, now pair each with its own
+  and land at the plain move's midpoint, not the crossed lerp the test used to record as the known limit;
+  `test_fifopair.py`'s swapped quads likewise, nothing moved. *Mutation:* the match taking the head of the key's
+  list (stream order) fails the twins and the C-against-fifopair test.
+- **Why ahead of session D** [V]: PLAN-NEXT M2 builds only the classes on the owner's list, and session D makes
+  the list. A fog layer flickering at 120 Hz in the opening cutscene is not a matter of taste; it is recorded here
+  and in PLAN-60FPS-MODS so the owner can say otherwise.
+- **Still on the page** [V, `build/interp-review/battle`]: frame 9180 (18.6%, before and after): Aika leaps between
+  two animation keys, her pose lerped halfway into stretched textures; 513 draws moved over 128 px, too few for the
+  cut detector's 80%. A draw moving that far where the scene does not is a per-draw cut: next to look at, with the
+  ground near the camera, whose vertices project far, kept out of the measure.

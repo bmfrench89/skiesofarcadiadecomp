@@ -332,8 +332,10 @@ passes: F with `GXR_PAIR_RECORD`, F+1 as it is, and F+1 again with
 display list, the arrays its vertex layout indexes, the textures its stages
 sample, its primitive, vertex count and TEV setup, but not the TEV colour
 registers, so a fade stays one draw -- and numbers it in stream order.
-RECORD files the draw under its key; LERP takes the oldest unmatched draw of
-F with the same key. After the transform, `pair_positions` keeps the
+RECORD files the draw under its key; LERP, once the draw is transformed,
+takes of the first 32 unmatched draws of F with the same key the one whose
+clip-space centre is nearest (`pair_match`, H18a; stream order paired the
+opening's re-sorted clouds wrongly). After the transform, `pair_positions` keeps the
 clip-space x, y, z and w of RECORD's vertices, or replaces LERP's with
 (1-t)·F + t·F+1. Colours and texture coordinates stay F+1's. A draw with no
 match, or whose projection kind changed between the frames, is drawn as F+1

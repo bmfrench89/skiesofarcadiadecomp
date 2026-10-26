@@ -19,11 +19,13 @@ setup, the position matrices it used, and its vertices in model space, view
 space and on the screen.
 
 A draw in N+1 is matched to one in N with an equal key: (display list, array
-bases, textures, primitive, vertex count, TEV hash). Draws sharing a key pair
-off in stream order, so a repeated draw -- ten identical trees, a run of
-glyphs -- is paired by position in the stream and can be paired with the
-wrong instance; the key cannot tell instances apart, which is what H7's tags
-are for.
+bases, textures, primitive, vertex count, TEV hash). Among draws sharing a
+key, each takes, of the first 32 of N's not yet paired, the one whose centre
+in clip space is nearest (H18a, gxr.c's pair_match): the opening's clouds are
+sorted far to near each frame, and stream order paired the nearest, which
+fills the screen, with a small one off to the side. Instances that move
+further than they stand apart can still pair with the wrong one, which is
+what H7's tags are for.
 
 Pixels are estimated, not counted. The command stream carries no per-draw
 fragment count, so a draw's area is the sum of its triangles' projected areas:
@@ -48,7 +50,7 @@ import math
 import re
 import struct
 import sys
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -105,6 +107,9 @@ class Draw:
     offset: int = 0  # where the command sits: in the .fifo, or in its display list
     copies_before: int = 0  # EFB copies to texture earlier in the frame
     wiped: bool = False  # a later clearing copy to texture takes it off the EFB
+    cen: tuple | None = (
+        None  # its vertices' centre in clip space, for the match (H18a); None unresolved
+    )
 
     def key(self, drop: str | None = None) -> tuple:
         return tuple(getattr(self, f) for f in KEY_FIELDS if f != drop)
@@ -338,6 +343,7 @@ def _draw(seq, op, n, layout, buf, off, where, rel, cp, xf, bp, ram) -> Draw:
         area=draw_area(op & 0xF8, clip, vp, (bp[0x00] >> 14) & 3),
         ortho=bool(xf[0x1026] & 1),
         offset=rel,
+        cen=centre(clip),
     )
 
 
@@ -391,17 +397,39 @@ def load_frame(base) -> Frame:
 # --------------------------------------------------------------------------
 
 
+def centre(clip: list) -> tuple | None:
+    """The clip-space centre of a draw's vertices, as gxr.c's pair_match takes
+    it; None when a position could not be read."""
+    if not clip or any(c is None for c in clip):
+        return None
+    return tuple(sum(c[k] for c in clip) / len(clip) for k in range(4))
+
+
+LOOK = 32  # gxr.c's PAIR_LOOK
+
+
 def match(a: list, b: list, key) -> list:
-    """Pair each draw of `b` with an unpaired draw of `a` whose key is equal,
-    in stream order within a key. Returns (index in a, index in b), b ascending."""
-    pool: dict = defaultdict(deque)
+    """Pair each draw of `b` with an unpaired draw of `a` whose key is equal:
+    of the first LOOK not yet paired, in stream order, the one whose centre in
+    clip space is nearest, the first of equals -- gxr.c's pair_match (H18a: a
+    key's draws can come in another order each frame, the opening's clouds
+    sorted far to near). Without centres, stream order. Returns (index in a,
+    index in b), b ascending."""
+    pool: dict = defaultdict(list)
     for i, d in enumerate(a):
         pool[key(d)].append(i)
     pairs = []
     for j, d in enumerate(b):
         q = pool.get(key(d))
-        if q:
-            pairs.append((q.popleft(), j))
+        if not q:
+            continue
+        best, best_d = 0, None
+        for k, i in enumerate(q[:LOOK]):
+            ca, cb = getattr(a[i], "cen", None), getattr(d, "cen", None)
+            dist = sum((x - y) * (x - y) for x, y in zip(ca, cb, strict=True)) if ca and cb else 0.0
+            if best_d is None or dist < best_d:
+                best, best_d = k, dist
+        pairs.append((q.pop(best), j))
     return pairs
 
 
