@@ -3066,6 +3066,16 @@ static void report_frames(void)
     }
     memcpy(c, g_frame_consumer_ms, sizeof(float) * n);
     memcpy(g, g_frame_gpu_ms, sizeof(float) * n);
+    {
+        /* SOA_GPU_FRAME_LOG=path, a check's (H17j): each frame's consumer and
+         * GPU ms, a line each, numbered as the screen copies came */
+        const char* path = getenv("SOA_GPU_FRAME_LOG");
+        FILE* f = path && *path ? fopen(path, "w") : NULL;
+        if (f) {
+            for (k = 0; k < n; k++) fprintf(f, "%u consumer_ms %.3f gpu_ms %.3f\n", k, c[k], g[k]);
+            fclose(f);
+        }
+    }
     qsort(c, n, sizeof(float), cmp_float);
     qsort(g, n, sizeof(float), cmp_float);
 #define PCT(a, p) (a)[(size_t)((double)(n - 1) * (p))]

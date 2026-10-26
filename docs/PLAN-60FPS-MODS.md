@@ -406,7 +406,9 @@ Move vertex setup (2–4 ms per drawn frame) off the guest thread, keeping H10's
 
 **H17i. The budget's come-back by the same median** — *tried 2026-10-26, not kept* (FINDINGS "H17i"): back on sooner, the stream stopped again within 31 frames each time in the battle's heavy stretches (13 stops against 5, 1624 frames without an image against 1805), so those stretches are too heavy for it and V12's long pause was right.
 
-**H17j. The battle's heavy stretches** — *next.* Frames 6000-8500 of the battle scenario run 40-54 ms with the in-between stream on: uncapped from a frame inside, A/B by interpolation, the producer's and the consumer's time, as the cutscene was measured (FINDINGS "H17f"-"H17h"); then cut what costs.
+**H17j. The battle's heavy stretches** — *first look 2026-10-26* (FINDINGS "H17j"): kept on in a window (`SOA_INTERP_BUDGET=0`), frames 4000-7499 hold their pace; the overload is 7500-8499, the GPU at p95 19-23 ms a frame. The earlier runs' stops there followed hours of GPU work on the handheld's shared power budget.
+
+**H17k. The budget by slice** — *next; H17c's spec §2, left unbuilt.* Over budget, take a slice away before the whole stream, and give it back after the back-off; at none the stream is off. For the GPU's overload (frames 7500-8499 of the battle). *Done:* the budget's tests with a slice taken and given back, a mutation failing; the battle in a window keeping some in-between images through 7500-8499.
 
 **H18. The tail, one artifact class per slice** — *a day to several days each. Follows H17b wherever H17 goes: its fixes are on the guest thread, so the GPU gate does not hold it. Only the classes on the owner's H17b list are built (PLAN-NEXT M2).*
 Classes known today, to be confirmed by H17b's list: **H18a** particles, **H18b** reordered alpha, **H18c** UI and HUD, **H18d** camera cuts the detector misses, and **H18e** texture copies that the in-between image samples from N+1.

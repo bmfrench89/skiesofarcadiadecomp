@@ -10488,3 +10488,24 @@ PLAN-60FPS-MODS H17i, from FINDINGS "H17h".
 - **Next:** what the stream costs in the battle's heavy stretches (frames 6000-8500: 40-54 ms with it on), the
   cutscene's way (FINDINGS "H17f"-"H17h"): uncapped from a frame inside, A/B by interpolation, the producer's
   and the consumer's time.
+
+**H17j, first look: the battle's "heavy stretch" holds its pace in a window with the stream kept on; the overload
+is frames 7500-8499, on the GPU.** 2026-10-26. PLAN-60FPS-MODS H17j.
+
+- **Two check knobs** [V, `runtime/gxr.c`, `gxv.c`]: `SOA_INTERP_BUDGET=0` keeps the in-between stream on in a
+  window, the budget never stopping it; `SOA_GPU_FRAME_LOG=path` writes each frame's consumer and GPU ms at the
+  report, a line each.
+- **Headless** [V, `build/e2/unc6-disp.log`, `unc6-off.log`, uncapped from frame 6100]: frames 6100-6599 in
+  display mode p50 33.4 ms, p95 40.5; interpolation off p50 34.3, p95 38.0. With the stream on throughout, the
+  31-frame median crossed 35.5 ms in 38 of 469 windows, nearly all at 6100-6199.
+- **In a window, the stream kept on** [V, `build/e2/battle-nob.ilog`, `battle-nob.flog`, the battle scenario to
+  frame 8600 at 85 Hz]: frames 4000-7499 ran p50 33.4-33.8 ms and p95 36.1-38.7, GPU p50 9.3-11.1 ms and p95
+  12.1-15.2, the consumer p50 6.4-7.9 -- and no 31-frame median over 35.5, so the budget would not have stopped
+  there. Frames 7500-7999 ran p95 50.2 with the GPU at p95 19.1, and 8000-8499 p95 47.4 with the GPU at p95 23.1:
+  medians over 35.5 in 117 and 67 windows. One image a refresh on 93.3% of intervals.
+- **Against the same day's budgeted runs** [V, `win-battle-h17h.log`, `win-battle-h17i.log`]: those stopped at
+  4360 to 6210 after frames of 40-54 ms, in the stretch this run held. They followed hours of back-to-back GPU
+  runs on a handheld's shared 15-30 W budget; this one followed lighter work. Which frames run slow in a window
+  is as much the device's state as the stream's cost, so a run's stops are evidence about that run.
+- **Next:** for the overload the GPU makes (7500-8499), the budget by slice, which H17c's spec planned and left
+  unbuilt: a slice taken away before the whole stream. And session D, on the device in its normal state.

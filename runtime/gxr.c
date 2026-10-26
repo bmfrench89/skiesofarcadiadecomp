@@ -198,6 +198,7 @@ static double g_cut_share = 0.8; /* a cut: more than this share of matched 3D dr
 static FILE* g_interp_log;       /* SOA_INTERP_LOG: a line a frame, the detector's inputs */
 static unsigned long long g_cuts;
 static InterpBudget g_budget; /* interp_budget.h */
+static int g_budget_off;      /* SOA_INTERP_BUDGET=0, a check's (H17j): the budget never stops the stream */
 static double g_ms_last;
 /* H17c (docs/specs/interp-display.md): the frame's in-between weights, an
  * image each, ascending in (0, 1); one at the midpoint unless
@@ -316,6 +317,7 @@ int gxr_enabled(void)
             if (g_interp && lg && *lg && !(g_interp_log = fopen(lg, "w")))
                 fprintf(stderr, "[interp] cannot write SOA_INTERP_LOG=%s\n", lg);
             if (g_interp_log) g_draw_every = 1; /* the log is of every frame, snapshots or not */
+            g_budget_off = getenv("SOA_INTERP_BUDGET") && !strcmp(getenv("SOA_INTERP_BUDGET"), "0");
             if (cut && *cut) { /* px:share, px one of 16, 32, 64, 128 */
                 double px = 0.0, sh = 0.0;
                 int i;
@@ -2644,7 +2646,7 @@ static void interp_frame_begin(void)
     g_ms_last = ms;
     if (g_interp_log) /* every frame's time, the stream on or off, headless too, for a replay of the rule */
         fprintf(g_interp_log, "%u budget frame_ms %.2f on %d\n", gx_frame_count(), ms, g_mid_on);
-    if (!plat_load32(&g_mid_window)) return;
+    if (!plat_load32(&g_mid_window) || g_budget_off) return; /* SOA_INTERP_BUDGET=0: every frame its images */
     if (!plat_load32(&g_mid_allowed)) {
         g_mid_on = 0;
         return;
