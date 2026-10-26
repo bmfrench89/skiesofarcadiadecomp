@@ -10454,6 +10454,8 @@ instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
   the one at 6099); the stream then stays off long -- 6099 to 7110 -- because the come-back count, V12's, adds two
   for a frame over 34.5 ms and takes one off for one under, and in a window about a third of the battle's frames
   run over 34.5 with the stream off. That is the stop rule's old fault on the other side (FINDINGS "H17e").
+  *Wrong, measured the next day (FINDINGS "H17i"):* brought back sooner, the stream stopped again within 31
+  frames each time in those stretches; they are too heavy for it, and the long pause was right.
 - **Checks** [V]: replay 23/23 at 1, 2, 3 and 8 threads; self test; `gpuspike.py selftest`, `oracle` (33 of 35, the
   Dangral pair by design), `contrast --set corpus,perfset,gpuset` 67 of 67, `pairs`, `pairs --weights`, `queue`,
   `overlap`, `specdiff` 35 of 35, `present` -- the spike reads its picture after `gxr_flush`, so these ran the frame
@@ -10464,4 +10466,25 @@ instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
 - **The copy regions stay whole** [V]: halved like the rest, a slot could no longer hold the largest copy the
   buffers ever took, and `copydiff`'s 781x723 rectangle was refused (eight of the suite's tests); `destbuf` and
   `imagebuf` are made twice over instead, 20 MB more of host-visible memory.
-- **Next:** the come-back rule by the same median (H17i), then session D and Android's 60 Hz request (D-45).
+- **Next:** what the stream costs in the battle's heavy stretches (FINDINGS "H17i"), then session D and
+  Android's 60 Hz request (D-45).
+
+**H17i: the budget's come-back by the median, measured to trade badly, and not kept.** 2026-10-26.
+PLAN-60FPS-MODS H17i, from FINDINGS "H17h".
+
+- **What was tried** [V, the patch kept outside the tree]: in `runtime/interp_budget.h`, smooth motion back on
+  once the back-off count has run out and the median of the last 31 frames, the images off, is at or under
+  34.5 ms -- in place of V12's count, two up for a frame over 34.5 and one down for a frame under. With the images
+  off in a window, 30.7% of the battle's frames ran over 34.5 ms and 18.3% over 35.5 (33.8% over 34.5 in the
+  long pause, 6100-7109: `build/e2/battle-h17h.ilog`), so the old count hardly moves there. The tests held a
+  device with that shape after a 45 ms spell; V12's count in place of the new rule failed it.
+- **What it did** [V, `build/e2/win-battle-h17i.log` against `win-battle-h17h.log`, the battle in a window in
+  display mode at 85 Hz]: frames without an in-between image 1624 against 1805; stops 13 against 5. Back on
+  sooner in the heavy stretches, it stopped again within the 31 frames each time -- eight times between 6210 and
+  8485 -- each a run of slowed frames before the median tripped, and a pair of notices on the screen.
+- **What that says** [V]: those stretches are too heavy for the in-between images, not merely jittery, and the
+  old count's long pause was the right answer there. FINDINGS "H17h"'s "What still pauses it" called the long
+  pause the stop rule's old fault on the other side; that was wrong, and is marked so there.
+- **Next:** what the stream costs in the battle's heavy stretches (frames 6000-8500: 40-54 ms with it on), the
+  cutscene's way (FINDINGS "H17f"-"H17h"): uncapped from a frame inside, A/B by interpolation, the producer's
+  and the consumer's time.

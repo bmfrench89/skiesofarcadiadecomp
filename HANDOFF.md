@@ -471,9 +471,12 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    H17h built two command buffers in flight (`docs/specs/gpu-frames-in-flight.md`), a copy's image carried
    into the next slot on the GPU, a copy to texture sent ahead: the cutscene in display mode at p50 33.4 ms
    against one slot's 36.5, the battle in a window without an in-between image on 15% of frames against 57%
-   (FINDINGS "H17h"). `SOA_GPU_FRAMES=1` is the old route, for A/B. **Next is H17i** (PLAN-60FPS-MODS): the
-   budget's come-back count, V12's, keeps smooth motion off for a thousand frames after a stop in a window;
-   give it the same median as the stop rule (`runtime/interp_budget.h`). Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
+   (FINDINGS "H17h"). `SOA_GPU_FRAMES=1` is the old route, for A/B. H17i tried the budget's come-back by the
+   median and took it out: back on sooner, the stream stopped again each time in the battle's heavy
+   stretches, so V12's long pause there was right (FINDINGS "H17i"). **Next is H17j** (PLAN-60FPS-MODS):
+   what the in-between stream costs in frames 6000-8500 of the battle scenario (40-54 ms with it on),
+   measured as the cutscene was -- uncapped from a frame inside, A/B by interpolation, the producer's and
+   consumer's time -- then cut. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in
