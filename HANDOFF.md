@@ -483,8 +483,9 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    review page (`tools/interp_review.py` over headless 120 Hz runs of title and battle, pages under
    `build/interp-review/`) found the opening cutscene's fog gone from every in-between image: re-sorted
    clouds paired in stream order. H18a pairs equal-key draws by position (FINDINGS "H18a"). The
-   per-draw case (Aika's leap, battle frame 9180) is built behind `SOA_INTERP_JUMP=128`, off: it steps
-   the fly-through's clouds too, so session D decides (FINDINGS "H18d"). What is left of D-45 otherwise
+   per-draw case (Aika's leap, battle frame 9180) is built behind `SOA_INTERP_JUMP=128`, off: it would
+   step any draw that really moves that fast, which the review score cannot see, so session D decides
+   (FINDINGS "H18d"; the score of one frame moves several points between runs). What is left of D-45 otherwise
    is the owner's (session D, below) and Android's 60 Hz request. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
    spec, android.md §3.12, now asks for it), and
    (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
@@ -504,8 +505,9 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
   `docs/research/60fps-across-ports.md`'s last table), and now `interp = display` with `gpu = vulkan` too: on the
   Ally X's 120 Hz screen and the 85 Hz ultrawide, with the window moved between them (H17c-b's Done 6 and 7), the
   notices in the corner (H17d), and whether 120 Hz's battery cost makes a 60 cap the better handheld default;
-  the review pages under `build/interp-review/` (title and battle at 120 Hz, worst first), the 60-of-85
-  steps of H17k, and `SOA_INTERP_JUMP=128` against off (Aika's leap at 9180, the fly-through at 980);
+  the review pages under `build/interp-review/` (`title` and `battle` at 120 Hz, worst first, and the same
+  with `SOA_INTERP_JUMP=128` as `title-jump128` and `battle-jump128`), the 60-of-85 steps of H17k, and
+  the jump knob against off in motion (Aika's leap at battle frame 9180, the fly-through near title 980);
 - the menu in a window and the Vulkan menu (M8a/b);
 - a battery run (H20);
 - a small mod built from `docs/MODDING.md` alone (T10).

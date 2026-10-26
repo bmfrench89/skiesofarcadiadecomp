@@ -10582,11 +10582,14 @@ owner's eye.** 2026-10-26. PLAN-60FPS-MODS H18; from FINDINGS "H18a".
   vertices in front of the camera and within half a screen of it in both frames are measured, so ground under the
   camera, whose near vertices project far, keeps its lerp. The cut detector keeps its own measure. Counted on a
   line of its own in the `[pair]` and `[interp]` reports.
-- **Why off by default** [V, the review pages at 128 px against H18a's]: battle frame 9180 left the list, but the
-  title's frame 980, the opening's fly-through, went from 7.8% to 15.9%: clouds rushing past the camera move over
-  128 px a frame for real, and stepped at 30 Hz while everything else moved smoothly. 36383 draws over the
-  battle's 12000 frames and 617 over the title's 2000 were taken. Smears on a leap against stepping on a fly-past
-  is a judgement for the owner at 120 Hz, not a pixel score; session D compares the two.
+- **Why off by default** [V, two pairs of review runs, off against 128 px]: battle frame 9180 left the list both
+  times. The title's frame 980, the opening's fly-through, went from 7.8% to 15.9% in the first pair and from
+  10.8% to 6.4% in the second (`build/interp-review/title`, `title-jump128`): the score moves several points
+  between runs of the same code, and it cannot see the concern at all -- a draw drawn where F+1 has it matches
+  F+1, so a draw stepping at 30 Hz lowers the score. The concern is by construction: any draw moving over 128 px
+  a frame for real, the fly-through's near clouds among them, steps while the rest moves smoothly; 36383 draws
+  over the battle's 12000 frames and 617 over the title's 2000 were taken. Smears on a leap against stepping on
+  a fly-past is a judgement for the owner's eye at 120 Hz; session D compares the two.
 - **Tests** [V, `test_gxr_pair.py`, one]: a "jump" scene, a triangle jumping 300 px and a quad moving 10 (two keys),
   with the knob at 128: the triangle lands where F+1 has it and the quad halfway, on the three-pass and the live
   route alike. *Mutation:* `pair_far` never saying yes fails it.
