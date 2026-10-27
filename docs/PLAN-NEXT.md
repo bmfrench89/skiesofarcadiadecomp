@@ -82,7 +82,8 @@ The owner plays the game there. This repository is the mod platform:
    named against this repository's 321) and its research notes, credited; keep decompiling only what a mod
    must change (D-39); give matched code back to it if this side's ever grows. A decompilation never takes
    the disc's place: the game's data stays the player's own. Its SDK and MusyX files came from other
-   projects under their own licences, checked before any is taken.
+   projects under their own licences, checked before any is taken. *Imported 2026-10-27:* 839 names and
+   the 17 notes, in `docs/research/ogdanimal-decomp/` (FINDINGS "D-47").
 What follows below is the record of the play-everywhere order it replaces.
 
 **The goal, in the owner's words:** "I want to be able to play it on any Windows or Android device."

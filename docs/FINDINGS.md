@@ -10775,3 +10775,61 @@ slots, the pairing, the pacing and the checks, 21 findings, the six most severe 
   edge cases, about 1-2 weeks for both renderers [I], not the plan's hook and retranslation.
 - **Then** [V]: D-46, answered the same night, dropped widescreen: the owner plays on another recompilation
   that already has it. This entry stays as the record of what the game's own value does.
+
+**D-47: 839 function names from the other developer's CC0 decompilation, and its notes, imported.** 2026-10-27.
+The owner's D-47 (PLAN-NEXT §0 item 4); no code taken.
+
+- **Where from** [V]: github.com/ogdanimal/SkiesOfArcadiaLegends-Decomp, a matching decompilation of this game
+  dedicated to the public domain (CC0 1.0), names 1,185 of the 7,117 functions in its `config/GEAE8P/symbols.txt`
+  (as of 2cc3414, that file's last change; the same at its head, 1d2f66e). This repository's own copy of that file
+  named 321.
+- **What came in** [V, `config/names.txt`'s D-47 block]: 839 names, each where this repository had only a
+  placeholder, each with its source in the evidence column. Left out: 254 that dtk's signatures already name here
+  (the 260 functions both projects' dtk files name carry the same name in all 260); 79 that `names.txt` already
+  names, 58 alike and 21 not, all in the CARD library, where ours carry a `CARD` prefix and theirs the SDK's static
+  names (`TimeoutHandler` for our `CARDTimeoutHandler`; ours kept); 8 at addresses the two inventories split
+  differently, because a name is a claim about a function this inventory has (the first attempt took them, and
+  `test_card.py` failed on it); and 5 that the decompilation gives two functions (`AlarmHandler`, `OnReset`, static
+  functions of one name in two SDK files).
+- **And 100 older names** [V, `git log` of both files]: `names.txt` held 100 names added 2026-09-16 to 18 (the
+  ARQ, PPC and CARD libraries) that `config/functions.tsv` and `config/symbols.txt` never received; both were last
+  regenerated 2026-09-16 (502cf47). `names.txt` is meant to run ahead of them (`matchcheck.py` says so), and the
+  regeneration brings those in too: the inventory's named functions go from 328 to 1,267 of 7,144.
+- **Names, nothing else** [V]: `tools/inventory.py --dtk build/dtk-symbols.txt` regenerated the three files; of
+  `functions.tsv`'s 7,144 rows 939 changed, each in its name and source columns alone (`auto` to `string`), and
+  `config/GEAE8P/symbols.txt` in names alone. The translated C keeps its `fn_XXXXXXXX` identifiers and carries a
+  name as a comment (`/* BattleHudDraw */`), but `functions.tsv` is baked into it, so the whole executable was
+  translated again (327 s): the self test passes and replay matches 23/23 at 1, 2, 3 and 8 threads. inventory.py
+  writes in text mode, so on Windows `config/GEAE8P/symbols.txt` came out CRLF where it was LF; set back.
+- **The notes** [V]: the decompilation's `docs/` (17 notes at 1d2f66e) copied whole to
+  `docs/research/ogdanimal-decomp/`, with a README that credits it, says which note helps which slice here
+  (`qol_cheats.md` for R4's boosts, `ui.md` for a way for mods to draw) and says none of the notes' claims was
+  re-checked here. Its images were not copied. The same developer's playable recompilation is GPL-3.0; the notes
+  describe some of its patches, and none of its code may come into this MIT repository.
+- **What it gives** [I]: a mod author reading the translated C or a log now meets a name on 1,267 functions
+  instead of 328, among them the battle HUD's, the camp menus' and the message window's, the places a mod that
+  draws (R5, P7) will start from. Its SDK, MSL, MetroTRK and MusyX source files came from other projects
+  (tw2004 and AxioDL's musyx, its `sdk_import.md` says) under their own licences; none was taken.
+
+**The cleanup took V0's twelve benchmark references; re-made, and shown to be the same images.** 2026-10-27.
+
+- **Found** [V]: the full suite after D-47 failed `test_gpuspike.py::test_the_captures_pass_v0_on_the_gpu`, 12 of
+  35: "reference is NOT V0's build/gpu-oracle/ref/perfset/...". The cleanup of `build/` the same night (HANDOFF)
+  deleted every picture outside its protected folders, and `build/gpu-oracle/ref/perfset/` held the CPU frames V0
+  inspected for the benchmark set, which has no pinned frame hash: `gpuspike.py oracle` holds each CPU replay to
+  them pixel for pixel. The corpus's 23 pass on the manifest's hashes and were never at risk.
+- **Re-made** [V]: `python tools/imgdiff.py refs --set perfset` from the executable as committed (48de35c's
+  renderer), 12 of 12. Each opened before use, on one contact sheet: the deck battle twice, the ship's hold, the
+  early-game close-up, Alfonso's bridge with its dialogue twice, the Dangral base twice, the 550a ship battle
+  twice, the world map twice; nothing missing or torn.
+- **The same images** [V]: no hash of the old references survives, so the proof is through the GPU. The oracle
+  run of 2026-10-26 09:40 (`build/e2/gs-oracle-h4.txt`), which held V0's references, and today's, holding the
+  re-made ones, print the same 35 lines to the last digit: for every perfset frame the same exact, near and far
+  pixel counts against the GPU's frame, blob, MAE, bias, shift and blur. A reference that differed in any pixel
+  where the GPU's frame matches would move the exact count. And `corpus_15800` and `corpus_6000`, the benchmark
+  set's copies of two corpus captures from before C5c (`15800.fifo` is byte for byte `build/fifo-pre-c5`'s), hash
+  to `a91622f21a14d5bb` and `029fe3a8640a9b43`, the manifest's pins for those captures before C5c replaced them
+  (`build/c5c-compare-final.txt`).
+- **For the next cleanup** [V]: `build/gpu-oracle/ref/` is a check's input, not a render to throw away; HANDOFF
+  says so. It can be re-made this way while the captures and the GPU's frames are unchanged; once either moves, an
+  old oracle log stops being a witness.

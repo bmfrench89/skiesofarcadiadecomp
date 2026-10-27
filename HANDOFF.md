@@ -476,7 +476,9 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
 **`build/` was cleaned 2026-10-27, at the owner's word:** 88 GB of screenshots, frame dumps, GPU check renders
 and test installs deleted; every log, pad file, card, capture and the protected folders (`fifo`, `fifo-pre-c5`,
 `cards`, `savetest`, `gpuset`, `perfset`, `x2`) kept. A FINDINGS reference to a picture from before then no
-longer resolves; its log does.
+longer resolves; its log does. It also took `build/gpu-oracle/ref/`, V0's references, which a check reads:
+the benchmark set's twelve were re-made the same night and shown to be the same images (FINDINGS "The
+cleanup took V0's twelve benchmark references"). Keep that folder in any later cleanup.
 
 **Waiting on the owner at the machine** (none of these can be done by a session; since D-46, only what mods need):
 - a small mod built from `docs/MODDING.md` alone (T10);
