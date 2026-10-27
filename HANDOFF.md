@@ -518,7 +518,7 @@ cleanup took V0's twelve benchmark references"). Keep that folder in any later c
   2, 1.5, defenses and speed 1.25, rewards 1.5);
 - a small mod built from `docs/MODDING.md` alone (T10);
 - the menu in a window and the Vulkan menu (M8a/b), its Mods page above all, and its Save now and Debug page;
-- `examples/mods/battle-hp` in the story's first battle, in a window, on the CPU presenter and with `gpu = on`,
+- `examples/mods/battle-hp` in the story's first battle, in a window, on the CPU presenter and with `gpu = vulkan`,
   the menu opened over it once (M20's Done 6: the rows in the top-left corner, dimmed under the menu's panel);
 - a battle with `battle-info.hp`, `.order` and `.log` set to 1 (R5's Done 4), and a word on which of the three
   to show by default and whether the text wants `battle-info.size = 2` on the Ally X;
