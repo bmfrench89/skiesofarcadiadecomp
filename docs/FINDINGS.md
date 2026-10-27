@@ -10932,3 +10932,68 @@ as "Setup would have installed the example mods"); PLAN-NEXT §0 item 2, the pla
   the old test of `disc.iso` alone, Rebuild not extracting, the size left out of the record, no carry-over, an
   unbuilt install carried from, the oldest install instead of the newest, a card written over. Not run end to end
   from a package with the disc.
+
+**M20: mods draw over the picture -- `draw_rect` and `draw_text`, on every presenter, never in the frames the checks
+hash.** 2026-10-27. Spec: `docs/specs/mod-overlay.md`, written the same night from a read of the presenters, the
+menu, the mod API and the consumers by three readers; PLAN-NEXT §0 item 1's "a way for mods to draw (R5, P7)".
+
+- **What a mod gets** [V]: two members appended to `SoaModApi` (`SOA_MOD_HAS(draw_text)` tells a mod that the port
+  it runs on can draw): a filled rectangle and a line of the port's 5x7 font at 1 to 8 times its size, in the
+  game's 640x480 units and straight-alpha RGBA, from any of the mod's callbacks -- the frame end, the safe point,
+  the battle's events -- but not its `soa_mod_init`, a texture provider or a projection filter. A mod draws its
+  whole picture each frame: each frame end hands that frame's draws over in place of the last frame's, so a mod that
+  stops drawing clears itself. Room, each frame: 256 draws and 4 KB of text a mod, 1024 and 16 KB for all; past it
+  a draw returns 0 and the mod is told once.
+- **How** [V, the code]: `runtime/overlay.c` keeps each mod's list for the frame being built and publishes the
+  frame through a triple buffer, three frames and one atomic word, so the guest thread never waits for the window
+  and the window takes only a whole frame (at each present the newest, if one came; the last one taken is drawn
+  until then). The window maps the game's units onto `picture_layout`'s rectangle, the picture's place in the
+  client, so a draw stays on the thing it marks at any window size, layout and scale, and draws into the presented
+  buffer before the menu (DXGI, GDI, SDL); for Vulkan it composites the draws over a clear buffer and the menu over
+  them, which the GPU blends over its picture as it does the menu's alone (M8b), at the rectangle
+  `gxv_present_picture` gives. The font moved out of `menu.c` into `runtime/font5x7.h`, shared; the menu's pixels
+  did not move (`test_menu.py`).
+- **On the presenters** [V]: DXGI, `battle.scn` with `examples/mods/battle-hp` loaded and the menu opened over
+  frame 10600 (`build/m20/dxgi.log`, `build/m20/shots/menu-10600.bmp`, opened): both soldiers' rows in the
+  picture's top-left corner, `28/58` with its bar short by the 30 the picture shows landing and `58/58`, the menu
+  drawn over them, and `[window] frame 10600: menu open; the game's picture 07a584f65a0e04c3 before,
+  07a584f65a0e04c3 after; the converted frame 732658c9 before, 732658c9 after: unchanged` -- the example drawing in
+  that same present. SDL, in a Linux container: every runtime file compiled with gcc and SDL required (47 of 47),
+  `test_window_sdl.py` under Xvfb, `test_overlay.py` and `test_menu.py` built with gcc (20 passed). Vulkan in two
+  halves: the buffer it is given (`test_overlay.py`, the draws over a clear buffer; `test_menu.py`, the menu over
+  them) and `gpuspike.py present --overlay`, the GPU's blend of any such buffer over the picture (2 of 2 targets
+  within one); the list itself was not run through a Vulkan window. GDI read, not run.
+- **Nothing the checks see moved** [V, `build/m20/replay.log`]: replay 23/23 at `SOA_THREADS` 1, 2, 3 and 8 with
+  the runtime as built. The spec's second replay, with the example loaded and drawing, cannot be had, and a run
+  made for it proved nothing: `scenario.py` strips every `SOA_` variable from its replays, so `SOA_MODS` never
+  reached them, and `--replay` returns before the game starts, so no mod callback runs there to draw. The DXGI
+  line above is what shows a drawing mod leaves the game's picture alone.
+- **The review** [V, four readers and a skeptic for each serious finding, `review-m20-overlay`]: confirmed and
+  fixed -- `test_memguard.py` and `test_profiler.py` built `mod.c` without `overlay.c`, so the full suite would not
+  link (both lists carry it now); a coordinate past an int once scaled wrapped instead of being clipped (at
+  1920x1080's default 2x, x = -2147483648, what a float-to-int conversion gives a NaN, drew exactly on the
+  picture's left edge, and a width of 2147483647 drew nothing): each pixel edge is held to a pixel past the client
+  before it is narrowed; and nothing ran Vulkan's composite, where the menu's ground, written over the buffer,
+  erased a mod's draw under the panel that the CPU presenters dim: the ground is composited "over" now (the same
+  bytes over nothing, so M8b's pixels hold), and `test_menu.py` builds `overlay.c` beside `menu.c` and checks the
+  composite. Low, and fixed: a draw from a texture provider or projection filter, which the header said never, was
+  accepted (refused now, with a test); a dispatcher reached inside `call_guest` set the current mod to -1 instead of
+  putting it back, so the outer callback's later draws were refused with no line (each that can run nested puts it
+  back now; read, not run: the fake guest cannot nest a controller read in a call); the frame-wide room was in no
+  document and the refusal named only a mod's own; Vulkan's line above 3840x2400 named only the menu; and
+  `pad_filter`, twice a frame, adds its draws twice (the guide says to draw in `on_frame_end`). Two refuted: a
+  duplicate read against HEAD, and the API page, regenerated. A per-thread current mod, tried for a race with a
+  renderer thread, was taken out again: texture providers and projection filters run on the guest thread, which
+  parses the command stream (`runtime/gxr.c:365`, `:789`).
+- **The checks** [V]: `test_overlay.py` (new, 9: overlay.c built alone with a driver playing both threads -- where
+  a rect lands for a given client and picture, the blend, each font pixel, `?` past byte 126, clipping, a
+  coordinate past an int, the Vulkan buffer, only a published and taken frame drawn, each mod's room); `test_mods.py`,
+  5 (the fake guest's new `drawn` command: a frame's draws replacing the last, a frame with none clearing, the
+  refusals and the room; a mod with no frame-end handler still publishing; `battle-hp` built and drawing only in a
+  battle; draws from the safe point alone; the renderer's callbacks refused); `test_menu.py`, 1 (Vulkan's
+  composite). Mutations, each run on its tests: 18, all caught but one equivalent (the `soa_mod_init` test taken
+  out of `draw_from`: during init the mod's index is the count of mods loaded before it, which the bounds test
+  refuses anyway).
+- **Left** [V]: the owner's look in a window (Done 6), and the Vulkan path with a real list; R5's bars over each
+  enemy, which needs its place on the screen; clipping regions, a notice for mods, the colour filters over the
+  overlay (a red and green bar is not corrected for a colour-blind player), fonts past ASCII.

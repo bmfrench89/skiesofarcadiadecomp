@@ -197,6 +197,7 @@ def build(tmp_path: Path) -> Path:
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "main.c"),
             str(ROOT / "runtime" / "mod.c"),
+            str(ROOT / "runtime" / "overlay.c"),  # M20: the mods' drawing, which mod.c hands over
             str(ROOT / "runtime" / "sha1.c"),  # disc-layer I1
             str(ROOT / "runtime" / "tick.c"),
             str(ROOT / "runtime" / "picture.c"),

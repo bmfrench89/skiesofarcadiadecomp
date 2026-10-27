@@ -58,6 +58,9 @@ void menu_draw(uint8_t* bgra, int w, int h, int stride);
  * to nothing, the panel's ground translucent, the rest opaque. 1 when it drew
  * the menu, 0 when the menu is closed. */
 int menu_draw_overlay(uint8_t* bgra, int w, int h, int stride);
+/* M20: the same drawn over what the buffer already holds (the mods' overlay),
+ * not cleared first; 1 when the menu or the notice drew. */
+int menu_draw_overlay_over(uint8_t* bgra, int w, int h, int stride);
 
 /* H17d (docs/specs/interp-display.md): a line in the picture's lower-left
  * corner for `ms` milliseconds, the menu open or not, drawn by menu_draw and

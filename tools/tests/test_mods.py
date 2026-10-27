@@ -6201,3 +6201,181 @@ def test_battle_boosts_no_ko_stands_down_where_losing_carries_the_story_on(drive
     assert f"{POISON_WORD:08X}=00000001" in out, out  # left for the game
     said = "no knock-outs stands down for this battle: losing it carries the story on (defeat condition 2)"
     assert mod_lines(err).count(said) == 1, err
+
+
+# --------------------------------------------------------------------------
+# M20: drawing over the picture (docs/specs/mod-overlay.md) on the fake guest
+# --------------------------------------------------------------------------
+
+DRAWS = r"""
+#include "soa_mod.h"
+#include <stdio.h>
+static const SoaModApi* A;
+static int g_frames;
+static void frame_end(void* u)
+{
+    char line[48];
+    int i, ok = 0;
+    (void)u;
+    g_frames++;
+    if (g_frames == 1) {
+        A->draw_rect(10, 20, 100, 8, 0x20C040FFu);
+        A->draw_text(10, 30, 2, 0xFFFFFFFFu, "HP 58/58");
+    }
+    if (g_frames == 2) A->draw_rect(0, 0, 640, 480, 0x00000080u);
+    /* frame 3 draws nothing, and clears the overlay */
+    if (g_frames == 4) {
+        for (i = 0; i < 300; i++) ok += A->draw_rect(i, 0, 1, 1, 0xFFFFFFFFu);
+        snprintf(line, sizeof line, "drew %d of 300", ok);
+        A->log(line);
+    }
+}
+static uint32_t damage(void* u, uint32_t v, uint32_t b, uint32_t a, uint32_t t, uint32_t e)
+{
+    (void)u; (void)b; (void)a; (void)t; (void)e;
+    A->draw_text(0, 0, 1, 0xFF0000FFu, "hit");
+    return v;
+}
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    char line[96];
+    (void)version;
+    A = api;
+    if (api->size < SOA_MOD_HAS(draw_text)) return 1;
+    snprintf(line, sizeof line, "from init %d; size 0 %d; size 9 %d; NULL %d", api->draw_rect(0, 0, 1, 1, 0xFFFFFFFFu),
+             api->draw_text(0, 0, 0, 0xFFFFFFFFu, "x"), api->draw_text(0, 0, 9, 0xFFFFFFFFu, "x"),
+             api->draw_text(0, 0, 1, 0xFFFFFFFFu, NULL));
+    api->log(line);
+    return api->on_frame_end(frame_end, 0) && api->on_damage(damage, 0) ? 0 : 1;
+}
+"""
+
+
+def drawn_blocks(out: str) -> list[str]:
+    return re.findall(r"^drawn\n(.*?)^end$", out, re.M | re.S)
+
+
+@needs_cc
+def test_m20_each_frame_s_draws_replace_the_last_and_a_frame_without_clears_them(driver, tmp_path):
+    """Draws from on_frame_end and from a battle event make the frame's list;
+    each frame end publishes it in place of the last; a frame with no draws
+    clears the overlay; init and arguments out of range are refused; past a
+    mod's room the rest is refused, said once."""
+    source_mod(tmp_path, "draws", DRAWS)
+    out, err = play(
+        driver,
+        tmp_path,
+        "frame drawn frame drawn frame drawn damage 5 1 0 0 0 frame drawn frame drawn",
+    )
+    blocks = drawn_blocks(out)
+    assert blocks[0] == "rect 10 20 100 8 20C040FF\ntext 10 30 2 FFFFFFFF HP 58/58\n", out
+    assert blocks[1] == "rect 0 0 640 480 00000080\n", out
+    assert blocks[2] == "", out
+    lines = blocks[3].splitlines()
+    assert lines[0] == "text 0 0 1 FF0000FF hit" and len(lines) == 256, (
+        lines[:3],
+        len(lines),
+    )  # the event's, then 255
+    assert blocks[4] == "", out
+    assert "[mod] draws: from init 0; size 0 0; size 9 0; NULL 0" in err, err
+    assert "[mod] draws: drew 255 of 300" in err, err
+    assert err.count("past this frame's room to draw") == 1, err
+
+
+@needs_cc
+def test_m20_a_frame_end_with_no_mod_drawing_publishes_nothing_new(driver, tmp_path):
+    """With nothing drawn, ever, the window has nothing to take."""
+    mod(tmp_path, "patch-only")
+    out, err = play(driver, tmp_path, "frame frame drawn")
+    assert drawn_blocks(out) == [""], out
+
+
+BATTLE_HP = ROOT / "examples" / "mods" / "battle-hp"
+
+
+@needs_cc
+def test_m20_the_example_draws_each_living_enemy_s_hp_in_a_battle(driver, tmp_path):
+    """examples/mods/battle-hp: a panel, the track, what is left and the
+    numbers for each living enemy, only in a battle; outside one its rows
+    clear themselves."""
+    shipped(tmp_path, folder=BATTLE_HP)
+    script = (
+        BATTLE
+        + f"set {ENEMY4 + 24:x} 64 set 803475cc 7 frame drawn "
+        + f"set {ENEMY4 + 28:x} 100 frame drawn "  # unconscious: its row goes
+        + "set 803475cc 6 frame drawn"
+    )
+    out, err = play(driver, tmp_path, script)
+    blocks = drawn_blocks(out)
+    assert blocks[0] == (
+        "rect 6 7 128 22 000000A0\nrect 10 10 120 6 502828FF\nrect 10 10 60 6 38D058FF\n"
+        "text 10 18 1 FFFFFFFF 50/100\n"
+    ), (out, err)
+    assert blocks[1:] == ["", ""], out
+
+
+SAFE_DRAW = r"""
+#include "soa_mod.h"
+static const SoaModApi* A;
+static void safe(void* u) { (void)u; A->draw_rect(1, 2, 3, 4, 0x11223344u); }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    A = api;
+    if (api->size < SOA_MOD_HAS(draw_text)) return 1;
+    return api->on_safe_point(safe, 0) ? 0 : 1;
+}
+"""
+
+
+RENDERER_DRAW = r"""
+#include "soa_mod.h"
+#include <stdio.h>
+static const SoaModApi* A;
+static int provide(void* u, uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba, SoaImage* out)
+{
+    char line[48];
+    (void)u; (void)hash; (void)fmt; (void)w; (void)h; (void)rgba; (void)out;
+    snprintf(line, sizeof line, "from the provider %d", A->draw_rect(0, 0, 8, 8, 0xFFFFFFFFu));
+    A->log(line);
+    return 0;
+}
+static void filter(void* u, float p[6], int orthographic)
+{
+    char line[48];
+    (void)u; (void)p; (void)orthographic;
+    snprintf(line, sizeof line, "from the filter %d", A->draw_text(0, 0, 1, 0xFFFFFFFFu, "x"));
+    A->log(line);
+}
+static void frame_end(void* u) { (void)u; A->draw_rect(5, 6, 7, 8, 0x11223344u); }
+SOA_MOD_EXPORT int soa_mod_init(const SoaModApi* api, uint32_t version)
+{
+    (void)version;
+    A = api;
+    if (api->size < SOA_MOD_HAS(draw_text)) return 1;
+    return api->texture_provider(provide, 0) && api->projection_filter(filter, 0) && api->on_frame_end(frame_end, 0)
+               ? 0 : 1;
+}
+"""
+
+
+@needs_cc
+def test_m20_the_renderer_s_callbacks_cannot_draw(driver, tmp_path):
+    """A texture provider and a projection filter, which the renderer calls
+    as often as the game changes a texture or the projection, may not draw:
+    each draw from one is refused, and the frame end after each still draws,
+    so neither leaves the refusal behind it."""
+    source_mod(tmp_path, "renderer-draw", RENDERER_DRAW)
+    out, err = play(driver, tmp_path, "tex 1234 4 4 frame drawn proj 0 1 0 1 0 1 0 frame drawn")
+    assert "[mod] renderer-draw: from the provider 0" in err, err
+    assert "[mod] renderer-draw: from the filter 0" in err, err
+    assert drawn_blocks(out) == ["rect 5 6 7 8 11223344\n"] * 2, (out, err)
+
+
+@needs_cc
+def test_m20_draws_from_the_safe_point_alone_are_published_too(driver, tmp_path):
+    """A mod with no frame-end callback and no patches takes mod_frame's
+    early return; the frame end publishes its draws all the same."""
+    source_mod(tmp_path, "safe-draw", SAFE_DRAW)
+    out, err = play(driver, tmp_path, "safe frame drawn")
+    assert drawn_blocks(out) == ["rect 1 2 3 4 11223344\n"], (out, err)

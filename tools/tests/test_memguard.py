@@ -226,8 +226,9 @@ def build(tmp_path):
     runtime = ROOT / "runtime"
     sources = [
         *(
-            runtime / f for f in ("main.c", "mod.c", "tick.c", "picture.c", "gxv.c", "power.c")
-        ),  # power: H20
+            runtime / f
+            for f in ("main.c", "mod.c", "overlay.c", "tick.c", "picture.c", "gxv.c", "power.c")
+        ),  # power: H20; overlay: M20, the mods' drawing mod.c hands over
         *(runtime / f for f in ("disc.c", "sha1.c", "vfst.c")),  # disc-layer I1, I6
         *toolchain.runtime_support_sources(),
         tmp_path / "stubs.c",

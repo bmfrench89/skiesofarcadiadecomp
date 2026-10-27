@@ -27,6 +27,7 @@ TEXT_START, TEXT_LEN = 0x80003100, 0x1000
 DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "eventtrack.h"
+#include "overlay.h"
 #include "mod.h"
 #include "soa_mod.h"
 #include <stdio.h>
@@ -373,6 +374,13 @@ int main(int argc, char** argv)
             memmove(mem_ptr(&s, to), mem_ptr(&s, from), cn);
             printf("copied\n");
         }
+        else if (!strcmp(cmd, "drawn")) {
+            /* M20: the newest frame the window thread would draw, as text */
+            static char list[65536];
+            overlay_take();
+            overlay_describe(list, sizeof list);
+            printf("drawn\n%send\n", list);
+        }
         else if (!strcmp(cmd, "events")) {
             int ev;
             printf("events");
@@ -435,6 +443,7 @@ def driver_sources(out: Path) -> list[Path]:
         RUNTIME / "savext.c",  # X2, its sites left out (SOA_FAKE_GUEST)
         RUNTIME / "savenow.c",  # M7a, which savext.c calls
         RUNTIME / "actions.c",  # M7b
+        RUNTIME / "overlay.c",  # M20, which mod.c draws through
         *toolchain.runtime_support_sources(),  # plat.c (portability L9)
         out / "driver.c",
     ]

@@ -180,6 +180,21 @@ lowercase letters, digits, `.`, `_` and `-`), and ask for the number with `api->
 same number every run, and never hands a number out twice, even after its mod is removed. Saves carry
 the table, so a save loaded on an install that numbered a claim differently says so.
 
+**Drawing over the picture** (M20, docs/specs/mod-overlay.md): `api->draw_rect(x, y, w, h, rgba)` and
+`api->draw_text(x, y, size, rgba, text)`, from any callback -- the battle's events and `on_frame_end` included,
+`texture_provider` and `projection_filter` not (a draw from either returns 0) --
+in the game's 640x480 units, which the port maps onto the picture wherever the window puts it, so a layout made
+once fits every screen. `rgba` is `0xRRGGBBAA` with straight alpha; text is the port's 5x7 ASCII font, each
+character `6 x size` units wide and `9 x size` high (size 2 or more reads on a handheld; other bytes draw `?`).
+Draw what you want shown every frame: each frame end replaces the last frame's drawing with this frame's, so a
+frame you draw nothing in clears yours. Draw it in `on_frame_end`, which runs once a frame: a callback that runs
+more often (`pad_filter`, twice a frame) adds its draws each time, and one that runs while the game loads, with no
+frame end, adds to the same frame until its room is gone. 256 draws and 4 KB of text a mod a frame, and 1024 and
+16 KB for every mod together; past either, a draw returns 0 and the log says so once. It is drawn under the port's
+menu, never into the game's picture: no hash, snapshot, replay or recording sees it, and a headless run draws
+nothing. The colour filters (gamma, colour-blind) do not reach it. `examples/mods/battle-hp` draws each enemy's
+HP in a battle.
+
 **The rules** (each one the port enforces or depends on):
 
 - Everything runs on the game's CPU thread. Never call the API from a thread of your own.
@@ -189,7 +204,7 @@ the table, so a save loaded on an install that numbered a claim differently says
   inside an interrupt handler; every register comes back as it was.
 - The table only grows at its end. Check `api->size >= SOA_MOD_HAS(member)` before using anything
   appended after `log` (pad filters, projections, textures, `call_guest`, host buttons, pad 2, options,
-  the battle's events):
+  the battle's events, the save's chunks, claims, drawing):
   an older port may not have it, and a newer one always does.
 - Pointer patches belong on load triggers. In a battle `0x803474BC` still names the field's table while
   its memory holds something else, so a write through it every frame lands in the battle's data.
@@ -218,6 +233,7 @@ port's own tests.
 
 - `examples/mods/encounters-off`: one patch, no options.
 - `examples/mods/encounter-scale`: a pointer, a `for` run, `*=`, and an option.
+- `examples/mods/battle-hp`: each enemy's HP in a battle, drawn over the picture (M20).
 - `examples/mods/battle-tally`: the battles won since New Game, counted through `on_rewards` (R1) and
   kept in the save file through `on_save` and `on_load` (X2).
 - `examples/mods/damage-double`: every blow doubled through `on_damage` (R0); `SOA_BATTLE_LOG=1` and

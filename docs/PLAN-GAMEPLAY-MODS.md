@@ -915,6 +915,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - Whether every other logged number matches an off run of the same battle compares two runs, so it waits on K6/D4 (rule 7).
 
 **R5. Battle information** — *days, after M8.*
+- *2026-10-27:* M20 (`docs/specs/mod-overlay.md`) is the drawing R5 needs, and `examples/mods/battle-hp` draws each living enemy's HP, as a bar and numbers, in the picture's corner; over each enemy needs its place on the screen, from the camera.
 - Enemy HP bars; the turn order from phase 3 (estimated from Quick in phase 1); a battle log from `on_effect`.
 - Enemy names come from a name table by id, shipped as text (Q5 asks whether that counts as game data).
 

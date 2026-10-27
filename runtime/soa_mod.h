@@ -242,6 +242,27 @@ typedef struct SoaModApi {
      * its init or any callback; kind "flag" for now. 0 for a name it did not
      * claim. The number is the same every run here, and never another mod's. */
     int (*claim)(const char* kind, const char* name, uint32_t* number);
+
+    /* Appended (M20, docs/specs/mod-overlay.md): drawing over the picture, in
+     * the game's 640x480 units, mapped onto the picture wherever the window
+     * puts it, under the port's menu and never into the game's own picture
+     * (no hash, snapshot, replay or recording sees it). From any callback --
+     * the battle events and on_frame_end included; never texture_provider or
+     * projection_filter, which the renderer calls -- each call adds to the
+     * mod's list for this frame, and each frame end replaces the last frame's
+     * list with it: a mod that draws nothing in a frame clears what it drew.
+     * Draw in on_frame_end, once a frame: pad_filter runs twice a frame, and
+     * adds its draws each time. Each returns 1, or 0 when refused: from
+     * soa_mod_init, a texture provider or a projection filter, an argument out
+     * of range, or past the frame's room (256 draws and 4 KB of text a mod,
+     * 1024 and 16 KB for every mod together), said once. This one: a filled
+     * rectangle, rgba 0xRRGGBBAA with straight alpha; w or h 0 or less draws
+     * nothing. */
+    int (*draw_rect)(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgba);
+    /* one line in the port's 5x7 font: each character 6 x size units wide and
+     * 9 x size high, size 1 to 8 (2 or more reads on a handheld), up to 255
+     * bytes; a byte outside 32-126 draws '?' */
+    int (*draw_text)(int32_t x, int32_t y, uint32_t size, uint32_t rgba, const char* text);
 } SoaModApi;
 
 typedef int (*SoaModInit)(const SoaModApi* api, uint32_t version);

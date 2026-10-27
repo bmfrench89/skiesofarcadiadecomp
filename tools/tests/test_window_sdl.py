@@ -201,6 +201,7 @@ def test_the_sdl_window_shows_the_frame_reads_a_key_and_drops_sound_it_cannot_qu
         runtime / "audio_sdl.c",
         runtime / "audio_out.c",
         runtime / "picture.c",
+        runtime / "overlay.c",  # M20: the mods' overlay, which window_sdl.c draws
         *toolchain.runtime_support_sources(),
         tmp_path / "driver.c",
     ]

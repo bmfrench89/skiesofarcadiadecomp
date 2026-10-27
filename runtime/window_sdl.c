@@ -34,6 +34,7 @@
 #include "plat.h"
 #include "clock.h"
 #include "menu.h"
+#include "overlay.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -548,6 +549,7 @@ static void sdl_present(int w, int h)
     r = picture_layout(w, h, g_bw, g_bh, g_scaler);
     if (r.w < 1 || r.h < 1) return;
     picture_scale(g_bgra, w, h, g_scaled, g_bw, g_bh, g_scaler);
+    if (overlay_take()) overlay_draw(g_scaled, g_bw, g_bh, g_bw * 4, r.x, r.y, r.w, r.h, 0); /* M20: under the menu */
     menu_draw(g_scaled, g_bw, g_bh, g_bw * 4); /* M8: over the scaled copy only, when it is open */
     if (!SDL_UpdateTexture(g_tex, NULL, g_scaled, g_bw * 4) || !SDL_RenderTexture(g_ren, g_tex, NULL, NULL)) {
         g_present_failed++;

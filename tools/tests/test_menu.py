@@ -26,6 +26,7 @@ PROFILE = toolchain.profile(os.environ.get("SOA_CC"))
 DRIVER = r"""
 #include "menu.h"
 #include "mod.h"
+#include "overlay.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,6 +100,27 @@ int main(int argc, char** argv)
             printf("overlay %d\n", menu_draw_overlay(ov, 640, 480, 640 * 4));
             continue;
         }
+        if (!strcmp(cmd, "modsover")) {
+            /* M20: Vulkan's overlay, as window.c's present_overlay makes it -- a
+             * mod's draws over a clear buffer, the menu over them; the picture
+             * the whole buffer, so a game unit is a pixel */
+            static unsigned char ov[640 * 480 * 4];
+            char path[256];
+            FILE* f;
+            if (scanf("%255s", path) != 1) return 1;
+            overlay_rect(0, 0, 0, 640, 40, 0xFF0000FFu);   /* red across the top, past the panel */
+            overlay_rect(0, 33, 106, 28, 25, 0xFF0000FFu); /* and under the panel's corner and title */
+            overlay_publish();
+            overlay_take();
+            memset(ov, 0, sizeof ov);
+            printf("mods %d\n", overlay_draw(ov, 640, 480, 640 * 4, 0, 0, 640, 480, 1));
+            printf("menu %d\n", menu_draw_overlay_over(ov, 640, 480, 640 * 4));
+            f = fopen(path, "wb");
+            if (!f) return 1;
+            fwrite(ov, 1, sizeof ov, f);
+            fclose(f);
+            continue;
+        }
         if (!strcmp(cmd, "draw")) {
             int w, h, x, y;
             char path[256];
@@ -144,6 +166,7 @@ def driver(tmp_path_factory):
             "/I",
             str(ROOT / "runtime"),
             str(ROOT / "runtime" / "menu.c"),
+            str(ROOT / "runtime" / "overlay.c"),  # M20: the mods' draws the menu goes over
             str(out / "driver.c"),
             "/Fe" + str(exe),
         ],
@@ -371,6 +394,29 @@ def test_the_panel_and_its_text(driver, tmp_path):
             got = px(buf, w, tx + c * s, ty + r * s)
             lit = got == (0x60, 0xC8, 0xF0)  # TITLE, BGR
             assert lit == (bit == "#"), (r, c, got)
+
+
+def test_on_vulkan_the_menu_goes_over_a_mod_s_draws(driver, tmp_path):
+    """M20: Vulkan's overlay is a mod's draws composited over a clear buffer
+    and the menu over them (window.c's present_overlay). Outside the panel the
+    mod's red is untouched; under the panel's ground it is dimmed as the CPU
+    presenters dim it (255 / 4 + 8 = 71 there; 72 here, 11 at 191 over it);
+    the title's S covers it; and the ground over nothing is M8b's, 11 at 191.
+    The mutation, the ground written over what the buffer holds (as it was
+    until the review), erases the red under the panel."""
+    raw = tmp_path / "over.raw"
+    out = run(driver, f"open modsover {raw}", cwd=tmp_path)
+    assert out[-2:] == ["mods 1", "menu 1"], out
+    buf = raw.read_bytes()
+
+    def bgra(x: int, y: int) -> tuple[int, ...]:
+        i = (y * 640 + x) * 4
+        return tuple(buf[i : i + 4])
+
+    assert bgra(320, 20) == (0, 0, 255, 255)  # outside the panel: the mod's red
+    assert bgra(35, 111) == (8, 8, 72, 255), bgra(35, 111)  # under the ground: dimmed
+    assert bgra(46, 116) == (0x60, 0xC8, 0xF0, 255)  # the title's S, TITLE: the menu's own
+    assert bgra(62, 108) == (11, 11, 11, 191)  # the ground over nothing
 
 
 def test_during_a_replay_the_status_line_says_so(driver, tmp_path):

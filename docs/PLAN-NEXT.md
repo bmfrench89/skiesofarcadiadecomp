@@ -71,9 +71,12 @@ The owner plays the game there. This repository is the mod platform:
 1. **Milestone 3** (PLAN-GAMEPLAY-MODS §E), its difficulty presets and boosts first: a spec for R3 and R4,
    then R4 (EXP, gold and magic EXP, Spirit, escape, no knock-outs), then R3 (Easy, Hard, Nightmare); then
    the rest of milestone 3, the research items (K2, K7, K8, K11) where a slice needs one, and a way for mods
-   to draw (R5, P7), which no plan has yet. *R3 and R4 built 2026-10-27* (`docs/specs/battle-mods.md`,
+   to draw (R5, P7). *R3 and R4 built 2026-10-27* (`docs/specs/battle-mods.md`,
    FINDINGS "Battle mods"): `mods/battle-boosts` and `mods/difficulty`, each off until set; the owner's
-   Hard through one dungeon is R3's Done left.
+   Hard through one dungeon is R3's Done left. *The drawing built the same night as M20*
+   (`docs/specs/mod-overlay.md`, FINDINGS "M20"): `draw_rect` and `draw_text`, over the picture on every
+   presenter and never in the frames the checks hash; `examples/mods/battle-hp` draws each enemy's HP in a
+   corner. R5's bars over each enemy need where the game puts them on the screen, which is R5's own.
 2. **The play path in maintenance:** defects fixed with their checks, no new features (2026-10-27: the
    distribution review's two Setup defects, FINDINGS "Setup's two defects"). Dropped: widescreen
    (M10, M14, V9b; WS0's first look is kept as a record, FINDINGS "WS0, first look"), 60 fps polish (session

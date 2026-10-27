@@ -25,6 +25,7 @@
 #include "interp_rate.h"
 #include "clock.h"
 #include "menu.h"
+#include "overlay.h"
 #include <windows.h>
 #include <xinput.h>
 #include <process.h>
@@ -322,6 +323,19 @@ static int dxgi_start(HWND h, int w, int ht)
     return g_scaled != NULL;
 }
 
+/* M8b and M20 on the Vulkan presenter, which blends one overlay: the mods'
+ * draws, then the menu and its notice over them, in that one buffer, cleared
+ * once; nothing to draw is no GPU pass, as before. On the window's thread,
+ * inside the present (gxv_present_picture says where it lays the picture). */
+static int present_overlay(uint8_t* bgra, int w, int h, int stride)
+{
+    int px, py, pw, ph, j, drew;
+    if (!overlay_take() || !gxv_present_picture(&px, &py, &pw, &ph)) return menu_draw_overlay(bgra, w, h, stride);
+    for (j = 0; j < h; j++) memset(bgra + (size_t)j * (size_t)stride, 0, (size_t)w * 4);
+    drew = overlay_draw(bgra, w, h, stride, px, py, pw, ph, 1);
+    return menu_draw_overlay_over(bgra, w, h, stride) || drew;
+}
+
 /* g_bgra (the frame, w x h) into the back buffer where picture_layout puts
  * it -- nearest neighbour, so whole pixels at `integer` -- with black bars
  * round it, and presented, held for g_interval refreshes. */
@@ -331,6 +345,7 @@ static void dxgi_present(int w, int h)
     PicRect r = picture_layout(w, h, g_bw, g_bh, g_scaler);
     if (g_bw < 1 || g_bh < 1 || r.w < 1 || r.h < 1) return;
     picture_scale(g_bgra, w, h, g_scaled, g_bw, g_bh, g_scaler);
+    if (overlay_take()) overlay_draw(g_scaled, g_bw, g_bh, g_bw * 4, r.x, r.y, r.w, r.h, 0); /* M20: under the menu */
     menu_draw(g_scaled, g_bw, g_bh, g_bw * 4); /* M8: over the scaled copy only, when it is open */
     if (FAILED(IDXGISwapChain1_GetBuffer(g_sc, 0, &IID_ID3D11Texture2D, (void**)&bb)) || !bb) {
         g_present_failed++;
@@ -556,7 +571,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                 SetRect(&bar, 0, r.y, r.x, r.y + r.h); FillRect(dc, &bar, black);
                 SetRect(&bar, r.x + r.w, r.y, rc.right, r.y + r.h); FillRect(dc, &bar, black);
                 SetStretchBltMode(dc, COLORONCOLOR);
-                if (menu_is_open() && rc.right > 0 && rc.bottom > 0) {
+                int mods = overlay_take(); /* M20: a mod's overlay takes the client-sized copy too */
+                if ((menu_is_open() || mods) && rc.right > 0 && rc.bottom > 0) {
                     /* M8: the picture scaled into a client-sized copy, the menu over that, drawn 1:1 */
                     static uint8_t* buf;
                     static size_t cap;
@@ -568,6 +584,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                     }
                     if (buf) {
                         picture_scale(g_bgra, g_shown_w, g_shown_h, buf, rc.right, rc.bottom, g_scaler);
+                        if (mods) overlay_draw(buf, rc.right, rc.bottom, rc.right * 4, r.x, r.y, r.w, r.h, 0);
                         menu_draw(buf, rc.right, rc.bottom, rc.right * 4);
                         bi.bmiHeader.biWidth = rc.right;
                         bi.bmiHeader.biHeight = -rc.bottom;
@@ -1111,7 +1128,7 @@ static unsigned __stdcall ui_thread(void* arg)
             else if (gxv_present_open(GetModuleHandle(NULL), g_hwnd, cr.right, cr.bottom, why, sizeof why))
             {
                 g_vk = 1;
-                gxv_present_overlay(menu_draw_overlay); /* M8b: the menu blended over the GPU's picture */
+                gxv_present_overlay(present_overlay); /* M8b, M20: the mods' draws and the menu over the GPU's picture */
                 if ((g_fresh_ev = CreateEventW(NULL, FALSE, FALSE, NULL)) != NULL) gxv_on_publish(fresh_signal);
             } else
                 fprintf(stderr, "[window] the GPU presenter could not start: %s; presenting with DXGI\n", why);

@@ -3952,6 +3952,7 @@ static VkBuffer g_ovl_buf;
 static uint8_t* g_ovl_map;
 static int g_ovl_draw; /* the next present_record blends it */
 static int (*g_ovl_fn)(uint8_t* bgra, int w, int h, int stride);
+static PicRect g_ovl_pic; /* M20: the picture's place for the overlay being drawn, w 0 outside one */
 static int g_ovl_said;
 static unsigned long long g_n_presents, g_n_present_frames, g_n_swap_made;
 static unsigned long long g_n_stale; /* asked for a new frame with none published: the slot came later */
@@ -4147,7 +4148,9 @@ static int overlay_ready(int w, int h)
 {
     if (!g_ovl_pipe || !g_ovl_set) return 0;
     if ((size_t)w * (size_t)h * 4 > OVERLAY_BYTES) {
-        if (!g_ovl_said++) say("the menu is not drawn over a %dx%d window: the overlay holds 3840x2400 at most", w, h);
+        if (!g_ovl_said++)
+            say("the menu and the mods' drawing are not drawn over a %dx%d window: the overlay holds 3840x2400 at most",
+                w, h);
         return 0;
     }
     if (!g_ovl_buf) {
@@ -4173,6 +4176,16 @@ void gxv_present_overlay(int (*fn)(uint8_t* bgra, int w, int h, int stride))
     plat_lock(&g_present_lock);
     g_ovl_fn = fn;
     plat_unlock(&g_present_lock);
+}
+
+int gxv_present_picture(int* x, int* y, int* w, int* h)
+{
+    if (g_ovl_pic.w <= 0) return 0;
+    *x = g_ovl_pic.x;
+    *y = g_ovl_pic.y;
+    *w = g_ovl_pic.w;
+    *h = g_ovl_pic.h;
+    return 1;
 }
 
 /* The presenter's command buffer and fence, its own pool: the window's
@@ -4486,8 +4499,16 @@ static int present_once(unsigned slot, int mode)
     vkResetFences(g_dev, 1, &g_pres_fence);
     /* M8b: the window's overlay into its buffer, which the fence above has
      * freed, when it has one to draw */
+    {
+        /* M20: the picture's place, as present_record will lay it, for a
+         * callback that draws over the picture (the filter pass takes its
+         * picture's size from the slot it filters) */
+        unsigned src = g_filt_pending && slot == SCREEN_SHOWN ? g_filt_src : slot;
+        g_ovl_pic = picture_layout(g_scr_w[src], g_scr_h[src], (int)g_swap_ext.width, (int)g_swap_ext.height, mode);
+    }
     g_ovl_draw = g_ovl_fn && overlay_ready((int)g_swap_ext.width, (int)g_swap_ext.height) &&
                  g_ovl_fn(g_ovl_map, (int)g_swap_ext.width, (int)g_swap_ext.height, (int)g_swap_ext.width * 4);
+    g_ovl_pic.w = 0;
     present_record(g_pres_pass, g_swap_fb[img], (int)g_swap_ext.width, (int)g_swap_ext.height, slot, mode);
     g_ovl_draw = 0;
     vkEndCommandBuffer(g_pres_cb);
@@ -5017,6 +5038,15 @@ void gxv_present_resize(int w, int h)
 void gxv_present_overlay(int (*fn)(uint8_t* bgra, int w, int h, int stride))
 {
     (void)fn;
+}
+
+int gxv_present_picture(int* x, int* y, int* w, int* h)
+{
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    return 0;
 }
 
 void gxv_set_root(const char* root)

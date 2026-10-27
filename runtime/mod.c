@@ -106,6 +106,7 @@
  * With SOA_MODS unset nothing here runs and nothing is printed.
  */
 #include "mod.h"
+#include "overlay.h"
 #include "sha1.h"
 #include "soa_mod.h"
 #include <ctype.h>
@@ -729,6 +730,7 @@ static int g_cb_n[CB_KINDS];
 static CpuState* g_s;
 static uint32_t g_text[7][2]; /* the DOL's code sections, [lo, hi): no mod writes there */
 static int g_cur_mod = -1;    /* whose callback, or whose init, is running: log names it */
+static int g_in_renderer;     /* inside a texture provider or projection filter (M20: no drawing there) */
 static char g_cur_dir[64];
 static uint32_t g_last_scene;
 static int g_seen_scene, g_loading;
@@ -1409,6 +1411,43 @@ static int api_option_int(const char* name, int64_t* out)
     return 1;
 }
 
+/* ---- M20: drawing over the picture (docs/specs/mod-overlay.md) ---------- */
+
+static unsigned char g_draw_said[MOD_MAX]; /* a mod told it is past its room */
+
+/* A draw from where one may come: a callback of a loaded mod (g_cur_mod
+ * names it), never its soa_mod_init, nor a texture provider or projection
+ * filter, which the renderer calls as often as the game changes a texture or
+ * the projection, not once a frame. */
+static int draw_from(void)
+{
+    return !g_in_init && !g_in_renderer && g_cur_mod >= 0 && g_cur_mod < g_mod_n;
+}
+
+static int drawn(int ok)
+{
+    if (!ok && !g_draw_said[g_cur_mod]) {
+        g_draw_said[g_cur_mod] = 1;
+        fprintf(stderr,
+                "[mod] %s: past this frame's room to draw (%d draws and %d bytes of text a mod, %d and %d for every "
+                "mod); the rest refused\n",
+                g_mods[g_cur_mod].dir, OVERLAY_MOD_CMDS, OVERLAY_MOD_TEXT, OVERLAY_CMDS, OVERLAY_TEXT);
+    }
+    return ok;
+}
+
+static int api_draw_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t rgba)
+{
+    if (!draw_from()) return 0;
+    return drawn(overlay_rect(g_cur_mod, x, y, w, h, rgba));
+}
+
+static int api_draw_text(int32_t x, int32_t y, uint32_t size, uint32_t rgba, const char* text)
+{
+    if (!draw_from() || !text || size < 1 || size > 8 || strlen(text) > 255) return 0;
+    return drawn(overlay_text(g_cur_mod, x, y, size, rgba, text));
+}
+
 static const SoaModApi g_api = {
     sizeof(SoaModApi), SOA_MOD_API_VERSION,
     api_read8, api_read16, api_read32, api_read_f32, api_read_bytes,
@@ -1439,13 +1478,16 @@ static const SoaModApi g_api = {
     api_on_load,
     api_on_new_game,
     api_claim,
+    api_draw_rect,
+    api_draw_text,
 };
 
 /* Each texture decode, from gxr_tev.c: the first provider that answers wins. */
 static int mod_texture(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, const uint8_t* rgba, const uint8_t** out,
                        uint32_t* out_w, uint32_t* out_h)
 {
-    int i;
+    int i, was = g_cur_mod, was_in = g_in_renderer; /* put back: this can run inside call_guest */
+    g_in_renderer = 1;
     for (i = 0; i < g_cb_n[CB_TEXTURE]; i++) {
         SoaImage img = {0, 0, NULL};
         int got;
@@ -1463,37 +1505,41 @@ static int mod_texture(uint64_t hash, uint32_t fmt, uint32_t w, uint32_t h, cons
             *out = img.rgba;
             *out_w = img.w;
             *out_h = img.h;
-            g_cur_mod = -1;
+            g_cur_mod = was;
+            g_in_renderer = was_in;
             return 1;
         }
     }
-    g_cur_mod = -1;
+    g_cur_mod = was;
+    g_in_renderer = was_in;
     return 0;
 }
 
 /* Each new projection, from gxr.c: each mod's filter in load order. */
 static void mod_projection(float p[6], int orthographic)
 {
-    int i;
+    int i, was = g_cur_mod, was_in = g_in_renderer; /* put back: this can run inside call_guest */
+    g_in_renderer = 1;
     for (i = 0; i < g_cb_n[CB_PROJECTION]; i++) {
         g_cur_mod = g_cb[CB_PROJECTION][i].mod;
         g_cb[CB_PROJECTION][i].calls++;
         ((void (*)(void*, float*, int))g_cb[CB_PROJECTION][i].fn)(g_cb[CB_PROJECTION][i].user, p, orthographic);
     }
-    g_cur_mod = -1;
+    g_cur_mod = was;
+    g_in_renderer = was_in;
 }
 
 /* Every controller read, from si.c: each mod's filter in load order. */
 static void mod_pad(unsigned frame, void* pad)
 {
-    int i;
+    int i, was = g_cur_mod; /* put back: a controller read can come inside call_guest */
     for (i = 0; i < g_cb_n[CB_PAD_FILTER]; i++) {
         g_cur_mod = g_cb[CB_PAD_FILTER][i].mod;
         g_cb[CB_PAD_FILTER][i].calls++;
         ((void (*)(void*, uint32_t, SoaPad*))g_cb[CB_PAD_FILTER][i].fn)(g_cb[CB_PAD_FILTER][i].user, frame,
                                                                          (SoaPad*)pad);
     }
-    g_cur_mod = -1;
+    g_cur_mod = was;
 }
 
 /* ---- calling the game from a mod (PLAN M4) ------------------------------ */
@@ -2959,8 +3005,11 @@ void mod_frame(CpuState* s, unsigned frame)
     uint8_t letter;
     int loaded;
     unsigned i;
-    int c;
-    if (!g_patch_n && !g_cb_n[CB_FRAME_END]) return;
+    int c, was = g_cur_mod; /* put back: a frame end can come inside call_guest */
+    if (!g_patch_n && !g_cb_n[CB_FRAME_END]) {
+        overlay_publish(); /* M20: draws from the safe point or the battle's events */
+        return;
+    }
     scene = mem_r32(s, SCENE_ID);
     state = mem_r32(s, FIELD_STATE);
     number = mem_r32(s, MAP_NUMBER);
@@ -2994,7 +3043,8 @@ void mod_frame(CpuState* s, unsigned frame)
         g_cb[CB_FRAME_END][c].calls++;
         ((void (*)(void*))g_cb[CB_FRAME_END][c].fn)(g_cb[CB_FRAME_END][c].user);
     }
-    g_cur_mod = -1;
+    g_cur_mod = was;
+    overlay_publish(); /* M20: this frame's draws replace the last frame's */
 }
 
 const char* mod_describe(void) { return g_describe; }
