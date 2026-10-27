@@ -6379,3 +6379,204 @@ def test_m20_draws_from_the_safe_point_alone_are_published_too(driver, tmp_path)
     source_mod(tmp_path, "safe-draw", SAFE_DRAW)
     out, err = play(driver, tmp_path, "safe frame drawn")
     assert drawn_blocks(out) == ["rect 1 2 3 4 11223344\n"], (out, err)
+
+
+# --------------------------------------------------------------------------
+# mods/battle-info (PLAN-GAMEPLAY-MODS R5, docs/specs/battle-info.md) on the
+# fake guest: the battle laid out as for battle-boosts, drawn through M20
+# --------------------------------------------------------------------------
+
+INFO = ROOT / "mods" / "battle-info"
+ORDER, CURSOR, ACTING, PHASE, ROUND = 0x803092F4, 0x80347335, 0x80347334, 0x8034733C, 0x80347340
+IN_BATTLE = "set 803475cc 7 "
+
+
+def info(driver, tmp_path, script: str, opts: str = "", **env) -> tuple[str, str]:
+    shipped(tmp_path, folder=INFO)
+    if opts:
+        env["SOA_MOD_OPT"] = " ".join(f"battle-info.{o}" for o in opts.split())
+    return play(driver, tmp_path, script, **env)
+
+
+def order(*slots: int, cursor: int = 0) -> str:
+    """The turn order as the game keeps it, slots ending at -1, and its cursor."""
+    out = "".join(f"setb {ORDER + i:x} {s & 0xFF:x} " for i, s in enumerate([*slots, -1]))
+    return out + f"setb {CURSOR:x} {cursor:x} "
+
+
+def test_battle_info_is_shipped_and_built_by_link():
+    import recompile
+
+    srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
+    assert "mods/battle-info" in srcs, srcs
+
+
+@needs_cc
+def test_battle_info_at_its_defaults_registers_nothing(driver, tmp_path):
+    """Setup installs every folder of mods/: with every part off the mod
+    registers nothing, and a battle frame draws nothing."""
+    out, err = info(driver, tmp_path, IN_BATTLE + BATTLE + f"set {ENEMY4 + 24:x} 64 frame drawn")
+    assert "loaded 1" in out, err
+    assert mod_lines(err, "battle-info") == ["every part off: nothing registered"], err
+    assert "[mod] battle-info registers" not in err, err
+    assert drawn_blocks(out) == [""], out
+
+
+@needs_cc
+def test_battle_info_hp_draws_each_living_enemy_s_row(driver, tmp_path):
+    """hp: a panel ending at y 470, then each enemy's letter, track, what is
+    left and numbers, a row each, in game units; a change in the numbers
+    logged as shown; nothing once the battle is decided (phase 8, Try
+    again's options low and left); the fallen leave the rows (the rest close
+    down); a boss's five digits widen the panel; outside a battle nothing."""
+    enemy5 = 0x80420C00
+    script = (
+        IN_BATTLE
+        + BATTLE
+        + f"set {ACTORS + 20:x} {enemy5:x} set {enemy5 + 20:x} 28 set {enemy5 + 24:x} 28 "  # B, 40 of 40
+        # the last battle's 7 still in the phase as this one begins: drawn all the same
+        + f"set {PHASE:x} 7 set {ENEMY4 + 24:x} 64 frame drawn "
+        + f"set {PHASE:x} 4 set {ENEMY4 + 20:x} 19 frame drawn "  # 25 of 100
+        + f"set {PHASE:x} 8 frame drawn "  # lost: the game's Try again owns the screen
+        + f"set {PHASE:x} 4 set {ENEMY4 + 28:x} 100 frame drawn "  # A knocked out: no row, B's moves down
+        + f"set {enemy5 + 20:x} 2ee0 set {enemy5 + 24:x} 2ee0 frame drawn "  # B at 12000 of 12000
+        + "set 803475cc 6 frame drawn"
+    )
+    out, err = info(driver, tmp_path, script, "hp=1")
+    blocks = drawn_blocks(out)
+    row_b = "rect 22 {y} 64 4 502828FF\nrect 22 {y} 64 4 38D058FF\ntext 92 {t} 1 FFFFFFFF {n}\n"
+    assert blocks[0] == (
+        "rect 7 439 148 34 00000090\ntext 10 442 1 FFFFFFFF A\nrect 22 445 64 4 502828FF\n"
+        "rect 22 445 32 4 38D058FF\ntext 92 442 1 FFFFFFFF 50/100\n"
+        "text 10 458 1 FFFFFFFF B\n" + row_b.format(y=461, t=458, n="40/40")
+    ), (out, err)
+    assert (
+        "rect 22 445 16 4 38D058FF" in blocks[1] and "text 92 442 1 FFFFFFFF 25/100" in blocks[1]
+    ), blocks[1]
+    assert blocks[2] == "", blocks[2]
+    assert blocks[3] == (
+        "rect 7 455 148 18 00000090\ntext 10 458 1 FFFFFFFF B\n"
+        + row_b.format(y=461, t=458, n="40/40")
+    ), blocks[3]
+    assert blocks[4] == (  # 11 cells of numbers, past the 9 the panel holds otherwise
+        "rect 7 455 160 18 00000090\ntext 10 458 1 FFFFFFFF B\n"
+        + row_b.format(y=461, t=458, n="12000/12000")
+    ), blocks[4]
+    assert blocks[5] == "", out
+    shown = [x.split(": ", 1)[1] for x in mod_lines(err, "battle-info") if "shows" in x]
+    assert shown == [
+        "slot 4 shows 50/100",
+        "slot 5 shows 40/40",
+        "slot 4 shows 25/100",
+        "slot 5 shows 12000/12000",
+    ], err
+
+
+@needs_cc
+def test_battle_info_order_runs_from_the_cursor_and_leaves_the_fallen_out(driver, tmp_path):
+    """order: from the cursor on, the slot acting in yellow, one cell between
+    labels, right-aligned; the fallen left out, and the asleep (phase 3 passes
+    over 0x6500); the slot at the cursor fallen in its own turn takes its
+    yellow with it; nothing before phase 3; each order shown logged once."""
+    script = (
+        IN_BATTLE
+        + BATTLE
+        + order(0, 4, 1)
+        + f"set {PHASE:x} 2 frame drawn "  # the order not set yet
+        + f"set {PHASE:x} 4 frame drawn "
+        + f"setb {CURSOR:x} 1 frame drawn "
+        + f"set {PARTY1 + 28:x} 100 frame drawn "  # P2 knocked out
+        + f"set {PARTY1 + 28:x} 0 set {ENEMY4 + 28:x} 100 frame drawn "  # A, acting, falls; P2 back
+        + f"set {PARTY1 + 28:x} 400 frame drawn"  # P2 asleep
+    )
+    out, err = info(driver, tmp_path, script, "order=1")
+    blocks = drawn_blocks(out)
+    assert blocks[0] == "", out
+    assert blocks[1] == (
+        "rect 585 7 48 15 00000090\ntext 588 10 1 FFE060FF P1\ntext 606 10 1 FFFFFFFF A\n"
+        "text 618 10 1 FFFFFFFF P2\n"
+    ), blocks[1]
+    assert blocks[2] == (
+        "rect 603 7 30 15 00000090\ntext 606 10 1 FFE060FF A\ntext 618 10 1 FFFFFFFF P2\n"
+    ), blocks[2]
+    assert blocks[3] == "rect 621 7 12 15 00000090\ntext 624 10 1 FFE060FF A\n", blocks[3]
+    assert blocks[4] == "rect 615 7 18 15 00000090\ntext 618 10 1 FFFFFFFF P2\n", blocks[4]
+    assert blocks[5] == "", blocks[5]
+    orders = [x.split(": ", 1)[1] for x in mod_lines(err, "battle-info") if ": order " in x]
+    assert orders == ["order P1 A P2", "order A P2", "order A", "order P2"], err
+
+
+@needs_cc
+def test_battle_info_log_says_what_each_change_was(driver, tmp_path):
+    """log: a blow with its striker, a drop at the round's end with none
+    (the slot that acted last is not its striker), a heal, a knock-out, an
+    escape and a new round, each a line drawn and a line in the port's log;
+    five on screen, the oldest dropped."""
+    script = (
+        IN_BATTLE
+        + BATTLE
+        + f"setb {ROUND:x} 1 set {PHASE:x} 4 setb {ACTING:x} 0 frame "  # what is there: nothing logged
+        + f"set {ENEMY4 + 20:x} 22 frame "  # P1 strikes A: 50 -> 34
+        # the round's end, P1 still in the acting byte: poison takes 5 of P2, A heals 8
+        + f"set {PHASE:x} 6 set {PARTY1 + 20:x} 2d set {ENEMY4 + 20:x} 2a frame "
+        + f"set {PARTY1 + 28:x} 100 frame "  # P2 down
+        + f"setb {ROUND:x} 2 frame "
+        + f"set {ENEMY4 + 28:x} 2000 frame "  # A escapes
+        + f"set {PHASE:x} 4 setb {ACTING:x} 4 set {PARTY0 + 20:x} 2e frame drawn"  # A strikes P1: 4
+    )
+    out, err = info(driver, tmp_path, script, "log=1")
+    said = [x.split(": ", 1)[1] for x in mod_lines(err, "battle-info") if x.startswith("frame ")]
+    assert said == [
+        "P1 > A -16",
+        "P2 -5",
+        "A +8",
+        "P2 down",
+        "round 2",
+        "A fled",
+        "A > P1 -4",
+    ], err
+    block = drawn_blocks(out)[0].splitlines()
+    lines = [x.split(" ", 5)[5] for x in block if x.startswith("text ")]
+    assert lines == ["A +8", "P2 down", "round 2", "A fled", "A > P1 -4"], out  # the first dropped
+    # the panel as wide as the longest line, 9 cells, against the right edge, ending at y 470
+    assert block[0] == "rect 573 422 60 51 00000090", block
+    assert [x.split(" ")[1:3] for x in block[1:]] == [
+        ["576", str(425 + 9 * i)] for i in range(5)
+    ], block
+
+
+@needs_cc
+def test_battle_info_starts_the_log_afresh_when_a_battle_begins_again(driver, tmp_path):
+    """Try again rebuilds the battle in scene 7, its phase back to 0: the
+    log's lines go, and the rebuilt actors' HP is no blow or heal."""
+    script = (
+        IN_BATTLE
+        + BATTLE
+        + f"set {PHASE:x} 4 setb {ACTING:x} 0 frame set {ENEMY4 + 20:x} 22 frame drawn "
+        + f"set {PHASE:x} 0 set {ENEMY4 + 20:x} 32 frame drawn"
+    )
+    out, err = info(driver, tmp_path, script, "log=1")
+    blocks = drawn_blocks(out)
+    assert "P1 > A -16" in blocks[0] and blocks[1] == "", out
+    said = [x.split(": ", 1)[1] for x in mod_lines(err, "battle-info") if x.startswith("frame ")]
+    assert said == ["P1 > A -16"], err
+
+
+@needs_cc
+def test_battle_info_size_scales_every_part(driver, tmp_path):
+    """size 2: the text at size 2, the rows twice as tall, the bar 80 units
+    (48 + 16 a size, so the rows leave the log its corner at size 3), both
+    panels ending at y 470, the log's as wide as its longest line and
+    against the right edge."""
+    script = (
+        IN_BATTLE
+        + BATTLE
+        + f"set {ENEMY4 + 24:x} 64 set {PHASE:x} 4 setb {ACTING:x} 0 frame "
+        + f"set {ENEMY4 + 20:x} 22 frame drawn"  # P1 strikes A: 50 -> 34
+    )
+    out, err = info(driver, tmp_path, script, "hp=1 log=1 size=2")
+    assert drawn_blocks(out)[0] == (
+        "rect 7 443 242 30 00000090\ntext 10 446 2 FFFFFFFF A\nrect 34 452 80 8 502828FF\n"
+        "rect 34 452 27 8 38D058FF\ntext 126 446 2 FFFFFFFF 34/100\n"
+        "rect 507 449 126 24 00000090\ntext 510 452 2 FFFFFFFF P1 > A -16\n"
+    ), out

@@ -76,7 +76,10 @@ The owner plays the game there. This repository is the mod platform:
    Hard through one dungeon is R3's Done left. *The drawing built the same night as M20*
    (`docs/specs/mod-overlay.md`, FINDINGS "M20"): `draw_rect` and `draw_text`, over the picture on every
    presenter and never in the frames the checks hash; `examples/mods/battle-hp` draws each enemy's HP in a
-   corner. R5's bars over each enemy need where the game puts them on the screen, which is R5's own.
+   corner. *R5 built on it the same night* (`docs/specs/battle-info.md`, FINDINGS "Battle information"): `mods/battle-info`,
+   each enemy's HP, the turn order and a battle log, each off until set; the bars over each enemy wait on
+   where the game puts it on the screen, and names on gameplay Q5. Next: P7 (with K7, and K11 for its part
+   line), then T3 + K8, T5, R6 and K2.
 2. **The play path in maintenance:** defects fixed with their checks, no new features (2026-10-27: the
    distribution review's two Setup defects, FINDINGS "Setup's two defects"). Dropped: widescreen
    (M10, M14, V9b; WS0's first look is kept as a record, FINDINGS "WS0, first look"), 60 fps polish (session

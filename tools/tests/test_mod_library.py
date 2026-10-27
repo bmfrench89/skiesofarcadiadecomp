@@ -125,6 +125,8 @@ SWITCHED = {
         "lowhp",
         "SOA_BOOSTS_TEST=lowhp: every party character at 1 HP between battles",
     ),
+    # no switch of its own: its parts are options, through the port's SOA_MOD_OPT
+    "battle-info": ("SOA_MOD_OPT", "battle-info.hp=1", "on: hp; text size 1"),
     "coop": ("SOA_COOP", "1", "pad 2 chooses the commands of party slot(s) 1"),
     # no switch of its own: its preset, an option, through the port's SOA_MOD_OPT
     "difficulty": (

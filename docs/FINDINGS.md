@@ -10997,3 +10997,73 @@ menu, the mod API and the consumers by three readers; PLAN-NEXT §0 item 1's "a 
 - **Left** [V]: the owner's look in a window (Done 6), and the Vulkan path with a real list; R5's bars over each
   enemy, which needs its place on the screen; clipping regions, a notice for mods, the colour filters over the
   overlay (a red and green bar is not corrected for a colour-blind player), fonts past ASCII.
+
+**Battle information (gameplay R5): `mods/battle-info` shows each enemy's HP, the turn order and a battle log, each
+off until set.** 2026-10-27. Spec: `docs/specs/battle-info.md`, written and built the same night on M20.
+
+- **What a player gets** [V]: a sixth shipped mod, three parts and a text size, each part off until set
+  (`battle-info.hp = 1` and so on, or the menu's Mods page): each living enemy's letter, bar and HP in the
+  bottom-left corner; the round's order from the slot acting on, that slot in yellow, top right, once the game has
+  set it (phases 3 to 5); the last five things the round did to anyone's HP in the bottom-right corner. Nothing once
+  the battle is decided (phases 7 to 9). The party is P1 to P4, the enemies A to H, by slot: no names (gameplay
+  Q5). With every part off the mod registers nothing, so Setup installs it with the others.
+- **Where it reads** [V, the code; `config/gamedata.txt`]: at each frame end, what R0's log reads; the order's cursor
+  and the slot acting, `0x80347335` and `0x80347334`, named for it (`battle.order_cursor`, `battle.acting`), each
+  re-found in phase 3's `fn_800708C0` (`0x80070908`, `0x8007093C`; `gamedata.py check`: 75 of 75). The order leaves
+  out what phase 3 would pass over, by the game's own test (status `0x6500`, or `0x02000000`).
+- **The story's first battle** [V, `build/r5/`; `battle.scn` at K6's seed, `SOA_BATTLE_LOG=1`, the three parts on, a
+  DXGI window with the menu opened over frames 10450, 10600 and 11300; run three times as the mod changed, the
+  first two kept in `build/r5/first/` and `second/`]: `tools/battle.py info` passes each time. The log reads the
+  battle as R0 does: `P2 > A -30` at 10562 (R0: slot 1's damage 30 on slot 4), `P1 > A -28` and `A down` at
+  10679, `B > P1 -46` at 10857 (K6's 46 on Vyse), `round 2` at 10934, `P1 > B -44` at 11446, `P2 > B -14` and
+  `B down` at 11571; the battle won at 11827. The log is HP lost, so a finishing blow reads what was left: Vyse's
+  43 on A (R0's damage line, and the number the game shows over A) is `-28`, Aika's 29 on B `-14`. The pictures,
+  opened, show the log's numbers at their frames: at 10450, the party choosing, both soldiers at 58/58 and no
+  order yet; at 10600 A at 28/58 with its bar short by half, and the order `P2 P1 B A` (the round's `1 0 5 4`
+  from the cursor, P2 acting, in yellow) beside `P2 > A -30`; at 11300, A gone from the rows and the log's five
+  lines. Each frame's `[window]` line: the game's picture and the converted frame unchanged across the present with
+  the mod drawing. The third run, with the review's fixes and the order logged: `battle: 4 shows, 7 log and 7
+  order line(s); each R0's, and every change R0 logged shown`; the order lines follow the battle -- `P2 P1 B A` at
+  10502 as round 1's order is set, `P1 B A` at 10621 once Aika has acted, `P1 B` at 10679 as A falls, `B` at 10802,
+  and in round 2 `P1 P2 B` at 11402, `P2 B` at 11510 and `P2` at 11571 as B falls; its other lines the second
+  run's, line for line.
+- **The first run's pictures moved the layout** [V, `build/r5/first/`]: the HP rows and the log began at the top,
+  under the order, and there the game's Spirit gauge, its bar and the target's name sit while the party chooses:
+  at 10450 the rows' panel met the gauge's circle, and at 11300 the log's lines ran over the bar's end. The bottom
+  of the picture showed only the scene in all three frames, so the HP and the log took the bottom corners; the
+  order, shown only after the party's choices, when the gauge has gone, kept the top right (`second/`: clear of
+  the game's own pieces in both phases). The HP's bar grows by 16 units a size instead of 64, so at size 3 the
+  rows end at x 340 and leave the log its corner.
+- **The review** [V, four readers and a skeptic for each serious finding, `review-r5-battle-info`]: two confirmed,
+  both fixed. After a defeat the battle stays in scene 7 at phase 8, where the game prints Try again's two options
+  low and left (`fn_80009874`'s text at 160,360 and 160,384, read from the DOL), and at size 2 with three enemies
+  standing, or size 3 with two, the rows lay over them: the mod draws nothing once the battle is decided -- from
+  this battle's own phases on, since the last battle's 7 lasts until the game's setup writes 0 (`0x8000A2AC`).
+  And `info` carried a slot's last row across battles, so a later battle where nothing was drawn passed: it now
+  starts each battle afresh at R0's `start` line. Low, and fixed: `info`'s window let a row come two frames late
+  (R0's line is always a frame after the mod's: now the mod's frame or the one before, never after); a row drawn
+  for a fallen enemy passed, and no test exercised the filter; the log and the order were held to nothing -- now
+  each blow, heal, knock-out and escape the log tells must be R0's change, a named striker R0's last damage line on
+  the target, and each order shown (which the mod now logs) a suffix of R0's latest with the fallen left out; the
+  yellow moved to the next slot when the one acting fell in its own turn; a boss's five-digit HP ran past its
+  panel; the order kept slots the game would pass over (asleep, stone); `battle.order_cursor` was described as the
+  next index where in phases 3 to 5 it is the slot acting; README's list of shipped mods; and this entry's label,
+  since "R5" is distribution's Android slice already.
+- **The checks** [V]: `test_mods.py`, 7 (shipped and built by `--link`; nothing registered with every part off;
+  the rows to the unit -- two enemies, one falling, a battle begun on the last one's phase, a boss's five digits,
+  nothing after a defeat; the order from the cursor, the fallen and the asleep left out, the yellow, nothing before
+  phase 3, each order logged once; the log's lines, a blow and its striker, a drop at the round's end with none, a
+  heal, a knock-out, an escape and a round, five kept and placed; Try again starting it afresh; size 2);
+  `test_battle.py`, 10 (`info`: agreeing logs pass; a wrong number, a wrong max, another slot's numbers, a fallen
+  enemy's row, a change never shown, a row late, a later battle drawn nothing, a wrong striker or amount, a blow
+  told as poison, a knock-out too early, an order no suffix of R0's, and no row at all each fail);
+  `test_mod_library.py`, 1 (its switch). 31 mutations of the final code, all caught; on the way, an earlier round
+  missed two (a fallen enemy's row, masked by the row count's own test with one enemy; the max not compared) and
+  the tests were strengthened. *Mutation of a real input* (`build/r5/mut/`, the third run's log): `slot 4 shows
+  28/58` made 29, `slot 5 shows 14/58` taken out, B's first row given a max of 87, the order `P1 B A` written `B P1
+  A`, and Aika's 30 put to P1 -- each fails `info` (2, 1, 2, 1 and 1 faults: `the order shown [5, 0, 4] is no
+  suffix of R0's [1, 0, 5, 4]`, `the log puts A's -30 to P1; R0's striker is [1]`); the log as run passes.
+- **Left** [V]: the owner's battle with the parts on, and a word on the defaults and the size on the Ally X (Done
+  4); whether any of the game's other battle windows (a magic or item list) use the bottom corners; the blow's own
+  number where it is more than was left (from `on_effect`, effect by effect); the bars over each enemy, which need
+  its place on the screen; names (Q5); an estimated order before the party's choices.

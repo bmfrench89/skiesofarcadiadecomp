@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1996 |
+| Python tests | 2014 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -427,10 +427,10 @@ finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26),
 to 27 the 60 fps review's fixes, Setup's example mods kept out of a player's install, WS0's first look, the owner's
 D-46 ("Narrow to mods") and D-47 (the CC0 decompilation's 839 names and 17 notes, `docs/research/ogdanimal-decomp/`),
 milestone 3's first two mods -- `mods/battle-boosts` (R4) and `mods/difficulty` (R3), to
-`docs/specs/battle-mods.md` -- Setup's two defects from the distribution review, and M20, drawing for mods
-(`docs/specs/mod-overlay.md`), pushed. The full pre-push
-suite passes: 1996 tests in 104 files (1955
-passed, 41 skipped here; 784 skip with MSVC hidden, so 743 want MSVC). Nothing is
+`docs/specs/battle-mods.md` -- Setup's two defects from the distribution review, M20, drawing for mods
+(`docs/specs/mod-overlay.md`), and R5, `mods/battle-info` on it (`docs/specs/battle-info.md`), pushed. The full pre-push
+suite passes: 2014 tests in 104 files (1973
+passed, 41 skipped here; 791 skip with MSVC hidden, so 750 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -445,6 +445,7 @@ choosing work.
 | R4, R3 | `mods/battle-boosts` and `mods/difficulty`, shipped, off until set; `tools/battle.py rewards` | battle-mods.md |
 | Setup's two defects | another disc image extracts again; a new version keeps the saves and settings | distribution.md |
 | M20 | mods draw rectangles and text over the picture, every presenter; `examples/mods/battle-hp` | mod-overlay.md |
+| R5 | `mods/battle-info`: each enemy's HP, the turn order, a battle log, off until set; `battle.py info` | battle-info.md |
 
 **What the last session built (2026-10-22 to 24), in order.** Each has a spec under `docs/specs/` and a FINDINGS
 entry of the same name:
@@ -474,9 +475,12 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    one the story lets you lose, where no knock-outs stands down), and an enemy's death spell on a party with no
    knock-outs (cancelled as a miss: a state no run has shown the battle survive). *M20 built the same night*
    (FINDINGS "M20"): `draw_rect` and `draw_text` draw over the picture on every presenter, under the menu and never
-   in a hashed frame; `examples/mods/battle-hp` draws each living enemy's HP in a corner. Next in milestone 3: R5
-   (battle information: the turn order, a battle log, and the HP over each enemy, which needs its place on the
-   screen) on M20, and P7 (with K7); then T3 + K8, T5 and R6 (edited enemy files: I7, or a patch at load), K2, K11. What follows is the night's brief of 2026-10-26:
+   in a hashed frame; `examples/mods/battle-hp` draws each living enemy's HP in a corner. *R5 built on it*
+   (FINDINGS "Battle information"): `mods/battle-info`, shipped, each part off until set -- each living enemy's HP (top left), the
+   round's turn order once the game has set it (top right) and a log of what the round did to anyone's HP, with
+   `tools/battle.py info` holding its rows to R0's log. Not in it: the bars over each enemy (its place on the
+   screen, which no one has found) and names (gameplay Q5). Next in milestone 3: P7 (with K7, and K11 for its part
+   line); then T3 + K8, T5 and R6 (edited enemy files: I7, or a patch at load), K2. What follows is the night's brief of 2026-10-26:
    The owner plays the game on another recompilation,
    github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp (GPL-3.0: read its notes, copy none of its code), which
    already ships widescreen, 60 fps and Android and cannot run mods that change the game's code. Here: a spec for
@@ -512,6 +516,8 @@ cleanup took V0's twelve benchmark references"). Keep that folder in any later c
 - the menu in a window and the Vulkan menu (M8a/b), its Mods page above all, and its Save now and Debug page;
 - `examples/mods/battle-hp` in the story's first battle, in a window, on the CPU presenter and with `gpu = on`,
   the menu opened over it once (M20's Done 6: the rows in the top-left corner, dimmed under the menu's panel);
+- a battle with `battle-info.hp`, `.order` and `.log` set to 1 (R5's Done 4), and a word on which of the three
+  to show by default and whether the text wants `battle-info.size = 2` on the Ally X;
 - a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point.
 Dropped with the play path's features (D-46): session D's look at 60 fps, the `build/interp-review/` and
 `build/ws0/` pages, and the battery run (H20).
@@ -534,7 +540,8 @@ Dropped with the play path's features (D-46): session D's look at 60 fps, the `b
 - *The build from before X2* is kept at `build/x2/before/soa.exe` (2ac1b7c): it stands in for the game alone.
 - *A drawing mod, seen* (FINDINGS "M20"): the battle recipe with `--env SOA_WINDOW=1 --env SOA_PRESENTER=dxgi
   --env SOA_WINDOW_TEST=menu@10600 --env SOA_FRAMES_DIR=<dir>` writes the presented buffer, the mods' drawing in
-  it, as `<dir>/menu-10600.bmp`, and logs whether the game's picture moved across that present.
+  it, as `<dir>/menu-10600.bmp`, and logs whether the game's picture moved across that present. R5's run adds
+  `SOA_BATTLE_LOG=1` and `battle-info`'s three parts, and `tools/battle.py info <log>` holds the rows to R0.
 
 **Traps that cost time in that session** (the memory files hold them too):
 - **Never write code containing a backslash through a Bash heredoc**, quoted delimiter or not: `\n` and `\\n`

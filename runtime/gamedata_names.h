@@ -71,6 +71,8 @@
 {"battle.context.gold", 0x80347390u, 0u, 52u, -4, 1},
 {"battle.formation", 0x80347384u, 0u, 0u, 4, 0},
 {"battle.turn_order[]", 0x803092F4u, 1u, 0u, -1, 0},
+{"battle.order_cursor", 0x80347335u, 0u, 0u, 1, 0},
+{"battle.acting", 0x80347334u, 0u, 0u, 1, 0},
 {"battle.phase", 0x8034733Cu, 0u, 0u, 4, 0},
 {"battle.choosing", 0x80347330u, 0u, 0u, 4, 0},
 {"battle.round_state", 0x80347338u, 0u, 0u, 4, 0},

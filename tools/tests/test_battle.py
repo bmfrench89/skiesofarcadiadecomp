@@ -136,3 +136,127 @@ def test_rewards_from_the_command_line(tmp_path):
     path.write_text(rewards_log([(120, 240, 301, 602, 3, 3)]), encoding="utf-8")
     assert battle.main(["rewards", str(path), "--exp", "2", "--gold", "2"]) == 0
     assert battle.main(["rewards", str(path)]) == 1
+
+
+# ---- info: battle-info's rows and log against R0's own lines (R5) -----------
+
+
+def info_log(r0: list[tuple], shows: list[tuple], extra: list[tuple] = ()) -> str:
+    """R0's actor lines (frame, slot, hp, max, status), the mod's shows lines
+    (frame, slot, hp, max) and any other lines (frame, text), in frame order as
+    a run would print them."""
+    lines = (
+        [
+            (f, f"[battle] frame {f} slot {s} hp {hp}/{mx} mp 0 status {st:08X}")
+            for f, s, hp, mx, st in r0
+        ]
+        + [(f, f"[mod] battle-info: frame {f}: slot {s} shows {hp}/{mx}") for f, s, hp, mx in shows]
+        + list(extra)
+    )
+    return "\n".join(text for _, text in sorted(lines, key=lambda x: x[0])) + "\n"
+
+
+def hit(frame: int, by: int, on: int, value: int) -> tuple:
+    return (
+        frame,
+        f"[battle] frame {frame} damage {value} -> {value} -> {value} by slot {by} on slot {on} "
+        "element 0 mult 10 guard 0",
+    )
+
+
+def says(frame: int, text: str) -> tuple:
+    return (frame, f"[mod] battle-info: frame {frame}: {text}")
+
+
+# the run's shape: a soldier at 58, struck to 28 by slot 1 (P2) and seen at
+# 10500, and finished by slot 0 (P1) at 10679, knocked out in the same frame;
+# R0 logs each a frame after the mod's frame end saw it
+START = (9811, "[battle] frame 9811 start: battle 1 on map 000000C9")
+R0 = [(9813, 4, 58, 58, 0), (10501, 4, 28, 58, 0), (10680, 4, 0, 58, 0x8100)]
+SHOWN = [(9812, 4, 58, 58), (10500, 4, 28, 58)]
+BLOWS = [hit(10450, 1, 4, 30), hit(10650, 0, 4, 43)]
+
+
+def test_info_every_number_shown_is_r0_s_and_every_change_shown():
+    assert battle.check_info(info_log(R0, SHOWN, [START])) == []
+    # R0's knock-out line is no row: the filter passes over it (taken out, 0/58 is a change never shown)
+    assert battle.check_info(info_log(R0, SHOWN)) == []
+
+
+def test_info_a_number_shown_wrong_fails():
+    off = SHOWN[:1] + [(10500, 4, 29, 58)]
+    faults = battle.check_info(info_log(R0, off))
+    assert any("slot 4 shown at 29/58" in f for f in faults), faults
+    # the right HP over the wrong max: a record's max scaled (difficulty) and the row not told
+    off = [(9812, 4, 58, 87)] + SHOWN[1:]
+    faults = battle.check_info(info_log(R0, off))
+    assert any("slot 4 shown at 58/87" in f for f in faults), faults
+
+
+def test_info_a_change_never_shown_fails():
+    """A row that froze at 58: R0's 28 is never shown."""
+    faults = battle.check_info(info_log(R0, SHOWN[:1]))
+    assert any("R0 has slot 4 at 28/58" in f for f in faults), faults
+
+
+def test_info_another_slot_s_numbers_fail():
+    r0 = R0 + [(9813, 5, 40, 40, 0)]
+    faults = battle.check_info(info_log(r0, SHOWN + [(9812, 5, 58, 58)]))
+    assert any("slot 5 shown at 58/58" in f for f in faults), faults
+
+
+def test_info_a_row_for_a_fallen_enemy_fails():
+    """The mod drawing 0/58 for a soldier R0 has knocked out in that frame."""
+    faults = battle.check_info(info_log(R0, SHOWN + [(10679, 4, 0, 58)]))
+    assert any("slot 4 shown at 0/58" in f for f in faults), faults
+
+
+def test_info_with_no_row_shown_proves_nothing():
+    faults = battle.check_info(info_log(R0, []))
+    assert any("nothing is proved" in f for f in faults), faults
+
+
+def test_info_a_row_may_come_a_frame_before_r0_s_line_or_with_it_never_after():
+    for d, ok in ((0, True), (1, True), (2, False)):
+        moved = [(f + d, s, hp, mx) for f, s, hp, mx in SHOWN]
+        assert (battle.check_info(info_log(R0, moved)) == []) == ok, d
+
+
+def test_info_starts_each_battle_afresh():
+    """A second battle (R0's start line) whose soldier matches the first's
+    last row: nothing drawn in it fails, a row drawn in it passes."""
+    second = [(20000, "[battle] frame 20000 start: battle 2 on map 000000C9")]
+    r0 = R0[:2] + [(20002, 5, 28, 58, 0)]
+    shown = SHOWN + [(10500, 5, 28, 58)]  # slot 5 at 28 in the first battle
+    r0 = r0 + [(10501, 5, 28, 58, 0)]
+    faults = battle.check_info(info_log(r0, shown, [START, *second]))
+    assert any("frame 20002: R0 has slot 5 at 28/58" in f for f in faults), faults
+    assert battle.check_info(info_log(r0, shown + [(20001, 5, 28, 58)], [START, *second])) == []
+
+
+def test_info_holds_the_log_to_r0():
+    """Each blow the log tells: R0's change in that slot's HP, and its striker
+    R0's last damage line on it since its HP last moved; a knock-out, R0's bit."""
+    good = [says(10500, "P2 > A -30"), says(10679, "P1 > A -28"), says(10679, "A down")]
+    assert battle.check_info(info_log(R0, SHOWN, [START, *BLOWS, *good])) == []
+    for line, why in (
+        (says(10500, "P1 > A -30"), "puts A's -30 to P1"),  # the wrong striker
+        (says(10500, "P2 > A -31"), "the log says A -31"),  # the wrong amount
+        (says(10500, "A -30"), "names no striker for A's -30"),  # a blow told as poison
+        (says(10500, "A down"), "the log says A down"),  # not knocked out yet
+    ):
+        faults = battle.check_info(info_log(R0, SHOWN, [START, *BLOWS, line]))
+        assert any(why in f for f in faults), (line, faults)
+
+
+def test_info_holds_the_order_to_r0():
+    """Each order the mod shows: a suffix of R0's latest order, the fallen
+    left out -- A knocked out at 10680 leaves B alone at the end."""
+    order = [(10503, "[battle] frame 10503 order 1 0 5 4")]
+    r0 = R0 + [(9813, 0, 420, 420, 0), (9813, 1, 360, 360, 0), (9813, 5, 58, 58, 0)]
+    shown = SHOWN + [(9812, 5, 58, 58)]
+    good = [says(10502, "order P2 P1 B A"), says(10600, "order P1 B A"), says(10700, "order B")]
+    assert battle.check_info(info_log(r0, shown, [START, *order, *good])) == []
+    for line in (says(10600, "order P1 P2 B A"), says(10700, "order B A")):
+        faults = battle.check_info(info_log(r0, shown, [START, *order, line]))
+        assert any("is no suffix of R0's" in f for f in faults), (line, faults)

@@ -55,6 +55,8 @@
 #define SOA_BATTLE_COMMANDS 0x80309174u /* bytes[384] */
 #define SOA_BATTLE_RESULTS 0x80309730u /* bytes[192] */
 #define SOA_BATTLE_TURN_ORDER 0x803092F4u /* s8[12] */
+#define SOA_BATTLE_ORDER_CURSOR 0x80347335u /* u8 */
+#define SOA_BATTLE_ACTING 0x80347334u /* u8 */
 #define SOA_BATTLE_PHASE 0x8034733Cu /* u32 */
 #define SOA_BATTLE_CHOOSING 0x80347330u /* u32 */
 #define SOA_BATTLE_ROUND_STATE 0x80347338u /* u32 */
@@ -754,6 +756,22 @@ static inline int soa_battle_turn_order_get(const SoaModApi* api, uint32_t i, in
 static inline int soa_battle_turn_order_set(const SoaModApi* api, uint32_t i, int8_t v)
 {
     return api->write8(0x803092F4u + i * 1u, (uint8_t)v);
+}
+static inline int soa_battle_order_cursor_get(const SoaModApi* api, uint8_t* out)
+{
+    return api->read8(0x80347335u, out);
+}
+static inline int soa_battle_order_cursor_set(const SoaModApi* api, uint8_t v)
+{
+    return api->write8(0x80347335u, v);
+}
+static inline int soa_battle_acting_get(const SoaModApi* api, uint8_t* out)
+{
+    return api->read8(0x80347334u, out);
+}
+static inline int soa_battle_acting_set(const SoaModApi* api, uint8_t v)
+{
+    return api->write8(0x80347334u, v);
 }
 static inline int soa_battle_phase_get(const SoaModApi* api, uint32_t* out)
 {

@@ -3,6 +3,7 @@
 
     python tools/battle.py check <log> [--double] [--min-hits N]
     python tools/battle.py rewards <log> [--exp K] [--gold K] [--magic K]
+    python tools/battle.py info <log>
 
 A run with SOA_BATTLE_LOG=1 prints a `[battle] ... damage B -> O -> R` line
 for every damage the battle worked out: the base the game passed fn_800108EC,
@@ -26,6 +27,22 @@ Hard); gold held to 99,999,999 and magic EXP to 127 as runtime/battle.c holds
 them. Every K is 1 unless given, so a run with no mod must pair each value
 with itself. There must be one rewards line for each battle that ended in
 victory (its end line's last phase 7), and at least one.
+
+`info` holds mods/battle-info to R0's own reading of the same words (R5's
+Done, docs/specs/battle-info.md), battle by battle (R0's `start` lines): the
+mod logs `slot S shows H/M` each time a row's numbers change, and each line
+of its battle log; R0 logs `slot S hp H/M ... status X` each time an actor's
+do, and a `damage ... by slot A on slot T` line for each blow worked out.
+The mod reads at a frame end and R0 at the next safe point, so what R0 has
+at frame F the mod saw at F - 1 (or F), never later. Every number shown
+must be R0's for that slot, an enemy still in the fight (status without
+0x2100); every change R0 logs for one must be shown; each blow or heal the
+log tells must be R0's change in that slot's HP, and a named striker R0's
+last damage line on the target since its HP last moved (a drop with no
+striker, one with none); each `down` and `fled`, R0's status bit. So a row
+that froze, lagged, showed another slot's numbers or a fallen enemy, and a
+log line with the wrong amount or striker, each fail. At least one shows
+line, or nothing is proved.
 """
 
 from __future__ import annotations
@@ -113,6 +130,155 @@ STEP_CAPS = {"exp": 2**31 - 1, "gold": 2**31 - 1, "magic": 127}
 CAPS = {"exp": 2**31 - 1, "gold": 99_999_999, "magic": 127}
 
 
+SLOT_HP = re.compile(
+    r"^\[battle\] frame (\d+) slot (\d+) hp (-?\d+)/(-?\d+) mp \d+ status ([0-9A-F]{8})$"
+)
+START = re.compile(r"^\[battle\] frame (\d+) start: battle \d+")
+SHOWS = re.compile(r"^\[mod\] battle-info: frame (\d+): slot (\d+) shows (-?\d+)/(-?\d+)$")
+SAYS = re.compile(
+    r"^\[mod\] battle-info: frame (\d+): (?:(P[1-4]|[A-H]) > )?(P[1-4]|[A-H]) ([+-]\d+)$"
+)
+FELL = re.compile(r"^\[mod\] battle-info: frame (\d+): (P[1-4]|[A-H]) (down|fled)$")
+R0_ORDER = re.compile(r"^\[battle\] frame (\d+) order (.*)$")
+SHOWN_ORDER = re.compile(
+    r"^\[mod\] battle-info: frame (\d+): order ((?:P[1-4]|[A-H])(?: (?:P[1-4]|[A-H]))*)$"
+)
+PASSED_OVER = 0x6500 | 0x02000000  # a slot phase 3 skips (fn_800708C0): out of the order shown
+KO, ESCAPED = 0x100, 0x2000
+NOT_PRESENT = KO | ESCAPED  # no row
+# The mod reads at a frame end and R0 at the next safe point, which carries the
+# next frame's number: what R0 has at frame F the mod saw at F - 1, or at F
+# where the two count alike -- never after.
+LAGS = (1, 0)
+
+
+@dataclass(frozen=True)
+class Row:
+    frame: int
+    hp: int
+    max: int
+    status: int = 0
+
+
+def slot_of(label: str) -> int:
+    """battle-info's label: P1-P4 the party's slots 0-3, A-H the enemies' 4-11."""
+    return int(label[1]) - 1 if label[0] == "P" else 4 + ord(label) - ord("A")
+
+
+def at(rows: list[Row], frame: int, since: int) -> Row | None:
+    """The last row at or before `frame` and not before `since`, its battle's start."""
+    got = None
+    for row in rows:
+        if row.frame > frame:
+            break
+        if row.frame >= since:
+            got = row
+    return got
+
+
+def said(row: Row | None, status: bool = True) -> str:
+    if row is None:
+        return "nothing"
+    return f"{row.hp}/{row.max}" + (f" status {row.status:08X}" if status else "")
+
+
+def check_info(text: str) -> list[str]:
+    """The faults, empty when battle-info's rows and log agree with R0's log."""
+    r0: dict[int, list[Row]] = {}
+    shows: dict[int, list[Row]] = {}
+    hits: list[tuple[int, int, int]] = []  # R0's damage lines: frame, attacker, target
+    says: list[tuple[int, str | None, str, int]] = []
+    fell: list[tuple[int, str, str]] = []
+    orders: list[tuple[int, list[int]]] = []  # R0's order lines
+    shown_orders: list[tuple[int, list[int]]] = []
+    starts = [0]
+    for line in text.splitlines():
+        line = line.strip()
+        if m := START.match(line):
+            starts.append(int(m.group(1)))
+        elif m := SLOT_HP.match(line):
+            f, s, hp, mx = (int(v) for v in m.groups()[:4])
+            r0.setdefault(s, []).append(Row(f, hp, mx, int(m.group(5), 16)))
+        elif m := DAMAGE.match(line):
+            hits.append((int(m.group(1)), int(m.group(5)), int(m.group(6))))
+        elif m := SHOWS.match(line):
+            f, s, hp, mx = (int(v) for v in m.groups())
+            shows.setdefault(s, []).append(Row(f, hp, mx))
+        elif m := SAYS.match(line):
+            says.append((int(m.group(1)), m.group(2), m.group(3), int(m.group(4))))
+        elif m := FELL.match(line):
+            fell.append((int(m.group(1)), m.group(2), m.group(3)))
+        elif m := R0_ORDER.match(line):
+            orders.append((int(m.group(1)), [int(v) for v in m.group(2).split() if v != "(none)"]))
+        elif m := SHOWN_ORDER.match(line):
+            shown_orders.append((int(m.group(1)), [slot_of(x) for x in m.group(2).split()]))
+
+    def since(frame: int) -> int:
+        return max(s for s in starts if s <= frame)
+
+    faults = []
+    for s, rows in sorted(
+        shows.items()
+    ):  # every number shown R0's, for an enemy still in the fight
+        for row in rows:
+            near = [at(r0.get(s, []), row.frame + d, since(row.frame)) for d in LAGS]
+            if not any(
+                n and (n.hp, n.max) == (row.hp, row.max) and not n.status & NOT_PRESENT
+                for n in near
+            ):
+                faults.append(
+                    f"frame {row.frame}: slot {s} shown at {said(row, False)}; R0 has {said(near[0])}"
+                )
+    for s, rows in sorted(r0.items()):  # every change R0 logs for one shown, in its battle
+        for row in rows:
+            if s < 4 or row.status & NOT_PRESENT:
+                continue
+            near = [at(shows.get(s, []), row.frame - d, since(row.frame)) for d in LAGS]
+            if not any(n and (n.hp, n.max) == (row.hp, row.max) for n in near):
+                faults.append(
+                    f"frame {row.frame}: R0 has slot {s} at {said(row, False)}; the row showed "
+                    f"{said(near[0], False)}"
+                )
+    for f, by, who, delta in says:  # each blow or heal the log tells: R0's change, and its striker
+        t = slot_of(who)
+        before = at(r0.get(t, []), f, since(f))
+        after = at(r0.get(t, []), f + 1, since(f))
+        if not before or not after or after.hp - before.hp != delta:
+            faults.append(
+                f"frame {f}: the log says {who} {delta:+d}; R0 has {said(before)} then {said(after)}"
+            )
+            continue
+        struck = [a for h, a, target in hits if target == t and before.frame < h <= f]
+        if by is not None and (not struck or struck[-1] != slot_of(by)):
+            faults.append(
+                f"frame {f}: the log puts {who}'s {delta} to {by}; R0's striker is {struck[-1:]}"
+            )
+        elif by is None and delta < 0 and struck:
+            faults.append(
+                f"frame {f}: the log names no striker for {who}'s {delta}; R0's is slot {struck[-1]}"
+            )
+    for f, who, what in fell:  # each knock-out and escape the log tells: R0's status bit
+        bit = KO if what == "down" else ESCAPED
+        near = [at(r0.get(slot_of(who), []), f + d, since(f)) for d in LAGS]
+        if not any(n and n.status & bit for n in near):
+            faults.append(f"frame {f}: the log says {who} {what}; R0 has {said(near[0])}")
+    for f, shown in shown_orders:  # each order shown: a suffix of R0's latest, the fallen left out
+        latest = [o for o_f, o in orders if since(f) <= o_f <= f + 1]
+        arr = latest[-1] if latest else []
+
+        def standing(s: int, f: int = f) -> bool:
+            row = at(r0.get(s, []), f + 1, since(f))
+            return row is not None and not row.status & PASSED_OVER
+
+        if not any([s for s in arr[c:] if standing(s)] == shown for c in range(len(arr) + 1)):
+            faults.append(
+                f"frame {f}: the order shown {shown} is no suffix of R0's {arr}, the fallen left out"
+            )
+    if not shows:
+        faults.append("no shows line: battle-info drew no HP row, so nothing is proved")
+    return faults
+
+
 def multipliers(text: str) -> list[Fraction]:
     """`1.25,2` as the multipliers a reward goes through, in order."""
     return [Fraction(k) for k in text.split(",")]
@@ -152,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("command", choices=("check", "rewards"))
+    ap.add_argument("command", choices=("check", "rewards", "info"))
     ap.add_argument("log", type=Path)
     ap.add_argument("--double", action="store_true", help="the doubling mod: R == min(2 O, 9999)")
     ap.add_argument("--min-hits", type=int, default=10)
@@ -160,6 +326,23 @@ def main(argv: list[str] | None = None) -> int:
         ap.add_argument(f"--{name}", type=multipliers, default=[Fraction(1)], metavar="K[,K...]")
     args = ap.parse_args(argv)
     text = args.log.read_text(encoding="utf-8", errors="replace")
+    if args.command == "info":
+        faults = check_info(text)
+        lines = [x.strip() for x in text.splitlines()]
+        rows = sum(1 for x in lines if SHOWS.match(x))
+        told = sum(1 for x in lines if SAYS.match(x) or FELL.match(x))
+        orders = sum(1 for x in lines if SHOWN_ORDER.match(x))
+        print(
+            f"battle: {rows} shows, {told} log and {orders} order line(s); "
+            + (
+                "each R0's, and every change R0 logged shown"
+                if not faults
+                else f"{len(faults)} fault(s)"
+            )
+        )
+        for f in faults[:20]:
+            print(f"FAIL {f}")
+        return 1 if faults else 0
     if args.command == "rewards":
         faults = check_rewards(text, {"exp": args.exp, "gold": args.gold, "magic": args.magic})
         rows = sum(1 for x in text.splitlines() if REWARDS.match(x.strip()))

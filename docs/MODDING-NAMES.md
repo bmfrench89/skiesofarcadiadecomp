@@ -55,6 +55,8 @@ a DLL mod includes `runtime/soa_gamedata.h`.
 | `battle.commands` | `0x80309174` | `bytes[384]` | `0x8001070C` | battle-system.md:100-120, 32 bytes a slot |
 | `battle.results` | `0x80309730` | `bytes[192]` | `0x80010540` | battle-system.md, 16 bytes a slot |
 | `battle.turn_order` | `0x803092F4` | `s8[12]` | `0x8006EDB8` | battle-system.md, slots ending at -1 |
+| `battle.order_cursor` | `0x80347335` | `u8` | `0x80070908` | battle-system.md s.2.1; the order's index of the slot acting (phases 3-5), +1 in phase 5 |
+| `battle.acting` | `0x80347334` | `u8` | `0x8007093C` | battle-system.md s.2.1; the slot phase 3 took from the order, acting until phase 5 |
 | `battle.phase` | `0x8034733C` | `u32` | `0x80008DA0` | battle-system.md; 7 victory |
 | `battle.choosing` | `0x80347330` | `u32` | `0x8001D5F8` | battle-system.md, the member choosing |
 | `battle.round_state` | `0x80347338` | `u32` | `0x8000A2B4` | battle-system.md |

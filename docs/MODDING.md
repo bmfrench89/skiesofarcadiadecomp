@@ -245,3 +245,6 @@ port's own tests.
   events in use: rewards, a Run, damage, effects and the round's end; an enemy scaled at its spawn, and its
   record's max HP for that battle only (the boss music reads it), put back when the battle ends; options with
   presets a number can override. Each registers nothing at its defaults.
+- `mods/battle-info` (R5; docs/specs/battle-info.md): shipped, and the drawing in use: each living enemy's
+  HP, the round's turn order and a log of what the round did to anyone's HP, read at each frame end and
+  drawn in the picture's corners; registers nothing with its parts off.

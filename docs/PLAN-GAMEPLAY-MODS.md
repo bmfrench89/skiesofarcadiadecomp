@@ -914,7 +914,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
   - (b) R0 pokes ctx+3 = 0 after setup, so every enemy roll is handed false. Every enemy `on_escape` call (slots 4+) returns the `success` it was handed, and at least one enemy Run is logged before the party escapes. A mutation that forces any enemy slot's `success` to true is caught.
 - Whether every other logged number matches an off run of the same battle compares two runs, so it waits on K6/D4 (rule 7).
 
-**R5. Battle information** — *days, after M8.*
+**R5. Battle information** — *days, after M8. **Built 2026-10-27** to [specs/battle-info.md](specs/battle-info.md) (FINDINGS "Battle information"): `mods/battle-info`, each enemy's HP, the turn order and a log, without names (Q5) or the bars over each enemy.*
 - *2026-10-27:* M20 (`docs/specs/mod-overlay.md`) is the drawing R5 needs, and `examples/mods/battle-hp` draws each living enemy's HP, as a bar and numbers, in the picture's corner; over each enemy needs its place on the screen, from the camera.
 - Enemy HP bars; the turn order from phase 3 (estimated from Quick in phase 1); a battle log from `on_effect`.
 - Enemy names come from a name table by id, shipped as text (Q5 asks whether that counts as game data).
