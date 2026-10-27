@@ -605,7 +605,7 @@ Each is **hours to a day, no rebuild**, written up in FINDINGS or a research not
 - The journal's record layout is written up with its table address.
 - One page opened by pad in a run matches its label (frame opened).
 
-**K11. Story progress keys** — *static, hours.*
+**K11. Story progress keys** — *static, hours.* **Done 2026-10-27, statically** ([research/k11-story-keys.md](research/k11-story-keys.md), FINDINGS "K11"): Done 1 to 3; the peek (4) is planned, not run, and on `card-saved` can only read zeros (the game's own part G save already holds row 16's 6,22,3,12). 50 stores in 16 groups in 12 scripts; B[2..3] change at twelve story flags only, B[3] is the writing entry's number, and no native code reads B[2..5]. P7b's key: the highest story flag set below 580 (580-606 are a side series), B[2..5] unused. The bullets below are the plan as written.
 - The part cards cannot answer this. `ME355A.SCT` never writes B[2..5], so every card holds `card-saved`'s values or whatever its landing event wrote.
 - List every write of B[2..5] across the 258 scripts, each with the story flag set just before it. Use `tools/sct.py`, plus a raw scan for the tokens 0x10000002–5, which the desync on ops 24/25/144/155 cannot hide.
 - Look in the DOL for native writers of `0x80310A1E`–`21`.

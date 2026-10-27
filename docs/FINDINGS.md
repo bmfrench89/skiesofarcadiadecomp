@@ -11067,3 +11067,84 @@ off until set.** 2026-10-27. Spec: `docs/specs/battle-info.md`, written and buil
   4); whether any of the game's other battle windows (a magic or item list) use the bottom corners; the blow's own
   number where it is more than was left (from `on_effect`, effect by effect); the bars over each enemy, which need
   its place on the screen; names (Q5); an estimated order before the party's choices.
+
+**K11, story progress keys: twelve scripts write B[2..5], 50 stores in 16 places, and no native code reads them;
+P7b keys on story flags alone.** 2026-10-27. PLAN-GAMEPLAY-MODS K11; milestone 3, for P7b; the table is `docs/research/k11-story-keys.md`. Static: nothing was run.
+The one peek K11's Done asks for is planned at the end, not made.
+
+- **The stores** [V; two independent raw scans of the 258 decompressed `/field/*.sct` (257 `meNNNx` and `me035ag`;
+  there is no `.sct` elsewhere) for the operand words 0x10000002-5, kept when word-aligned and after word 5; and a
+  scan of every op 5 by the handler's own index, the operand's low halfword sign-extended (0x801F5EEC/F0)]: 50
+  stores in 16 groups in 12 scripts (me004a, me008b, me018a, me033a, me099a, me099e, me099f, me101b, me101c, me202a,
+  me205a, me241a). Each is op 5 storing a constant. By byte: B[2] 12, B[3] 12, B[4] 13, B[5] 13. `tools/sct.py`
+  lists 30 of them in 9 scripts. It drops me101ba04, me205ab01, me004ab05, me004ab06 and me033ad11 whole (after op
+  23 or op 69, or at a false SWITCH), and so hides stores made before the point where it lost sync.
+- **Each follows a FLAGSET** [V, decoded forward from each constant FLAGSET]: in the same entry, in straight-line
+  code. In 12 groups the store is the next instruction. In the other 4, other instructions come between, none a
+  branch: me004ab05 SETB B[6]=5; me099a's kujira, op 186 and four messages; me099e's M04000, ops 26 and 16;
+  me099f's M06010, six op 99. PLAN-GAMEPLAY-MODS:612's "right after" holds for 12 of the 16.
+- **B[2..3] change at twelve story flags, no more** [V]: 3, 4, 6, 11 (part A); 50, 57, 58, 61 (B); 151, 160 (D);
+  204 (E); and 321 (G, me018ag22, the last). B[2] is the flag over 50, rounded down, at all twelve. B[3] is not the
+  remainder (that holds only at 3, 4 and 6): (B[2], B[3]) is the writing entry's part and number in 10 of the 12
+  (b05 gives 1,5; d11 gives 3,11; g22 gives 6,22). me101ba04 (0,3) and me101ca05 (0,4) are the exceptions.
+  Parts C, F and H-L write none, so PLAN-GAMEPLAY-MODS:242 and plan-gaps.md:181 ("written after each story flag")
+  and plan-gaps.md:188 ("rises at every story beat") are wrong.
+- **B[4..5] name the next scene** [V for the bytes, I for the reading]: 8 of the 10 nonzero pairs are an entry the
+  writer then calls or warps to. They are a07 me028ea07, a09 me002aa09, a13 me002aa13, b01 me205ab01, b03
+  me033ab03, b07 me205ab07, b09 me099ab09, and d12 me220ad12. d12 takes two hops: d11 returns to me033a's loop,
+  which reloads me033a with sys[15]=40000, and the reload's else branch warps to me220a [I: the order]. The other
+  2 are part A's, one step behind: me101c's loop plays a05 at (0,4) and a06 at (0,5) (IFs @000c0, @000dc, @00144,
+  @00160). Those IFs are the only script reads of B[2..5]; no script reads B[2] or B[3].
+- **The world map writes B[4..5] only, and after field flags** [V]:
+  - me099a's kujira writes (1,1) after 1105, inside IF FLAG[1764] and IF FLAG[16].
+  - me099e's M04000 writes (0,9) after 1087, with no gate in the entry. 099e is the world map while B[6]=4, which
+    me201aa02 sets after flag 1 and me002aa13 clears after 12 [I].
+  - me099f's loop writes (1,7) and its M06010 writes (1,9), both after 1087, inside FLAG[58] with 62 clear.
+- **No native code moves or reads them** [V; `python tools/gamedata.py find`: 143 instructions build 0x80310A1C,
+  none build 0x80310A1E-21; two independent whole-program dataflows; `tools/disasm.py`]:
+  - Four things write 0x80310A1E-21: the boot .bss clear (`__init_data`'s memset at 0x8000332C, whose table at
+    0x800055DC gives 0x80302A00 + 0x43D18); `fn_801CAF30`'s clear (0x801CAFE0-EC; called at boot, 0x801DBF64, and
+    at New Game, 0x80228BF0); op 5 (`stbx` at 0x801F5F2C); and the load's `MemCopy` at 0x801A452C (288 bytes
+    from save +12488), which only puts back the card's bytes.
+  - Of B[0..7], only B[6] is read at a fixed offset: 33 `lbz` in 28 functions, not story-flags.md:134's 19.
+  - The table readers never index 2-5: 0x800C80EC/0x800C8A6C (table 0x802E0F40: B[7..15], B[45..47], B[57..62],
+    B[67..75]; so story-flags.md:185's "no reader" for B[7] and B[45] is wrong), and 0x8020EC7C (table 0x802F7538).
+  - The save screen shows the location id, B[50], a level, a word at +12780 [I: the time], the party and the
+    stamp (`fn_801A68C4`, `fn_801A58A0`). It does not show B[2..5], which story-flags.md:135 and :186 guessed.
+  - The title routine reads B[51], B[78..81], B[105], B[108] and B[109]. K7 omits B[109] (0x801EF508, 0x801EF694).
+- **What could reach them, and does not** [V unless marked]:
+  - `fldManshipB` (`fn_800FC8EC`: B[n]=0 at 0x800FD2C0, +1 at 0x800FD564, n from a layout's parameters) is
+    named in no extracted file [I: it never runs].
+  - Unchecked indices alias B: op 6 at sys[2446..2447] (0x801F5DFC); op 7 at float[2370..2371] (0x801F5D5C);
+    the evaluator's reads of the same (0x801F6C84, 0x801F6CE4); the matrix stack's 129th push (0x801DD794); and
+    a script call stack 2,240 deep (0x801F5C9C). No operand in the 258 scripts uses those indices, by the
+    handlers' own index rule.
+  - Not ruled out: another array overrunning by thousands of bytes.
+- **The game's own saves agree** [V; the SA_LEGENDS save on every card in `build/savetest/`, read in place from
+  the game block at offset 5184 (save-load.md), its XOR over 3,199 words matching]:
+  - Each card whose play passed a row holds that row: `card-partD-end` 3,11,3,12; `card-partE-mid` and `-late`,
+    the three `card-partF-*` and `card-partG-sail` 4,5,3,12; `card-partG-013d` 6,22,3,12.
+  - `card-partG-crescent`, with flags up to 320 plus 329 but 321 clear, still holds 4,5,3,12.
+  - The 10 part-select cards, and the cards played on from the C, H and I presets, hold 0,0,0,0: ME355A sets the
+    flags and not the bytes, and from those presets the play passes no row.
+- **P7b's key** [V for what it rests on]: the highest set story flag below 580, with part = flag / 50 (A to L),
+  read from the flags alone.
+  - Flags 580-606 are a side series. The `q` entries set them (me260aq00-07, me033aq08/09/16, me250aq09-27,
+    me008bq17, me013eq24/25), gated on field flags 2775-2778. No entry lettered a-l sets them; each such entry's
+    flags lie in its own letter's block (a 0-25, ..., l 552-571), and nothing sets 572-579 (`sct.py --story`, a
+    raw scan).
+  - 587 and 588 are set in part I (`card-partI-004a`, whose highest flag below 580 is 414) and stay set. So the
+    unmasked rule reads six played cards of parts I-K as part L; with the mask, all 23 played cards read the part
+    their play was in.
+  - Within a part, numeric order is not story order (329 before 321; 522-525 before 504), so step lines test their
+    own flags. story-flags.md:8's "set in story order" holds by block only.
+  - B[2..5] are not used: they repeat 12 of the flags, are stale between them, and read zero on part-select saves.
+- **The peek, planned** [I, a prediction]: `card-saved` holds flags 1 and 2 only (0x80310B3C = 00000006; flag 0 is
+  clear, not story-flags.md:198's 7). It holds 0000430E at 0x80310BBC, line 1357's value and this read's control,
+  and B[0..7] = 0,0,0,0,0,0,4,0. It predates every row (the first is flag 3's, reached through M06500 and
+  me101ba04). So a copy Continued with `partl.scn`'s pad should peek, at 3000 and 3600, 0x80310B3C = 00000006,
+  0x80310A1C = 00000000 and 0x80310A20 = 00000400; and at 2000, before the load, 0x80310A20 = 00000000. That tests
+  the restore and "nothing before flag 3", not a row's values.
+- **Found on the way** [V]: `build/disasm.txt`'s "@ 0x80310A20/30/34" notes at 0x8015BE80-0x8015C174 are not B
+  accesses. Its linear annotator carried r4 across a branch and a call; the block is entered with r4 =
+  *(r13-29820).

@@ -43,7 +43,7 @@ supply your own dump of a disc you own.
 
 The two tables below are written by hand and were last checked on 2026-10-14
 against [HANDOFF.md](HANDOFF.md) and [docs/FINDINGS.md](docs/FINDINGS.md) (the 60 fps row on
-2026-10-22), which hold the evidence for each row; [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) says what
+2026-10-22, the Mods row on 2026-10-27), which hold the evidence for each row; [docs/PLAN-NEXT.md](docs/PLAN-NEXT.md) says what
 comes next. The decompilation table after them is generated, and a test fails
 when it falls behind.
 

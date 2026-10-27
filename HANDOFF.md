@@ -428,7 +428,8 @@ to 27 the 60 fps review's fixes, Setup's example mods kept out of a player's ins
 D-46 ("Narrow to mods") and D-47 (the CC0 decompilation's 839 names and 17 notes, `docs/research/ogdanimal-decomp/`),
 milestone 3's first two mods -- `mods/battle-boosts` (R4) and `mods/difficulty` (R3), to
 `docs/specs/battle-mods.md` -- Setup's two defects from the distribution review, M20, drawing for mods
-(`docs/specs/mod-overlay.md`), and R5, `mods/battle-info` on it (`docs/specs/battle-info.md`), pushed. The full pre-push
+(`docs/specs/mod-overlay.md`), R5, `mods/battle-info` on it (`docs/specs/battle-info.md`), and K11's static
+research (`docs/research/k11-story-keys.md`), pushed. The full pre-push
 suite passes: 2014 tests in 104 files (1973
 passed, 41 skipped here; 791 skip with MSVC hidden, so 750 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
@@ -446,6 +447,7 @@ choosing work.
 | Setup's two defects | another disc image extracts again; a new version keeps the saves and settings | distribution.md |
 | M20 | mods draw rectangles and text over the picture, every presenter; `examples/mods/battle-hp` | mod-overlay.md |
 | R5 | `mods/battle-info`: each enemy's HP, the turn order, a battle log, off until set; `battle.py info` | battle-info.md |
+| K11 | every script write of B[2..5], no native reader; P7b keys on story flags below 580 | (FINDINGS "K11") |
 
 **What the last session built (2026-10-22 to 24), in order.** Each has a spec under `docs/specs/` and a FINDINGS
 entry of the same name:
@@ -479,8 +481,10 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    (FINDINGS "Battle information"): `mods/battle-info`, shipped, each part off until set -- each living enemy's HP (top left), the
    round's turn order once the game has set it (top right) and a log of what the round did to anyone's HP, with
    `tools/battle.py info` holding its rows to R0's log. Not in it: the bars over each enemy (its place on the
-   screen, which no one has found) and names (gameplay Q5). Next in milestone 3: P7 (with K7, and K11 for its part
-   line); then T3 + K8, T5 and R6 (edited enemy files: I7, or a patch at load), K2. What follows is the night's brief of 2026-10-26:
+   screen, which no one has found) and names (gameplay Q5). *K11 done statically* (FINDINGS "K11"): B[2..5] are
+   the scripts' own sequencing bytes, so P7b's part line keys on the highest story flag set below 580; its peek
+   is planned, not run. Next in milestone 3: P7 (with K7); then T3 + K8, T5 and R6 (edited enemy files: I7, or a
+   patch at load), K2. What follows is the night's brief of 2026-10-26:
    The owner plays the game on another recompilation,
    github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp (GPL-3.0: read its notes, copy none of its code), which
    already ships widescreen, 60 fps and Android and cannot run mods that change the game's code. Here: a spec for
