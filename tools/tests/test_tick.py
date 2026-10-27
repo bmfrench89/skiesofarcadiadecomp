@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "eventtrack.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,25 @@ DRIVER = r"""
 void fn_8023F704(CpuState* s);
 int tick_on_safe_point(void (*fn)(CpuState*));
 void tick_unlock_from(unsigned frame);
+int tick_turbo_toggle(void);
+int tick_turbo_now(void);
+
+/* The event track (E3), as si.c gives it: "replay" makes a replay run, "line
+ * F on|off" is an @turbo line in it, taken once each at or after its frame;
+ * what the track is asked to record is printed. */
+static int g_replay, g_nlines, g_taken;
+static struct { unsigned f; char v[8]; } g_lines[16];
+static void ev_record(unsigned f, const char* k, const char* v) { printf("record %u %s %s\n", f, k, v); }
+static int ev_take(const char* k, unsigned f, char* out, size_t cap)
+{
+    if (!g_replay) return -1;
+    if (strcmp(k, "turbo") != 0 || g_taken >= g_nlines || g_lines[g_taken].f > f) return 0;
+    snprintf(out, cap, "%s", g_lines[g_taken++].v);
+    return 1;
+}
+static int ev_replaying(void) { return g_replay; }
+static void ev_left(unsigned f, const char* w, const char* y) { printf("left %u %s, %s\n", f, w, y); }
+static const EventTrack g_track = {ev_record, ev_take, ev_replaying, ev_left};
 
 uint32_t g_watch_addr, g_watch_len;
 void watch_hit(CpuState* s, uint32_t e, unsigned n, uint64_t v) { (void)s; (void)e; (void)n; (void)v; }
@@ -45,8 +65,10 @@ void hle_on_report(void (*fn)(void)) { g_report = fn; }
 
 static void safe_a(CpuState* s) { printf("safe a %08X\n", s->lr); }
 static void safe_b(CpuState* s) { (void)s; printf("safe b\n"); }
+static void safe_turbo(CpuState* s) { (void)s; printf("safe turbo %d\n", tick_turbo_now()); }
 
-/* On stdin:  count V | start V | frame F | unlock F | cb | call LR | report */
+/* On stdin:  count V | start V | frame F | unlock F | cb | call LR | report
+ *            scene V | cbturbo | track | replay | line F on|off | toggle */
 int main(void)
 {
     static CpuState s;
@@ -59,6 +81,13 @@ int main(void)
         else if (!strcmp(cmd, "frame") && scanf("%u", &v) == 1) g_frame = v;
         else if (!strcmp(cmd, "unlock") && scanf("%u", &v) == 1) tick_unlock_from(v);
         else if (!strcmp(cmd, "cb")) { tick_on_safe_point(safe_a); tick_on_safe_point(safe_b); }
+        else if (!strcmp(cmd, "scene") && scanf("%u", &v) == 1) mem_w32(&s, 0x803475CCu, v);
+        else if (!strcmp(cmd, "cbturbo")) tick_on_safe_point(safe_turbo);
+        else if (!strcmp(cmd, "track")) tick_set_event_track(&g_track);
+        else if (!strcmp(cmd, "replay")) g_replay = 1;
+        else if (!strcmp(cmd, "line") && g_nlines < 16 && scanf("%u %7s", &v, g_lines[g_nlines].v) == 2)
+            g_lines[g_nlines++].f = v;
+        else if (!strcmp(cmd, "toggle")) printf("toggle -> %d\n", tick_turbo_toggle());
         else if (!strcmp(cmd, "call") && scanf("%x", &v) == 1) {
             s.lr = v;
             s.gpr[3] = 0xDEADBEEFu;
@@ -99,8 +128,11 @@ def driver(tmp_path_factory):
 
 
 def play(exe, script: str) -> tuple[list[str], str]:
+    # tick.c reads SOA_TURBO, and a shell that sets it would arm turbo before
+    # the script asks (the review of 2026-10-26): the driver runs without any.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SOA_")}
     proc = subprocess.run(
-        [str(exe)], input=script, capture_output=True, text=True, timeout=60, check=False
+        [str(exe)], input=script, capture_output=True, text=True, env=env, timeout=60, check=False
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.splitlines(), proc.stderr
@@ -149,6 +181,72 @@ def test_the_report_counts_safe_points_against_frames(driver):
 def test_unlocking_at_zero_locks_it_again(driver):
     out, _ = play(driver, f"unlock 1 frame 5 count 9 start 3 call {SPIN} unlock 0 call {SPIN}")
     assert out == ["r3 00000004", "r3 00000009"]
+
+
+# ---- the event track (event-track.md E3) -------------------------------------
+# Scene 7 is a battle, where turbo runs whenever it is on, so the callback's
+# "safe turbo N" is whether it is on in the frame the callbacks see.
+
+
+@needs_msvc
+def test_a_turbo_flip_is_recorded_at_its_frame_before_the_callbacks(driver):
+    """The chord or the menu flips turbo at the next safe point; with a track
+    the flip is an `@turbo` line at that frame, written before the callbacks
+    run, and said in the log as before."""
+    out, err = play(
+        driver,
+        f"track scene 7 cbturbo frame 41 toggle call {TOP} frame 42 toggle call {TOP} call {TOP}",
+    )
+    assert [line for line in out if not line.startswith("r3")] == [
+        "toggle -> 1",
+        "record 41 turbo on",
+        "safe turbo 1",
+        "toggle -> 0",
+        "record 42 turbo off",
+        "safe turbo 0",
+        "safe turbo 0",
+    ], out
+    assert "[turbo] frame 41: on" in err and "[turbo] frame 42: off" in err, err
+
+
+@needs_msvc
+def test_a_recorded_turbo_flip_replays_at_its_frame_and_the_menu_takes_nothing(driver):
+    """E3's Done 7. A replay's `@turbo on` at 600 flips turbo at frame 600,
+    before the callbacks, as the live flip did, and `off` at 900. The menu's
+    toggle takes nothing: at 700, during the replay, it is refused where it is
+    asked (it answers what turbo is); and one asked before the replay was
+    known is dropped at the safe point, so 599 runs without turbo. Mutations:
+    the replay's lines never taken (nothing flips at 600); the toggle not
+    refused where asked (it answers 0); a toggle already asked taken at the
+    safe point during a replay (599 runs at turbo)."""
+    script = (
+        f"track scene 7 cbturbo toggle replay line 600 on line 900 off "
+        f"frame 599 call {TOP} frame 600 call {TOP} "
+        f"frame 700 toggle frame 701 call {TOP} frame 900 call {TOP}"
+    )
+    out, err = play(driver, script)
+    assert [line for line in out if not line.startswith("r3")] == [
+        "toggle -> 1",  # asked before the replay was known
+        "safe turbo 0",  # and dropped: the replay is the whole input
+        "record 600 turbo on",
+        "safe turbo 1",
+        "toggle -> 1",  # during the replay: what it is, nothing asked
+        "safe turbo 1",
+        "record 900 turbo off",
+        "safe turbo 0",
+    ], out
+    assert "[turbo] frame 600: on" in err and "[turbo] frame 900: off" in err, err
+    assert "[turbo] a replay is running: the toggle takes nothing" in err, err
+    assert "[turbo] frame 701" not in err, err
+
+
+@needs_msvc
+def test_without_a_track_turbo_flips_as_it_always_did(driver):
+    """The tests and the mod driver link tick.c with no track: the chord's
+    flip still lands at the next safe point and records nothing."""
+    out, err = play(driver, f"scene 7 cbturbo toggle frame 3 call {TOP}")
+    assert [line for line in out if not line.startswith("r3")] == ["toggle -> 1", "safe turbo 1"]
+    assert "[turbo] frame 3: on" in err, err
 
 
 def test_the_binding_is_in_hle_txt():

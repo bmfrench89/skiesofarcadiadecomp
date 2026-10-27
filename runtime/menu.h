@@ -40,6 +40,10 @@ void menu_close(void);
 /* What the window can tell it: fullscreen and turbo now, for their rows. */
 void menu_set_state(int fullscreen, int turbo);
 
+/* Whether a replay is running (si.c's, set by main.c): while one is, the
+ * Turbo, Save now and Debug rows say so and take nothing (event-track.md E3). */
+void menu_set_replaying(int (*fn)(void));
+
 /* savenow.c (M7a): what MENU_ACT_SAVE_NOW asks for, from the UI thread. */
 void savenow_request(void);
 

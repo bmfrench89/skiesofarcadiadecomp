@@ -159,6 +159,18 @@ static int g_page, g_sel[PAGES], g_top[PAGES], g_mod; /* g_mod: the mod PAGE_MOD
 static int g_warp;                                     /* M7b: the warp row's map, an index of actions_warp_map */
 static int g_fullscreen, g_turbo;
 static char g_status[96];
+static int (*g_replaying)(void);
+
+void menu_set_replaying(int (*fn)(void)) { g_replaying = fn; }
+
+/* A replay is the whole input (E3): a row that would change the game says
+ * so and takes nothing. 1 when it refused. */
+static int refused_for_replay(void)
+{
+    if (!g_replaying || !g_replaying()) return 0;
+    snprintf(g_status, sizeof g_status, "a replay is running: it is the whole input");
+    return 1;
+}
 
 /* What this menu has written this run: soa.ini's new values, which the
  * game has not read yet, shown in place of the values in effect. */
@@ -369,6 +381,7 @@ static int change(const Item* it, int dir, int big)
     case K_FULLSCREEN:
         return MENU_ACT_FULLSCREEN | MENU_ACT_REDRAW;
     case K_TURBO:
+        if (refused_for_replay()) return MENU_ACT_REDRAW;
         return MENU_ACT_TURBO | MENU_ACT_REDRAW;
     case K_MOD: {
         const char* key = "";
@@ -459,6 +472,7 @@ int menu_input(int key)
             g_status[0] = '\0';
             return MENU_ACT_REDRAW;
         case K_SAVE_NOW:
+            if (refused_for_replay()) return MENU_ACT_REDRAW;
             menu_close();
             return MENU_ACT_SAVE_NOW | MENU_ACT_CLOSE | MENU_ACT_REDRAW;
         case K_PAGE_DEBUG:
@@ -472,6 +486,7 @@ int menu_input(int key)
         case K_DBG_ENDING: {
             static const int k_act[] = {ACT_WARP, ACT_PART, ACT_FADE, ACT_ENCOUNTERS_OFF, ACT_ENDING};
             int act = k_act[it[*sel].kind - K_DBG_WARP];
+            if (refused_for_replay()) return MENU_ACT_REDRAW;
             if (act == ACT_ENCOUNTERS_OFF && actions_encounters_off()) act = ACT_ENCOUNTERS_ON;
             actions_request(act, act == ACT_WARP ? actions_warp_map(g_warp) : 0);
             menu_close();

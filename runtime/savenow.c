@@ -14,9 +14,13 @@
  *   - for the game alone (a P3 export, Dolphin), a save made off a save point
  *     carries the last save-point map in its map word and letter, its own in
  *     the chunk, which the port puts back before the game reads the block.
+ * The save menu opened is an `@savenow` line in a recording (E3); during a
+ * replay the recording's lines ask at their frames, and SOA_SAVE_NOW and the
+ * menu take nothing.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "eventtrack.h"
 #include "plat.h"
 #include "save_point_maps.h"
 #include "soa_mod.h"
@@ -41,6 +45,9 @@ static int g_opened, g_frame_set;
 static unsigned g_at_frame;
 static uint32_t g_last_sp; /* number << 8 | letter of the last save-point map entered, 0 none */
 static char g_why[96];     /* the last refusal, for the menu */
+static const EventTrack* g_track; /* si.c's, set by main.c */
+
+void savenow_set_event_track(const EventTrack* t) { g_track = t; }
 
 int savenow_is_save_point(uint32_t map)
 {
@@ -55,8 +62,16 @@ static uint32_t current_map(CpuState* s)
     return mem_r32(s, SOA_MAP_NUMBER) << 8 | mem_r8(s, SOA_MAP_LETTER);
 }
 
-/* Ask for a save now; the next safe point decides. */
-void savenow_request(void) { plat_cas32(&g_pending, 0, 1); }
+/* Ask for a save now; the next safe point decides. Not during a replay,
+ * which is the whole input (E3). */
+void savenow_request(void)
+{
+    if (g_track && g_track->replaying()) {
+        fprintf(stderr, "[savenow] a replay is running: save now takes nothing\n");
+        return;
+    }
+    plat_cas32(&g_pending, 0, 1);
+}
 
 const char* savenow_refusal(void) { return g_why; }
 
@@ -81,32 +96,57 @@ const char* field_not_quiet(CpuState* s, int world)
 
 static const char* not_quiet(CpuState* s) { return field_not_quiet(s, 0); }
 
-/* At each safe point: the last save-point map, SOA_SAVE_NOW's frame, and a
- * pending request written or refused. */
-void savenow_safe_point(CpuState* s)
+/* The save menu asked for now: NULL, said and recorded; or why not, said. */
+static const char* ask(CpuState* s)
 {
     uint32_t map;
     const char* why;
-    if (mem_r32(s, SOA_SCENE) == SCENE_FIELD && mem_r32(s, SOA_FIELD_STATE) == FIELD_RUNNING) {
-        map = current_map(s);
-        if (savenow_is_save_point(map)) g_last_sp = map;
-    }
-    if (g_frame_set && gx_frame_count() >= g_at_frame) {
-        g_frame_set = 0;
-        savenow_request();
-    }
-    if (plat_cas32(&g_pending, 1, 0) != 1) return;
+    unsigned f = gx_frame_count();
     if ((why = not_quiet(s)) != NULL) {
         snprintf(g_why, sizeof g_why, "not now: %s", why);
-        fprintf(stderr, "[savenow] frame %u: save now refused, %s\n", gx_frame_count(), why);
-        return;
+        fprintf(stderr, "[savenow] frame %u: save now refused, %s\n", f, why);
+        return why;
     }
     mem_w32(s, SOA_SAVE_VARIANT, 0);
     mem_w32(s, SOA_SAVE_REQUEST, 1);
     g_opened = 1;
     map = current_map(s);
-    fprintf(stderr, "[savenow] frame %u: the save menu asked for on a%03u%c%s\n", gx_frame_count(), map >> 8,
-            (char)(map & 0xFF), savenow_is_save_point(map) ? "" : ", off a save point");
+    fprintf(stderr, "[savenow] frame %u: the save menu asked for on a%03u%c%s\n", f, map >> 8, (char)(map & 0xFF),
+            savenow_is_save_point(map) ? "" : ", off a save point");
+    if (g_track) g_track->record(f, "savenow", "");
+    return NULL;
+}
+
+/* At each safe point: the last save-point map, SOA_SAVE_NOW's frame, and a
+ * pending request written or refused -- or, during a replay, the
+ * recording's own asks at their frames. */
+void savenow_safe_point(CpuState* s)
+{
+    uint32_t map;
+    unsigned f = gx_frame_count();
+    char v[4];
+    int r;
+    if (mem_r32(s, SOA_SCENE) == SCENE_FIELD && mem_r32(s, SOA_FIELD_STATE) == FIELD_RUNNING) {
+        map = current_map(s);
+        if (savenow_is_save_point(map)) g_last_sp = map;
+    }
+    r = g_track ? g_track->take("savenow", f, v, sizeof v) : -1;
+    if (r >= 0) {
+        g_frame_set = 0; /* SOA_SAVE_NOW is input, and the replay is the whole of it */
+        if (plat_cas32(&g_pending, 1, 0) == 1)
+            fprintf(stderr, "[savenow] frame %u: a replay is running: the request takes nothing\n", f);
+        for (; r == 1; r = g_track->take("savenow", f, v, sizeof v)) {
+            const char* why = ask(s);
+            if (why) g_track->left(f, "save now", why);
+        }
+        return;
+    }
+    if (g_frame_set && f >= g_at_frame) {
+        g_frame_set = 0;
+        savenow_request();
+    }
+    if (plat_cas32(&g_pending, 1, 0) != 1) return;
+    ask(s);
 }
 
 static void put32(uint8_t* p, uint32_t v)

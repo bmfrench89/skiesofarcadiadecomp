@@ -314,6 +314,8 @@ RE_PAD_FILE = re.compile(r"^\[pad\] replaying (\d+) state changes")
 RE_PAD_FILE_TROUBLE = re.compile(r"^\[pad\] (?:cannot read |\S+:\d+ is not )")
 # si.c names each entry of the # config line a replay differs in (event-track.md E1).
 RE_PAD_CONFIG_DIFF = re.compile(r"^\[pad\] the configuration differs from the recording's: ")
+# and a recorded event the replay could not apply (E3): the game is another one from there.
+RE_PAD_LEFT = re.compile(r"^\[event\] frame \d+: .*: the replay has left the recording$")
 RE_POKE_TROUBLE = re.compile(r"^\[(?:poke|peek)\] SOA_(?:POKE|PEEK): stopped at")
 # What scenario.py itself prints (cmd_run), which only the run_*.log echo has.
 RE_SCENARIO_EXIT = re.compile(r"^\[scenario\] \S+ exited (-?\d+):")
@@ -376,6 +378,7 @@ class Seen:
     pad_file_changes: int | None = None
     pad_file_trouble: str | None = None
     pad_config_diff: str | None = None
+    pad_left: str | None = None
     poke_trouble: str | None = None
     frames: int | None = None
     wall_seconds: float | None = None
@@ -477,6 +480,8 @@ def read_seen(text: str) -> Seen:
             s.pad_file_changes = int(m.group(1))
         elif RE_PAD_CONFIG_DIFF.match(line) and s.pad_config_diff is None:
             s.pad_config_diff = line
+        elif RE_PAD_LEFT.match(line) and s.pad_left is None:
+            s.pad_left = line
         elif RE_PAD_FILE_TROUBLE.match(line) and s.pad_file_trouble is None:
             s.pad_file_trouble = line
         elif RE_POKE_TROUBLE.match(line) and s.poke_trouble is None:
@@ -617,9 +622,11 @@ def card_check(s: Seen) -> tuple[scenario.Check, list[str]]:
 def pad_check(r: scenario.Report, s: Seen, strict: bool = False) -> scenario.Check:
     """scenario.py's pad check, plus a recording (SOA_PAD_FILE) as a source,
     and the echo's generated count as the number to match. With `strict`, a
-    replay set up unlike its recording fails it (event-track.md E1)."""
+    replay set up unlike its recording fails it (event-track.md E1), and so
+    does one that left its recording (E3)."""
     name = "the pad script was understood"
-    trouble = r.pad_trouble or s.pad_file_trouble or (s.pad_config_diff if strict else None)
+    unlike = (s.pad_config_diff or s.pad_left) if strict else None
+    trouble = r.pad_trouble or s.pad_file_trouble or unlike
     if trouble:
         return scenario.Check(name, FAIL, trouble, False)
     if r.scripted_events is not None:
@@ -842,6 +849,8 @@ def judge(
         questions.append(
             f"{s.pad_config_diff} (check --strict fails a replay set up unlike its recording)"
         )
+    if s.pad_left and not strict:
+        questions.append(f"{s.pad_left} (check --strict fails a replay that left its recording)")
     after_rows = None
     if frames_dir is not None and s.traced:
         more, after_rows = after_battle_questions(s, frames_dir)

@@ -44,6 +44,7 @@ STUBS = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "gxr.h"
 #include "disc.h"
+#include "eventtrack.h"
 #include <windows.h>
 #include <stdio.h>
 
@@ -111,6 +112,12 @@ void battle_init(void) {} /* battle.c (R0): no battle here */
 void savext_init(void) {} /* savext.c (X2): no save here */
 void savenow_init(void) {} /* savenow.c (M7a) */
 void actions_init(void) {} /* actions.c (M7b) */
+/* the event track (E3): si.c's ends, and what main.c hands them to */
+const EventTrack* si_event_track(void) { return 0; }
+int si_replay_running(void) { return 0; }
+void actions_set_event_track(const EventTrack* t) { (void)t; }
+void savenow_set_event_track(const EventTrack* t) { (void)t; }
+void menu_set_replaying(int (*fn)(void)) { (void)fn; }
 /* disc.c (disc-layer I1): an image that opens, and three buffers of zeroes --
  * enough shape for the boot path to reach the guest, and nothing of the game. */
 static const uint8_t zero_dol[0x100], zero_boot[0x440], zero_fst[0x40];

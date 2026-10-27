@@ -147,8 +147,8 @@ the log path; three scenarios died part-way, silently, exit `-1`, with a second 
 - **`units.txt` is tab-separated and `native` is lowercase.** Spaces used to raise an
   unhandled `ValueError` and `Native` was silently ignored, so the unit matched under
   `decomp.py` while never entering the port. Since 2026-09-22 both readers share
-  `decomp.read_units`, which refuses either with the file and line -- but
-  `fetch_toolchain.py` and `test_decomp_native.py` still parse the file themselves.
+  `decomp.read_units`, which refuses either with the file and line, and since 2026-10-26
+  so do `fetch_toolchain.py` and `test_decomp_native.py`, which used to parse it themselves.
 - **Counts in prose rot, and it is always the top-of-file status table.** `docs/PLAN.md`'s
   said 41 matching functions, 9 swapped in and 362 tests for three days, against a tree
   holding 83, 12 and 475 — and its C3 entry still said "all 20 captures" when the corpus

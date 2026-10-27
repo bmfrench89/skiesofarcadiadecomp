@@ -202,7 +202,8 @@ A recording (`SOA_PAD_RECORD`) names every mod it was made with, by id, version 
 in load order, with any option away from its default. Replay it with the same mods and it plays the same;
 the port says when the mods differ, and with `SOA_PAD_STRICT=1` refuses the replay. Pad 2 and the host
 buttons (LB, View, the stick clicks) are in the recording too, as `@pad2` and `@host` lines, so a mod that
-reads them replays as it played.
+reads them replays as it played; and so are turbo, the menu's Save now and its Debug actions (`@turbo`,
+`@savenow`, `@action`), which a replay applies at their frames.
 
 ## What the kit can and cannot tell you
 

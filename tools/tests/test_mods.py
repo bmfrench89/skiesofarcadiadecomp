@@ -5335,3 +5335,122 @@ def test_m7b_soa_action_s_grammar_its_frames_and_its_faults(driver, tmp_path):
     ):
         out, err = play(driver, empty, f"actions {bad}")
         assert "scheduled -1" in out and said in err, (bad, out, err)
+
+
+# --------------------------------------------------------------------------
+# E3: the event track's actions and save now (docs/specs/event-track.md),
+# through actions.c and savenow.c with the fake guest's stand-in track.
+# --------------------------------------------------------------------------
+
+
+def lines_of(out: str, word: str) -> list[str]:
+    return [x for x in out.splitlines() if x.startswith(word + " ")]
+
+
+@needs_cc
+def test_e3_what_is_written_is_recorded_and_what_is_refused_is_not(driver, tmp_path):
+    """With a track and no replay, a save now, a warp and the encounter toggle
+    each become a record at their frame, in SOA_ACTION's names; a refused warp
+    records nothing. The mutation, a record before the refusal check, records
+    the refused one too."""
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        "track "
+        + FIELD
+        + at("a")
+        + "savenow_req savenow_tick set 803473b4 0 "
+        + "act 1 6761 actions_tick act 5 0 actions_tick "
+        + "set 803475cc 7 act 1 6761 actions_tick",
+    )
+    assert lines_of(out, "record") == [
+        "record 0 savenow",
+        "record 0 action warp:103a",
+        "record 0 action encounters:off",
+    ], out
+    assert "warp to 103a refused, in a battle" in err, err
+
+
+@needs_cc
+def test_e3_during_a_replay_the_recording_s_actions_run_and_nothing_else(driver, tmp_path):
+    """A replay is the whole input: SOA_ACTION's fade at frame 0 and a menu
+    request asked before the replay was known take nothing, the menu cannot
+    ask once it is (the queue empty by then, so the refusal is the replay's),
+    and the recording's warp runs at its frame, 2, recorded again for a
+    recording made of the replay. Mutations: SOA_ACTION's schedule run during
+    a replay (the fade lands at 0); the queued request run (the fade lands);
+    the menu's ask not refused (a second "requested 1"); the recording's line
+    never taken (no warp at 2)."""
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        "track "
+        + FIELD
+        + at("a")
+        + "set 80347518 1 actions fade@0 act 4 0 replay line action 2 warp:103a "
+        + "actions_tick act 4 0 get 80347518 hex 80305cf0 c "
+        + "frame frame actions_tick get 80347518 "
+        + WARP_WORDS,
+    )
+    assert "scheduled 1" in out, out
+    assert lines_of(out, "requested") == ["requested 1", "requested 0"], out
+    assert re.findall(r"^80347518=([0-9A-F]{8})$", out, re.M) == ["00000001", "00000001"], out
+    assert "a replay is running: the menu's request takes nothing" in err, err
+    names = re.findall(r"^hex 80305CF0 ([0-9A-F]*)$", out, re.M)
+    assert [bytes.fromhex(n) for n in names] == [bytes(12), b"ME103A.SCT\0\0"], out
+    assert "[action] frame 2: warp to 103a" in err, err
+    assert lines_of(out, "record") == ["record 2 action warp:103a"], out
+
+
+@needs_cc
+def test_e3_a_recorded_action_the_replay_cannot_run_leaves_the_recording(driver, tmp_path):
+    """Refused where the recording ran it, or not an action this build knows:
+    each is the replay leaving its recording, said once, and nothing is
+    written or recorded."""
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        "track replay line action 0 warp:103a line action 0 dance "
+        + FIELD
+        + at("a")
+        + "set 803475cc 7 actions_tick "
+        + WARP_WORDS,
+    )
+    assert lines_of(out, "left") == [
+        "left 0 action warp:103a, in a battle",
+        "left 0 action dance, not an action this build knows",
+    ], out
+    assert not lines_of(out, "record") and script_name(out) == bytes(12), out
+
+
+@needs_cc
+def test_e3_during_a_replay_save_now_asks_at_the_recording_s_frames_only(driver, tmp_path):
+    """SOA_SAVE_NOW at frame 0 and a request asked before the replay was known
+    take nothing; the recording's save now at frame 2 opens the save menu and
+    is recorded; one at frame 3, the field loading, leaves the recording.
+    Mutations: SOA_SAVE_NOW's frame run during a replay (the menu asked at
+    0); the queued request run (likewise); the line never taken (nothing at
+    2)."""
+    empty = tmp_path / "none"
+    empty.mkdir()
+    out, err = play(
+        driver,
+        empty,
+        "savenow_init track "
+        + FIELD
+        + at("a")
+        + "savenow_req replay line savenow 2 - line savenow 3 - "
+        + "savenow_tick get 803473b4 frame frame savenow_tick get 803473b4 "
+        + "frame set 80311aec 3 savenow_tick",
+        SOA_SAVE_NOW="0",
+    )
+    assert re.findall(r"^803473B4=([0-9A-F]{8})$", out, re.M) == ["00000000", "00000001"], out
+    assert "a replay is running: the request takes nothing" in err, err
+    assert lines_of(out, "record") == ["record 2 savenow"], out
+    assert lines_of(out, "left") == ["left 3 save now, while the field loads"], out

@@ -40,10 +40,12 @@ from soa import toolchain  # noqa: E402
 DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "eventtrack.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+const EventTrack* si_event_track(void);
 void si_poll(void);
 void si_report(void);
 int si_read(CpuState* s, uint32_t ea, unsigned size, uint64_t* out);
@@ -94,6 +96,42 @@ int window_pad(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t t
     return 1;
 }
 
+/* The event track (E3), as tick.c, actions.c and savenow.c use it at the top
+ * of a frame: DRIVER_APPLY="F:kind:value,..." hands the recorder each at its
+ * frame; DRIVER_TAKE="kind,..." takes every line due of each kind, printed;
+ * DRIVER_LEFT=F says a recorded action could not be applied at F. */
+static void events_at(unsigned f)
+{
+    const EventTrack* t = si_event_track();
+    const char* apply = getenv("DRIVER_APPLY");
+    const char* take = getenv("DRIVER_TAKE");
+    const char* left = getenv("DRIVER_LEFT");
+    static int said_none;
+    char buf[512], *item, *next;
+    if (apply) {
+        snprintf(buf, sizeof buf, "%s", apply);
+        for (item = buf; item; item = next) {
+            char *kind, *value;
+            if ((next = strchr(item, ',')) != NULL) *next++ = '\0';
+            if (!(kind = strchr(item, ':')) || !(value = strchr(kind + 1, ':'))) continue;
+            *kind++ = '\0';
+            *value++ = '\0';
+            if ((unsigned)strtoul(item, NULL, 10) == f) t->record(f, kind, value);
+        }
+    }
+    if (take) {
+        snprintf(buf, sizeof buf, "%s", take);
+        for (item = buf; item; item = next) {
+            char v[32];
+            int r;
+            if ((next = strchr(item, ',')) != NULL) *next++ = '\0';
+            while ((r = t->take(item, f, v, sizeof v)) == 1) printf("take %u %s%s%s\n", f, item, *v ? " " : "", v);
+            if (r < 0 && !said_none++) printf("notreplaying %u\n", f);
+        }
+    }
+    if (left && (unsigned)strtoul(left, NULL, 10) == f) t->left(f, "action warp:116c", "during an event");
+}
+
 int main(int argc, char** argv)
 {
     unsigned last = argc > 2 ? (unsigned)strtoul(argv[2], NULL, 10) : 100u;
@@ -125,6 +163,7 @@ int main(int argc, char** argv)
     for (f = 0; f <= last; f++) {
         g_frame = f;
         g_retrace = (uint64_t)f * per;
+        events_at(f); /* the safe point comes first in a frame */
         /* Twice, as the guest does: the field poll and a direct transfer. */
         for (k = 0; k < reads; k++) si_poll();
         if (si_host_buttons() != was_host) {
@@ -209,6 +248,7 @@ def run_code(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
     e = dict(os.environ)
     for name in (
         "SOA_PAD",
+        "SOA_PAD2",
         "SOA_PAD_RECORD",
         "SOA_PAD_FILE",
         "SOA_PAD_STOP",
@@ -218,6 +258,8 @@ def run_code(driver, tmp_path, mode, env=None, last=100, per=2, reads=2):
         "SOA_BATTLE_FORCE",
         "SOA_POKE",
         "SOA_MEMPOKE",
+        "SOA_ACTION",
+        "SOA_SAVE_NOW",
     ):
         e.pop(name, None)
     # The configuration line a recording carries: pin every switch it names, so
@@ -835,3 +877,145 @@ def test_an_unknown_event_and_one_out_of_order_are_passed_over_and_named(driver,
     assert f"[pad] {rec}:3: `@teleport` is not an event this build knows; passed over" in err, err
     assert f"[pad] {rec}:5: `@host` goes back to frame 6 from 8; that line is ignored" in err, err
     assert host_lines(out) == ["host 8 1"], out
+
+
+# --------------------------------------------------------------------------
+# the event track: turbo, save now and the actions (event-track.md E3)
+# --------------------------------------------------------------------------
+
+APPLIED = "10:turbo:on,20:action:warp:116c,30:savenow:,40:turbo:off"
+KINDS = "turbo,action,savenow"
+
+
+def takes(out: str) -> list[str]:
+    return [ln for ln in out.splitlines() if ln.startswith("take ")]
+
+
+def record_events(driver, tmp_path, name="events.pad"):
+    rec = tmp_path / name
+    run(
+        driver,
+        tmp_path,
+        "script",
+        {"SOA_PAD_RECORD": str(rec), "SOA_PAD": "3:a", "DRIVER_APPLY": APPLIED},
+        last=50,
+    )
+    return rec
+
+
+@needs_msvc
+def test_events_applied_are_written_as_lines_at_their_frames(driver, tmp_path):
+    """What tick.c, actions.c and savenow.c hand the track becomes a line at
+    its frame; a kind with no value is the frame and the kind alone."""
+    rec = record_events(driver, tmp_path)
+    assert event_lines(rec, "turbo") == ["10 @turbo on", "40 @turbo off"], rec.read_text()
+    assert event_lines(rec, "action") == ["20 @action warp:116c"], rec.read_text()
+    assert event_lines(rec, "savenow") == ["30 @savenow"], rec.read_text()
+
+
+@needs_msvc
+def test_events_replay_at_their_frames_each_taken_once(driver, tmp_path):
+    """Replayed, each line is taken once, at its frame, by whoever asks for
+    its kind, and never before it. The mutation, the @savenow line deleted,
+    takes nothing at 30; a cursor that does not advance takes each line at
+    every frame after its own."""
+    rec = record_events(driver, tmp_path)
+    out, _ = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "DRIVER_TAKE": KINDS}, last=50
+    )
+    assert takes(out) == [
+        "take 10 turbo on",
+        "take 20 action warp:116c",
+        "take 30 savenow",
+        "take 40 turbo off",
+    ], out
+    cut = tmp_path / "cut.pad"
+    cut.write_text(rec.read_text().replace("30 @savenow\n", ""))
+    out, _ = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(cut), "DRIVER_TAKE": KINDS}, last=50
+    )
+    assert "take 30 savenow" not in takes(out), out
+
+
+@needs_msvc
+def test_without_a_replay_nothing_is_taken(driver, tmp_path):
+    """No replay, no events from one: the modules then act on the chord, the
+    menu and the knobs as they always did."""
+    out, _ = run(driver, tmp_path, "script", {"SOA_PAD": "3:a", "DRIVER_TAKE": "turbo"}, last=10)
+    assert takes(out) == [] and "notreplaying 0" in out, out
+
+
+@needs_msvc
+def test_the_knobs_that_schedule_events_are_ignored_during_a_replay(driver, tmp_path):
+    """SOA_ACTION and SOA_SAVE_NOW are input, so a replay names them as
+    ignored, as it does SOA_PAD."""
+    rec = tmp_path / "plain.pad"
+    rec.write_text("# soa pad recording v3\n0 -\n5 a\n6 -\n")
+    _, err = run(
+        driver,
+        tmp_path,
+        "replay",
+        {"SOA_PAD_FILE": str(rec), "SOA_ACTION": "warp:116c@3300", "SOA_SAVE_NOW": "3300"},
+        last=10,
+    )
+    assert "[pad] SOA_ACTION is set as well, and is ignored" in err, err
+    assert "[pad] SOA_SAVE_NOW is set as well, and is ignored" in err, err
+
+
+@needs_msvc
+@pytest.mark.parametrize(
+    "line, said",
+    [
+        ("5 @turbo maybe", '"frame @turbo on | off"'),
+        ("5 @turbo", '"frame @turbo on | off"'),
+        ("5 @savenow now", '"frame @savenow"'),
+        ("5 @action", '"frame @action NAME[:ARG]"'),
+        ("5 @action warp:116c again", '"frame @action NAME[:ARG]"'),
+        ("5 @action " + "x" * 24, '"frame @action NAME[:ARG]"'),
+    ],
+)
+def test_a_malformed_event_line_is_named_and_passed_over(driver, tmp_path, line, said):
+    rec = tmp_path / "bad.pad"
+    rec.write_text(f"# soa pad recording v3\n0 -\n{line}\n9 -\n")
+    out, err = run(
+        driver, tmp_path, "replay", {"SOA_PAD_FILE": str(rec), "DRIVER_TAKE": KINDS}, last=12
+    )
+    assert f"[pad] {rec}:3 is not {said}; that line is ignored" in err, err
+    assert takes(out) == [], out
+
+
+@needs_msvc
+def test_a_replay_that_leaves_its_recording_says_so_and_strict_stops_it(driver, tmp_path):
+    """A recorded event this replay could not apply is named, and the run goes
+    on; under SOA_PAD_STRICT it stops there, exit 11, the guest having read
+    nothing at or after that frame. The mutation, the switch not acted on,
+    runs the strict case to its end."""
+    rec = record_with(driver, tmp_path, MODS)
+    env = {"SOA_PAD_FILE": str(rec), "DRIVER_EXTRA_TEXT": MODS, "DRIVER_LEFT": "15"}
+    said = (
+        "[event] frame 15: the recording's action warp:116c was refused here, during an event: "
+        "the replay has left the recording\n"
+    )
+    _, err = run(driver, tmp_path, "replay", env, last=20)
+    assert said in err and "[pad] replayed" in err, err
+    code, out, err = run_code(driver, tmp_path, "replay", {**env, "SOA_PAD_STRICT": "1"}, last=20)
+    assert code == 11, out + err
+    assert said in err and "a replay that has left its recording is refused (exit 11)" in err, err
+    assert reports(out) and all(int(ln.split()[0]) < 15 for ln in reports(out)), out
+
+
+@needs_msvc
+def test_event_lines_a_run_never_reached_are_counted(driver, tmp_path):
+    """An event is taken once, so one still waiting at the end never
+    happened, and the report says how many, from which frame."""
+    rec = tmp_path / "late.pad"
+    rec.write_text("# soa pad recording v3\n0 -\n5 @turbo on\n500 @savenow\n600 @action fade\n")
+    out, err = run(
+        driver,
+        tmp_path,
+        "replay",
+        {"SOA_PAD_FILE": str(rec), "DRIVER_TAKE": KINDS, "SOA_PAD_STOP": "0"},
+        last=20,
+    )
+    assert takes(out) == ["take 5 turbo on"], out
+    assert "[event] 2 event lines from frame 500 on never played: the run stopped first" in err, err

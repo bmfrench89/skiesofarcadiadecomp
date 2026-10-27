@@ -9,8 +9,15 @@ controller read, where the replay is loaded, and the log ends there.
 
 **E2 built 2026-10-25** (FINDINGS "E2"): Done lines 4 to 6. *As built:* a recording of `@` lines alone replays, the
 run ending after the last line of either sort; the end of a recording lets go of held host buttons and pad 2 as it
-does pad 1; `@pad2` lines carry no `#r` count, since drift is pad 1's. **E3 waits** behind 60 fps (the owner's D-45,
-2026-10-25).
+does pad 1; `@pad2` lines carry no `#r` count, since drift is pad 1's.
+
+**E3 built 2026-10-26** (FINDINGS "E3"): Done lines 7 to 10; the event track is complete. *As built:* si.c hands
+`tick.c`, `actions.c` and `savenow.c` one `EventTrack` (`runtime/eventtrack.h`: record, take, replaying, left), and
+`menu.c` the replaying test, all through main.c; a replayed event is recorded again when the replay is also
+recording; the replay now loads at the first safe point when that comes before the first controller read, so
+E1's refusal can come there; the left-the-recording line is `[event] frame F: the recording's action warp:103a was
+refused here, not on the field: the replay has left the recording`, and the run's report counts event lines it
+never reached. The last line of the spec's §2 table holds: a refused event is not written.
 
 **Why.** A pad recording is how a session is kept: a bug report, a soak's input, a race. Today four things change the
 game mid-run and never reach the file: pad 2, the host buttons a mod reads, turbo, and the menu's save-now and debug

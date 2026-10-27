@@ -11,6 +11,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
 #include "disc.h"
+#include "eventtrack.h"
 #include "sha1.h"
 #include "gxr.h"
 #include "gxv.h"
@@ -88,6 +89,9 @@ int clock_pause_requested(void);
 void si_set_pad2_source(int (*fn)(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]));
 int si_read_pad(unsigned port, void* out);
 int window_pad2(uint16_t* buttons, uint8_t stick[2], uint8_t cstick[2], uint8_t trig[2]);
+const EventTrack* si_event_track(void); /* si.c, E3: turbo, save now and the actions in a recording */
+int si_replay_running(void);
+void menu_set_replaying(int (*fn)(void)); /* menu.c: its rows refuse during a replay */
 
 static void on_chord(int chord, unsigned frame)
 {
@@ -1400,6 +1404,12 @@ int main(int argc, char** argv)
         si_set_menu_open(menu_is_open); /* M8: the pad withheld while it is open */
         tick_set_hold(clock_pause_requested);
         si_set_pad2_source(window_pad2); /* P10a: port 2 for mods */
+        /* E3: the events a safe point applies, written to a recording and
+         * taken from a replay (docs/specs/event-track.md) */
+        tick_set_event_track(si_event_track());
+        actions_set_event_track(si_event_track());
+        savenow_set_event_track(si_event_track());
+        menu_set_replaying(si_replay_running);
         mod_set_pad_reader(si_read_pad);
         mod_set_host_buttons(si_host_buttons);
         hle_on_report(si_motor_stop);

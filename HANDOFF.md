@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1907 |
+| Python tests | 1930 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,14 +417,16 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-24)
+## Where the last session stopped (2026-10-26)
 
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
 spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h, H17i's
-finding, H17j's first look, H17k, H18a in part and H18d's knob (2026-10-26), pushed. The full pre-push suite passes: 1907 tests in 103 files (1866
-passed, 41 skipped here; 709 skip with MSVC hidden, so 668 want MSVC). Nothing is
+finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26), pushed: the event track is done,
+and gameplay milestone 2's list with it but for I7 (T1's deltas), which a session's note holds until a mod
+needs one. The full pre-push suite passes: 1930 tests in 103 files (1889
+passed, 41 skipped here; 730 skip with MSVC hidden, so 689 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -492,11 +494,13 @@ fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with
    the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in
    H17b and V12"). Another recompilation of this game (ogdanimal's, GPL-3.0) ships interpolated 60: read its notes,
    copy none of its code without the owner's licence decision.
-2. **The event track's E3** after it (`docs/specs/event-track.md`): turbo, save now and the debug actions as `@`
-   lines. E1 and E2 are built (FINDINGS "E1", "E2").
-3. Then **ask the owner** (the questions tool) what follows milestone 2. The candidates are milestone 3
-   (PLAN-GAMEPLAY-MODS §E), widescreen (M10, V9b), which D-43 put behind the core, and I7 (deltas) or the R2
-   status thunks, which the free bits of K12 now allow.
+2. **The event track's E3: built 2026-10-26** (FINDINGS "E3"): turbo, save now and the debug actions recorded as
+   `@turbo`, `@savenow` and `@action` lines and applied from a replay at their frames; the menu's rows take nothing
+   during one; a recorded event the replay cannot apply is the replay leaving its recording, exit 11 under
+   `SOA_PAD_STRICT`. The event track is done; milestone 2's list is done but for I7 (T1's deltas).
+3. **Ask the owner** (the questions tool) what follows: **D-46** in PLAN-NEXT's register, where the night's
+   research on the four candidates is summarised (widescreen, milestone 3, I7, the R2 thunks), with the
+   session's recommendation: widescreen, starting with WS0, a no-build test of the game's own aspect word.
 
 **Waiting on the owner at the machine** (none of these can be done by a session):
 - the menu's Save now and Debug page, in a window;

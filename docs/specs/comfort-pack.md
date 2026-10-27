@@ -508,7 +508,8 @@ which records them and dropped the line).
   (`tools/scenario.py:132`, `:233`), because the pad grammar lives in both (CLAUDE.md).
 - **Recording.** Each chord writes `# chord F view+lb fullscreen` into the recording (a comment the
   replay ignores) and a `[chord]` line to the log. Replaying chord actions is the event track's
-  (milestone 2).
+  (milestone 2): since E3, 2026-10-26, turbo's flip is an `@turbo` line a replay applies at its frame;
+  fullscreen changes no game state.
 - **API.** `uint32_t (*host_buttons)(void)`, appended to `SoaModApi`, returns the `SOA_HOST_*` bits as
   of the current controller read. mod.c gets it from a setter (`mod_set_host_buttons`), so
   `test_mods.py`'s driver can stub it.
@@ -865,7 +866,7 @@ Test-only variables (not in `k_settings`): `SOA_ENCOUNTERS_TEST`, `SOA_AUTOTEXT_
 - **More sessions cannot be replayed for a while.** Pad 2 (P10), hold-to-skip (P11b) and chord toggles
   (CH1, M11a) are not in the recording until milestone 2. If you play co-op or toggle turbo with
   `SOA_PAD_RECORD` on and something breaks, the recording will not reproduce it. (Pad 2 and the host
-  buttons since the event track's E2, 2026-10-24; turbo's toggles with E3.)
+  buttons since the event track's E2, 2026-10-24; turbo's toggles since E3, 2026-10-26.)
 - **M19 changes the clock of every run.** A mistake there changes game timing everywhere. Mitigations:
   - every gap is logged, and ordinary runs on an unloaded host must log none (M19's Done). A heavily
     loaded host can starve the guest past the gap rule and log a real gap (fe7e48f's first run; the

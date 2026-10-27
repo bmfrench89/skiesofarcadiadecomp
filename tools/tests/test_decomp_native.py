@@ -27,6 +27,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import decomp as DC  # noqa: E402
 from soa import toolchain  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,13 +64,8 @@ def renames(sources: list[str]) -> list[str]:
 
 
 def native_units() -> list[str]:
-    rows = []
-    for line in UNITS.read_text(encoding="utf-8").splitlines():
-        cols = line.split("\t")
-        listed = line.strip() and not line.startswith("#") and len(cols) >= 4
-        if listed and cols[3].strip() == "native":
-            rows.append(cols[0])
-    return rows
+    """The units marked native, read as decomp.py and recompile.py read them."""
+    return [u.src.as_posix() for u in DC.read_units(UNITS) if u.native]
 
 
 # --------------------------------------------------------------------------

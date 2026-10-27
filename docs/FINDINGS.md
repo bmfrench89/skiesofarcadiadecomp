@@ -10593,3 +10593,80 @@ owner's eye.** 2026-10-26. PLAN-60FPS-MODS H18; from FINDINGS "H18a".
 - **Tests** [V, `test_gxr_pair.py`, one]: a "jump" scene, a triangle jumping 300 px and a quad moving 10 (two keys),
   with the knob at 128: the triangle lands where F+1 has it and the quad halfway, on the three-pass and the live
   route alike. *Mutation:* `pair_far` never saying yes fails it.
+
+**E3, the event track's events: turbo, save now and the debug actions in the recording; the event track complete.**
+2026-10-26. Spec: `docs/specs/event-track.md`; milestone 2's last item.
+
+- **What it is** [V]:
+  - Beside pad 1's lines and E2's, a recording holds `F @turbo on|off`, `F @action NAME[:ARG]` (SOA_ACTION's names:
+    `warp:103a`, `part`, `ending`, `fade`, `encounters:off`, `encounters:on`) and `F @savenow`, each written when it
+    happened, at the safe point: turbo when `turbo_evaluate` flips it (from the chord or the menu), an action when
+    `actions.c` writes it (from the menu or `SOA_ACTION`), save now when `savenow.c` opens the game's save menu. A
+    refused one changed nothing and is not written.
+  - During a replay each kind is taken from the recording at its frame, each line once, by the module that applies
+    it, at the point it applied it live: turbo inside `turbo_evaluate`, before the safe-point callbacks. The replay
+    is the whole input: `SOA_ACTION` and `SOA_SAVE_NOW` are named as ignored, the chord fires nothing (E2), the
+    menu's Turbo, Save now and Debug rows say "a replay is running" and take nothing, and a toggle or request
+    already asked when the replay became known is dropped at the safe point.
+  - A recorded event the replay cannot apply is the replay leaving the recording: `[event] frame F: the
+    recording's action warp:103a was refused here, not on the field: the replay has left the recording`; with
+    `SOA_PAD_STRICT=1` the run stops there, exit 11. `soak.py check --strict` fails a log holding that line, and
+    without the switch it is a question. The report counts event lines a run never reached.
+  - The plumbing: si.c keeps the recorder and the lists and hands one `EventTrack` (`runtime/eventtrack.h`:
+    record, take, replaying, left) to `tick.c`, `actions.c` and `savenow.c` through main.c, and `menu.c` the
+    replaying test, so each still links alone in its tests and in the mod driver. A replay now loads at the first
+    safe point when that comes before the first controller read, so E1's refusal can come there.
+- **On this PC** [V, `build/e3/`, headless, a scratch copy of each card, restored between runs]:
+  - *Turbo* (Done 8): `SOA_PAD=300:view+rs`, 700 frames, recorded: `300 @host view+rs`, `# chord 300 view+rs
+    turbo`, `300 @turbo on`. Replayed with no script: `[turbo] frame 300: on`. *Mutation:* the `@turbo` line
+    deleted, and no `[turbo] frame` line in the run.
+  - *Save now* (Done 9): part G's card to the field (HANDOFF's recipe), `SOA_SAVE_NOW=3300` and the save presses
+    to 3770, recorded: `3300 @savenow`, the save menu asked for on `a116a`, the save written, `cardformat.py
+    verify` READY. Replayed with neither knob on the card restored: `[savenow] frame 3300: the save menu asked for
+    on a116a`, the save written, the card READY; all 30 `[si]` reads equal to the recording's, no drift. The two
+    cards differ in 20 bytes inside the save's own blocks (18 and 19); the port's clock is the host's
+    (`exi.c` `rtc_seconds`), and the two runs saved minutes apart [I]. *Mutation:* the `@savenow` line deleted, and
+    no `[savenow]` line in the run.
+  - *A warp* (Done 9): the same field, `SOA_ACTION=warp:103a@3300`, recorded: `3300 @action warp:103a`. Both runs,
+    peeked: map 0x74 at 3290, the warp at 3300, map 0x67 letter `a` with the field running (state 8) at 4800, at
+    the same retrace (9836); all 18 `[si]` reads equal.
+  - *Leaving the recording* (Done 10): the warp's `@action` line moved by hand to frame 100, the title screen:
+    `[action] frame 100: warp to 103a refused, not on the field`, then the `[event]` line, and the run goes on; with
+    `SOA_PAD_STRICT=1`, exit 11 there. `soak.py check` on that log asks, and `--strict` fails it.
+  - The slice's contract: the self test; replay 23/23 at 1, 2, 3 and 8 threads; `title --check` 4 of 4.
+- **Tests** [V]:
+  - `test_tick.py`, three (Done 7): a live flip recorded at its frame before the callbacks; a replayed `@turbo`
+    flip at its frame, before the callbacks, with the menu's toggle refused where asked and one asked before the
+    replay was known dropped at the safe point; with no track, the old behaviour.
+  - `test_padrec.py`, twelve: events applied become lines (a kind with no value the frame and kind alone);
+    replayed, each taken once at its frame (the deleted-line mutation inside the test); no replay, nothing taken;
+    `SOA_ACTION` and `SOA_SAVE_NOW` named as ignored; six malformed lines named and passed over; leaving the
+    recording said, and exit 11 under strict with no report at or after its frame; lines never reached counted.
+  - `test_mods.py`, four, on the fake guest, which gained a stand-in track: what actions.c and savenow.c write is
+    recorded and a refusal is not; during a replay `SOA_ACTION`'s schedule, a queued menu request and the menu's
+    ask take nothing and the recording's warp runs at its frame; a recorded action refused, or unknown, leaves
+    the recording; `SOA_SAVE_NOW` and a queued request take nothing while the recording's save now asks at its
+    frame and one where the field loads leaves the recording.
+  - `test_menu.py`, two: during a replay Turbo, Save now and each Debug row answer only a redraw and no action is
+    asked, while Fullscreen still toggles; and the status line under the rows is drawn, the only difference from
+    the same page outside a replay.
+  - `test_soak.py`, one: the left line a question, and a failure under `--strict`. `test_scenario.py`: exit 11's
+    meaning, and three `exit(11);` in si.c.
+- **Mutations, each caught** [V]: in tick.c, the replay's lines never taken; the toggle not refused where asked;
+  a toggle already asked taken during a replay; a live flip not recorded. In si.c, the take's cursor not advancing;
+  a line taken before its frame; strict not stopping; a value-less kind written with a trailing space; `@turbo`
+  taking any value; `SOA_ACTION` not named; the never-played count left out. In actions.c, the schedule or a queued
+  request run during a replay; the recording's line never taken; a refused action recorded; the menu's ask not
+  refused; an action the replay cannot run not reported. In savenow.c, `SOA_SAVE_NOW`'s frame or a queued request
+  acted on during a replay; the line never taken. In menu.c, each row's check left out, and the status left unset.
+- **What the review found** [V, an independent four-lens review of the diff, each finding then argued against]:
+  no defect in the code; three gaps in the tests, all closed above. One test passed for the wrong reason and was
+  reordered: the menu's ask during a replay was refused because the queue was already full, not because a replay
+  ran. Two guards stand between a replay and `SOA_SAVE_NOW` (the safe point's and `savenow_request`'s), so
+  removing either alone changes nothing a run can see; the test holds the property, both removed.
+- **Also** [V]: `fetch_toolchain.py` and `test_decomp_native.py` read `units.txt` through `decomp.read_units`, so a
+  row written with spaces stops the fetch with its line (one test; *mutation:* the old reader back, and the fetch
+  carries on); `tools/mod.py`'s rebuild check names every file the fake guest is built from, where it had missed
+  `savext.c`, `savenow.c` and `actions.c`; TESTING.md's table gains the rows four test files lacked.
+- **Next:** the event track is done, and with it milestone 2's list but for I7 (T1's deltas), which PLAN-NEXT §0
+  holds until a mod needs one. PLAN-NEXT §0: ask the owner what follows (D-46).

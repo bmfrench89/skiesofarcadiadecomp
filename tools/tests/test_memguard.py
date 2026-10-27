@@ -36,6 +36,7 @@ from soa import embed, toolchain  # noqa: E402
 # path link on its own; none of them is reached before SOA_MEMPOKE is.
 STUBS = """
 #include "gxr.h"
+#include "eventtrack.h"
 void fn_80003140(CpuState* s) { (void)s; }
 void hle_report(void) {}
 void hle_clock_start(void) {}
@@ -79,6 +80,12 @@ void battle_init(void) {} /* battle.c (R0): no battle here */
 void savext_init(void) {} /* savext.c (X2): no save here */
 void savenow_init(void) {} /* savenow.c (M7a) */
 void actions_init(void) {} /* actions.c (M7b) */
+/* the event track (E3): si.c's ends, and what main.c hands them to */
+const EventTrack* si_event_track(void) { return 0; }
+int si_replay_running(void) { return 0; }
+void actions_set_event_track(const EventTrack* t) { (void)t; }
+void savenow_set_event_track(const EventTrack* t) { (void)t; }
+void menu_set_replaying(int (*fn)(void)) { (void)fn; }
 int selftest(CpuState* s) { (void)s; return 0; }
 int gx_replay(CpuState* s, const char* b) { (void)s; (void)b; return 0; }
 int gx_replay_pair(CpuState* s, const char* a, const char* b) { (void)s; (void)a; (void)b; return 0; }

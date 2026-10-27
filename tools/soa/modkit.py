@@ -26,6 +26,7 @@ TEXT_START, TEXT_LEN = 0x80003100, 0x1000
 
 DRIVER = r"""
 #define _CRT_SECURE_NO_WARNINGS
+#include "eventtrack.h"
 #include "mod.h"
 #include "soa_mod.h"
 #include <stdio.h>
@@ -39,9 +40,37 @@ void savext_load(CpuState* s, uint32_t block);
 void savext_new_game(void);
 void savenow_request(void);          /* runtime/savenow.c's (M7a) */
 void savenow_safe_point(CpuState* s);
+void savenow_init(void);
 int actions_parse(const char* text);  /* runtime/actions.c's (M7b) */
 int actions_request(int kind, uint32_t map);
 void actions_safe_point(CpuState* s);
+
+/* The event track (E3), as si.c gives it to actions.c and savenow.c:
+ * "track" hands it over, "replay" makes a replay run, "line KIND F VALUE"
+ * (VALUE "-" for none) is a line of it, taken once at or after its frame;
+ * what it is asked to record, and a line the replay could not apply, are
+ * printed. */
+static int g_replay, g_nev;
+static struct { char kind[12]; unsigned f; char v[24]; int taken; } g_ev[16];
+static void ev_record(unsigned f, const char* k, const char* v)
+{
+    printf("record %u %s%s%s\n", f, k, *v ? " " : "", v);
+}
+static int ev_take(const char* k, unsigned f, char* out, size_t cap)
+{
+    int i;
+    if (!g_replay) return -1;
+    for (i = 0; i < g_nev; i++)
+        if (!g_ev[i].taken && !strcmp(g_ev[i].kind, k) && g_ev[i].f <= f) {
+            g_ev[i].taken = 1;
+            snprintf(out, cap, "%s", g_ev[i].v);
+            return 1;
+        }
+    return 0;
+}
+static int ev_replaying(void) { return g_replay; }
+static void ev_left(unsigned f, const char* w, const char* y) { printf("left %u %s, %s\n", f, w, y); }
+static const EventTrack g_track = {ev_record, ev_take, ev_replaying, ev_left};
 
 /* What cpu.h's accessors can reach: none of it is, since every address a
  * patch may name is memory. */
@@ -130,7 +159,8 @@ void dispatch(CpuState* s, uint32_t a)
  *   proj O P0..P5      a new projection (O 1 orthographic), through the filter
  *   tex HASH W H       a W x H texture decoded, its source hash HASH, through the provider
  *   game               the game's registers at a safe point: r2, r13 its, r14 a mark
- *   walkfns            answer the walker's three game functions   here ID   an object id they find */
+ *   walkfns            answer the walker's three game functions   here ID   an object id they find
+ *   track | replay | line KIND F VALUE    the event track (E3), above */
 int main(int argc, char** argv)
 {
     static CpuState s;
@@ -299,6 +329,15 @@ int main(int argc, char** argv)
         /* M7a: a save now asked for, and the safe point that decides it */
         else if (!strcmp(cmd, "savenow_req")) { savenow_request(); printf("asked\n"); }
         else if (!strcmp(cmd, "savenow_tick")) { savenow_safe_point(&s); printf("ticked\n"); }
+        else if (!strcmp(cmd, "savenow_init")) savenow_init(); /* reads SOA_SAVE_NOW */
+        /* E3: the event track */
+        else if (!strcmp(cmd, "track")) { actions_set_event_track(&g_track); savenow_set_event_track(&g_track); }
+        else if (!strcmp(cmd, "replay")) g_replay = 1;
+        else if (!strcmp(cmd, "line") && g_nev < 16) {
+            if (scanf("%11s %u %23s", g_ev[g_nev].kind, &g_ev[g_nev].f, g_ev[g_nev].v) != 3) break;
+            if (!strcmp(g_ev[g_nev].v, "-")) g_ev[g_nev].v[0] = '\0';
+            g_nev++;
+        }
         /* M7b: SOA_ACTION's text, a request as the menu makes one, and the safe point */
         else if (!strcmp(cmd, "actions")) {
             char at[256];

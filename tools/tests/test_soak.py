@@ -343,6 +343,27 @@ def test_a_replay_unlike_its_recording_is_a_question_and_fails_under_strict(tmp_
     assert soak.main(["check", str(log), "--strict"]) == 1
 
 
+LEFT = (
+    "[event] frame 3300: the recording's action warp:116c was refused here, during an event: "
+    "the replay has left the recording"
+)
+
+
+def test_a_replay_that_left_its_recording_is_a_question_and_fails_under_strict():
+    """E3: a recorded event the replay could not apply is si.c's line; without
+    --strict it is a question, with it the pad check fails. The mutation, the
+    line's pattern not matched, passes the strict case."""
+    log = replay_log(False).replace(
+        "[pad] replaying 40 state changes", LEFT + "\n[pad] replaying 40 state changes"
+    )
+    asked = soak.judge(log, "x.log")
+    assert asked["verdict"] == "pass", asked["checks"]
+    assert any(q.startswith(LEFT) for q in asked["questions"]), asked["questions"]
+    strict = soak.judge(log, "x.log", strict=True)
+    assert status(strict, "the pad script was understood") == "FAIL" and strict["verdict"] == "FAIL"
+    assert not any(q.startswith(LEFT) for q in strict["questions"]), strict["questions"]
+
+
 def test_check_exits_1_on_a_failure_and_writes_one_object_per_log(tmp_path):
     """The exit status is what a batch runner reads; summary.json is what a
     report is built from, so a missing log gets an object too."""

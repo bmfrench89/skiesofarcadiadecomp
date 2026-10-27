@@ -33,6 +33,7 @@
  *   one.
  */
 #include "cpu.h"
+#include "eventtrack.h"
 #include "plat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +56,9 @@ static unsigned long long g_safe_points, g_released;
  * for the frame: when on, the frame end's spin goes after one field, as
  * SOA_UNCAP's does, so the game runs up to twice as fast. battle is scene 7,
  * and scene 6 on a map of 500 or more (the ship battles); sky is the sky-mode
- * word, 1 on the world map and the ship-piloted maps. */
+ * word, 1 on the world map and the ship-piloted maps. A flip is an `@turbo`
+ * line in a recording (E3), and during a replay the recording's lines flip
+ * it, at their frames, where the chord and the menu take nothing. */
 #define SCENE_ID 0x803475CCu
 #define MAP_NUMBER 0x80311AC0u
 #define SKY_MODE 0x80347464u
@@ -65,6 +68,12 @@ static int g_turbo_mode = -1; /* the SOA_TURBO bits, -1 before it is read */
 static int g_turbo_armed, g_turbo_now;
 static volatile int g_turbo_toggle;
 static unsigned long long g_turbo_frames;
+static const EventTrack* g_track; /* si.c's, set by main.c; none in this file's own tests */
+
+void tick_set_event_track(const EventTrack* t)
+{
+    g_track = t;
+}
 
 static void turbo_read(void)
 {
@@ -79,11 +88,15 @@ static void turbo_read(void)
     if (g_turbo_armed) fprintf(stderr, "[turbo] armed for %s: up to 2x there\n", v);
 }
 
-/* The chord (main.c): flip turbo from the next safe point. The answer is
- * what it will be. */
+/* The chord (main.c) and the menu: flip turbo from the next safe point. The
+ * answer is what it will be; during a replay, what it is, and nothing asked. */
 int tick_turbo_toggle(void)
 {
     if (g_turbo_mode < 0) turbo_read();
+    if (g_track && g_track->replaying()) {
+        fprintf(stderr, "[turbo] a replay is running: the toggle takes nothing\n");
+        return g_turbo_armed;
+    }
     g_turbo_toggle = 1;
     return !g_turbo_armed;
 }
@@ -94,15 +107,29 @@ int tick_turbo_now(void)
     return g_turbo_now;
 }
 
+/* Turbo set at frame `f`, said, and written to the recording. */
+static void turbo_set(unsigned f, int on)
+{
+    g_turbo_armed = on;
+    fprintf(stderr, "[turbo] frame %u: %s\n", f, on ? "on" : "off");
+    if (g_track) g_track->record(f, "turbo", on ? "on" : "off");
+}
+
 static void turbo_evaluate(CpuState* s)
 {
     uint32_t scene;
-    int mode;
+    int mode, r;
+    unsigned f = gx_frame_count();
+    char v[8];
     if (g_turbo_mode < 0) turbo_read();
-    if (g_turbo_toggle) {
+    /* Taken here, before the safe-point callbacks, as a live flip is. */
+    r = g_track ? g_track->take("turbo", f, v, sizeof v) : -1;
+    if (r >= 0) {
+        g_turbo_toggle = 0; /* a replay is the whole input */
+        for (; r == 1; r = g_track->take("turbo", f, v, sizeof v)) turbo_set(f, !strcmp(v, "on"));
+    } else if (g_turbo_toggle) {
         g_turbo_toggle = 0;
-        g_turbo_armed = !g_turbo_armed;
-        fprintf(stderr, "[turbo] frame %u: %s\n", gx_frame_count(), g_turbo_armed ? "on" : "off");
+        turbo_set(f, !g_turbo_armed);
     }
     mode = g_turbo_mode ? g_turbo_mode : TURBO_BATTLE | TURBO_SKY; /* armed by the chord alone: both */
     scene = mem_r32(s, SCENE_ID);

@@ -30,6 +30,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from decomp import read_units  # noqa: E402
+
 ARCHIVE = "https://files.decomp.dev/compilers_latest.zip"
 OBJDIFF = (
     "https://github.com/encounter/objdiff/releases/download/v3.8.1/objdiff-cli-windows-x86_64.exe"
@@ -38,16 +42,16 @@ RECORD = "TOOLCHAIN.sha256"
 
 
 def versions_from_units(path: Path) -> list[str]:
-    """The compiler versions units.txt names, in first-seen order."""
+    """The compiler versions units.txt names, in first-seen order, read by
+    decomp.read_units: a row it would refuse is refused here too, with its
+    line, rather than skipped or half-read (CLAUDE.md, "units.txt is
+    tab-separated")."""
     out: list[str] = []
     if not path.exists():
         return out
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) > 1 and parts[1].strip() and parts[1].strip() not in out:
-            out.append(parts[1].strip())
+    for unit in read_units(path):
+        if unit.version not in out:
+            out.append(unit.version)
     return out
 
 
@@ -149,7 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.versions:
         versions = [v.strip() for v in args.versions.split(",") if v.strip()]
     else:
-        versions = versions_from_units(args.units)
+        try:
+            versions = versions_from_units(args.units)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         if not versions:
             print(f"error: no compiler versions in {args.units}", file=sys.stderr)
             return 1

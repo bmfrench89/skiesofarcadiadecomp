@@ -11,10 +11,14 @@
  *   fade       fade.direction 0: a field a map load left black comes back
  *   encounters:off / encounters:on   encounter.steps 0 at every safe point
  *              while off, so the roll never passes
+ * Each one written is an `@action` line in a recording (E3), in SOA_ACTION's
+ * names; during a replay the recording's lines run at their frames, and
+ * SOA_ACTION and the menu take nothing.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "actions.h"
 #include "cpu.h"
+#include "eventtrack.h"
 #include "plat.h"
 #include "soa_mod.h"
 #include "soa_gamedata.h"
@@ -42,6 +46,9 @@ static struct {
 static int g_sched_n;
 static plat_a32 g_req; /* kind << 24 | map, 0 none: the menu's, from the UI thread */
 static int g_enc_off;
+static const EventTrack* g_track; /* si.c's, set by main.c */
+
+void actions_set_event_track(const EventTrack* t) { g_track = t; }
 
 int actions_encounters_off(void) { return g_enc_off; }
 int actions_warp_count(void) { return WARP_MAPS; }
@@ -58,6 +65,7 @@ static int warpable(uint32_t map)
 int actions_request(int kind, uint32_t map)
 {
     if (kind <= ACT_NONE || kind >= ACT_KINDS) return 0;
+    if (g_track && g_track->replaying()) return 0; /* a replay is the whole input (E3) */
     return plat_cas32(&g_req, 0, (int32_t)((uint32_t)kind << 24 | (map & 0xFFFFFFu))) == 0;
 }
 
@@ -68,6 +76,25 @@ static uint32_t map_of(const char* t)
     if (strlen(t) != 4 || t[3] < 'a' || t[3] > 'z') return 0;
     if (t[0] < '0' || t[0] > '9' || t[1] < '0' || t[1] > '9' || t[2] < '0' || t[2] > '9') return 0;
     return (uint32_t)((t[0] - '0') * 100 + (t[1] - '0') * 10 + (t[2] - '0')) << 8 | (uint32_t)t[3];
+}
+
+/* NAME[:ARG] in SOA_ACTION's names: its kind, and a warp's map; ACT_NONE when
+ * it is not one. */
+static int kind_of(const char* item, uint32_t* map)
+{
+    int k;
+    *map = 0;
+    if (!strncmp(item, "warp:", 5)) return (*map = map_of(item + 5)) != 0 ? ACT_WARP : ACT_NONE;
+    for (k = ACT_PART; k < ACT_KINDS; k++)
+        if (!strcmp(item, k_name[k])) return k;
+    return ACT_NONE;
+}
+
+/* The other way: what an `@action` line and SOA_ACTION call it. */
+static void text_of(int kind, uint32_t map, char out[24])
+{
+    if (kind == ACT_WARP) snprintf(out, 24, "warp:%03u%c", map >> 8, (char)(map & 0xFF));
+    else snprintf(out, 24, "%s", k_name[kind]);
 }
 
 int actions_parse(const char* text)
@@ -82,8 +109,8 @@ int actions_parse(const char* text)
         at = strrchr(item, '@');
         char* end = NULL;
         unsigned long frame;
-        int kind = ACT_NONE, k;
-        uint32_t map = 0;
+        int kind;
+        uint32_t map;
         while (*item == ' ') item++;
         if (!at || !at[1]) {
             fprintf(stderr, "[action] `%s` is not NAME[:ARG]@FRAME: nothing scheduled\n", item);
@@ -95,15 +122,10 @@ int actions_parse(const char* text)
             fprintf(stderr, "[action] `%s@%s`: the frame is not a number: nothing scheduled\n", item, at + 1);
             return -1;
         }
-        if (!strncmp(item, "warp:", 5)) {
-            kind = ACT_WARP;
-            if (!(map = map_of(item + 5))) {
-                fprintf(stderr, "[action] `%s`: a warp names a map like 116c: nothing scheduled\n", item);
-                return -1;
-            }
-        } else {
-            for (k = ACT_PART; k < ACT_KINDS; k++)
-                if (!strcmp(item, k_name[k])) kind = k;
+        kind = kind_of(item, &map);
+        if (kind == ACT_NONE && !strncmp(item, "warp:", 5)) {
+            fprintf(stderr, "[action] `%s`: a warp names a map like 116c: nothing scheduled\n", item);
+            return -1;
         }
         if (kind == ACT_NONE) {
             fprintf(stderr, "[action] `%s` is not warp:NNNx, part, ending, fade, encounters:off or encounters:on: "
@@ -129,16 +151,19 @@ static void name_of(uint32_t map, char out[16])
     snprintf(out, 16, "%03u%c", map >> 8, (char)(map & 0xFF));
 }
 
-/* One action now: written, or refused with its reason. */
-static void run(CpuState* s, int kind, uint32_t map)
+/* One action now: written and recorded (NULL), or refused with its reason,
+ * said and returned. */
+static const char* run(CpuState* s, int kind, uint32_t map)
 {
     const char* why = NULL;
-    char m[16];
+    char m[16], text[24];
     unsigned f = gx_frame_count();
+    text_of(kind, map, text);
     if (kind == ACT_ENCOUNTERS_OFF || kind == ACT_ENCOUNTERS_ON) {
         g_enc_off = kind == ACT_ENCOUNTERS_OFF;
         fprintf(stderr, "[action] frame %u: encounters %s\n", f, g_enc_off ? "off" : "on");
-        return;
+        if (g_track) g_track->record(f, "action", text);
+        return NULL;
     }
     if (kind == ACT_FADE) {
         if (mem_r32(s, SOA_SCENE) != 6u) why = "not on the field";
@@ -152,7 +177,7 @@ static void run(CpuState* s, int kind, uint32_t map)
     if (why) {
         fprintf(stderr, "[action] frame %u: %s%s%s refused, %s\n", f, k_name[kind], kind == ACT_WARP ? " to " : "",
                 kind == ACT_WARP ? m : "", why);
-        return;
+        return why;
     }
     switch (kind) {
     case ACT_WARP:
@@ -176,20 +201,45 @@ static void run(CpuState* s, int kind, uint32_t map)
         fprintf(stderr, "[action] frame %u: the fade turned in\n", f);
         break;
     }
+    if (g_track) g_track->record(f, "action", text);
+    return NULL;
+}
+
+/* A recording's action, run at its frame; one this replay cannot run is the
+ * replay leaving the recording. */
+static void replay_one(CpuState* s, unsigned f, const char* text)
+{
+    char what[48];
+    uint32_t map;
+    int kind = kind_of(text, &map);
+    const char* why = kind == ACT_NONE ? "not an action this build knows" : run(s, kind, map);
+    snprintf(what, sizeof what, "action %s", text);
+    if (why) g_track->left(f, what, why);
 }
 
 void actions_safe_point(CpuState* s)
 {
-    int i;
+    int i, r;
     int32_t req;
     unsigned f = gx_frame_count();
-    for (i = 0; i < g_sched_n; i++)
-        if (g_sched[i].kind != ACT_NONE && f >= g_sched[i].frame) {
-            run(s, g_sched[i].kind, g_sched[i].map);
-            g_sched[i].kind = ACT_NONE;
-        }
-    req = plat_load32(&g_req);
-    if (req && plat_cas32(&g_req, req, 0) == req) run(s, (int)((uint32_t)req >> 24), (uint32_t)req & 0xFFFFFFu);
+    char text[24];
+    r = g_track ? g_track->take("action", f, text, sizeof text) : -1;
+    if (r >= 0) {
+        /* A replay is the whole input (E3): its actions at their frames, and
+         * SOA_ACTION's and the menu's none. */
+        for (; r == 1; r = g_track->take("action", f, text, sizeof text)) replay_one(s, f, text);
+        req = plat_load32(&g_req);
+        if (req && plat_cas32(&g_req, req, 0) == req)
+            fprintf(stderr, "[action] frame %u: a replay is running: the menu's request takes nothing\n", f);
+    } else {
+        for (i = 0; i < g_sched_n; i++)
+            if (g_sched[i].kind != ACT_NONE && f >= g_sched[i].frame) {
+                run(s, g_sched[i].kind, g_sched[i].map);
+                g_sched[i].kind = ACT_NONE;
+            }
+        req = plat_load32(&g_req);
+        if (req && plat_cas32(&g_req, req, 0) == req) run(s, (int)((uint32_t)req >> 24), (uint32_t)req & 0xFFFFFFu);
+    }
     if (g_enc_off) mem_w32(s, SOA_ENCOUNTER_STEPS, 0);
 }
 

@@ -153,7 +153,8 @@ EXIT_MEANINGS = {
     8: "SOA_STRICT: an MMIO access outside the modelled range (note, hle.c)",
     9: "the disc layer stopped the run (runtime/disc.c)",
     10: "a mod faulted inside a battle event, named in the log (runtime/mod.c, R1)",
-    11: "SOA_PAD_STRICT: the replay's configuration differs from its recording's (runtime/si.c)",
+    11: "SOA_PAD_STRICT: the replay's configuration differs from its recording's, or the replay "
+    "left its recording (runtime/si.c)",
 }
 
 KEYS = ("name", "summary", "frames", "pad", "env", "shows", "evidence", "note")

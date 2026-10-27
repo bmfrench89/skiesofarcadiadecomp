@@ -224,14 +224,12 @@ def driver(p: toolchain.Profile) -> tuple[Path, Path]:
     """The fake guest, kept in build/modkit and rebuilt when a source is newer."""
     out = ROOT / "build" / "modkit" / p.name
     exe = out / ("mods" + p.exeext)
+    # every file the fake guest is built from, and the headers they share:
+    # savext.c, savenow.c and actions.c joined it after this list was written
     sources = [
-        ROOT / "runtime" / "mod.c",
-        ROOT / "runtime" / "sha1.c",
-        ROOT / "runtime" / "tick.c",
-        ROOT / "runtime" / "soa_mod.h",
-        ROOT / "runtime" / "mod.h",
+        *(s for s in modkit.driver_sources(out) if s.name != "driver.c"),
+        *(ROOT / "runtime" / h for h in ("soa_mod.h", "mod.h", "eventtrack.h", "actions.h")),
         Path(modkit.__file__),
-        *toolchain.runtime_support_sources(),
     ]
     if exe.is_file() and all(s.stat().st_mtime <= exe.stat().st_mtime for s in sources):
         return exe, out / "fake.dol"

@@ -74,12 +74,16 @@ uint32_t actions_warp_map(int i) { static const uint32_t m[3] = {0x0261, 0x6761,
 
 static const char* const k_names[] = {"up", "down", "left", "right", "bl", "br", "ok", "back", "toggle"};
 
+/* si.c's si_replay_running, as main.c hands it over (E3) */
+static int replay_yes(void) { return 1; }
+
 int main(int argc, char** argv)
 {
     char cmd[32];
     while (scanf("%31s", cmd) == 1) {
         unsigned k;
         if (!strcmp(cmd, "open")) { menu_open(); printf("open %d\n", menu_is_open()); continue; }
+        if (!strcmp(cmd, "replaying")) { menu_set_replaying(replay_yes); continue; }
         if (!strcmp(cmd, "state")) { int f, t; if (scanf("%d %d", &f, &t) != 2) return 1; menu_set_state(f, t); continue; }
         if (!strcmp(cmd, "notice")) { /* H17d: "notice MS text_with_underscores", "-" for none */
             unsigned ms;
@@ -188,6 +192,26 @@ def test_the_debug_page_s_rows_ask_for_their_actions(driver):
     for downs, act in ((1, "action 2 0"), (2, "action 4 0"), (3, "action 5 0"), (4, "action 3 0")):
         assert act in run(driver, debug + "down " * downs + "ok"), (downs, act)
     assert run(driver, debug + "back")[-1] == "back -> 1 open 1"  # back to the main page
+
+
+def test_during_a_replay_the_rows_that_change_the_game_take_nothing(driver):
+    """E3: a replay is the whole input, so Turbo, Save now and each Debug row
+    answer only a redraw and leave the menu open (the status line says why),
+    and no action is asked for; Fullscreen, which changes no game state,
+    still toggles. The mutation, the check left out of the Turbo row, answers
+    9 there."""
+    debug = "replaying open down down down down down down ok "
+    out = run(driver, "replaying open down down down right down right down ok")
+    assert out[4:] == [
+        "right -> 5 open 1",  # fullscreen, still
+        "down -> 1 open 1",
+        "right -> 1 open 1",  # turbo: nothing
+        "down -> 1 open 1",
+        "ok -> 1 open 1",  # save now: nothing, and the menu stays open
+    ], out
+    for downs in range(5):
+        out = run(driver, debug + "down " * downs + "ok")
+        assert out[-1] == "ok -> 1 open 1" and not any(x.startswith("action ") for x in out), out
 
 
 def test_a_mod_s_options_change_and_are_saved(driver):
@@ -347,3 +371,21 @@ def test_the_panel_and_its_text(driver, tmp_path):
             got = px(buf, w, tx + c * s, ty + r * s)
             lit = got == (0x60, 0xC8, 0xF0)  # TITLE, BGR
             assert lit == (bit == "#"), (r, c, got)
+
+
+def test_during_a_replay_the_status_line_says_so(driver, tmp_path):
+    """E3: the refused rows' answer is not silence. The Turbo row taken during
+    a replay and outside one draw the same page but for one line of text, the
+    status under the rows. The mutation, the status left unset, draws the two
+    pages the same."""
+    w, h = 640, 480
+    refused = draw(driver, tmp_path, "replaying open down down down down right", w, h)
+    taken = draw(driver, tmp_path, "open down down down down right", w, h)
+    stride = w * 4
+    rows = [
+        y
+        for y in range(h)
+        if refused[y * stride : (y + 1) * stride] != taken[y * stride : (y + 1) * stride]
+    ]
+    assert rows, "the status line was not drawn"
+    assert rows[-1] - rows[0] < 9 * 2, rows  # one line of text at scale 2

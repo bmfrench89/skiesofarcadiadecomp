@@ -33,6 +33,8 @@
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include "cpu.h"
+#include "eventtrack.h"
+#include "plat.h"
 #include "soa_mod.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -579,27 +581,36 @@ static void pad_record(const PadState* st, unsigned frame)
 /* ---- the event track (docs/specs/event-track.md) -------------------------
  * What changes the game besides pad 1, as `F @kind value` lines in the same
  * file: since E2, `@pad2 STATE` and `@pad2 off` (port 2, which mods read)
- * and `@host NAMES` (the host buttons, which mods read and chords come from).
- * Each kind is written when it changes, kept apart from pad 1's lines on
- * replay, in its own frame order, and read through its own cursor. A replay
- * is the whole input for these as for pad 1: none recorded means none. */
-enum { EV_PAD2, EV_HOST, EV_KINDS };
-static const char* const k_ev_names[EV_KINDS] = {"pad2", "host"};
-typedef struct { unsigned frame; uint8_t kind, there, host; PadState st; } EventLine;
+ * and `@host NAMES` (the host buttons, which mods read and chords come from),
+ * each written when it changes; since E3, `@turbo on|off`, `@action
+ * NAME[:ARG]` and `@savenow`, each written when tick.c, actions.c or
+ * savenow.c applies one at a safe point (eventtrack.h). Each kind is kept
+ * apart from pad 1's lines on replay, in its own frame order, and read
+ * through its own cursor: the line in effect for pad 2 and the host buttons,
+ * the next line due for the rest, each taken once. A replay is the whole
+ * input for these as for pad 1: none recorded means none. */
+enum { EV_PAD2, EV_HOST, EV_TURBO, EV_ACTION, EV_SAVENOW, EV_KINDS };
+static const char* const k_ev_names[EV_KINDS] = {"pad2", "host", "turbo", "action", "savenow"};
+static const char* const k_ev_grammar[EV_KINDS] = {"buttons [stick] [cstick] [triggers] | off", "host+buttons | -",
+                                                   "on | off", "NAME[:ARG]", ""};
+typedef struct { unsigned frame; uint8_t kind, there, host; PadState st; char text[24]; } EventLine;
 static EventLine* g_ev;
 static int g_ev_n, g_ev_cap;
 static int g_ev_at[EV_KINDS], g_ev_next[EV_KINDS]; /* the line in effect, -1 none; the next of its kind */
-static int g_replaying; /* the recording held a line of either sort, so it is the whole input */
+/* The recording held a line of either sort, so it is the whole input. Set
+ * once, on the guest thread; the menu reads it from the UI thread. */
+static plat_a32 g_replaying;
 static PadState g_rec_p2;
 static int g_rec_p2_there;
 static uint32_t g_rec_host;
 
-/* One event line, written whole, as pad_record writes its lines. */
+/* One event line, written whole, as pad_record writes its lines; a kind
+ * with no value is the frame and the kind alone. */
 static void event_record(unsigned frame, const char* kind, const char* value)
 {
     char line[192];
     if (!g_rec || g_rec_done) return;
-    snprintf(line, sizeof line, "%u @%s %s\n", frame, kind, value);
+    snprintf(line, sizeof line, "%u @%s%s%s\n", frame, kind, *value ? " " : "", value);
     fputs(line, g_rec);
     fflush(g_rec);
 }
@@ -826,14 +837,23 @@ static int pad_parse_event(char* line, const char* path, unsigned lineno, unsign
             ok = pad_parse_line(again, &f) == 1;
             e.st = f.st;
         }
-    } else {
+    } else if (k == EV_HOST) {
         tok = pad_token(&p);
         ok = tok && pad_parse_host(tok, &e.host) && !pad_token(&p);
+    } else if (k == EV_SAVENOW) {
+        ok = !pad_token(&p);
+    } else {
+        /* turbo's value is checked here; an action's name is actions.c's to
+         * know, when the line comes due */
+        tok = pad_token(&p);
+        ok = tok && strlen(tok) < sizeof e.text && !pad_token(&p) &&
+             (k != EV_TURBO || !strcmp(tok, "on") || !strcmp(tok, "off"));
+        if (ok) snprintf(e.text, sizeof e.text, "%s", tok);
     }
     if (!ok) {
         if ((*bad)++ < 5)
-            fprintf(stderr, "[pad] %s:%u is not \"frame @%s %s\"; that line is ignored\n", path, lineno, kind,
-                    k == EV_PAD2 ? "buttons [stick] [cstick] [triggers] | off" : "host+buttons | -");
+            fprintf(stderr, "[pad] %s:%u is not \"frame @%s%s%s\"; that line is ignored\n", path, lineno, kind,
+                    *k_ev_grammar[k] ? " " : "", k_ev_grammar[k]);
         return 0;
     }
     if (!event_push(&e)) return 0;
@@ -898,7 +918,7 @@ static void pad_replay_load(void)
         fprintf(stderr, "[pad] %s holds no usable lines, so nothing will be pressed\n", path);
         return;
     }
-    g_replaying = 1;
+    plat_cas32(&g_replaying, 0, 1);
     for (k = 0; k < EV_KINDS; k++) {
         g_ev_at[k] = -1;
         for (g_ev_next[k] = 0; g_ev_next[k] < g_ev_n && g_ev[g_ev_next[k]].kind != k; g_ev_next[k]++) {}
@@ -962,6 +982,11 @@ static void pad_replay_load(void)
     if (script && *script) fprintf(stderr, "[pad] SOA_PAD is set as well, and is ignored\n");
     script = getenv("SOA_PAD2");
     if (script && *script) fprintf(stderr, "[pad] SOA_PAD2 is set as well, and is ignored\n");
+    /* E3: the knobs that schedule events are input as well */
+    script = getenv("SOA_ACTION");
+    if (script && *script) fprintf(stderr, "[pad] SOA_ACTION is set as well, and is ignored\n");
+    script = getenv("SOA_SAVE_NOW");
+    if (script && *script) fprintf(stderr, "[pad] SOA_SAVE_NOW is set as well, and is ignored\n");
 }
 
 void gx_set_frame_limit(unsigned frames);
@@ -1034,7 +1059,7 @@ static void pad_replay_end(unsigned frame)
 static int pad_replay(PadState* st, unsigned frame)
 {
     if (!g_play_tried) pad_replay_load();
-    if (!g_replaying) return 0;
+    if (!plat_load32(&g_replaying)) return 0;
     /* One entry per read, not every entry that is due. A frame the guest
      * never polled would let a while-loop step over that frame's entry
      * without anyone reading it; stepping once hands it over a read late
@@ -1050,6 +1075,60 @@ static int pad_replay(PadState* st, unsigned frame)
     }
     *st = g_play_i < 0 ? PAD_NEUTRAL : g_play[g_play_i].st;
     return 1;
+}
+
+/* ---- the event track's ends (E3, eventtrack.h) ---------------------------
+ * tick.c, actions.c and savenow.c apply their events at the safe point, on
+ * the guest thread, and reach the file through these, which main.c hands
+ * them as si_event_track(). */
+
+/* An event applied: written if a recording is being made. A safe point can
+ * come before the first controller read, so the file may open here. */
+static void event_applied(unsigned frame, const char* kind, const char* value)
+{
+    if (!g_rec_tried) pad_record_open();
+    event_record(frame, kind, value);
+}
+
+/* The next `@kind` line due at or before `frame`, taken: 1; 0 none due; -1
+ * no replay. The first call loads the replay, as a controller read does. */
+static int event_take(const char* kind, unsigned frame, char* out, size_t cap)
+{
+    int k, j;
+    if (!g_play_tried) pad_replay_load();
+    if (!plat_load32(&g_replaying)) return -1;
+    for (k = EV_TURBO; k < EV_KINDS && strcmp(kind, k_ev_names[k]) != 0; k++) {}
+    if (k == EV_KINDS) return 0;
+    j = g_ev_next[k];
+    if (j >= g_ev_n || g_ev[j].frame > frame) return 0;
+    snprintf(out, cap, "%s", g_ev[j].text);
+    for (j++; j < g_ev_n && g_ev[j].kind != k; j++) {}
+    g_ev_next[k] = j;
+    return 1;
+}
+
+/* Whether a replay is the whole input: any thread (the menu's rows ask). */
+int si_replay_running(void)
+{
+    return plat_load32(&g_replaying) != 0;
+}
+
+/* A recorded event this replay could not apply: the game is no longer the
+ * one the recording was made in, which SOA_PAD_STRICT refuses. */
+static void event_left(unsigned frame, const char* what, const char* why)
+{
+    fprintf(stderr, "[event] frame %u: the recording's %s was refused here, %s: the replay has left the recording\n",
+            frame, what, why);
+    if (pad_strict()) {
+        fprintf(stderr, "[event] SOA_PAD_STRICT: a replay that has left its recording is refused (exit 11)\n");
+        exit(11);
+    }
+}
+
+const EventTrack* si_event_track(void)
+{
+    static const EventTrack track = {event_applied, event_take, si_replay_running, event_left};
+    return &track;
 }
 
 /* The change line the saved runs are read by. It used to live in
@@ -1159,7 +1238,7 @@ int si_read_pad(unsigned port, void* out)
     if (port != 2) return 0;
     if (!g_rec_tried) pad_record_open();
     if (!g_play_tried) pad_replay_load();
-    if (g_replaying) {
+    if (plat_load32(&g_replaying)) {
         int at = event_at(EV_PAD2, frame);
         *st = at < 0 ? PAD_NEUTRAL : g_ev[at].st;
         return at >= 0 && g_ev[at].there;
@@ -1226,7 +1305,7 @@ static void host_update(unsigned frame)
     g_host_frame = frame;
     g_host_prev = g_host;
     g_host = 0;
-    if (g_replaying) {
+    if (plat_load32(&g_replaying)) {
         int at = event_at(EV_HOST, frame);
         g_host = at < 0 ? 0 : g_ev[at].host;
     } else {
@@ -1242,7 +1321,7 @@ static void host_update(unsigned frame)
         event_record(frame, "host", names);
         g_rec_host = g_host;
     }
-    if (g_replaying) return;
+    if (plat_load32(&g_replaying)) return;
     pressed = g_host & ~g_host_prev;
     for (i = 0; i < sizeof k_chords / sizeof k_chords[0]; i++) {
         if ((g_host & k_chords[i].mask) != k_chords[i].mask || !(pressed & k_chords[i].mask)) continue;
@@ -1531,5 +1610,16 @@ void si_report(void)
                             "because more than one was due at the same read\n",
                     (unsigned long long)g_play_late, g_play_late == 1 ? "" : "s",
                     g_play_late == 1 ? "it" : "them");
+    }
+    if (plat_load32(&g_replaying)) {
+        /* E3's events are taken once each, so one left over never happened */
+        int k, j, left = 0;
+        unsigned from = 0;
+        for (k = EV_TURBO; k < EV_KINDS; k++)
+            for (j = g_ev_next[k]; j < g_ev_n; j++)
+                if (g_ev[j].kind == k && (!left++ || g_ev[j].frame < from)) from = g_ev[j].frame;
+        if (left)
+            fprintf(stderr, "[event] %d event line%s from frame %u on never played: the run stopped first\n", left,
+                    left == 1 ? "" : "s", from);
     }
 }

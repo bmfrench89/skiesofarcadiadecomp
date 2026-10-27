@@ -11,6 +11,8 @@ what it downloaded, so a compiler that changes under a match leaves no trace.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import decomp as DC  # noqa: E402
@@ -53,6 +55,20 @@ def test_the_real_units_need_more_than_one_compiler():
 
 def test_a_units_file_that_is_not_there_asks_for_nothing(tmp_path):
     assert FT.versions_from_units(tmp_path / "nope.txt") == []
+
+
+def test_a_row_decomp_refuses_is_refused_here_too(tmp_path):
+    """fetch_toolchain used to read units.txt itself, and a row written with
+    spaces for tabs was skipped without a word, so the compiler it named was
+    never fetched. It reads the file through decomp.read_units now, which
+    names the line, and the tool stops on it. The mutation, the old reader
+    back, returns the other versions and fetches."""
+    path = tmp_path / "units.txt"
+    path.write_text(SAMPLE + "src/e.c 1.2.6 -O4,p\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"units\.txt:6: not source<TAB>compiler<TAB>flags"):
+        FT.versions_from_units(path)
+    assert FT.main(["--units", str(path), "--vendor", str(tmp_path / "vendor")]) == 1
+    assert not (tmp_path / "vendor").exists()  # stopped before fetching anything
 
 
 def test_every_unit_missing_a_compiler_is_named(tmp_path):
