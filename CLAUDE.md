@@ -7,8 +7,14 @@ hand-decompiled C in `src/` matched byte for byte against the original. Plan of 
 how it fits together [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Every rule here was
 broken here first, with its reason attached, because one without its reason is argued away.
 
-**The owner's goal is any Windows or Android device** (2026-09-30): x86-64 PCs and
-handhelds (this machine is their ROG Ally X), the Steam Deck, and Android flagships.
+**The owner's direction since 2026-10-27 (D-46) is mods.** They play the game on another
+recompilation of it (github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp, GPL-3.0), which already ships
+widescreen, 60 fps and Android; this repository is the mod platform it cannot be (code-changing
+mods), milestone 3's difficulty and boosts first. The play path -- renderers, presenters, Android,
+distribution -- is kept to maintenance: defects fixed, no new features. Read the other port's notes
+freely and copy none of its code. Before that, the goal was any Windows or Android device
+(2026-09-30): x86-64 PCs and handhelds (this machine is their ROG Ally X), the Steam Deck, and
+Android flagships.
 Linux runs natively since L10 (2026-10-05; no owner session there yet), and Android on the x86-64
 emulator since L12c, where since L12d it imports the game library and the disc through the file
 picker (2026-10-06; no phone yet). What is next, in order, is

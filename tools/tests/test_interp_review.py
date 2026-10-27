@@ -77,3 +77,25 @@ def test_a_folder_without_a_frame_before_is_said(tmp_path, capsys):
     png.write_rgba(frames / "0100.mid.png", W, H, picture(20))
     assert interp_review.main([str(frames), "--out", str(tmp_path / "review")]) == 1
     assert "no snapshot" in capsys.readouterr().out
+
+
+def test_an_out_folder_holding_the_frames_is_refused_and_nothing_is_removed(tmp_path):
+    """The page's folder is removed before it is written. Given the frames
+    folder or a folder above it, the tool refuses even where an index.html
+    makes it look like a page; given a folder of other files with no page
+    in it, it refuses too; and every file stays. The mutations, either rule
+    left out, remove the frames or the other files."""
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    snapshot(frames, 100, picture(10), [picture(20)], picture(30))
+    for page_like in (frames, tmp_path):  # the first rule alone refuses these
+        (page_like / "index.html").write_text("<p>an old page</p>", encoding="utf-8")
+    other = tmp_path / "notes"
+    other.mkdir()
+    (other / "keep.txt").write_text("mine", encoding="utf-8")  # the second rule alone refuses this
+    for out in (frames, tmp_path, other):
+        assert interp_review.main([str(frames), "--out", str(out)]) == 2, out
+    assert (frames / "0100.png").is_file() and (other / "keep.txt").is_file()
+    page = tmp_path / "review"
+    assert interp_review.main([str(frames), "--out", str(page)]) == 0
+    assert interp_review.main([str(frames), "--out", str(page)]) == 0  # its own page, again

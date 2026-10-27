@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1930 |
+| Python tests | 1939 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -423,10 +423,12 @@ washed-out colour and a correct fix would have failed the suite.
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
 spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h, H17i's
-finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26), pushed: the event track is done,
-and gameplay milestone 2's list with it but for I7 (T1's deltas), which a session's note holds until a mod
-needs one. The full pre-push suite passes: 1930 tests in 103 files (1889
-passed, 41 skipped here; 730 skip with MSVC hidden, so 689 want MSVC). Nothing is
+finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26), and the same night the 60 fps
+review's fixes, Setup's example mods kept out of a player's install, WS0's first look and the owner's D-46
+("Narrow to mods"), pushed: the event track is done, and gameplay milestone 2's list with it but for I7
+(T1's deltas), which a session's note holds until a mod needs one; milestone 3 is next.
+The full pre-push suite passes: 1939 tests in 103 files (1898
+passed, 41 skipped here; 737 skip with MSVC hidden, so 696 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
 
@@ -450,71 +452,38 @@ entry of the same name:
 Owner decisions taken: D-43 (the gameplay core), D-44 (gameplay Q2: the honest save promise, no mod-map or gear
 fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with it.
 
-**Next, in order.** PLAN-NEXT §0 has the order; this is where it now points.
-1. **60 fps, finished** (the owner's D-45, 2026-10-25: "I want the 60fps finished next"). The research is
-   `docs/research/60fps-across-ports.md`: 60 becomes the default on the GPU renderer once (a) a display-rate mode
-   interpolates to any refresh rate, RT64's "Display" recipe, since today `present_interp` shows in-between images at
-   60/120/180/240 Hz only and the owner's 85 Hz monitor gets none; (b) the fallback tells the player; (c) session D's
-   artifact classes are fixed (H18); (d) Android asks for 60. The display-rate mode is specified as **H17c**
-   (`docs/specs/interp-display.md`): H17c-a, slices drawn on the GPU at each weight, and H17c-b, `interp = display`
-   at the monitor's own rate, are built (FINDINGS "H17c-a", "H17c-b"), and H17d, (b) the notice the player sees
-   (FINDINGS "H17d"). H17e fixed the budget, which paused smooth motion on the game's own jitter (now the
-   median of the last 31 frames over 35.5 ms, `runtime/interp_budget.h`), and found where smooth motion really
-   does slow the game: the cutscene aboard Alfonso's ship (battle scenario, from frame about 4124), where the
-   slices' GPU time lands on the game's critical path because nothing of the GPU's frame overlaps the game's
-   next (FINDINGS "H17e"). H17f built that overlap and took it out: measured A/B in one build it changed
-   nothing (p50 36.2 ms against 36.3; at 3x scale 64.9 against 63.2), because with one command buffer the
-   consumer waits at the next frame's start instead, and at 1x the cutscene's frame is the producer's vertex
-   setup (9.13 ms a frame against 2.67 elsewhere) and the gate's wait for the consumer to record the second
-   draws (3.86 ms), not the GPU (FINDINGS "H17f"). H17g's profile found each draw's 3 KB TEV setup copied
-   whole, twice in display mode; copied as far as it is read, the producer's setup fell 7-11%, and the
-   cutscene's frame did not move: the producer now waits longer at the gate, for the consumer, whose serial
-   path (record the frame, then wait on its one command buffer for the GPU) is the frame (FINDINGS "H17g").
-   H17h built two command buffers in flight (`docs/specs/gpu-frames-in-flight.md`), a copy's image carried
-   into the next slot on the GPU, a copy to texture sent ahead: the cutscene in display mode at p50 33.4 ms
-   against one slot's 36.5, the battle in a window without an in-between image on 15% of frames against 57%
-   (FINDINGS "H17h"). `SOA_GPU_FRAMES=1` is the old route, for A/B. H17i tried the budget's come-back by the
-   median and took it out: back on sooner, the stream stopped again each time in the battle's heavy
-   stretches, so V12's long pause there was right (FINDINGS "H17i"). H17j kept the stream on in a window
-   (`SOA_INTERP_BUDGET=0`, with `SOA_GPU_FRAME_LOG` for each frame's GPU ms): frames 4000-7499 held their
-   pace, so the earlier stops there were the device's state after hours of GPU runs, and the real
-   overload is 7500-8499 on the GPU (FINDINGS "H17j"). H17k built the budget by slice: each step down
-   takes one in-between image a frame away, the weights at the rate the rest serve (60 at 85 Hz), and at
-   none the stream is off; the battle in a window held 60 images a second through 8519-10383 (FINDINGS
-   "H17k"). Measure on a cool device: a run's stops are evidence about that run. Preparing session D's
-   review page (`tools/interp_review.py` over headless 120 Hz runs of title and battle, pages under
-   `build/interp-review/`) found the opening cutscene's fog gone from every in-between image: re-sorted
-   clouds paired in stream order. H18a pairs equal-key draws by position (FINDINGS "H18a"). The
-   per-draw case (Aika's leap, battle frame 9180) is built behind `SOA_INTERP_JUMP=128`, off: it would
-   step any draw that really moves that fast, which the review score cannot see, so session D decides
-   (FINDINGS "H18d"; the score of one frame moves several points between runs). What is left of D-45 otherwise
-   is the owner's (session D, below) and Android's 60 Hz request. Left of D-45's four: (d) Android's 60 Hz request, waiting for the GPU backend on a phone (its
-   spec, android.md §3.12, now asks for it), and
-   (c) session D's classes, where H17c-b's 60 Hz and second-monitor lines are checked too; then `display` becomes
-   the GPU renderer's default. Two defects in the shipped stream were fixed first (FINDINGS "Two defects in
-   H17b and V12"). Another recompilation of this game (ogdanimal's, GPL-3.0) ships interpolated 60: read its notes,
-   copy none of its code without the owner's licence decision.
-2. **The event track's E3: built 2026-10-26** (FINDINGS "E3"): turbo, save now and the debug actions recorded as
+**Next, in order.** PLAN-NEXT §0 has the order; since the owner's D-46 (2026-10-27, "Narrow to mods") it is:
+1. **Milestone 3, the mod platform.** The owner plays the game on another recompilation,
+   github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp (GPL-3.0: read its notes, copy none of its code), which
+   already ships widescreen, 60 fps and Android and cannot run mods that change the game's code. Here: a spec for
+   R3 and R4 first (PLAN-GAMEPLAY-MODS Track R: Easy, Hard and Nightmare; EXP, gold and magic EXP boosts, full
+   Spirit, an escape that works, no knock-outs), then R4, then R3. The night's milestone-3 brief (D-46's research)
+   found none of milestone 3 specified; R3 and R4 need no research item, their fields confirmed in
+   `docs/research/battle-system.md`; R1's events and its `[battle] rewards` line (`runtime/battle.c`) are R4's
+   oracle in one `SOA_BATTLE_LOG` run of the battle scenario; R5 and P7 need a way for mods to draw, which no plan
+   has yet; T5 and R6 need a route for edited enemy files (I7, or a patch at load). Alongside it, the owner's
+   D-47: github.com/ogdanimal/SkiesOfArcadiaLegends-Decomp's CC0 function names and research notes imported, credited.
+2. **The play path in maintenance** (D-46): defects fixed with their checks, no new features. 60 fps stays as
+   built (`interp` opt-in); the night of 2026-10-26 a review fixed four defects in it (FINDINGS "The 60 fps
+   review"), and Setup no longer installs the example mods (FINDINGS "Setup would have installed the example
+   mods"). Dropped: session D, H18's classes, Android's 60 Hz request and widescreen, whose first look stays as a
+   record (FINDINGS "WS0, first look"). The 60 fps story this item used to tell is FINDINGS "H17a" to "H18d".
+3. **The event track's E3: built 2026-10-26** (FINDINGS "E3"): turbo, save now and the debug actions recorded as
    `@turbo`, `@savenow` and `@action` lines and applied from a replay at their frames; the menu's rows take nothing
    during one; a recorded event the replay cannot apply is the replay leaving its recording, exit 11 under
    `SOA_PAD_STRICT`. The event track is done; milestone 2's list is done but for I7 (T1's deltas).
-3. **Ask the owner** (the questions tool) what follows: **D-46** in PLAN-NEXT's register, where the night's
-   research on the four candidates is summarised (widescreen, milestone 3, I7, the R2 thunks), with the
-   session's recommendation: widescreen, starting with WS0, a no-build test of the game's own aspect word.
 
-**Waiting on the owner at the machine** (none of these can be done by a session):
-- the menu's Save now and Debug page, in a window;
-- a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point;
-- session D at 60 or 120 Hz (H17b and V12's look and pacing; the research's checklist of where to look is in
-  `docs/research/60fps-across-ports.md`'s last table), and now `interp = display` with `gpu = vulkan` too: on the
-  Ally X's 120 Hz screen and the 85 Hz ultrawide, with the window moved between them (H17c-b's Done 6 and 7), the
-  notices in the corner (H17d), and whether 120 Hz's battery cost makes a 60 cap the better handheld default;
-  the review pages under `build/interp-review/` (`title` and `battle` at 120 Hz, worst first, and the same
-  with `SOA_INTERP_JUMP=128` as `title-jump128` and `battle-jump128`), the 60-of-85 steps of H17k, and
-  the jump knob against off in motion (Aika's leap at battle frame 9180, the fly-through near title 980);
-- the menu in a window and the Vulkan menu (M8a/b);
-- a battery run (H20);
-- a small mod built from `docs/MODDING.md` alone (T10).
+**`build/` was cleaned 2026-10-27, at the owner's word:** 88 GB of screenshots, frame dumps, GPU check renders
+and test installs deleted; every log, pad file, card, capture and the protected folders (`fifo`, `fifo-pre-c5`,
+`cards`, `savetest`, `gpuset`, `perfset`, `x2`) kept. A FINDINGS reference to a picture from before then no
+longer resolves; its log does.
+
+**Waiting on the owner at the machine** (none of these can be done by a session; since D-46, only what mods need):
+- a small mod built from `docs/MODDING.md` alone (T10);
+- the menu in a window and the Vulkan menu (M8a/b), its Mods page above all, and its Save now and Debug page;
+- a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point.
+Dropped with the play path's features (D-46): session D's look at 60 fps, the `build/interp-review/` and
+`build/ws0/` pages, and the battery run (H20).
 
 **Recipes the last session leaned on** (all in FINDINGS with their runs):
 - *Part G's card to the field:* `--card build/savetest/card-partG.raw` and the pad

@@ -41,9 +41,12 @@ ship because, in display mode, the GPU backend's consumer thread cannot keep up 
     in either slot, or, when none is, the command after the last run. It never moves back.
 - **Knobs.** `SOA_GPU_FRAMES=1` keeps one slot, waiting at every submission as before H17h: the A/B. `--mutate
   deliver-early` hands a frame's picture to gxr when it is submitted rather than finished.
-- **The replay's repeats** (`SOA_REPLAY_REPEAT=N`): only the last pass writes the PNG, so the earlier passes go in
-  flight; each later pass's start finishes the one before and prints that pass's picture's hash, so the in-flight
-  route's pictures are checked against the synchronous one's.
+- **The replay's repeats** (`SOA_REPLAY_REPEAT=N`): only the last pass writes the PNG, so the earlier passes' screen
+  copies go in flight; each later pass's start prints the pass before's picture's hash, so the in-flight route's
+  pictures are checked against the synchronous one's. *Corrected 2026-10-26 (the review of the 60 fps work):* each
+  pass's own `gxr_flush` finishes its slot (`settle`), so no frame is in flight while the next pass is recorded;
+  what `repeat` checks is the hand-over of a picture from a slot finished late, and its guard now asks for two slots,
+  where it once passed a run with one.
 
 ## 3. Done
 

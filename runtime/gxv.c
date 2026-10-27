@@ -276,6 +276,10 @@ typedef struct {
     unsigned cimg_n;
     int deliver_slot, deliver_w, deliver_h;
     int publish_due, publish_w, publish_h;
+    /* this half's texels the other slot's carries read on the GPU
+     * (carry_copy_image), not the host's to write until that slot is
+     * finished; empty when hi <= lo */
+    uint32_t carried_lo, carried_hi;
 } Slot;
 static Slot g_slot[2];
 static int g_cur, g_nslots = 2;
@@ -295,6 +299,7 @@ static int g_mut_deliver_early;    /* --mutate deliver-early (H17h): a frame's p
 static int g_land_early_off;       /* SOA_GPU_LAND_EARLY=0: a copy to texture stays in its slot (H17h's A/B) */
 static int g_poll_off;             /* SOA_GPU_POLL=0: a slot in flight finished only when needed (copyimage's carry) */
 static unsigned long long g_n_copy_submits, g_n_cimg_carried; /* copies sent ahead; their images carried over */
+static unsigned long long g_n_carry_waits; /* host uploads that waited for a carry out of their half to run */
 /* --mutate land-at-copy: every copy waited for and landed at the copy, as V6
  * did; --mutate cimg-cpu: a draw samples the producer's copy image, not yet
  * landed, instead of the pool's. */
@@ -785,6 +790,8 @@ static int slot_finish(int s)
     g_wait_ns += plat_mono_ns() - t0;
     VKCHECK(vkResetFences(g_dev, 1, &S->fence));
     S->inflight = 0;
+    /* its carries have run: the other half's ranges are the host's again */
+    if (g_nslots > 1) g_slot[s ^ 1].carried_lo = g_slot[s ^ 1].carried_hi = 0;
     land_slot(S);
     if (g_timestamps) {
         uint64_t ts[2];
@@ -1414,11 +1421,16 @@ static unsigned tex_texels(const TexCfg* C)
 /* A copy's image from the slot in flight, into this slot's pool on the GPU
  * (H17h): the pool's copy there is the other slot's, written before this
  * submission began -- whose barrier orders it -- and reused once that slot is
- * entered again, so this slot takes its own. Its record, as the copy made it,
+ * entered again, so this slot takes its own. The barrier orders the other
+ * slot's GPU work, not the host's: once that slot is entered again, its next
+ * uploads could land on the range before the GPU has run this copy (the
+ * review of 2026-10-26), so the range is marked there, and pool_claim waits
+ * for this slot before writing over it. Its record, as the copy made it,
  * pointing at the new place; NO_TEXTURE - 1 when this slot has no room. */
 static uint32_t carry_copy_image(const CopyImage* from)
 {
     Slot* S = &g_slot[g_cur];
+    Slot* O = &g_slot[g_cur ^ (g_nslots - 1)];
     const uint32_t* src = (const uint32_t*)g_texrec_map + from->rec;
     uint32_t texels = src[11] * src[22], *rec;
     VkBufferCopy rg;
@@ -1435,6 +1447,13 @@ static uint32_t carry_copy_image(const CopyImage* from)
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &mb, 0, NULL, 0,
                          NULL);
+    if (O->carried_hi <= O->carried_lo) {
+        O->carried_lo = src[0];
+        O->carried_hi = src[0] + texels;
+    } else {
+        if (src[0] < O->carried_lo) O->carried_lo = src[0];
+        if (src[0] + texels > O->carried_hi) O->carried_hi = src[0] + texels;
+    }
     rec = (uint32_t*)g_texrec_map + g_texrec_used;
     memcpy(rec, src, TEXREC_WORDS * 4);
     rec[0] = g_pool_used;
@@ -1445,6 +1464,18 @@ static uint32_t carry_copy_image(const CopyImage* from)
     g_texrec_used += TEXREC_WORDS;
     g_n_cimg_carried++;
     return S->cimg[S->cimg_n - 1].rec;
+}
+
+/* The host's bytes into [at, at + n) of this slot's pool: where a carry the
+ * other slot holds still reads this half on the GPU (carry_copy_image), that
+ * slot is finished first. Only an upload landing on the carried range waits,
+ * and the overlap H17h built stays for the rest. */
+static int pool_claim(uint32_t at, uint32_t n)
+{
+    const Slot* S = &g_slot[g_cur];
+    if (S->carried_hi <= S->carried_lo || at >= S->carried_hi || at + n <= S->carried_lo) return 1;
+    g_n_carry_waits++;
+    return slot_finish(g_cur ^ (g_nslots - 1));
 }
 
 static uint32_t upload_texture(const TexCfg* C)
@@ -1483,12 +1514,14 @@ static uint32_t upload_texture(const TexCfg* C)
          * submission still sample -- what 3.2's append-only rule forbids. */
         const uint32_t* old = (const uint32_t*)g_texrec_map + g_resident[id].rec;
         if (old[11] == (uint32_t)C->lw[0] && old[22] == (uint32_t)C->lh[0]) {
+            if (!pool_claim(old[0], (uint32_t)(C->lw[0] * C->lh[0]))) return NO_TEXTURE;
             memcpy(g_pool_map + (size_t)old[0] * 4, C->level[0], (size_t)C->lw[0] * C->lh[0] * 4);
             g_resident[id].gen = C->tex_gen;
             return g_resident[id].rec;
         }
     }
     if (g_pool_used + n > g_pool_end || g_texrec_used + TEXREC_WORDS > g_texrec_end) return NO_TEXTURE - 1; /* full */
+    if (!pool_claim(g_pool_used, n)) return NO_TEXTURE;
     rec = (uint32_t*)g_texrec_map + g_texrec_used;
     memset(rec, 0, TEXREC_WORDS * 4);
     for (l = 0; l < C->nlevels && l < MAX_MIPS; l++) {
@@ -2356,12 +2389,17 @@ static int screen_end(const DrawCmd* D, int sw, int sh)
     S->publish_due = 1;
     S->publish_w = sw;
     S->publish_h = sh;
-    if (S->land_n) g_n_screen_land++;
     if (g_mut_deliver_early && S->deliver_slot >= 0) { /* before the GPU has drawn it */
         gxr_backend_screen_late(g_screen_map + (size_t)S->deliver_slot * READBACK_BYTES, S->deliver_w, S->deliver_h);
         S->deliver_slot = -1;
     }
-    g_n_screen_async++;
+    /* counted only where it is left in flight: with one slot, or measuring,
+     * submit_next waits for it on the spot (the review of 2026-10-26: the
+     * count said the same with SOA_GPU_FRAMES=1, so repeat could not tell) */
+    if (g_nslots > 1 && !g_measure) {
+        g_n_screen_async++;
+        if (S->land_n) g_n_screen_land++;
+    }
     return submit_next();
 }
 
@@ -3149,10 +3187,10 @@ void gxv_report(void)
     say("frames in flight (H17h): %d slot(s)%s; %llu frames left in flight while the next was recorded (%llu of them "
         "with a copy to texture still to land), %llu waited for with their picture read (a PNG, a hash or a check); "
         "%llu slots waited for at their fence, %.3f ms in all; %llu copies to a texture sent ahead, %llu of their "
-        "images carried into the next slot's pool",
+        "images carried into the next slot's pool, %llu uploads waiting for a carry to run first",
         g_nslots, g_nslots == 1 ? " (SOA_GPU_FRAMES=1: every submission waited for, as before)" : "",
         g_n_screen_async, g_n_screen_land, g_n_screen_read, g_n_fence_waits, (double)g_fence_wait_ns / 1e6,
-        g_n_copy_submits, g_n_cimg_carried);
+        g_n_copy_submits, g_n_cimg_carried, g_n_carry_waits);
     report_pipelines();
     report_frames();
     present_report();

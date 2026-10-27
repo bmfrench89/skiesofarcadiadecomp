@@ -180,6 +180,29 @@ def test_setups_rebuild_translates_again_when_nothing_moved(monkeypatch, tmp_pat
     assert "[build] translate: Rebuild asked for" in capsys.readouterr().out
 
 
+def test_the_install_carries_the_shipped_mods_and_no_example(tmp_path):
+    """recompile.py's GNU build puts every mod's library in gen/mods, the
+    examples' among them; the install copies only the folders of mods/, so
+    soa.ini's `mods = mods` never loads damage-double (R0's check, which
+    doubles every battle's damage) or the lab. Installs made 2026-10-04 to 14
+    carry map-log this way (build/player1, build/r5c/P). The mutation, every
+    folder of gen/mods installed, installs damage-double and the lab too."""
+    gen = tmp_path / "gen"
+    for name in ("encounter-rate", "damage-double", "lab"):
+        (gen / "mods" / name).mkdir(parents=True)
+        (gen / "mods" / name / "mod.dll").write_bytes(b"MZ")
+        (gen / "mods" / name / "mod.ini").write_text(f"id = {name}\n", encoding="utf-8")
+    (gen / "soa.exe").write_bytes(b"MZ")
+    root = tmp_path / "root"
+    root.mkdir()
+    player_build.install(root, gen)
+    assert sorted(p.name for p in (root / "mods").iterdir()) == ["encounter-rate"]
+    assert (root / "mods" / "encounter-rate" / "mod.dll").is_file()
+    shipped = player_build.shipped_mods()
+    assert {"autotext", "coop", "encounter-rate"} <= shipped, shipped
+    assert not {"battle-tally", "damage-double", "lab", "map-log"} & shipped, shipped
+
+
 def test_the_baked_digest_reads_crlf_as_lf(tmp_path):
     """R5-0: a checkout's line endings are not the commit's -- GitHub's
     Windows runner checks out with core.autocrlf on -- and baked= is made of

@@ -852,10 +852,12 @@ int gx_replay(CpuState* s, const char* base)
      * image, so that a profiler (SOA_HOSTPROF) has more than one frame's worth
      * of the pixel path to sample. The PNG is the last pass's, the same, and
      * only the last writes it: the others' pictures are read by nothing, so
-     * the GPU backend leaves each in flight while the next is built (H17h).
-     * The next pass's start finishes it, its picture handed over, and says
-     * that picture's hash, which `gpuspike.py repeat` holds to the last
-     * pass's and a single replay's. */
+     * the GPU backend sends each screen copy in flight and hands its picture
+     * over when the slot is finished (H17h) -- which each pass's own
+     * gxr_flush does, its settle finishing every slot (the review of
+     * 2026-10-26: no frame is in flight while the next pass is recorded).
+     * The next pass's start says that picture's hash, which `gpuspike.py
+     * repeat` holds to the last pass's and a single replay's. */
     const char* rep = getenv("SOA_REPLAY_REPEAT");
     int n = rep && atoi(rep) > 1 ? atoi(rep) : 1, i;
     char out[512];

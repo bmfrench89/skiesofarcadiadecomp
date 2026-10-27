@@ -143,6 +143,20 @@ def main(argv: list[str] | None = None) -> int:
         scored.append((bad / seen, n, mids, (w, h, pa, pm, pb)))
     scored.sort(key=lambda s: -s[0])
     out = a.out
+    # The page's folder is removed and written again, so it must be one: never
+    # the frames, a folder holding them, the project or its build/, nor a
+    # folder with something in it that is not an earlier page (the review of
+    # 2026-10-26: the frames were read, then removed, then copied from).
+    whole, frames = out.resolve(), a.frames.resolve()
+    held = whole == frames or whole in frames.parents
+    if held or whole in (ROOT.resolve(), (ROOT / "build").resolve()):
+        print(f"[review] --out {out} holds the frames or the project; nothing was removed")
+        return 2
+    if out.exists() and any(out.iterdir()) and not (out / "index.html").is_file():
+        print(
+            f"[review] --out {out} has files and no index.html, so it is no earlier page; not removed"
+        )
+        return 2
     if out.exists():
         shutil.rmtree(out)
     (out / "img").mkdir(parents=True)

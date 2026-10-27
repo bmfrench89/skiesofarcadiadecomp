@@ -12,8 +12,15 @@ prevents that.
 
 ## 1. The goal, and where the order lives
 
-The owner's goal (2026-09-30): **"I want to be able to play it on any Windows
-or Android device."**
+**Since 2026-10-27 (D-46): "Narrow to mods."** The owner plays the game on another
+recompilation (github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp, GPL-3.0), which already ships widescreen,
+60 fps and Android. This repository is the mod platform: milestone 3's difficulty presets and
+boosts first, each spec first. The play path (renderers, presenters, Android, distribution) is
+maintenance only: defects fixed, no new features; widescreen and 60 fps polish are dropped. Read
+the other port's notes; copy none of its code (GPL-3.0 into MIT).
+
+The goal before that (2026-09-30), which still says what the port must not break: **"I want to
+be able to play it on any Windows or Android device."**
 
 | In scope | Out of scope |
 |---|---|

@@ -1496,12 +1496,14 @@ RE_IN_FLIGHT = re.compile(
 def repeat(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
     """H17h (docs/specs/gpu-frames-in-flight.md): each capture replayed once
     with one slot (SOA_GPU_FRAMES=1, every submission waited for, as before),
-    then three times (SOA_REPLAY_REPEAT=3) with two, every pass left in flight
-    -- the spike reads the picture after gxr_flush, which settles the last.
-    Every pass's picture, the first two as the next pass's start hands them
-    over, must be the one-slot replay's, and at least two frames must have
-    been left in flight, or the route was never taken. A mutation goes to the
-    three-pass run, and must fail it."""
+    then three times (SOA_REPLAY_REPEAT=3) with two, every pass's screen copy
+    sent in flight and its picture handed over when its slot is finished --
+    by the pass's own gxr_flush, whose settle finishes every slot. Every
+    pass's picture, the first two as the next pass's start says their hashes,
+    must be the one-slot replay's, with two slots and at least two frames
+    left in flight, or the route was never taken (one slot, which this once
+    passed, now fails it). A mutation goes to the three-pass run, and must
+    fail it."""
     code = ready(prof)
     if code is not None:
         return code
@@ -1533,8 +1535,9 @@ def repeat(prof: toolchain.Profile, sets: list[str], mutate: str | None) -> int:
             bad.append(f"exit {one.returncode} and {three.returncode}, hashes {h1} and {h3}")
         if len(passes) != 2:
             bad.append(f"{len(passes)} pass lines where two were due")
-        if flight is None or int(flight.group(2)) < 2:
-            bad.append(f"{flight.group(2) if flight else 'no'} frames left in flight, not two")
+        if flight is None or flight.group(1) != "2" or int(flight.group(2)) < 2:
+            said = f"{flight.group(1)} slot(s), {flight.group(2)}" if flight else "no"
+            bad.append(f"{said} frames left in flight, not two slots and two frames")
         else:
             flown += int(flight.group(2))
         if h1 is not None and any(h != h1 for h in [*passes, h3]):

@@ -148,6 +148,46 @@ int main(void)
                 putchar('0' + (int)given);
             }
             printf(" %llu %llu %llu\n", bud.stops, bud.frames_off, bud.frames_cut);
+        } else if (!strcmp(cmd, "budgett") && scanf("%d", &n) == 1) {
+            /* n frames, each its top and its time, through the budget: the
+             * images given each frame, a digit each, then the steps down */
+            InterpBudget bud;
+            memset(&bud, 0, sizeof bud);
+            for (i = 0; i < n; i++) {
+                if (scanf("%d %lf", &a, &hz) != 2) return 2;
+                putchar('0' + interp_budget_step(&bud, hz, (unsigned)a));
+            }
+            printf(" %llu\n", bud.stops);
+        } else if (!strcmp(cmd, "budgetd") && scanf("%d %d %d %lf %lf %lf", &a, &n, &b, &hz, &w0, &w1) == 6) {
+            /* the review of 2026-10-26: a device on a display of a Hz, as
+             * gxr.c drives it -- the budget's top from the rate, the cap from
+             * what it gives, the frame's weights from interp_rate_frame --
+             * whose frame takes hz ms, and from frame b on w0 more for each
+             * slice the weights build, plus up to w1 either way: the images
+             * given each frame, then the steps down, the frames off, and of
+             * the frames with some taken, how many end on their real image */
+            InterpBudget bud;
+            unsigned lcg = 12345u, top = a >= 60 ? ((unsigned)a + 29u) / 30u - 1u : 1u, last = 0, r = 0, drawn = 0;
+            unsigned long long capped = 0, real = 0;
+            float w[8];
+            memset(&bud, 0, sizeof bud);
+            for (i = 0; i < n; i++) {
+                double t;
+                unsigned given, cap, m, ends;
+                lcg = lcg * 1103515245u + 12345u;
+                t = hz + (i >= b ? w0 * drawn : 0.0) + w1 * ((double)((lcg >> 8) & 0xFFFFu) / 32767.5 - 1.0);
+                given = (unsigned)interp_budget_step(&bud, t, top);
+                cap = given > 0 && given < top ? given : 0u;
+                m = interp_rate_frame((unsigned)a, cap, &last, &r, w);
+                ends = m && w[m - 1] == 1.0f;
+                drawn = given ? m - ends : 0u;
+                if (cap) {
+                    capped++;
+                    real += ends;
+                }
+                putchar('0' + (int)given);
+            }
+            printf(" %llu %llu %llu %llu\n", bud.stops, bud.frames_off, real, capped);
         } else if (!strcmp(cmd, "filter") && scanf("%31s %15s %15s %15s %d", g, cb, md, fl, &n) == 5) {
             /* n pixels, r g b each, through the filters on a 1 x n frame:
              * the refusal ("-" for none), then the pixels */
@@ -551,6 +591,121 @@ def test_the_budget_taking_every_image_at_once_fails(tmp_path):
     exe = build(tmp_path / "build", include_first=inc)
     bad = budget_model_problems(budget_model(exe, BUDGET_MODELS))
     assert [b.split(":")[0] for b in bad] == ["holds"], bad
+
+
+def budget_display(
+    exe: Path, cases: list[tuple[int, int, int, float, float, float]]
+) -> list[tuple]:
+    """Each (Hz, frames, heavy from, base ms, ms a slice, jitter ms) through
+    the driver's display model: the images given each frame, the steps down,
+    the frames off, and of the frames with images taken, how many end on
+    their real image and how many there were."""
+    out = ask(exe, [f"budgetd {hz} {n} {f} {b} {c} {j}" for hz, n, f, b, c, j in cases])
+    return [(ln.split()[0], *(int(v) for v in ln.split()[1:])) for ln in out]
+
+
+# An 85 Hz device that holds one image a frame and not two, turning heavy at
+# each of the six frames of the 85 Hz cycle: the remainder at its first step
+# down is each of 0, 25, 20, 15, 10 and 5 once.
+DISPLAY_PHASES = [(85, 3000, 100 + k, 33.4, 1.5, 0.6) for k in range(6)]
+
+
+def display_phase_problems(got: list[tuple]) -> list[str]:
+    bad = []
+    for (_, _, f, *_), (_, stops, off, real, capped) in zip(DISPLAY_PHASES, got, strict=True):
+        if stops != 1 or off or not capped or real != capped:
+            bad.append(
+                f"heavy from {f}: {stops} steps, {off} frames off, {real} of {capped} capped frames "
+                "ending on their real image"
+            )
+    return bad
+
+
+@needs_msvc
+def test_a_capped_rate_ends_each_frame_on_its_real_image_at_every_phase(driver):
+    """The review of 2026-10-26: at 85 Hz the accumulator's remainder cycles
+    through 0, 25, 20, 15, 10 and 5, and H17k's cap to 60 Hz carried it over,
+    where (r + 60) mod 30 is r for good: every frame got two lerps and never
+    its real image, one slice more than the cap leaves, and five phases in
+    six stepped down again and again. The model now charges the slices the
+    weights build, and a new rate starts the accumulator on a frame's end:
+    at every phase one step down, never off, and every capped frame ends on
+    its real image."""
+    assert display_phase_problems(budget_display(driver, DISPLAY_PHASES)) == []
+
+
+@needs_msvc
+def test_a_remainder_carried_into_the_cap_fails(tmp_path):
+    """The mutation: the rate's change not noticed, the remainder carried."""
+    src = (ROOT / "runtime" / "interp_rate.h").read_text(encoding="utf-8")
+    reset = "    if (hz != *last) {\n        *r = 0;\n        *last = hz;\n    }\n"
+    assert src.count(reset) == 1
+    inc = tmp_path / "inc"
+    inc.mkdir()
+    (inc / "interp_rate.h").write_text(src.replace(reset, ""), encoding="utf-8")
+    exe = build(tmp_path / "build", include_first=inc)
+    bad = display_phase_problems(budget_display(exe, DISPLAY_PHASES))
+    assert len(bad) == 5, bad  # every phase but the one whose remainder is 0
+
+
+def budget_list(exe: Path, frames: list[tuple[int, float]]) -> tuple[str, int]:
+    out = ask(exe, [f"budgett {len(frames)} " + " ".join(f"{t} {ms:.2f}" for t, ms in frames)])
+    given, stops = out[0].split()
+    return given, int(stops)
+
+
+def climb_back(given: str, top: int, after: int) -> int:
+    """Frames from `after` until the full rate is given again."""
+    return given.index(str(top), after) - after
+
+
+SPELL = 300  # frames at 45 ms, ten seconds of a game slowed for its own reasons
+
+
+@needs_msvc
+@pytest.mark.parametrize("top, within", [(3, 300), (7, 600)])
+def test_one_slow_spell_doubles_the_count_once(driver, top, within):
+    """The review of 2026-10-26: H17k doubled the come-back count at every
+    image taken away, so one ten-second spell at 120 Hz (three images a
+    frame) left each step back up waiting 240 frames, at 240 Hz (seven) 960:
+    30 s and nearly 4 minutes before the full rate came back, while frames
+    were on time. Only a failed try doubles it now, as V12 meant: the full
+    rate is back within 10 s at 120 Hz and 20 s at 240. The mutation, the
+    old doubling, takes 894 and 6800 frames."""
+    frames = [(top, 33.4)] * 300 + [(top, 45.0)] * SPELL + [(top, 33.4)] * 9000
+    given, _ = budget_list(driver, frames)
+    assert given[300 + SPELL - 1] == "0", given[300 : 300 + SPELL]  # the spell took every image
+    assert climb_back(given, top, 300 + SPELL) <= within, climb_back(given, top, 300 + SPELL)
+
+
+@needs_msvc
+@pytest.mark.parametrize("top", [1, 3])
+def test_failed_tries_still_back_off(driver, top):
+    """What V12's doubling is for (FINDINGS "H17i"): a device for which any
+    image is too many comes back, is slow, and goes off again, and each try
+    waits longer than the one before, at one image a frame as at three."""
+    ((given, _, _, _),) = budget_model(driver, [(top, 6000, 33.4, 3.0, 0.0)])
+    ups = [i for i in range(1, len(given)) if given[i - 1] == "0" and given[i] != "0"]
+    gaps = [b - a for a, b in zip(ups, ups[1:], strict=False)]
+    assert len(gaps) >= 3 and gaps == sorted(gaps) and gaps[-1] > 4 * gaps[0], gaps
+
+
+@needs_msvc
+def test_a_new_display_keeps_the_images_given(driver):
+    """The review of 2026-10-26: moved from a 144 Hz monitor (four images a
+    frame) holding two to an 85 Hz one (two a frame), the budget kept the
+    two it had taken and so took both of the new rate's -- smooth motion off
+    on a device that held two. What was given stays given now; and a device
+    at the full rate keeps the new full rate, as before, with no wait and no
+    notice that the game is behind. The mutations, the old clamp of what was
+    taken (none given) and the rule kept at the full rate too (two of four
+    after a move up), each fail."""
+    frames = [(4, 33.4)] * 300 + [(4, 45.0)] * 62 + [(4, 33.4)] * 20
+    given, _ = budget_list(driver, frames + [(2, 33.4)] * 5)
+    assert given[len(frames) - 1] == "2", given[300:]  # two of four given at 144 Hz
+    assert given[len(frames)] == "2", given[len(frames) - 5 :]  # and both of 85 Hz's two
+    full, _ = budget_list(driver, [(2, 33.4)] * 300 + [(4, 33.4)] * 5)
+    assert full[299:302] == "244", full[290:]  # 85 Hz in full, then 144 Hz in full at once
 
 
 @needs_msvc

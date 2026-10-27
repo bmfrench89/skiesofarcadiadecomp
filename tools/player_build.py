@@ -364,14 +364,27 @@ def build(root: Path, gen: Path, retranslate: bool, target: str = "windows") -> 
     return f"{step} failed (exit status {code}); the lines above say why"
 
 
+def shipped_mods(source: Path | None = None) -> set[str]:
+    """The mods a player's install carries: the folders of mods/, the ones the
+    port ships (specs/distribution.md, the package's table). recompile.py's
+    GNU build puts examples/mods' libraries in the same gen/mods, for whoever
+    copies one, and soa.ini's `mods = mods` loads every folder it finds: an
+    example installed is an example played, and damage-double, R0's check,
+    doubles every battle's damage."""
+    source = SOURCE if source is None else source
+    mods = source / "mods"
+    return {p.name for p in mods.iterdir() if (p / "mod.ini").is_file()} if mods.is_dir() else set()
+
+
 def install(root: Path, gen: Path) -> str:
-    """soa.exe and the mods at the top of root; soa.ini when there is none.
-    The answer is the exe's sha256."""
+    """soa.exe and the shipped mods at the top of root; soa.ini when there is
+    none. The answer is the exe's sha256."""
     exe = root / "soa.exe"
     shutil.copyfile(gen / "soa.exe", exe)
     mods = gen / "mods"
+    shipped = shipped_mods()
     if mods.is_dir():
-        for folder in sorted(p for p in mods.iterdir() if p.is_dir()):
+        for folder in sorted(p for p in mods.iterdir() if p.is_dir() and p.name in shipped):
             dest = root / "mods" / folder.name
             dest.mkdir(parents=True, exist_ok=True)
             for f in folder.iterdir():

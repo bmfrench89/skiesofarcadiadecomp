@@ -26,6 +26,13 @@ PCs. Vulkan, SDL3 and a build-time shader compiler are allowed (§12, "Shader-co
 and SDL3 vendoring").
 The order this sets is [PLAN-NEXT.md](PLAN-NEXT.md) §0.
 
+**Amended by the owner, 2026-10-27 (D-46): "Narrow to mods."** Another recompilation of the game
+(github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp, GPL-3.0) already plays it on Windows, Linux, macOS and
+Android with widescreen and 60 fps, and the owner plays it there. This project becomes the mod
+platform that one cannot be: mods that change the game's code (difficulty, battle information, new
+content), on a port that ships no translated game code. The play path is kept to maintenance; the
+devices above stay what it must not break.
+
 ### Non-goals (v1)
 
 - Bit-exact hardware emulation. We target *observable behavioural equivalence*.

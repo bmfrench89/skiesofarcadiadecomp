@@ -32,6 +32,25 @@ static inline unsigned interp_rate_weights(unsigned hz, unsigned* r, float* w)
     return n;
 }
 
+/* A frame's weights as the producer makes them (gxr.c): at the display's
+ * `hz`, held to 30 * (cap + 1) while the budget has taken images away (cap,
+ * the in-between images it leaves; 0 when none are taken) -- one image a
+ * frame at 60, two at 90, as a device holding fewer slices has them. A change
+ * of that rate starts the accumulator again on a frame's end: a remainder
+ * carried into a multiple of 30 never comes back to 0, so every frame there
+ * would end short of its real image, and one carried into 75 Hz from 85 can
+ * miss it for good (the review of 2026-10-26). *last is the rate the frame
+ * before's weights were made at. */
+static inline unsigned interp_rate_frame(unsigned hz, unsigned cap, unsigned* last, unsigned* r, float* w)
+{
+    if (cap && hz > 30u * (cap + 1u)) hz = 30u * (cap + 1u);
+    if (hz != *last) {
+        *r = 0;
+        *last = hz;
+    }
+    return interp_rate_weights(hz, r, w);
+}
+
 /* A display's refresh as RT64 rounds it: to the nearest whole Hz, and a rate
  * ending in 9 up, so 59, 59.94 and 60 are all 60, 119.88 is 120 and 143.98
  * is 144. */

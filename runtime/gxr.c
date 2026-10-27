@@ -215,7 +215,7 @@ static unsigned g_mid_wn = 1;
  * between (a frame of one refresh, under 60 Hz). */
 static int g_interp_display;
 static plat_a64 g_rate;
-static unsigned g_rate_r, g_rate_cap = GXR_MID_MAX;
+static unsigned g_rate_r, g_rate_last, g_rate_cap = GXR_MID_MAX; /* g_rate_last: the rate the weights were made at */
 static int g_mid_real, g_mid_skip;
 static unsigned long long g_display_frames, g_display_images;
 static unsigned long long g_slice_draws, g_slice_prev; /* in-between draws handed to slices; with F's positions */
@@ -2768,9 +2768,9 @@ static void interp_display_frame(void)
     }
     /* H17k: images taken away by the budget, the weights at the rate the
      * rest serve -- one a frame at 60, two at 90 -- as a device holding fewer
-     * slices has them; the presenter holds the frame's real image the rest */
-    if (g_mid_cap && hz > 30u * (g_mid_cap + 1u)) hz = 30u * (g_mid_cap + 1u);
-    n = interp_rate_weights(hz, &g_rate_r, w);
+     * slices has them; the presenter holds the frame's real image the rest.
+     * A new rate starts the accumulator again (interp_rate_frame). */
+    n = interp_rate_frame(hz, g_mid_cap, &g_rate_last, &g_rate_r, w);
     g_mid_real = n && w[n - 1] == 1.0f;
     ns = g_mid_real ? n - 1 : n;
     g_mid_skip = ns == 0;

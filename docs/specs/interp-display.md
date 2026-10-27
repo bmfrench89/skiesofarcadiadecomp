@@ -98,6 +98,13 @@ is given back after the existing back-off. At no slices the stream is off, as to
 *Built as H17k* (FINDINGS "H17k", 2026-10-26), after H17e changed the rule to the median of the last 31 frames over
 35.5 ms: each step down takes one image a frame away -- the weights then at the rate the rest serve, 60 at 85 Hz,
 as a device holding fewer slices has them -- and at none the stream is off; each step back up waits V12's count.
+*Corrected 2026-10-26* (FINDINGS "The 60 fps review"): the weights at the capped rate kept the accumulator's
+remainder, which at a multiple of 30 never returns to 0, so most capped frames drew one slice more than the cap
+and never their real image; a new rate now starts the accumulator on a frame's end (`interp_rate_frame`). The count
+doubled at every step of one walk down, not only after a failed try as V12's back-off means, so the climb back from
+one spell at 120 Hz or more took 30 s to minutes; it doubles only after a failed try now. And a change of the
+display's rate with images taken keeps the images given, where it kept the number taken and could turn
+the stream off; at the full rate it keeps the new full rate.
 
 **The report.** `[interp]` adds the display's rate, images per frame (the mean and the range), slices drawn, repeats
 and frames superseded; `[gxv]` the GPU time of the slices.

@@ -1279,6 +1279,9 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - **After T4.** If a script cannot round-trip, that script alone is edited as a binary delta against the player's own file (T1's deltas), recorded as an exception. It is never a whole-file override: that would ship the game's dialogue (rule 3), and the guard and T13 refuse its `.sct` suffix. If T1 decided against deltas, that script stays closed to mods until the assembler round-trips it.
 - **Before milestone 7.** Art. Without an artist, milestone 6's remixed and procedural content is the ceiling, and it is a high one.
 
+**Since 2026-10-27 (PLAN-NEXT D-46) milestone 3 is next,** its difficulty presets and boosts first (R3, R4,
+one spec), the play path kept to maintenance.
+
 **The first three slices:** *P6 and T0 are done. P1 is comfort-pack P1a, done (090eea6), and P1b; P11 is comfort-pack P11.*
 1. **P1 with P6** (hours each). P1 ships as a `mod.dll` reading `SOA_ENCOUNTERS`; its `soa.ini` line and P6's pin are relinks.
 2. **P11** (hours; M3b is done), dialogue auto-advance.

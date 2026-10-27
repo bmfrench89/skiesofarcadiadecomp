@@ -10463,6 +10463,9 @@ instead.** 2026-10-25. PLAN-60FPS-MODS H17f, from H17e's runs.
   one slot, 67 of 67 at every pass, 201 frames left in flight; `--mutate deliver-early` fails all 67.
   `copyimage` runs three routes -- the pool (`SOA_GPU_LAND_EARLY=0`), the carry (`SOA_GPU_POLL=0`) and the default
   -- each the CPU's frame; `cimg-cpu` fails the first two, `land-at-copy` the first.
+  *Corrected 2026-10-26 (FINDINGS "The 60 fps review"):* each pass's own `gxr_flush` finishes its slot, so `repeat`
+  checks a picture handed over from a slot finished late, never a frame in flight while the next is recorded; and its
+  guard counted 201 with one slot too, so it could not tell. It asks for two slots now, and one slot fails it.
 - **The copy regions stay whole** [V]: halved like the rest, a slot could no longer hold the largest copy the
   buffers ever took, and `copydiff`'s 781x723 rectangle was refused (eight of the suite's tests); `destbuf` and
   `imagebuf` are made twice over instead, 20 MB more of host-visible memory.
@@ -10532,6 +10535,10 @@ PLAN-60FPS-MODS H17k; H17c's spec §2, "the budget, by slice", built.
   in-between images 11251 (10195). One image a refresh on 84.0% of intervals: at 60 images a second on 85 Hz some
   hold two refreshes (2049 intervals of two). Whether that unevenness beats none is for the owner's eye at
   session D.
+  *Corrected 2026-10-26 (FINDINGS "The 60 fps review"):* the 60-a-second stretch carried the 85 Hz
+  accumulator's remainder into 60, where it never returns to 0: each capped frame drew two slices and never its
+  real image, not one and the real image as said above (the presenter's own count, 27430 images shown, matches
+  that and not the other). A new rate now starts the accumulator on a frame's end.
 - **Next:** session D (D-45), on the device in its normal state: the in-between images' classes, `display` at 60,
   85 and 120 Hz, the window moved between monitors, the notices, and the 60-of-85 steps.
 
@@ -10670,3 +10677,101 @@ owner's eye.** 2026-10-26. PLAN-60FPS-MODS H18; from FINDINGS "H18a".
   `savext.c`, `savenow.c` and `actions.c`; TESTING.md's table gains the rows four test files lacked.
 - **Next:** the event track is done, and with it milestone 2's list but for I7 (T1's deltas), which PLAN-NEXT §0
   holds until a mod needs one. PLAN-NEXT §0: ask the owner what follows (D-46).
+
+**The 60 fps review: a GPU race, two pacing defects and a check that could not fail, in two days of H17 work, fixed.**
+2026-10-26. From an independent review of 95c3b80..ac2c8b2 (H17c-a to H18d): four readers, one each for the GPU's
+slots, the pairing, the pacing and the checks, 21 findings, the six most severe each argued against by another.
+
+- **A copy image overwritten before the GPU read it** [V, the code and a model of it; high]: `carry_copy_image`
+  (H17h) records a GPU copy out of the other slot's pool half. The opening barrier orders that slot's GPU writes
+  before the copy, not the host's: `submit_next` then finishes and re-enters the other slot, its pool starts again at
+  the bottom, and the next frame's texture uploads (`memcpy` into mapped memory) can land on the carried range
+  before the GPU has run the copy -- when the producer is already waiting at the frame gate, the game running behind
+  -- so an effect drawn from that copy shows another texture's texels for a frame. A verifier's model of the slot
+  code, its GPU run only when its fence is waited on, gave the wrong texels in four orders of events. *Fixed:* a
+  carry marks the range it reads on the source slot, an upload that would land on it waits for the carrying slot
+  first (`pool_claim`), and finishing that slot clears it; the report counts the waits. *On this PC* [V,
+  `build/rv60/battle-display85.log`, the battle headless on the GPU in display mode at 85 Hz, 10600 frames]: 4531
+  images carried and 0 uploads that had to wait -- the window did not open in this run, the slot polled finished
+  first, and the fix costs nothing where it does not. `gpuspike.py selftest`, `contrast` 67 of 67, `repeat` 67 of
+  67, `copyimage`, `queue` pass.
+- **The capped rate kept the accumulator's remainder** [V, the code, H17k's own run, a model; medium]: H17k makes a
+  capped frame's weights at 60 or 90 Hz with the remainder of the 85 Hz cycle (0, 25, 20, 15, 10, 5), and at a
+  multiple of 30 the remainder never moves: every capped frame drew one slice more than the cap and never its real
+  image (60 Hz with 15 left gives 0.25 and 0.75 for good). H17k's battle run matches that and not its own account
+  (the presenter's 27430 images shown); FINDINGS "H17k" is marked. *Fixed:* `interp_rate_frame` (in
+  `interp_rate.h`, shared with the tests) starts the accumulator again on a frame's end whenever the rate the weights
+  are made at changes -- the cap, the device's, or another monitor (one carried from 85 into 75 Hz can miss the real
+  image for good, which "reset at multiples of 30" would not catch). `test_picture.py`'s model device now pays for
+  the slices the weights build: at 85 Hz, heavy from each of the cycle's six frames, the old code stepped down 1 to 6
+  times and was off up to 965 of 3000 frames, and five phases in six never showed a capped frame's real image; now
+  every phase steps down once, is never off, and every capped frame ends on its real image. *Mutation:* the remainder
+  carried, and five phases fail.
+- **One slow spell doubled the come-back count at every step** [V, the code and a model; medium]: H17k doubled V12's
+  count at each image taken away, so one spell's walk down at 120 Hz or more left every step back up waiting 240
+  frames or more. Measured after ten seconds at 45 ms then on time, frames to the full rate again at 1, 2, 3, 4 and 7
+  images a frame: 120, 181, 242, 303, 486 now, against 120, 361, 962, 2065, 6922 (nearly four minutes at 240 Hz).
+  *Fixed:* only a failed try doubles it -- a step down from the full rate or one that undoes a step back up -- as
+  V12 meant; a device that fails again and again still waits longer each time. *Mutation:* the old doubling, and the
+  spell tests fail.
+- **A new display kept what was taken** [V, a review finding, low]: moved from 144 Hz holding two of four images to
+  85 Hz, the budget kept "two taken" and took both of 85 Hz's, smooth motion off on a device that held two. *Fixed:*
+  with images taken, what was given stays given, as many as the new rate has; a device at the full rate keeps the
+  new full rate, as before. *Mutations:* the old clamp, and the rule kept at the full rate too (a move up then
+  waits, behind a notice that the game is behind), each fail the test.
+- **`repeat` could not fail for frames in flight** [V, two verifiers split on the comment, agreed on the guard;
+  medium]: each pass's own `gxr_flush` settles its slot, so no frame is ever in flight while the next pass is
+  recorded (the comment, the spec and FINDINGS "H17h" said otherwise; corrected), and the frames-in-flight count
+  read 201 with one slot too, so the guard passed a run with the route off. *Fixed:* the count is only of frames
+  left in flight (two slots, not measuring), and the guard asks for two slots. *Mutation:* the three-pass run on one
+  slot fails all 23 of the corpus, where it passed.
+- **`interp_review.py --out`** [V, low]: removed its folder unchecked, so the frames folder or one above it would go.
+  It refuses those, and a folder of other files with no page in it; two mutations, each caught.
+- **Left, low, for the session after** [V, each a reader's, not argued against]: `interp_rate_round` leaves a monitor
+  that says 143 at 143, where the spec says 144; the device cap counts the frame's real image against the slices,
+  so one slice serves 30 Hz and no in-between image; in display mode the `[interp]` line counts one in-between image
+  a frame whatever the slices, so FINDINGS' "in-between images" are frames with one (this run: 10600 of 30033); the
+  pace report bins every interval against the last rate; `pair_match` gives the stream-order partner no preference
+  within its 32; the report's `finish_all` and the consumer's slot calls do not share the lock; `copyimage`'s carried
+  route is finished by the consumer's idle too; the CPU pair replay names a weight it does not use.
+- **Checks** [V]: the self test; replay 23/23 at 1, 2, 3 and 8 threads; the GPU checks above; `test_picture.py`
+  seven new, `test_interp_review.py` one.
+
+**Setup would have installed the example mods, damage-double among them.** 2026-10-26. Spec: `docs/specs/distribution.md`
+(the package's table: the install's `mods/` holds "each shipped mod").
+
+- **Found** [I, then V]: the night's research for D-46 read it in the code; four earlier installs confirm it.
+  `recompile.py`'s GNU mod build puts every library of `mods/` and `examples/mods/` in one `gen/mods/<folder>`, and
+  `player_build.install` copied every folder there to the install's `mods/`, writing `mods = mods`, which loads every
+  folder with a `mod.ini`. `build/player1`, `build/r5b/R`, `build/r5c/P` and `build/release-root` (2026-10-04 to 14)
+  each hold `map-log`, an example, beside the three shipped mods.
+- **What it would have done** [V, the mods' code]: since 2026-10-23 `damage-double` (R0's check) has native code and
+  doubles every damage of every battle whenever it loads, and `battle-tally` (X2's example) adds a chunk to every
+  save; `lab` stays idle without `SOA_LAB`. A player's build since then would have played every battle at double
+  damage. No release carries it: the only two are drafts of 2026-10-05 (`gh release list`), before `damage-double`.
+- **The fix** [V]: `player_build.install` copies only the folders of `mods/` (`shipped_mods`); the examples are still
+  built, for whoever copies one. `test_player_build.py`, one: a `gen/mods` with a shipped mod, `damage-double` and
+  the lab installs the shipped one alone. *Mutation:* every folder installed, and it fails.
+
+**WS0, first look: the game's own aspect value widens its view, and 1.1, not 1.0, is the 4:3 it starts from.**
+2026-10-26. From the night's D-46 research (widescreen's brief); PLAN-60FPS-MODS M10/M14; no build.
+
+- **The value** [V, `build/ws0/*.log`, the battle scenario headless with `SOA_SNAP=100` to frame 10600]: `0x80345894`
+  reads `3F8CCCCD`, 1.1, at frames 150, 250, 3000, 9900 and 10500. Poked once at frame 200, it kept the poked value
+  at every later peek: nothing in the opening, the deck or the first battle writes it again, as the translated code
+  says (two writers, both under the setup `fn_801DC62C`).
+- **Widened** [V, frames opened]: poked to 0.825 = 1.1 x 3/4 for 16:9 and 0.614 for 3440x1440, each picture stretched
+  to its screen's shape, the game shows more of the world at both sides. In the tower cutscene, whose camera is still,
+  the tower is 243 and 262 px wide at two rows at 4:3 and the same at 16:9; with the 0.75 a community cheat code
+  writes it is 221 and 238 px, 9% too narrow, because the code takes the game's own value for 1.0. At frames 3300 and
+  7500, the same moment in both runs, the ship and the sails continue across the old picture's edges with nothing
+  cut off -- consistent with the cull reading the same value, as the code says [I: the cull was not isolated]. The
+  HUD stretches with the picture, as expected before WS3.
+- **The page** [V]: `build/ws0/index.html` (local; game imagery): 36 like-for-like moments of 106 and the battle's six,
+  each at 4:3, 16:9 and the ultrawide's shape, and the tower measured against the 0.75.
+- **Not yet** [V]: WS0's other steps -- a renderer-only widening to compare (M3c's filter), the orthographic draws of
+  the 23 captures counted for the HUD rule, render-to-texture views, a camera change after a window move -- and
+  its spec. What this says for D-46: the 3D view widens with one value, so widescreen's cost is the HUD and the
+  edge cases, about 1-2 weeks for both renderers [I], not the plan's hook and retranslation.
+- **Then** [V]: D-46, answered the same night, dropped widescreen: the owner plays on another recompilation
+  that already has it. This entry stays as the record of what the game's own value does.

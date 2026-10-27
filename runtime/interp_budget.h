@@ -19,12 +19,19 @@
  * within the 31.
  *
  * An image is given back once frames are back on time: a count of 30 frames,
- * doubling after each step down up to 960 (back to 30 once the stream has
- * held ten seconds at the display's rate), down one a frame under 34.5 ms and
- * up two a slower one, so never while the game is slow without it (FINDINGS
- * "V12"); the next step up waits the count again. Coming back by the median
- * instead brought the stream back into stretches too heavy for it, to step
- * down again within the 31 each time (FINDINGS "H17i").
+ * doubling after each try that failed -- a step down from the display's full
+ * rate, or one that undoes a step back up; never the further steps of one
+ * walk down, which H17k first doubled at too, so that one slow spell at 120
+ * Hz or more left the climb back waiting 240 frames a step (the review of
+ * 2026-10-26) -- up to 960 (back to 30 once the stream has held ten seconds
+ * at the display's rate), down one a frame under 34.5 ms and up two a slower
+ * one, so never while the game is slow without it (FINDINGS "V12"); the next
+ * step up waits the count again. Coming back by the median instead brought
+ * the stream back into stretches too heavy for it, to step down again within
+ * the 31 each time (FINDINGS "H17i"). When the display's rate changes (the
+ * window moved to another monitor) with images taken away, the images the
+ * device was holding stay given, as many as the new rate has, rather than
+ * the number taken; at the full rate it keeps the new full rate.
  *
  * Pure, and a header, so gxr.c and its test (test_picture.py) share the one
  * copy. All zero is the starting state: every image given, the count at 30.
@@ -41,7 +48,9 @@ typedef struct InterpBudget {
     double last[INTERP_BUDGET_N]; /* the latest frame times while the stream is on, a ring */
     unsigned n, at;               /* how many it holds, where the next goes */
     unsigned cut;                 /* images a frame taken away; at `top` the stream is off */
+    unsigned top;                 /* the most the display asked for last frame, 0 before the first */
     unsigned tries;               /* the count is 30 << tries frames */
+    unsigned down;                /* the last step was down: another is the same walk, not a failed try */
     unsigned wait, held;          /* the count to the next image back; frames held at the display's rate */
     unsigned long long stops, frames_off, frames_cut; /* steps down; frames off; frames with some taken */
 } InterpBudget;
@@ -68,13 +77,22 @@ static inline double interp_budget_push(InterpBudget* b, double ms)
 static inline int interp_budget_step(InterpBudget* b, double ms, unsigned top)
 {
     if (top == 0) top = 1;
-    if (b->cut > top) b->cut = top; /* the display's rate fell: as many taken as it has, no more */
+    if (b->top && top != b->top && b->cut) {
+        /* the display's rate changed with images taken: what was given stays
+         * given, as many as the new rate has -- not what was taken, which at
+         * a lower rate could take every image from a device holding some. A
+         * device at the full rate keeps the new full rate. */
+        unsigned given = b->cut < b->top ? b->top - b->cut : 0u;
+        b->cut = top - (given < top ? given : top);
+    }
+    b->top = top;
     if (b->cut < top) {
         if (interp_budget_push(b, ms) > INTERP_BUDGET_SLOW) {
             b->cut++;
             b->n = b->at = 0;
             b->wait = 30u << b->tries;
-            if (b->tries < INTERP_BUDGET_TRIES) b->tries++;
+            if (!b->down && b->tries < INTERP_BUDGET_TRIES) b->tries++;
+            b->down = 1;
             b->stops++;
             return (int)(top - b->cut);
         }
@@ -95,6 +113,7 @@ static inline int interp_budget_step(InterpBudget* b, double ms, unsigned top)
     } else {
         b->cut--;
         b->held = 0;
+        b->down = 0;
         b->n = b->at = 0;
         b->wait = 30u << b->tries;
     }
