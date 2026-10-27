@@ -10833,3 +10833,102 @@ The owner's D-47 (PLAN-NEXT §0 item 4); no code taken.
 - **For the next cleanup** [V]: `build/gpu-oracle/ref/` is a check's input, not a render to throw away; HANDOFF
   says so. It can be re-made this way while the captures and the GPU's frames are unchanged; once either moves, an
   old oracle log stops being a witness.
+
+**Battle mods (gameplay R3 and R4): `battle-boosts` and `difficulty` ship, each off until a player sets it.**
+2026-10-27. Spec: `docs/specs/battle-mods.md`, written the same night (the owner's D-46: milestone 3, "a spec for R3
+and R4, then R4, then R3").
+
+- **What a player gets** [V]: two mods in `mods/`, which Setup installs and loads (`mods = mods`). `battle-boosts`:
+  EXP, gold and magic EXP each x0 to x4, the Spirit gauge full at each battle's first round, a Run that always gets
+  the party away (enemies keep their own roll), and no knock-outs for the party. `difficulty`: Easy, Hard and
+  Nightmare, each enemy scaled as it is made (HP, Attack and Will, Defense, MagDef, Quick) and the rewards with
+  them, any one number settable over the preset; ship battles are left alone (they pass neither event). Set in
+  `soa.ini` (`battle-boosts.exp = 2`, `difficulty.preset = hard`); at their defaults neither registers a handler.
+- **What knocks a party member out** [V, the translated appliers, their direct calls followed]: of the 79 effect
+  appliers, 0, 5, 6 and 68 call the KO function `fn_8002BC4C` themselves, and 4, 8, 17, 44, 61, 62, 65, 66, 69, 70
+  and 72 reach it through effect 0's applier, called from inside their own -- eleven more than R4's plan listed,
+  which named only 5, 6 and 68 beside the damage clamp. `on_effect` sees those under their own number, so the
+  assist holds every one of them (but 66, a heal for a party member) to HP - 1 as it lands. A landed death (effect 5,
+  or 6's death branch, which carries the resolver's -1 and sets the hit result to KO) is cancelled with the hit
+  result made a miss; 68, whose damage still lands, becomes effect 0 with a KO result made a hit. Lethal poison
+  never lowers HP at its tick: it sets bit `1 << slot` of `0x80346BE8` (now `battle.poison_lethal` in
+  `config/gamedata.txt`, re-found at `0x8006FF08`), read two sub-states later; the assist clears the party's bits
+  in `on_round_end` and leaves those members at 1 HP with the low-HP bit `0x8000`, as `fn_80010474` would.
+- **A test switch that stalled the battle** [V, `build/r4/noko-lowhp.log`, `noko-poison.log`]: the check's switch
+  first wrote the party's HP to 1 at the battle's first round. Both members then took status `0x8000` at frame
+  10622 with no blow, Vyse's next attack began 16 frames early (10638, against 10654 in every other run) and the
+  battle stalled there: no effect applied, no enemy acted, to frame 16000 -- before any no-KO handler had a blow to
+  hold. Holding the characters' HP at 1 between battles instead, so the battle's own setup brings them in at 1 as a
+  battle begun hurt does, plays through [I: the stall came from a low-HP stance entered without its animation].
+- **The review** [V, four readers and a skeptic per serious finding, `review-battle-mods`]: confirmed and fixed --
+  the boss music task `fn_8007D42C` weighs the bosses' HP against their records' max HP, so `difficulty`'s scaled
+  actors put its cues at the wrong HP (at Easy the below-half music from the first frame); `difficulty` now scales
+  the record's max HP once a battle and puts it back when the scene leaves 7, where it still holds its value, and
+  a second enemy of the kind, made from the scaled record, is not scaled again; a landed death 6 would have been
+  applied as effect 0 with -1 (1 HP gained, the KO result left on a standing member), and a cancelled 5 left its KO
+  result too; the poison write left the low-HP bit out of step; `test_mod_library.py` pins the shipped mods'
+  list, which the two new ones broke; the defaults test could not see a safe-point registration; the test
+  switch's "writes no actor's HP" could not fail; eight of the eleven held effects, defense and magdef apart, and
+  the escaped bit were untested; `battle.py rewards` capped magic EXP once, where each mod caps it at its step;
+  `battle.c`'s spawn site counted a change by HP alone (now the whole actor); Try again rebuilds a battle inside
+  scene 7, so full Spirit and the test switch never re-armed for it (now a phase back at 0 or a round number that
+  drops re-arms them); and a scan of the scripts found the battle the story lets you lose -- of the 235 event
+  battles they request, 210 have defeat condition 1 (Try again), 24 have 0 (game over) and one, event battle 26
+  at the home base, has 2 (the story carries on), with Run forbidden too, so with no knock-outs it could end only
+  in a victory: the assist stands down where the defeat condition is 2, and says so once. And the spec's section
+  2, corrected: slots 0-11, not 0-10, the word read at sub-state 51, sub-state 11's early return.
+- **The fake guest** [V, `test_mods.py`, 32 new, and 2 in `test_mod_library.py`]: every rule of both mods, the two
+  chaining their rewards in folder order (EXP x2, then Hard: 103 -> 206 -> 257). Mutations, each run on the test
+  file: 59 of the two mods and `battle.py`, all caught but one equivalent (difficulty restoring on any scene change,
+  where every spawn happens in scene 7 and the table is empty at the others); four kept as tests. `tools/battle.py
+  rewards` (`test_battle.py`, 5 new) holds a run's `rewards` lines to the multipliers given, rounded down and capped
+  at each mod in turn, once a victory.
+- **R4 on the story's first battle** [V, `build/r4/`, `battle.scn` at `SOA_SPEED=3`, `SOA_SEED=4242`,
+  `SOA_BATTLE_LOG=1`, the mod alone]:
+  - `exp=2 gold=2 full_spirit=1`: `rewards exp 6 -> 12 gold 10 -> 20 magic exp 2 -> 2`, once, for the one victory
+    (`battle.py rewards --exp 2 --gold 2`: kept); the SP line at the first round's input `8/8`, the mod logging
+    `SP 2 -> 8 of 8`; the battle otherwise K6's, won at frame 11818.
+  - At the defaults: `nothing registered`, 0 callbacks, every reward paired with itself, every site's changed count 0.
+    *Mutation:* each log held to the other's multipliers fails the check.
+  - `no_ko=1`, the party brought in at 1 HP: slot 5's 46 on Vyse logged `46 -> 0`, held by the mod; no party slot
+    gains `0x100`; won in two rounds. With poison on them too: at the round's end the mod logs both members'
+    lethal ticks and the word `00000003 -> 00000000`, their HP stays 1, the battle is won. Again with the build
+    as committed, which sets the low-HP bit too (here already on): the same, won at frame 11991.
+    *Mutation:* the same switch with `no_ko` off: Vyse falls at frame 10858, Aika at 11429, and the battle ends in
+    defeat (phase 8).
+  - The one `on_rewards` call of the first run took 213 us (the report's handler time), past R1's 50 us budget [I:
+    the first run of that code, its page coming in; one sample].
+- **R3 on the same battle** [V, `build/r3/`, with the lab peeking]: `difficulty.preset=hard` logs the first soldier
+  `HP 58 -> 87, Attack 43 -> 53, Will 16 -> 20` and the second, made from the scaled record, `HP 87 -> 87`; the lab
+  reads the record's max HP at 87 during the battle, like the actors; the fight takes three rounds where the game's
+  took two (Vyse at 157 of 420 at the end, against 374); `rewards exp 6 -> 7 gold 10 -> 12 magic exp 2 -> 2` (`battle.py
+  rewards` at 1.25: kept); and as the battle ends the mod logs `record 80ED7880: max HP 87 put back to 58`.
+  *Mutation:* a build that never scales the record leaves it at 58 under actors of 87 -- the ratio the boss music
+  would read -- and makes the second soldier unscaled (`HP 58 -> 58`).
+- **Left** [V]: the owner's Hard through one dungeon (R3's Done) and their say on the preset numbers, a first
+  proposal; R3's level scaling, until the owner chooses a curve; stone; ship battles; event battle 26 itself, whose
+  stand-down no run has reached; a party Run, a Try again, and effects 5, 6 and 68, in a real battle -- the fake
+  guest holds them,
+  and a death cancelled as a miss is a state no run has shown the battle survive; a menu page for the options (M8).
+
+**Setup's two defects from the distribution review, fixed: another disc image is extracted, and a new version keeps the player's saves.**
+2026-10-27. From the night's review of the play path's distribution (D-46's research, 2026-10-26, the same review
+as "Setup would have installed the example mods"); PLAN-NEXT §0 item 2, the play path in maintenance.
+
+- **Another image was never extracted** [V, the code and a test]: `player_build` extracted only when
+  `extracted/disc.iso` was missing. An image the checks pass is this game with its executable, but another dump of
+  it can hold other files: a player who picked a good image after a damaged one and pressed Rebuild went on
+  playing the damaged one, and nothing said so. *Fixed:* the image's path and size go into `extracted/source.txt`;
+  another file, by either, is extracted again, and so is any image on `--rebuild` (Setup's Rebuild), each with a
+  line saying why. An install from before the record extracts once more. `write_image` already writes beside the
+  image and renames, so an interrupted extraction leaves the old image whole.
+- **A new version left the saves behind** [V, the code and a test]: a new version unzips to a folder of its own and
+  Setup builds there, so its first install found no card and wrote the default `soa.ini`. The player's saves and
+  settings stayed in the old folder, where nothing looks. *Fixed:* `install` first copies each of the two that is
+  missing from the newest built install beside it (a `soa-<version>-windows-x64` holding `soa.exe`), and says so:
+  `[build] carried over soa.ini from ..., build/cards/slotA.raw from ...`, which Setup's log shows and its bar
+  passes over. Copied, never moved, and never over a file already there.
+- **Checks** [V]: `test_player_build.py`, three new and two updated for the new line; seven mutations, each caught:
+  the old test of `disc.iso` alone, Rebuild not extracting, the size left out of the record, no carry-over, an
+  unbuilt install carried from, the oldest install instead of the newest, a card written over. Not run end to end
+  from a package with the disc.

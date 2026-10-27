@@ -75,6 +75,7 @@
 {"battle.choosing", 0x80347330u, 0u, 0u, 4, 0},
 {"battle.round_state", 0x80347338u, 0u, 0u, 4, 0},
 {"battle.round", 0x80347340u, 0u, 0u, 1, 0},
+{"battle.poison_lethal", 0x80346BE8u, 0u, 0u, 4, 0},
 {"battle.tasks[]", 0x80309700u, 4u, 0u, 4, 0},
 {"battle.override.initiative", 0x8030B7AAu, 0u, 0u, -1, 0},
 {"battle.override.escape_party", 0x8030B7ABu, 0u, 0u, -1, 0},

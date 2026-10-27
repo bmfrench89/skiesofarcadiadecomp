@@ -120,7 +120,18 @@ def test_the_example_library_loads_and_the_recording_names_it(driver, tmp_path):
 # compiled -- unnoticed until L10 built them, since only map-log was built here.
 SWITCHED = {
     "autotext": ("SOA_AUTOTEXT", "on", "a complete page turns itself after 45 frames"),
+    "battle-boosts": (
+        "SOA_BOOSTS_TEST",
+        "lowhp",
+        "SOA_BOOSTS_TEST=lowhp: every party character at 1 HP between battles",
+    ),
     "coop": ("SOA_COOP", "1", "pad 2 chooses the commands of party slot(s) 1"),
+    # no switch of its own: its preset, an option, through the port's SOA_MOD_OPT
+    "difficulty": (
+        "SOA_MOD_OPT",
+        "difficulty.preset=hard",
+        "hard: hp x1.50 attack x1.25 defense x1.00 magdef x1.00 speed x1.00 rewards x1.25",
+    ),
     "encounter-rate": ("SOA_ENCOUNTERS", "half", "random battles half in the field"),
 }
 

@@ -17,7 +17,9 @@ from the player's own disc image to a folder that plays:
    Windows too. Then the sysroot is built from those sources when it is not
    there, offline (tools/fetch_android_sysroot.py; D-34).
 3. **What the game reads is extracted** into <root>/extracted (the image the
-   runtime reads, and sys/), as tools/extract.py does.
+   runtime reads, and sys/), as tools/extract.py does: the first time, when
+   the image named is another file than the one extracted (its path and size,
+   in extracted/source.txt), and on --rebuild.
 4. **Never a stale translation:** every input the translated C bakes in is
    hashed, with the package's version, the compiler and its flags, and for
    Android the sysroot, into <gen>/build-inputs.txt. When any differs from
@@ -30,6 +32,9 @@ from the player's own disc image to a folder that plays:
    3.1), on every core.
    - windows: into <root>/gen, --reproducible; soa.exe and the mods' mod.dll
      go to the top of <root>, and soa.ini is written unless one is there.
+     A new version's folder, with no soa.ini or no card yet, first takes a
+     copy of the newest built install's beside it (soa-<version>-windows-x64):
+     a player's saves and settings follow them to the new version.
    - android-arm64, the phone's: into <root>/gen-android-arm64, against the
      sysroot; libsoa_game.so goes to the top of <root>.
    - android-x86_64, the emulator's: the same into gen-android-x86_64, as
@@ -83,6 +88,10 @@ BAKED = (
 )
 
 TARGETS = ("windows", "android-arm64", "android-x86_64")
+# In <root>/extracted: which image it was extracted from.
+SOURCE_RECORD = "source.txt"
+# What a player's earlier install is called beside a new one (package.py).
+INSTALL_GLOB = "soa-*-windows-x64"
 # Where an Android target's library goes at the root's top: the phone's by the
 # name its import asks for, the emulator's beside it.
 LIBRARY = {"android-arm64": "libsoa_game.so", "android-x86_64": "libsoa_game-x86_64.so"}
@@ -147,6 +156,70 @@ def extract(image: Path, out: Path) -> None:
     with Disc(open_image(image), source=str(image)) as disc:
         if ex.unpack(disc, args):
             raise RuntimeError("extraction failed")
+
+
+def image_identity(image: Path) -> str:
+    """Which file an extraction came from: its full path and its size."""
+    p = image.resolve()
+    return f"{p}\t{p.stat().st_size if p.is_file() else -1}"
+
+
+def why_extract(extracted: Path, image: Path, rebuild: bool) -> str | None:
+    """Why the image must be extracted now, or None to keep what is there. An
+    image the checks passed is this game, but another dump of it may hold
+    other files: a player who picks a good image after a damaged one, and
+    presses Rebuild, would otherwise keep playing the damaged one."""
+    if not (extracted / IMAGE_NAME).exists():
+        return "nothing extracted yet"
+    if rebuild:
+        return "Rebuild extracts again"
+    record = extracted / SOURCE_RECORD
+    was = record.read_text(encoding="utf-8").strip() if record.is_file() else ""
+    if was != image_identity(image):
+        return "the image is not the one extracted" if was else "no record of the image extracted"
+    return None
+
+
+def carry_over(root: Path) -> list[str]:
+    """A new version unzips to a folder of its own, so its first install finds
+    no soa.ini and no card: each of the two missing is copied from the newest
+    built install beside it (soa.exe there) that has it -- the player's saves
+    and settings follow them. Copied, never moved, and never over a file
+    already here. What was copied, as paths under root and where from."""
+    olds = [
+        p
+        for p in root.parent.glob(INSTALL_GLOB)
+        if p.is_dir() and p.resolve() != root.resolve() and (p / "soa.exe").is_file()
+    ]
+    cards = Path("build") / "cards"
+    copied: list[str] = []
+
+    def newest(files_of) -> Path | None:
+        having = [(max(f.stat().st_mtime for f in files_of(p)), p) for p in olds if files_of(p)]
+        return max(having)[1] if having else None
+
+    def card_files(folder: Path) -> list[Path]:
+        return (
+            [f for f in (folder / cards).glob("*") if f.is_file()]
+            if (folder / cards).is_dir()
+            else []
+        )
+
+    if not (root / "soa.ini").exists():
+        src = newest(lambda p: [p / "soa.ini"] if (p / "soa.ini").is_file() else [])
+        if src:
+            shutil.copyfile(src / "soa.ini", root / "soa.ini")
+            copied.append(f"soa.ini from {src.name}")
+    if not card_files(root):
+        src = newest(card_files)
+        if src:
+            (root / cards).mkdir(parents=True, exist_ok=True)
+            for f in sorted(card_files(src)):
+                shutil.copyfile(f, root / cards / f.name)
+                copied.append(f"{(cards / f.name).as_posix()} from {src.name}")
+    if copied:
+        say("carried over " + ", ".join(copied))
+    return copied
 
 
 def inputs_record(source: Path | None = None) -> dict[str, str]:
@@ -390,6 +463,7 @@ def install(root: Path, gen: Path) -> str:
             for f in folder.iterdir():
                 if f.suffix in (".dll", ".ini", ".txt"):
                     shutil.copyfile(f, dest / f.name)
+    carry_over(root)
     ini = root / "soa.ini"
     if not ini.exists():
         ini.write_text(
@@ -467,8 +541,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     say("extract")
     extracted = root / "extracted"
-    if not (extracted / IMAGE_NAME).exists():
+    why = why_extract(extracted, args.disc, args.rebuild)
+    if why:
+        print(f"extracting {args.disc}: {why}", flush=True)
         extract(args.disc, extracted)
+        extracted.mkdir(parents=True, exist_ok=True)
+        (extracted / SOURCE_RECORD).write_text(image_identity(args.disc) + "\n", encoding="utf-8")
     for target in targets:
         if build_target(root, target, args.rebuild):
             return 1

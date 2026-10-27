@@ -10,6 +10,7 @@ notes as decompiled, so neither can grow without the other.
 """
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -321,6 +322,7 @@ def test_the_targets_run_in_order_after_one_check_and_one_preflight(monkeypatch,
     assert out == [
         "[build] check",
         "[build] extract",
+        "extracting x.iso: nothing extracted yet",
         "extracted",
         "[build] android translate: no record of the last translation",
         "[build] android done libsoa_game-x86_64.so sha256 " + "1" * 64,
@@ -415,7 +417,13 @@ def test_a_damaged_tree_is_rebuilt_from_the_sources(monkeypatch, tmp_path, capsy
     argv = ["--disc", "x.iso", "--root", str(tmp_path / "root"), "--target", "android-arm64"]
     assert player_build.main(argv) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[:4] == ["[build] check", "[build] android sysroot", "[build] extract", "extracted"]
+    assert out[:5] == [
+        "[build] check",
+        "[build] android sysroot",
+        "[build] extract",
+        "extracting x.iso: nothing extracted yet",
+        "extracted",
+    ]
     tool = source / "tools" / "fetch_android_sysroot.py"
     assert ran == [[sys.executable, str(tool), "--offline"]]
     assert asked == [("android-arm64", True)]  # and the build went on
@@ -565,3 +573,120 @@ def test_the_embedded_python_reads_an_rvz_and_needs_its_zstd(tmp_path):
     (tmp_path / "python" / "_zstd.pyd").unlink()
     gone = subprocess.run([str(exe), "-c", script], capture_output=True, text=True, check=False)
     assert gone.returncode != 0 and "zstd" in gone.stderr
+
+
+def test_another_disc_image_or_rebuild_extracts_again(monkeypatch, tmp_path, capsys):
+    """The distribution review's defect (2026-10-26): with extracted/disc.iso
+    there, a player who picked another image and pressed Rebuild kept playing
+    the first. A different file, by path or size, or Rebuild, extracts again;
+    the same image does not. The mutation, the old test of disc.iso alone,
+    keeps a's data after b is named."""
+    source = tmp_path / "source"
+    (source / "runtime").mkdir(parents=True)
+    (source / "runtime" / "cpu.h").write_text("cpu.h", encoding="utf-8")
+    root = tmp_path / "root"
+    a, b = tmp_path / "a.iso", tmp_path / "b.iso"
+    a.write_bytes(b"A" * 10)
+    b.write_bytes(b"B" * 12)
+
+    def extract(image, out):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / player_build.IMAGE_NAME).write_bytes(image.read_bytes())
+        print(f"extracted {image.name}")
+
+    stand_in(monkeypatch, source)
+    monkeypatch.setattr(player_build, "extract", extract)
+
+    def run(disc, *extra):
+        assert player_build.main(["--disc", str(disc), "--root", str(root), *extra]) == 0
+        return [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("extract")]
+
+    assert run(a) == [f"extracting {a}: nothing extracted yet", "extracted a.iso"]
+    assert run(a) == []  # the same image: kept
+    assert run(b) == [f"extracting {b}: the image is not the one extracted", "extracted b.iso"]
+    assert run(b, "--rebuild") == [f"extracting {b}: Rebuild extracts again", "extracted b.iso"]
+    b.write_bytes(b"C" * 20)  # another file at the same path
+    assert run(b)[1:] == ["extracted b.iso"]
+    assert (root / "extracted" / player_build.IMAGE_NAME).read_bytes() == b"C" * 20
+    (root / "extracted" / player_build.SOURCE_RECORD).unlink()  # an install from before the record
+    assert run(b) == [f"extracting {b}: no record of the image extracted", "extracted b.iso"]
+
+
+def install_of(
+    parent: Path,
+    version: str,
+    ini: str | None = "mods = mods\n",
+    card: bytes | None = b"card",
+    built: bool = True,
+    age: int = 0,
+) -> Path:
+    """An earlier version's folder beside the new one, its files `age` hours old."""
+    d = parent / f"soa-{version}-windows-x64"
+    d.mkdir(parents=True)
+    files = []
+    if built:
+        (d / "soa.exe").write_bytes(b"MZ")
+    if ini is not None:
+        (d / "soa.ini").write_text(ini, encoding="utf-8")
+        files.append(d / "soa.ini")
+    if card is not None:
+        (d / "build" / "cards").mkdir(parents=True)
+        (d / "build" / "cards" / "slotA.raw").write_bytes(card)
+        files.append(d / "build" / "cards" / "slotA.raw")
+    when = 1_800_000_000 - age * 3600
+    for f in files:
+        os.utime(f, (when, when))
+    return d
+
+
+def fresh_gen(tmp_path: Path) -> Path:
+    gen = tmp_path / "gen"
+    gen.mkdir(exist_ok=True)
+    (gen / "soa.exe").write_bytes(b"MZ")
+    return gen
+
+
+def test_a_new_versions_folder_takes_the_last_installs_saves_and_settings(tmp_path, capsys):
+    """The distribution review's other defect: a new version unzips to a
+    folder of its own, and its first install began with no saves and the
+    default soa.ini. Each is now copied from the newest built install beside
+    it, and named; the old folder keeps its own. The mutation, no carry-over,
+    leaves the default soa.ini and no card."""
+    old = install_of(
+        tmp_path, "v1", ini="mods = mods\nbattle-boosts.exp = 2\n", card=b"SAVES", age=5
+    )
+    install_of(tmp_path, "v0", ini="mods = mods\nseed = 7\n", card=b"OLDER", age=50)
+    install_of(
+        tmp_path, "v9", ini="unbuilt = 1\n", card=b"NEVER", built=False
+    )  # Setup never built it
+    root = tmp_path / "soa-v2-windows-x64"
+    root.mkdir()
+    player_build.install(root, fresh_gen(tmp_path))
+    assert (root / "soa.ini").read_text(encoding="utf-8") == "mods = mods\nbattle-boosts.exp = 2\n"
+    assert (root / "build" / "cards" / "slotA.raw").read_bytes() == b"SAVES"
+    assert (old / "build" / "cards" / "slotA.raw").read_bytes() == b"SAVES"  # copied, not moved
+    assert (
+        "[build] carried over soa.ini from soa-v1-windows-x64, build/cards/slotA.raw from soa-v1-windows-x64"
+        in capsys.readouterr().out
+    )
+
+
+def test_the_carry_over_never_writes_over_what_is_there(tmp_path, capsys):
+    install_of(tmp_path, "v1", ini="mods = mods\nseed = 1\n", card=b"OLD", age=1)
+    root = tmp_path / "soa-v2-windows-x64"
+    (root / "build" / "cards").mkdir(parents=True)
+    (root / "build" / "cards" / "slotA.raw").write_bytes(b"NEW")
+    player_build.install(root, fresh_gen(tmp_path))
+    assert (root / "build" / "cards" / "slotA.raw").read_bytes() == b"NEW"
+    assert (root / "soa.ini").read_text(
+        encoding="utf-8"
+    ) == "mods = mods\nseed = 1\n"  # it had none
+    capsys.readouterr()
+    player_build.install(root, fresh_gen(tmp_path))  # a Rebuild in the same folder: nothing moves
+    assert "carried over" not in capsys.readouterr().out
+    # and a folder with no earlier install beside it gets the default soa.ini
+    alone = tmp_path / "elsewhere" / "soa-v3-windows-x64"
+    alone.mkdir(parents=True)
+    player_build.install(alone, fresh_gen(tmp_path))
+    assert "mods = mods" in (alone / "soa.ini").read_text(encoding="utf-8")
+    assert not (alone / "build").exists()

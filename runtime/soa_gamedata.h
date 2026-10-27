@@ -59,6 +59,7 @@
 #define SOA_BATTLE_CHOOSING 0x80347330u /* u32 */
 #define SOA_BATTLE_ROUND_STATE 0x80347338u /* u32 */
 #define SOA_BATTLE_ROUND 0x80347340u /* u8 */
+#define SOA_BATTLE_POISON_LETHAL 0x80346BE8u /* u32 */
 #define SOA_BATTLE_TASKS 0x80309700u /* ptr[12] */
 #define SOA_BATTLE_OVERRIDE_INITIATIVE 0x8030B7AAu /* s8 */
 #define SOA_BATTLE_OVERRIDE_ESCAPE_PARTY 0x8030B7ABu /* s8 */
@@ -785,6 +786,14 @@ static inline int soa_battle_round_get(const SoaModApi* api, uint8_t* out)
 static inline int soa_battle_round_set(const SoaModApi* api, uint8_t v)
 {
     return api->write8(0x80347340u, v);
+}
+static inline int soa_battle_poison_lethal_get(const SoaModApi* api, uint32_t* out)
+{
+    return api->read32(0x80346BE8u, out);
+}
+static inline int soa_battle_poison_lethal_set(const SoaModApi* api, uint32_t v)
+{
+    return api->write32(0x80346BE8u, v);
 }
 static inline int soa_battle_tasks_get(const SoaModApi* api, uint32_t i, uint32_t* out)
 {

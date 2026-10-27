@@ -146,10 +146,16 @@ void fn_800770B8(CpuState* s)
     s->pc = 0x800770B8u; /* first, as the translation's block head does: a sample in here names it (test_hle_pc) */
     uint32_t actor = s->gpr[3], record = s->gpr[4];
     int32_t hp;
+    uint8_t before[276]; /* the whole actor (battle-system.md 1.2): a mod may scale any of it, not HP alone */
+    int changed = 0;
     recomp_fn_800770B8(s);
     hp = (int32_t)mem_r32(s, actor + 20);
-    if (mod_event_count(MOD_EV_ENEMY_SPAWN)) mod_enemy_spawn(actor, record);
-    site(MOD_EV_ENEMY_SPAWN, (int32_t)mem_r32(s, actor + 20) != hp);
+    if (mod_event_count(MOD_EV_ENEMY_SPAWN)) {
+        memcpy(before, mem_ptr(s, actor), sizeof before);
+        mod_enemy_spawn(actor, record);
+        changed = memcmp(before, mem_ptr(s, actor), sizeof before) != 0;
+    }
+    site(MOD_EV_ENEMY_SPAWN, changed);
     if (g_log)
         fprintf(stderr, "[battle] frame %u spawn actor %08X record %08X hp %d -> %d\n", gx_frame_count(), actor, record,
                 hp, (int32_t)mem_r32(s, actor + 20));

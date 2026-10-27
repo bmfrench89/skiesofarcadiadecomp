@@ -171,7 +171,7 @@ memory card. Headless it runs about ten times real time.
 | Functions recompiled | 7,144, 100% instruction coverage |
 | Byte-matching decompiled symbols | 100 across 21 units (83 functions, 17 data) |
 | Of those, running in the port | 12 |
-| Python tests | 1939 |
+| Python tests | 1981 |
 | Self-test cases | 87 |
 | Scenarios | 13 |
 | Pinned frame hashes | 23 |
@@ -417,20 +417,32 @@ a check go green. That mistake cost a day: the manifest was first created from
 a render nobody had looked at, so eight of twenty-three frames pinned
 washed-out colour and a correct fix would have failed the suite.
 
-## Where the last session stopped (2026-10-26)
+## Where the last session stopped (2026-10-27)
 
 ### Start here (for the next session)
 
 **State.** `main` holds the event track's spec, E1 and E2 (2026-10-24 to 25), the two 60 fps defect fixes, H17c's
 spec, H17c-a, H17c-b, H17d, H17e, H17f's finding and H17g's first part (2026-10-25), and H17h, H17i's
-finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26), and the same night the 60 fps
-review's fixes, Setup's example mods kept out of a player's install, WS0's first look and the owner's D-46
-("Narrow to mods"), pushed: the event track is done, and gameplay milestone 2's list with it but for I7
-(T1's deltas), which a session's note holds until a mod needs one; milestone 3 is next.
-The full pre-push suite passes: 1939 tests in 103 files (1898
-passed, 41 skipped here; 737 skip with MSVC hidden, so 696 want MSVC). Nothing is
+finding, H17j's first look, H17k, H18a in part, H18d's knob and E3 (2026-10-26), and the night of 2026-10-26
+to 27 the 60 fps review's fixes, Setup's example mods kept out of a player's install, WS0's first look, the owner's
+D-46 ("Narrow to mods") and D-47 (the CC0 decompilation's 839 names and 17 notes, `docs/research/ogdanimal-decomp/`),
+milestone 3's first two mods -- `mods/battle-boosts` (R4) and `mods/difficulty` (R3), to
+`docs/specs/battle-mods.md` -- and Setup's two defects from the distribution review, pushed. The full pre-push
+suite passes: 1981 tests in 103 files (1940
+passed, 41 skipped here; 769 skip with MSVC hidden, so 728 want MSVC). Nothing is
 uncommitted but the owner's `.vscode/`. One session committed to this checkout; use the `orient` skill before
 choosing work.
+
+**What the night of 2026-10-26 to 27 built, in order** (each with its FINDINGS entry):
+
+| Slice | What it gives | Spec |
+|---|---|---|
+| E3 | turbo, save now and the debug actions in a recording, applied from a replay | event-track.md |
+| the 60 fps review | a GPU race, two pacing defects and a check that could not fail, fixed | interp-display.md |
+| Setup's example mods | a player's install carries the shipped mods alone | distribution.md |
+| D-46, D-47 | the owner's "Narrow to mods"; the CC0 decompilation's 839 names and 17 notes | (PLAN-NEXT §0) |
+| R4, R3 | `mods/battle-boosts` and `mods/difficulty`, shipped, off until set; `tools/battle.py rewards` | battle-mods.md |
+| Setup's two defects | another disc image extracts again; a new version keeps the saves and settings | distribution.md |
 
 **What the last session built (2026-10-22 to 24), in order.** Each has a spec under `docs/specs/` and a FINDINGS
 entry of the same name:
@@ -453,7 +465,18 @@ Owner decisions taken: D-43 (the gameplay core), D-44 (gameplay Q2: the honest s
 fallback until a mod needs one). Milestone 2's core list is done, and M7a/b with it.
 
 **Next, in order.** PLAN-NEXT §0 has the order; since the owner's D-46 (2026-10-27, "Narrow to mods") it is:
-1. **Milestone 3, the mod platform.** The owner plays the game on another recompilation,
+1. **Milestone 3, the mod platform.** *R3 and R4 built 2026-10-27* (FINDINGS "Battle mods"): `battle-boosts`
+   (EXP, gold and magic EXP x0 to x4, full Spirit, an escape that works, no knock-outs) and `difficulty` (Easy,
+   Hard, Nightmare), shipped, each off until set; the owner's Hard through one dungeon is R3's Done left, with
+   their say on the preset numbers. Not yet seen in a real battle: a party Run, a Try again, event battle 26 (the
+   one the story lets you lose, where no knock-outs stands down), and an enemy's death spell on a party with no
+   knock-outs (cancelled as a miss: a state no run has shown the battle survive). Next in milestone
+   3: R5 (battle information) and P7, which need a way for mods to draw -- M8's overlay is the likely base (the
+   port's menu draws its panel and notices over the picture on both renderers, `runtime/menu.c`), and the game's
+   own text queue a second route (`TextPrint` at `0x801E2EE4` among the imported names, through `call_guest` at a
+   safe point, with a string in guest memory that no one has found room for yet); then T3 + K8, T5 and R6 (edited
+   enemy files: I7, or a patch at load), K2, K7, K11. What follows is the night's brief of 2026-10-26:
+   The owner plays the game on another recompilation,
    github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp (GPL-3.0: read its notes, copy none of its code), which
    already ships widescreen, 60 fps and Android and cannot run mods that change the game's code. Here: a spec for
    R3 and R4 first (PLAN-GAMEPLAY-MODS Track R: Easy, Hard and Nightmare; EXP, gold and magic EXP boosts, full
@@ -481,6 +504,9 @@ the benchmark set's twelve were re-made the same night and shown to be the same 
 cleanup took V0's twelve benchmark references"). Keep that folder in any later cleanup.
 
 **Waiting on the owner at the machine** (none of these can be done by a session; since D-46, only what mods need):
+- Hard through one dungeon with `difficulty.preset = hard` in `soa.ini` (R3's Done), and a word on the preset
+  numbers (docs/specs/battle-mods.md §4: Easy 0.5 HP and 0.75 attack; Hard 1.5 and 1.25, rewards 1.25; Nightmare
+  2, 1.5, defenses and speed 1.25, rewards 1.5);
 - a small mod built from `docs/MODDING.md` alone (T10);
 - the menu in a window and the Vulkan menu (M8a/b), its Mods page above all, and its Save now and Debug page;
 - a save made off a save point (on `a116c`) loaded in Dolphin, which should land at the last save point.
@@ -497,6 +523,11 @@ Dropped with the play path's features (D-46): session D's look at 60 fps, the `b
 - *Battles:* the `battle` scenario at `SOA_SPEED=3` fights the story's first battle from about frame 9811;
   part G with `--soak-seed 33 --accelerate 600` fights one near 4420; reach U2's crystal and U3's ship battle
   recipes are in FINDINGS "R1, the battle events".
+- *A battle mod on that battle* (FINDINGS "Battle mods"): `scenario.py run battle --frames 16000 --env
+  SOA_SPEED=3 --env SOA_SEED=4242 --env SOA_BATTLE_LOG=1 --env SOA_SNAP=0 --env SOA_MODS=<a folder with the mod
+  alone>`, its options in `SOA_MOD_OPT`; `tools/battle.py rewards <log> --exp K` holds the payout. With K6's seed the
+  battle repeats blow for blow, won at frame 11818. `SOA_BOOSTS_TEST=lowhp` brings the party in at 1 HP (never write
+  an actor's HP mid-battle: that stalled it); the lab's `peek:F-G:0x80309DF4*+272*+36` reads slot 4's record.
 - *The build from before X2* is kept at `build/x2/before/soa.exe` (2ac1b7c): it stands in for the game alone.
 
 **Traps that cost time in that session** (the memory files hold them too):

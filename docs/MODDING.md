@@ -143,7 +143,7 @@ yourself. The callbacks, and where each runs:
 | `texture_provider` | each texture decode | hand back a replacement image |
 | `on_damage` | each damage the battle works out (R0) | return the damage, 0-9999 |
 | `on_heal` | each Recover-HP value: a heal spell, an item, Blue Rogues' heal (R1) | return the heal, 0-9999 |
-| `on_enemy_spawn` | each enemy made, before the battle starts | scale the actor (never its record: every enemy of the kind shares it) |
+| `on_enemy_spawn` | each enemy made, before the battle starts | scale the actor; its record only for the battle, put back when it ends (every enemy of the kind shares it, and it stays loaded for the next battle on the map) |
 | `on_enemy_action` | each enemy's choice, its command record filled | return the command type; edit the record |
 | `on_turn_order` | once a round, the order just set | reorder it (it must stay distinct slots 0-11, ending at -1) |
 | `on_spirit_gain` | the round's spirit, before the gauge's limit | return the gain |
@@ -225,3 +225,7 @@ port's own tests.
 - `examples/mods/map-alias`: two aliases in a `files.txt`, map 045 given map 002's room and script.
 - `examples/mods/map-log`: the native template, with an option.
 - `mods/encounter-rate`, `mods/autotext`, `mods/coop`: the native mods the port ships.
+- `mods/battle-boosts`, `mods/difficulty` (R4, R3; docs/specs/battle-mods.md): shipped too, and the battle
+  events in use: rewards, a Run, damage, effects and the round's end; an enemy scaled at its spawn, and its
+  record's max HP for that battle only (the boss music reads it), put back when the battle ends; options with
+  presets a number can override. Each registers nothing at its defaults.

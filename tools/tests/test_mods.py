@@ -2934,7 +2934,9 @@ def test_the_shipped_mods_are_manifest_2():
     should: an id and a version, api as a minimum."""
     for folder in (
         "mods/autotext",
+        "mods/battle-boosts",  # R4
         "mods/coop",
+        "mods/difficulty",  # R3
         "mods/encounter-rate",
         "examples/mods/encounters-off",
         "examples/mods/map-log",
@@ -5454,3 +5456,748 @@ def test_e3_during_a_replay_save_now_asks_at_the_recording_s_frames_only(driver,
     assert "a replay is running: the request takes nothing" in err, err
     assert lines_of(out, "record") == ["record 2 savenow"], out
     assert lines_of(out, "left") == ["left 3 save now, while the field loads"], out
+
+
+# --------------------------------------------------------------------------
+# mods/battle-boosts (PLAN-GAMEPLAY-MODS R4, docs/specs/battle-mods.md 3) on
+# the fake guest: the dispatchers R1's events go through, the battle's memory
+# laid out where the game keeps it
+# --------------------------------------------------------------------------
+
+BOOSTS = ROOT / "mods" / "battle-boosts"
+ACTORS = 0x80309DE4  # battle.actors, ptr[12]
+PARTY0, PARTY1, ENEMY4 = 0x80420000, 0x80420200, 0x80420800
+BATTLE_CTX = 0x80430000
+POISON_WORD = 0x80346BE8  # battle.poison_lethal
+# slot 0 and 1 the party, slot 4 an enemy; each at 50 HP and no status
+BATTLE = (
+    f"set {ACTORS:x} {PARTY0:x} set {ACTORS + 4:x} {PARTY1:x} set {ACTORS + 16:x} {ENEMY4:x} "
+    f"set {PARTY0 + 20:x} 32 set {PARTY1 + 20:x} 32 set {ENEMY4 + 20:x} 32 "
+)
+
+
+def boosts(driver, tmp_path, script: str, opts: str = "", **env) -> tuple[str, str]:
+    shipped(tmp_path, folder=BOOSTS)
+    if opts:
+        env["SOA_MOD_OPT"] = " ".join(f"battle-boosts.{o}" for o in opts.split())
+    return play(driver, tmp_path, script, **env)
+
+
+def mod_lines(err: str, name: str = "battle-boosts") -> list[str]:
+    """The mod's own log lines, in order: the port's option lines left out."""
+    said = [x.split(f"[mod] {name}: ", 1)[1] for x in err.splitlines() if f"[mod] {name}: " in x]
+    return [x for x in said if not x.startswith("option ")]
+
+
+def test_battle_boosts_is_shipped_and_built_by_link():
+    import recompile
+
+    srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
+    assert "mods/battle-boosts" in srcs, srcs
+    keys = {}
+    for line in (BOOSTS / "mod.ini").read_text(encoding="utf-8").splitlines():
+        key, eq, value = line.partition("=")
+        if eq and not line.lstrip().startswith("#"):
+            keys[key.strip()] = value.strip()
+    assert (
+        keys.get("manifest") == "2" and keys.get("id") == "battle-boosts" and keys.get("api") == "1"
+    ), keys
+
+
+@needs_cc
+def test_battle_boosts_at_its_defaults_registers_nothing(driver, tmp_path):
+    """Setup installs every folder of mods/ and loads them all, so the
+    defaults must be the game's: no handler registered -- the battle events,
+    and the safe point the Spirit and the test switch use -- and nothing
+    written at a battle's first round or between battles."""
+    out, err = boosts(
+        driver,
+        tmp_path,
+        f"set 803475cc 6 set {CHARS + 24:x} 1a401a4 safe "
+        + BATTLE
+        + spirit_battle()
+        + "safe events rewards 120 300 3 escape 0 0 damage 99 9 0 80420000 0 "
+        + f"get {BATTLE_CTX + 8:x} get {CHARS + 24:x} get {PARTY0 + 20:x}",
+    )
+    assert "loaded 1" in out, err
+    assert mod_lines(err) == ["every option at its default: nothing registered"], err
+    assert "[mod] battle-boosts registers" not in err, err  # the port names every registration
+    assert "events 0 0 0 0 0 0 0 0 0 0 0" in out, out
+    assert (
+        "rewards 120 300 3 -> 120 300 3" in out
+        and "escape 0 -> 0" in out
+        and "damage 99 -> 99" in out
+    ), out
+    assert f"{BATTLE_CTX + 8:08X}=00030003" in out and f"{CHARS + 24:08X}=01A401A4" in out, out
+    assert f"{PARTY0 + 20:08X}=00000032" in out, out
+
+
+@needs_cc
+def test_battle_boosts_multiplies_rewards_rounding_down(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        "rewards 101 33 40 rewards 7 1 2 rewards 0 99999999 127",
+        "exp=1.5 gold=3 magic_exp=4",
+    )
+    assert mod_lines(err) == ["exp x1.5, gold x3, magic EXP x4"], err
+    assert lines_of(out, "rewards") == [
+        "rewards 101 33 40 -> 151 99 127",  # 151.5 down; 160 held to 127
+        "rewards 7 1 2 -> 10 3 8",
+        "rewards 0 99999999 127 -> 0 299999997 127",  # the port and the game hold gold, not the mod
+    ], out
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "opt, want",
+    [
+        ("exp=0", "rewards 50 7 3 -> 0 7 3"),
+        ("gold=0.5", "rewards 50 7 3 -> 50 3 3"),
+        ("magic_exp=2", "rewards 50 7 3 -> 50 7 6"),
+    ],
+)
+def test_battle_boosts_each_reward_has_its_own_multiplier(driver, tmp_path, opt, want):
+    out, err = boosts(driver, tmp_path, "rewards 50 7 3", opt)
+    assert want in out, (out, err)
+
+
+@needs_cc
+def test_battle_boosts_escape_is_for_the_party_alone(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        "escape 0 0 escape 0 3 escape 1 2 escape 0 4 escape 1 11 escape 0 7",
+        "escape=1",
+    )
+    assert lines_of(out, "escape") == [
+        "escape 0 -> 1",
+        "escape 0 -> 1",
+        "escape 1 -> 1",
+        "escape 0 -> 0",  # an enemy's failed roll stays failed
+        "escape 1 -> 1",  # and its success a success
+        "escape 0 -> 0",
+    ], out
+    assert mod_lines(err)[1:] == [
+        "escape: slot 0's Run failed its roll; it gets away",
+        "escape: slot 3's Run failed its roll; it gets away",
+    ], err
+
+
+@needs_cc
+def test_battle_boosts_no_ko_holds_a_blow_on_the_party_to_hp_minus_one(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + "damage 49 9 0 80420000 0 damage 50 9 0 80420000 0 damage 999 9 0 80420200 0 "
+        + "damage 999 9 0 80420800 0 damage 0 9 0 80420000 0 "
+        + f"set {PARTY0 + 20:x} 1 damage 5 9 0 80420000 0",
+        "no_ko=1",
+    )
+    assert lines_of(out, "damage") == [
+        "damage 49 -> 49",  # leaves 1: as it was
+        "damage 50 -> 49",
+        "damage 999 -> 49",
+        "damage 999 -> 999",  # an enemy is knocked out as ever
+        "damage 0 -> 0",
+        "damage 5 -> 0",  # at 1 HP a blow takes nothing
+    ], out
+    assert "no knock-out: a blow of 999 on slot 1 held to 49 (HP 50)" in mod_lines(err), err
+
+
+@needs_cc
+def test_battle_boosts_no_ko_rewrites_the_effects_that_knock_out(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + "effect 0 0 80 effect 0 44 80 effect 1 72 50 effect 0 5 0 effect 0 6 80 effect 1 68 30 "
+        + "effect 0 31 80 effect 0 66 80 effect 0 3 80 effect 0 0 -20 effect 4 0 80 effect 4 5 0",
+        "no_ko=1",
+    )
+    assert lines_of(out, "effect") == [
+        "effect 0 80 -> 0 49",
+        "effect 44 80 -> 44 49",  # drain lands as effect 0's damage
+        "effect 72 50 -> 72 49",
+        "effect 5 0 -> 5 0 cancelled",
+        "effect 6 80 -> 0 49",
+        "effect 68 30 -> 0 30",  # not lethal: the damage kept, the death dropped
+        "effect 31 80 -> 31 80",  # a heal
+        "effect 66 80 -> 66 80",  # Blue Rogues heals a party member
+        "effect 3 80 -> 3 80",  # a status
+        "effect 0 -20 -> 0 -20",
+        "effect 0 80 -> 0 80",  # an enemy
+        "effect 5 0 -> 5 0",
+    ], out
+    assert "no knock-out: effect 6 value 80 on slot 0 -> effect 0 value 49 (HP 50)" in mod_lines(
+        err
+    ), err
+
+
+# The spec's section 2: the appliers that reach effect 0's (damage, then the
+# KO function) from inside their own, and what does not.
+LANDS_AS_DAMAGE = (0, 4, 8, 17, 44, 61, 62, 65, 69, 70, 72)
+
+
+@needs_cc
+def test_battle_boosts_no_ko_holds_every_effect_that_lands_as_damage(driver, tmp_path):
+    """Each of the eleven held on a party member at a lethal value, and the
+    heals (31, 32, and 66, Blue Rogues' on a party member) and a status (3)
+    left: a case left out of the mod's list fails here."""
+    held = "".join(f"effect 1 {e} 99 " for e in LANDS_AS_DAMAGE)
+    left = "".join(f"effect 1 {e} 99 " for e in (31, 32, 66, 3))
+    out, err = boosts(driver, tmp_path, BATTLE + held + left, "no_ko=1")
+    assert lines_of(out, "effect") == [f"effect {e} 99 -> {e} 49" for e in LANDS_AS_DAMAGE] + [
+        f"effect {e} 99 -> {e} 99" for e in (31, 32, 66, 3)
+    ], out
+
+
+@needs_cc
+def test_battle_boosts_no_ko_takes_the_party_s_lethal_poison_bits(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + f"set {PARTY0 + 20:x} 7 set {PARTY0 + 28:x} 80 set {POISON_WORD:x} 31 roundend 2 "
+        + f"get {POISON_WORD:x} get {PARTY0 + 20:x} get {PARTY0 + 28:x} "
+        + f"get {PARTY1 + 20:x} get {PARTY1 + 28:x} set {POISON_WORD:x} 30 roundend 3 get {POISON_WORD:x}",
+        "no_ko=1",
+    )
+    assert re.findall(r"^80346BE8=([0-9A-F]{8})$", out, re.M) == ["00000030", "00000030"], out
+    assert f"{PARTY0 + 20:08X}=00000001" in out and f"{PARTY1 + 20:08X}=00000032" in out, out
+    # at 1 HP the low-HP bit, as fn_80010474 would give it; slot 1 untouched
+    assert f"{PARTY0 + 28:08X}=00008080" in out and f"{PARTY1 + 28:08X}=00000000" in out, out
+    assert mod_lines(err)[1:] == [
+        "no knock-out: round 2, poison would have knocked out slot 0: HP 7 -> 1",
+        "no knock-out: lethal-poison word 00000031 -> 00000030",
+    ], err  # the enemies' bits alone: nothing said, nothing written
+
+
+RESULTS = 0x80309730  # battle.results, 16 bytes a slot, the hit result at +8
+
+
+@needs_cc
+def test_battle_boosts_no_ko_turns_a_death_that_landed_into_a_miss(driver, tmp_path):
+    """A death that lands (effect 5, and 6's death branch, which carries no
+    value, -1) leaves the target's hit result at KO (5): the assist cancels
+    it and makes the result a miss, a death spell that did not land. 68,
+    whose damage still lands, becomes effect 0 with its KO result a hit. 6's
+    -1 is never applied as effect 0, which would add 1 HP."""
+    ko = lambda slot: f"setb {RESULTS + 16 * slot + 8:x} 5 "  # noqa: E731
+    result = lambda slot: f"get {RESULTS + 16 * slot + 8:x} "  # noqa: E731
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + ko(0)
+        + "effect 0 5 0 "
+        + result(0)
+        + ko(1)
+        + "effect 1 6 -1 "
+        + result(1)
+        + ko(0)
+        + "effect 0 68 30 "
+        + result(0)
+        + "effect 1 6 -1 "
+        + result(1)  # no KO result to unmark: cancelled all the same
+        + "effect 1 68 -1 ",  # a 68 with no value: no damage, never a heal
+        "no_ko=1",
+    )
+    assert lines_of(out, "effect") == [
+        "effect 5 0 -> 5 0 cancelled",
+        "effect 6 -1 -> 6 -1 cancelled",
+        "effect 68 30 -> 0 30",
+        "effect 6 -1 -> 6 -1 cancelled",
+        "effect 68 -1 -> 0 0",
+    ], out
+    words = re.findall(rf"^({RESULTS + 8:08X}|{RESULTS + 24:08X})=([0-9A-F]{{8}})$", out, re.M)
+    # the hit result is the high byte of the word at +8: miss, miss, hit, and the miss left
+    assert [int(v, 16) >> 24 for _, v in words] == [0, 0, 1, 0], out
+    lines = mod_lines(err)
+    assert (
+        "no knock-out: effect 5 on slot 0 cancelled, its KO result made a miss (HP 50)" in lines
+    ), err
+    assert (
+        "no knock-out: effect 68 value 30 on slot 0 -> effect 0 value 30, its KO result made a hit (HP 50)"
+        in lines
+    ), err
+
+
+def spirit_battle(scene: int = 7, phase: int = 1, sp: int = 0x00030003) -> str:
+    """Scene, the context with max SP 10 and SP (and SP free) given, the phase."""
+    return (
+        f"set 803475cc {scene:x} set 80347390 {BATTLE_CTX:x} set {BATTLE_CTX + 4:x} a "
+        f"set {BATTLE_CTX + 8:x} {sp:x} set 8034733c {phase:x} "
+    )
+
+
+@needs_cc
+def test_battle_boosts_full_spirit_once_a_battle_at_its_first_round(driver, tmp_path):
+    ctx_sp = f"get {BATTLE_CTX + 8:x} "
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + spirit_battle(phase=0)
+        + "safe "
+        + ctx_sp  # phase 0: not yet
+        + "set 8034733c 1 safe "
+        + ctx_sp  # filled
+        + f"set {BATTLE_CTX + 8:x} 20002 safe "
+        + ctx_sp  # spent, and not filled again this battle
+        + "set 803475cc 6 safe "
+        + spirit_battle(phase=2, sp=0x00010001)
+        + "safe "
+        + ctx_sp,  # the next battle, after an ambush
+        "full_spirit=1",
+    )
+    assert re.findall(rf"^{BATTLE_CTX + 8:08X}=([0-9A-F]{{8}})$", out, re.M) == [
+        "00030003",
+        "000A000A",
+        "00020002",
+        "000A000A",
+    ], out
+    assert mod_lines(err)[1:] == [
+        "full spirit: SP 3 -> 10 of 10",
+        "full spirit: SP 1 -> 10 of 10",
+    ], err
+
+
+@needs_cc
+def test_battle_boosts_full_spirit_leaves_a_no_spirit_party_alone(driver, tmp_path):
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE + f"set {PARTY1 + 28:x} 10000 " + spirit_battle() + f"safe get {BATTLE_CTX + 8:x}",
+        "full_spirit=1",
+    )
+    assert f"{BATTLE_CTX + 8:08X}=00030003" in out, out
+    assert "full spirit: a member's equipment holds SP at 0; left as it is" in mod_lines(err), err
+    # an unconscious member's equipment does not count
+    out, err = boosts(
+        driver,
+        tmp_path / "ko",
+        BATTLE + f"set {PARTY1 + 28:x} 10100 " + spirit_battle() + f"safe get {BATTLE_CTX + 8:x}",
+        "full_spirit=1",
+    )
+    assert f"{BATTLE_CTX + 8:08X}=000A000A" in out, out
+    # nor an escaped one's (0x2000, the other half of the game's "not present")
+    out, err = boosts(
+        driver,
+        tmp_path / "fled",
+        BATTLE + f"set {PARTY1 + 28:x} 12000 " + spirit_battle() + f"safe get {BATTLE_CTX + 8:x}",
+        "full_spirit=1",
+    )
+    assert f"{BATTLE_CTX + 8:08X}=000A000A" in out, out
+
+
+CHARS = 0x8030B7F4  # party.character[6], 92 bytes each, HP the s16 at +24
+PARTY2 = 0x80420400
+
+
+@needs_cc
+def test_battle_boosts_test_switch_starts_the_battle_at_one_hp(driver, tmp_path):
+    """Between battles the switch holds each character's HP at 1, so the next
+    battle's setup brings the members in at 1 (a write to the actors in the
+    first round stalled the story's first battle); at the first round `poison`
+    poisons the living ones."""
+    between = (
+        f"set 803475cc 6 set {CHARS + 24:x} 1a401a4 set {CHARS + 92 + 24:x} 1680168 safe "
+        + f"set {CHARS + 24:x} 6401a4 safe "  # raised again (a level, an inn): lowered, not said again
+        + f"get {CHARS + 24:x} get {CHARS + 92 + 24:x} "
+    )
+    first_round = (
+        BATTLE
+        + f"set {ACTORS + 8:x} {PARTY2:x} set {PARTY2 + 20:x} 32 set {PARTY2 + 28:x} 2000 "
+        + f"set {PARTY1 + 28:x} 100 "
+        + spirit_battle()
+        + f"safe get {PARTY0 + 20:x} get {PARTY0 + 28:x} get {PARTY1 + 28:x} get {PARTY2 + 28:x} "
+        + f"get {ENEMY4 + 28:x}"
+    )
+    out, err = boosts(driver, tmp_path, between + first_round, SOA_BOOSTS_TEST="poison")
+    # HP 420 of 420 and 360 of 360: each HP to 1, its maximum kept
+    assert f"{CHARS + 24:08X}=000101A4" in out and f"{CHARS + 92 + 24:08X}=00010168" in out, out
+    assert f"{PARTY0 + 20:08X}=00000032" in out, out  # no actor's HP written
+    assert f"{PARTY0 + 28:08X}=00000080" in out, out  # poisoned at the first round
+    assert f"{PARTY1 + 28:08X}=00000100" in out, out  # unconscious: left alone
+    assert f"{PARTY2 + 28:08X}=00002000" in out, out  # escaped: left alone
+    assert f"{ENEMY4 + 28:08X}=00000000" in out, out
+    lines = mod_lines(err)
+    assert lines.count("test: 2 character(s) at 1 HP from frame 0") == 1, err  # said once
+    assert "test: slot 0 at HP 50, poisoned" in lines, err
+    # `lowhp` poisons no one
+    out, err = boosts(driver, tmp_path / "lowhp", between + first_round, SOA_BOOSTS_TEST="lowhp")
+    assert f"{PARTY0 + 28:08X}=00000000" in out and f"{CHARS + 24:08X}=000101A4" in out, out
+    assert "test: slot 0 at HP 50" in mod_lines(err), err
+
+
+# --------------------------------------------------------------------------
+# mods/difficulty (PLAN-GAMEPLAY-MODS R3, docs/specs/battle-mods.md 4) on the
+# fake guest: an enemy as fn_800770B8 leaves it, then R1's spawn dispatcher
+# --------------------------------------------------------------------------
+
+DIFFICULTY = ROOT / "mods" / "difficulty"
+FOE, FOE_RECORD = 0x80440000, 0x80450000
+# HP 58; level 5 and Will 10 (+128); Quick 15 (+136); Attack 30 and Defense 20
+# (+148); MagDef 20 and Hit 80 (+152); the base copies alike (+232, +240, +244)
+FOE_SET = {20: 58, 24: 58, 128: 0x5000A, 136: 0xF0000, 148: 0x1E0014, 152: 0x140050}
+FOE_SET |= {232: 0x5000A, 240: 0xF001E, 244: 0x140014}
+# the record: its max HP (+36) and its Quick, Attack, Defense, MagDef (+100..+107)
+RECORD_SET = {36: 58, 100: 0xF001E, 104: 0x140014}
+
+
+def made(fields: dict[int, int] | None = None) -> str:
+    """The script that lays out the enemy and its record, `fields` over FOE_SET."""
+    words = FOE_SET | (fields or {})
+    return "".join(f"set {FOE + off:x} {v:x} " for off, v in words.items()) + "".join(
+        f"set {FOE_RECORD + off:x} {v:x} " for off, v in RECORD_SET.items()
+    )
+
+
+def spawned(out: str, base: int, offsets) -> dict[int, int]:
+    words = dict(re.findall(r"^([0-9A-F]{8})=([0-9A-F]{8})$", out, re.M))
+    return {off: int(words[f"{base + off:08X}"], 16) for off in offsets}
+
+
+def want(hp, will, quick, attack, defense, magdef) -> dict[int, int]:
+    """FOE_SET's words with the stats given, each base copy the same."""
+    return {
+        20: hp,
+        24: hp,
+        128: 5 << 16 | will,
+        136: quick << 16,
+        148: attack << 16 | defense,
+        152: magdef << 16 | 80,
+        232: 5 << 16 | will,
+        240: quick << 16 | attack,
+        244: defense << 16 | magdef,
+    }
+
+
+def difficulty(driver, tmp_path, opts: str = "", fields=None, script: str = "") -> tuple[str, str]:
+    shipped(tmp_path, folder=DIFFICULTY)
+    env = {}
+    if opts:
+        env["SOA_MOD_OPT"] = " ".join(f"difficulty.{o}" for o in opts.split())
+    gets = "".join(f"get {FOE + off:x} " for off in FOE_SET) + "".join(
+        f"get {FOE_RECORD + off:x} " for off in RECORD_SET
+    )
+    # a battle under way (scene 7, seen at a safe point), so leaving it is a scene change
+    battle = "set 803475cc 7 safe " + made(fields)
+    return play(driver, tmp_path, battle + f"spawn {FOE:x} {FOE_RECORD:x} " + gets + script, **env)
+
+
+def test_difficulty_is_shipped_and_built_by_link():
+    import recompile
+
+    srcs = {p.parent.relative_to(ROOT).as_posix() for p in recompile.mod_dll_sources()}
+    assert "mods/difficulty" in srcs, srcs
+    keys = {}
+    for line in (DIFFICULTY / "mod.ini").read_text(encoding="utf-8").splitlines():
+        key, eq, value = line.partition("=")
+        if eq and not line.lstrip().startswith("#"):
+            keys[key.strip()] = value.strip()
+    assert (
+        keys.get("manifest") == "2" and keys.get("id") == "difficulty" and keys.get("api") == "1"
+    ), keys
+
+
+@needs_cc
+def test_difficulty_at_normal_registers_nothing(driver, tmp_path):
+    out, err = difficulty(driver, tmp_path, script="events rewards 103 10 3")
+    assert "loaded 1" in out, err
+    assert mod_lines(err, "difficulty") == [
+        "normal: hp x1.00 attack x1.00 defense x1.00 magdef x1.00 speed x1.00 rewards x1.00; nothing registered"
+    ], err
+    assert spawned(out, FOE, FOE_SET) == FOE_SET, out
+    assert "events 0 0 0 0 0 0 0 0 0 0 0" in out and "rewards 103 10 3 -> 103 10 3" in out, out
+
+
+@needs_cc
+@pytest.mark.parametrize(
+    "preset, stats, said, rewards",
+    [
+        (
+            "easy",
+            (29, 7, 15, 22, 20, 20),
+            "HP 58 -> 29, Attack 30 -> 22, Will 10 -> 7",
+            "rewards 103 10 3 -> 103 10 3",
+        ),
+        (
+            "hard",
+            (87, 12, 15, 37, 20, 20),
+            "HP 58 -> 87, Attack 30 -> 37, Will 10 -> 12",
+            "rewards 103 10 3 -> 128 12 3",
+        ),
+        (
+            "nightmare",
+            (116, 15, 18, 45, 25, 25),
+            "HP 58 -> 116, Attack 30 -> 45, Will 10 -> 15, Defense 20 -> 25, MagDef 20 -> 25, Quick 15 -> 18",
+            "rewards 103 10 3 -> 154 15 4",
+        ),
+    ],
+)
+def test_difficulty_each_preset_scales_the_actor_and_its_records_max_hp_for_the_battle(
+    driver, tmp_path, preset, stats, said, rewards
+):
+    """The record's max HP is scaled with the actor's, since the boss music
+    (fn_8007D42C) weighs the bosses' HP against it, and put back when the
+    scene leaves the battle; nothing else of the record is written."""
+    back = f"rewards 103 10 3 set 803475cc 6 safe get {FOE_RECORD + 36:x}"
+    out, err = difficulty(driver, tmp_path, f"preset={preset}", script=back)
+    assert spawned(out, FOE, FOE_SET) == want(*stats), (out, err)
+    record_hp = re.findall(rf"^{FOE_RECORD + 36:08X}=([0-9A-F]{{8}})$", out, re.M)
+    assert [int(v, 16) for v in record_hp] == [stats[0], 58], out  # in the battle, then after it
+    assert spawned(out, FOE_RECORD, (100, 104)) == {100: RECORD_SET[100], 104: RECORD_SET[104]}, out
+    assert rewards in out, out
+    lines = mod_lines(err, "difficulty")
+    assert f"spawn {FOE:08X}: {said}" in lines, err
+    assert f"record {FOE_RECORD:08X}: max HP {stats[0]} put back to 58" in lines, err
+
+
+FOE2, FOE3, OTHER_RECORD = 0x80441000, 0x80442000, 0x80451000
+
+
+@needs_cc
+def test_difficulty_a_second_enemy_of_the_kind_comes_scaled_and_is_not_scaled_again(
+    driver, tmp_path
+):
+    """The game makes an enemy's HP from its record's max HP, so after the
+    first spawn of a kind scaled the record, a second arrives with the scaled
+    HP: it is left there, its other stats scaled as ever. Another kind's
+    record is scaled at its own first spawn. The mutation, every spawn's HP
+    scaled, gives the second 130."""
+    second = "".join(
+        f"set {FOE2 + off:x} {v:x} " for off, v in (FOE_SET | {20: 87, 24: 87}).items()
+    )
+    third = "".join(
+        f"set {FOE3 + off:x} {v:x} " for off, v in (FOE_SET | {20: 100, 24: 100}).items()
+    )
+    script = (
+        second
+        + f"spawn {FOE2:x} {FOE_RECORD:x} get {FOE2 + 20:x} get {FOE2 + 148:x} "
+        + third
+        + f"set {OTHER_RECORD + 36:x} 64 spawn {FOE3:x} {OTHER_RECORD:x} get {FOE3 + 20:x} "
+        + f"get {OTHER_RECORD + 36:x} set 803475cc 6 safe get {FOE_RECORD + 36:x} get {OTHER_RECORD + 36:x}"
+    )
+    out, err = difficulty(driver, tmp_path, "preset=hard", script=script)
+    words = re.findall(r"^([0-9A-F]{8})=([0-9A-F]{8})$", out, re.M)
+    got = [(a, int(v, 16)) for a, v in words]
+    assert (f"{FOE2 + 20:08X}", 87) in got, out  # made scaled, left
+    assert (f"{FOE2 + 148:08X}", 37 << 16 | 20) in got, out  # Attack scaled as ever
+    assert (f"{FOE3 + 20:08X}", 150) in got and (f"{OTHER_RECORD + 36:08X}", 150) in got, out
+    assert got[-2:] == [(f"{FOE_RECORD + 36:08X}", 58), (f"{OTHER_RECORD + 36:08X}", 100)], out
+
+
+@needs_cc
+def test_difficulty_leaves_a_record_no_longer_holding_its_value(driver, tmp_path):
+    """A record whose max HP changed since the spawn (the map freed and reused
+    the memory) is not written when the battle ends."""
+    script = f"set {FOE_RECORD + 36:x} 1234 set 803475cc 6 safe get {FOE_RECORD + 36:x}"
+    out, err = difficulty(driver, tmp_path, "preset=hard", script=script)
+    assert re.findall(rf"^{FOE_RECORD + 36:08X}=([0-9A-F]{{8}})$", out, re.M)[-1] == "00001234", out
+    assert (
+        f"record {FOE_RECORD:08X}: max HP 4660, not this mod's 87 any more; left as it is"
+        in mod_lines(err, "difficulty")
+    ), err
+
+
+@needs_cc
+def test_difficulty_defense_and_magdef_each_take_their_own_number(driver, tmp_path):
+    out, err = difficulty(driver, tmp_path, "defense=2 magdef=0.5")
+    assert spawned(out, FOE, FOE_SET) == want(58, 10, 15, 30, 40, 10), (out, err)
+    assert spawned(out, FOE_RECORD, RECORD_SET) == RECORD_SET, out  # hp at 1: the record untouched
+
+
+@needs_cc
+def test_difficulty_a_number_wins_over_its_preset(driver, tmp_path):
+    out, err = difficulty(
+        driver, tmp_path, "preset=hard hp=4 attack=1 rewards=0", script="rewards 103 10 3"
+    )
+    assert mod_lines(err, "difficulty")[0] == (
+        "hard: hp x4.00 attack x1.00 defense x1.00 magdef x1.00 speed x1.00 rewards x0.00"
+    ), err
+    assert spawned(out, FOE, FOE_SET) == want(232, 10, 15, 30, 20, 20), out
+    assert "rewards 103 10 3 -> 0 0 0" in out, out
+    # and on a preset of normal, a number alone is enough to register
+    out, err = difficulty(driver, tmp_path / "speed", "speed=2")
+    assert spawned(out, FOE, FOE_SET) == want(58, 10, 30, 30, 20, 20), out
+
+
+@needs_cc
+def test_difficulty_holds_each_field_to_its_limits(driver, tmp_path):
+    # HP 1 at x0.25 stays 1; Attack 30000 at x4 is held to 32767; Defense 0 at x2 stays 0
+    fields = {20: 1, 24: 1, 148: 30000 << 16, 240: 15 << 16 | 30000, 244: 0 << 16 | 20}
+    out, err = difficulty(driver, tmp_path, "hp=0.25 attack=4 defense=2", fields)
+    got = spawned(out, FOE, FOE_SET)
+    assert got[20] == 1 and got[24] == 1, out
+    assert got[148] == 32767 << 16 and got[240] == 15 << 16 | 32767, out
+    assert got[244] == 0 << 16 | 20, out  # base Defense 0 -> 0; MagDef untouched
+
+
+@needs_cc
+def test_difficulty_rewards_round_down_and_hold_magic_exp(driver, tmp_path):
+    out, err = difficulty(driver, tmp_path, "rewards=1.5", script="rewards 7 1 100 rewards 1 1 1")
+    assert lines_of(out, "rewards") == ["rewards 7 1 100 -> 10 1 127", "rewards 1 1 1 -> 1 1 1"], (
+        out
+    )
+    out, err = difficulty(driver, tmp_path / "half", "rewards=0.5", script="rewards 1 3 1")
+    assert "rewards 1 3 1 -> 0 1 0" in out, out  # no floor of 1 on a reward
+
+
+@needs_cc
+def test_difficulty_and_boosts_chain_their_rewards_in_folder_order(driver, tmp_path):
+    shipped(tmp_path, folder=BOOSTS)
+    shipped(tmp_path, folder=DIFFICULTY)
+    out, err = play(
+        driver,
+        tmp_path,
+        "rewards 103 10 3",
+        SOA_MOD_OPT="battle-boosts.exp=2 difficulty.preset=hard",
+    )
+    assert "loaded 2" in out, err
+    assert "rewards 103 10 3 -> 257 12 3" in out, out  # 103 x2 = 206, x1.25 = 257.5 -> 257
+
+
+@needs_cc
+def test_battle_boosts_spec_mutations_fail(driver, tmp_path):
+    """Two of the spec's mutations, kept as tests: without the damage clamp a
+    blow knocks a party member out, and with the round's end leaving the
+    poison bits, the game is left to fell the poisoned."""
+    src = (BOOSTS / "mod.c").read_text(encoding="utf-8")
+    clamp = "    if ((int32_t)value <= most) return value;\n"
+    assert src.count(clamp) == 1
+    shipped(tmp_path / "a", src.replace(clamp, "    return value;\n"), folder=BOOSTS)
+    out, _ = play(
+        driver,
+        tmp_path / "a",
+        BATTLE + "damage 999 9 0 80420000 0",
+        SOA_MOD_OPT="battle-boosts.no_ko=1",
+    )
+    assert "damage 999 -> 999" in out, out  # the shipped mod gives 49
+
+    clear = "        word &= ~(1u << slot);\n"
+    assert src.count(clear) == 1
+    shipped(tmp_path / "b", src.replace(clear, ""), folder=BOOSTS)
+    out, _ = play(
+        driver,
+        tmp_path / "b",
+        BATTLE + f"set {POISON_WORD:x} 1 roundend 1 get {POISON_WORD:x}",
+        SOA_MOD_OPT="battle-boosts.no_ko=1",
+    )
+    assert f"{POISON_WORD:08X}=00000001" in out, out  # the shipped mod reads 0
+
+
+@needs_cc
+def test_difficulty_spec_mutations_fail(driver, tmp_path):
+    """Two of the spec's mutations, kept as tests: a build that never puts the
+    record back leaves it scaled after the battle, to be scaled again by the
+    next; and one that scales the record at every spawn makes a second enemy
+    of the kind from a record scaled twice over."""
+    src = (DIFFICULTY / "mod.c").read_text(encoding="utf-8")
+    restore = "            g_api->write32(g_rec[i].at + RECORD_HP_MAX, g_rec[i].was);\n"
+    assert src.count(restore) == 1
+    shipped(tmp_path / "a", src.replace(restore, ""), folder=DIFFICULTY)
+    out, _ = play(
+        driver,
+        tmp_path / "a",
+        "set 803475cc 7 safe "
+        + made()
+        + f"spawn {FOE:x} {FOE_RECORD:x} set 803475cc 6 safe get {FOE_RECORD + 36:x}",
+        SOA_MOD_OPT="difficulty.preset=hard",
+    )
+    assert f"{FOE_RECORD + 36:08X}=00000057" in out, out  # 87 left; the shipped mod puts back 58
+
+    seen = "if (g_rec[i].at == record) return 0;"
+    assert src.count(seen) == 1
+    never = "if (g_rec[i].at == record + 1u) return 0;"  # a record never found again
+    shipped(tmp_path / "b", src.replace(seen, never), folder=DIFFICULTY)
+    out, _ = play(
+        driver,
+        tmp_path / "b",
+        "set 803475cc 7 safe "
+        + made()
+        + f"spawn {FOE:x} {FOE_RECORD:x} spawn {FOE:x} {FOE_RECORD:x} get {FOE_RECORD + 36:x}",
+        SOA_MOD_OPT="difficulty.preset=hard",
+    )
+    assert f"{FOE_RECORD + 36:08X}=00000082" in out, (
+        out
+    )  # 58 -> 87 -> 130; the shipped mod stops at 87
+
+
+@needs_cc
+def test_difficulty_scales_the_next_battles_enemies_again(driver, tmp_path):
+    """The record is put back when the battle ends and forgotten, so the next
+    battle on the map scales its enemies from the game's value again: 87 each
+    time, never 130 or 58."""
+    again = (
+        f"set 803475cc 6 safe set 803475cc 7 safe set {FOE + 20:x} 3a set {FOE + 24:x} 3a "
+        + f"spawn {FOE:x} {FOE_RECORD:x} get {FOE + 20:x} get {FOE_RECORD + 36:x}"
+    )
+    out, err = difficulty(driver, tmp_path, "preset=hard", script=again)
+    words = re.findall(r"^([0-9A-F]{8})=([0-9A-F]{8})$", out, re.M)
+    assert words[-2:] == [
+        (f"{FOE + 20:08X}", "00000057"),
+        (f"{FOE_RECORD + 36:08X}", "00000057"),
+    ], out
+
+
+@needs_cc
+def test_battle_boosts_full_spirit_again_after_try_again(driver, tmp_path):
+    """Try again rebuilds the battle inside scene 7: the phase back to 0 and
+    the round to 1, a new context's SP. Either re-arms the first round, so
+    the retried battle starts full as well -- not only one after leaving the
+    battle."""
+    ctx_sp = f"get {BATTLE_CTX + 8:x} "
+    out, err = boosts(
+        driver,
+        tmp_path,
+        spirit_battle()
+        + "setb 80347340 2 safe "  # round 2 under way, filled at its first safe point
+        + f"set {BATTLE_CTX + 8:x} 20002 set 8034733c 0 safe "  # retried: phase 0 seen (the round alone below)
+        + "set 8034733c 1 safe "  # the round still 2: the phase alone re-armed it
+        + ctx_sp
+        + f"set {BATTLE_CTX + 8:x} 10001 setb 80347340 3 safe setb 80347340 1 safe "  # the round drops alone
+        + ctx_sp,
+        "full_spirit=1",
+    )
+    assert re.findall(rf"^{BATTLE_CTX + 8:08X}=([0-9A-F]{{8}})$", out, re.M) == [
+        "000A000A",
+        "000A000A",
+    ], out
+    assert [x for x in mod_lines(err) if x.startswith("full spirit: SP")] == [
+        "full spirit: SP 3 -> 10 of 10",
+        "full spirit: SP 2 -> 10 of 10",
+        "full spirit: SP 1 -> 10 of 10",
+    ], err
+
+
+@needs_cc
+def test_battle_boosts_no_ko_stands_down_where_losing_carries_the_story_on(driver, tmp_path):
+    """Defeat condition 2 (ctx+4; event battle 26 at the home base, where Run
+    is not offered either) carries the story on after a loss: the assist
+    lets the party fall there, says so once, and guards a battle with Try
+    again (1) as any other."""
+    battle_26 = f"set 80347390 {BATTLE_CTX:x} set {BATTLE_CTX + 4:x} 201000a "  # defeat 2, escape 1, max SP 10
+    try_again = f"set {BATTLE_CTX + 4:x} 100000a "
+    out, err = boosts(
+        driver,
+        tmp_path,
+        BATTLE
+        + battle_26
+        + "damage 999 9 0 80420000 0 effect 0 5 0 "
+        + f"set {POISON_WORD:x} 1 roundend 1 get {POISON_WORD:x} damage 998 9 0 80420000 0 "
+        + try_again
+        + "damage 999 9 0 80420000 0",
+        "no_ko=1",
+    )
+    assert lines_of(out, "damage") == [
+        "damage 999 -> 999",
+        "damage 998 -> 998",
+        "damage 999 -> 49",
+    ], out
+    assert "effect 5 0 -> 5 0" in out and "cancelled" not in out, out
+    assert f"{POISON_WORD:08X}=00000001" in out, out  # left for the game
+    said = "no knock-outs stands down for this battle: losing it carries the story on (defeat condition 2)"
+    assert mod_lines(err).count(said) == 1, err

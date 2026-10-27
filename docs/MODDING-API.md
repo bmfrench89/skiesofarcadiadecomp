@@ -378,8 +378,9 @@ value (fn_8006AE20), returning the heal, held to 0-9999.
 int (*on_enemy_spawn)(void (*fn)(void* user, uint32_t actor, uint32_t record), void* user);
 ```
 
-each enemy made (fn_800770B8), after the game filled it: scale the actor,
-never the record, which every enemy of the kind shares across battles
+each enemy made (fn_800770B8), after the game filled it: scale the actor;
+the record, which every enemy of the kind shares across battles, only
+if it is put back when the battle ends (mods/difficulty, for its max HP)
 
 ### `on_enemy_action`
 

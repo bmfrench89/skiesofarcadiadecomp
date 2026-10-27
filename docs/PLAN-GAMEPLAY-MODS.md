@@ -885,7 +885,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - A native "Burn" status ticks **exactly once a round** in R0's log.
 - An enemy whose AI uses a native condition takes the branch, and a mutated condition id changes it.
 
-**R3. Difficulty presets** — *days, after R1 and M16.* **Owner.**
+**R3. Difficulty presets** — *days, after R1 and M16.* **Owner.** *Built 2026-10-27 to [specs/battle-mods.md](specs/battle-mods.md) (FINDINGS "Battle mods") as `mods/difficulty`; left: the owner's Hard through one dungeon, and level scaling until the owner picks a curve.*
 - **Easy**, **Hard** and **Nightmare**, applied in `on_enemy_spawn`: HP, attack, defense, magic defense and speed multipliers, and optionally level scaling from the party's level (AI conditions 44/45 read the gap).
 - Rewards scale in `on_rewards`.
 
@@ -893,7 +893,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - R0 shows the actor scaled and the shared record untouched (peek the record after two battles).
 - **Owner:** Hard through one dungeon.
 
-**R4. Boosts and assists** — *hours each, after R1 and M16.*
+**R4. Boosts and assists** — *hours each, after R1 and M16.* *Built 2026-10-27 to [specs/battle-mods.md](specs/battle-mods.md) (FINDINGS "Battle mods") as `mods/battle-boosts`; a party Run and effects 5, 6 and 68 are held on the fake guest, not yet in a real battle.*
 - EXP, gold and magic EXP ×0–×4 (`on_rewards`); full Spirit at the start.
 - **Always escape, for the party only.** `fn_80010340` also rolls enemy runs, so the mod acts on `on_escape` for slots 0–3 only, or sets ctx+2 = 100, which the enemy branch never reads. A fleeing enemy keeps its own roll; otherwise every enemy that runs gets away, taking its EXP and drops with it.
 - **No knock-outs:**
@@ -1280,7 +1280,7 @@ owner's check: specified in [specs/mod-kit.md](specs/mod-kit.md), evidence in FI
 - **Before milestone 7.** Art. Without an artist, milestone 6's remixed and procedural content is the ceiling, and it is a high one.
 
 **Since 2026-10-27 (PLAN-NEXT D-46) milestone 3 is next,** its difficulty presets and boosts first (R3, R4,
-one spec), the play path kept to maintenance.
+one spec), the play path kept to maintenance. R3 and R4 were built the same night (FINDINGS "Battle mods").
 
 **The first three slices:** *P6 and T0 are done. P1 is comfort-pack P1a, done (090eea6), and P1b; P11 is comfort-pack P11.*
 1. **P1 with P6** (hours each). P1 ships as a `mod.dll` reading `SOA_ENCOUNTERS`; its `soa.ini` line and P6's pin are relinks.
